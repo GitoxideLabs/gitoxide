@@ -349,6 +349,15 @@ Check out the [performance discussion][gix-diff-performance] as well.
 * [x] API documentation
     * [ ] Examples
 
+### gix-blame
+
+* [ ] commit-annotations for a single file
+    - [ ] progress
+    - [ ] interruptability
+    - [ ] streaming
+* [x] API documentation
+    * [ ] Examples
+
 ### gix-traverse
 
 Check out the [performance discussion][gix-traverse-performance] as well.
