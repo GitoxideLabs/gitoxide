@@ -150,6 +150,10 @@ pub enum Subcommands {
     /// Subcommands that need no git repository to run.
     #[clap(subcommand)]
     Free(free::Subcommands),
+    /// Blame lines in a file
+    Blame {
+        file: std::ffi::OsString,
+    },
     /// Generate shell completions to stdout or a directory.
     #[clap(visible_alias = "generate-completions", visible_alias = "shell-completions")]
     Completions {
