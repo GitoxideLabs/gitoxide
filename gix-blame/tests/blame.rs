@@ -139,7 +139,11 @@ impl Fixture {
 
         let head_id = reference.peel_to_id_in_place(&store, &odb)?;
 
-        let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head_id), &odb).collect();
+        let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head_id), &odb)
+            .sorting(gix_traverse::commit::simple::Sorting::ByCommitTime(
+                gix_traverse::commit::simple::CommitTimeOrder::NewestFirst,
+            ))?
+            .collect();
 
         let git_dir = worktree_path.join(".git");
         let index = gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default())?;
