@@ -6,7 +6,11 @@ pub fn blame_file(mut repo: gix::Repository, file: &OsStr, out: impl std::io::Wr
     repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
 
     let suspect = repo.head()?.peel_to_commit_in_place()?;
-    let traverse: Vec<_> = gix::traverse::commit::Simple::new(Some(suspect.id), &repo.objects).collect();
+    let traverse: Vec<_> = gix::traverse::commit::Simple::new(Some(suspect.id), &repo.objects)
+        .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
+            gix::traverse::commit::simple::CommitTimeOrder::NewestFirst,
+        ))?
+        .collect();
     let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
 
     let work_dir: PathBuf = repo.work_dir().expect("TODO").into();
