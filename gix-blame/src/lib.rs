@@ -262,6 +262,16 @@ impl UnblamedHunk {
             self.suspects.insert(to, range_in_suspect);
         }
     }
+
+    fn clone_blame(&mut self, from: ObjectId, to: ObjectId) {
+        if let Some(range_in_suspect) = self.suspects.get(&from) {
+            self.suspects.insert(to, range_in_suspect.clone());
+        }
+    }
+
+    fn remove_blame(&mut self, suspect: ObjectId) {
+        let _ = self.suspects.remove(&suspect);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,7 +346,11 @@ pub fn process_change(
 ) -> (Option<UnblamedHunk>, Option<Change>) {
     match (hunk, change) {
         (Some(hunk), Some(Change::Unchanged(unchanged))) => {
-            let range_in_suspect = hunk.suspects.get(&suspect).expect("TODO");
+            let Some(range_in_suspect) = hunk.suspects.get(&suspect) else {
+                new_hunks_to_blame.push(hunk);
+
+                return (None, Some(Change::Unchanged(unchanged)));
+            };
 
             match (
                 // Since `unchanged` is a range that is not inclusive at the end,
@@ -799,46 +813,55 @@ pub fn blame_file<E>(
             break;
         }
 
-        if parent_ids.len() > 1 {
-            todo!("passing blame to more than one parent is not implemented yet");
-        }
+        if parent_ids.len() == 1 {
+            let parent_id: ObjectId = *parent_ids.last().unwrap();
 
-        let last_parent_id: ObjectId = *parent_ids.last().unwrap();
+            let changes_for_file_path = get_changes_for_file_path(&odb, file_path, item.id, parent_id);
 
-        let changes_for_file_path = get_changes_for_file_path(&odb, file_path, item.id, last_parent_id);
-
-        let [ref modification]: [gix_diff::tree::recorder::Change] = changes_for_file_path[..] else {
-            // None of the changes affected the file we’re currently blaming. Pass blame to parent.
-            hunks_to_blame
-                .iter_mut()
-                .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, last_parent_id));
-
-            continue;
-        };
-
-        match modification {
-            gix_diff::tree::recorder::Change::Addition { .. } => {
-                // Every line that has not been blamed yet on a commit, is expected to have been
-                // added when the file was added to the repository.
-                out.extend(
-                    hunks_to_blame
-                        .iter()
-                        .map(|hunk| BlameEntry::from_unblamed_hunk(hunk, suspect)),
-                );
-
-                hunks_to_blame = vec![];
-
-                break;
-            }
-            gix_diff::tree::recorder::Change::Deletion { .. } => todo!(),
-            gix_diff::tree::recorder::Change::Modification { previous_oid, oid, .. } => {
-                let changes = get_changes(&odb, resource_cache, *oid, *previous_oid, file_path);
-
-                hunks_to_blame = process_changes(&mut out, &hunks_to_blame, &changes, suspect);
+            let [ref modification]: [gix_diff::tree::recorder::Change] = changes_for_file_path[..] else {
+                // None of the changes affected the file we’re currently blaming. Pass blame to parent.
                 hunks_to_blame
                     .iter_mut()
-                    .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, last_parent_id));
+                    .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, parent_id));
+
+                continue;
+            };
+
+            match modification {
+                gix_diff::tree::recorder::Change::Addition { .. } => {
+                    // Every line that has not been blamed yet on a commit, is expected to have been
+                    // added when the file was added to the repository.
+                    out.extend(
+                        hunks_to_blame
+                            .iter()
+                            .map(|hunk| BlameEntry::from_unblamed_hunk(hunk, suspect)),
+                    );
+
+                    hunks_to_blame = vec![];
+
+                    break;
+                }
+                gix_diff::tree::recorder::Change::Deletion { .. } => todo!(),
+                gix_diff::tree::recorder::Change::Modification { previous_oid, oid, .. } => {
+                    let changes = get_changes(&odb, resource_cache, *oid, *previous_oid, file_path);
+
+                    hunks_to_blame = process_changes(&mut out, &hunks_to_blame, &changes, suspect);
+                    hunks_to_blame
+                        .iter_mut()
+                        .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, parent_id));
+                }
             }
+        } else {
+            for parent_id in parent_ids {
+                // Pass blame to parent.
+                hunks_to_blame
+                    .iter_mut()
+                    .for_each(|unblamed_hunk| unblamed_hunk.clone_blame(suspect, parent_id));
+            }
+
+            hunks_to_blame
+                .iter_mut()
+                .for_each(|unblamed_hunk| unblamed_hunk.remove_blame(suspect));
         }
     }
 
