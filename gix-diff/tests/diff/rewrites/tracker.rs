@@ -525,17 +525,19 @@ fn rename_by_50_percent_similarity() -> crate::Result {
 #[test]
 fn directories_without_relation_are_ignored() -> crate::Result {
     let mut track = util::new_tracker(Default::default());
-    let tree_without_relation = Change {
-        id: NULL_ID,
-        kind: ChangeKind::Deletion,
-        mode: EntryKind::Tree.into(),
-        relation: None,
-    };
-    assert_eq!(
-        track.try_push_change(tree_without_relation, "dir".into()),
-        Some(tree_without_relation),
-        "trees, or non-blobs, are ignored, particularly when they have no relation"
-    );
+    for mode in [EntryKind::Tree, EntryKind::Commit] {
+        let tree_without_relation = Change {
+            id: NULL_ID,
+            kind: ChangeKind::Deletion,
+            mode: mode.into(),
+            relation: None,
+        };
+        assert_eq!(
+            track.try_push_change(tree_without_relation, "dir".into()),
+            Some(tree_without_relation),
+            "trees and submodules are ignored, particularly when they have no relation"
+        );
+    }
     Ok(())
 }
 
