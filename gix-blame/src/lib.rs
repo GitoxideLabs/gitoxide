@@ -662,9 +662,14 @@ fn get_changes_for_file_path(
         .unwrap();
 
     let mut recorder = gix_diff::tree::Recorder::default();
-    gix_diff::tree::Changes::from(parent_tree_iter)
-        .needed_to_obtain(tree_iter, gix_diff::tree::State::default(), &odb, &mut recorder)
-        .unwrap();
+    gix_diff::tree(
+        parent_tree_iter,
+        tree_iter,
+        gix_diff::tree::State::default(),
+        &odb,
+        &mut recorder,
+    )
+    .unwrap();
 
     recorder
         .records
