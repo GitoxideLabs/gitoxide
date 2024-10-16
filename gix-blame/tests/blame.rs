@@ -242,6 +242,7 @@ mktest!(
     "different-file-in-another-chain-of-ancestors",
     1
 );
+mktest!(file_only_changed_in_branch, "file-only-changed-in-branch", 2);
 
 #[test]
 #[ignore = "TBD: figure out what the problem is"]
