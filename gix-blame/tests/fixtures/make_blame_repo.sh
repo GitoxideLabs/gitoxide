@@ -154,6 +154,20 @@ echo -e "line 1 conflict resolved\nline 2\n line 3" > resolved-conflict.txt
 git add resolved-conflict.txt
 git commit -q -m c9
 
+echo -e "line 1\nline 2\n line 3" > file-in-one-chain-of-ancestors.txt
+git add file-in-one-chain-of-ancestors.txt
+git commit -q -m c10
+
+git checkout -b different-branch-that-does-not-contain-file
+git reset --hard HEAD~1
+
+echo -e "line 4\nline 5\n line 6" > different-file-in-another-chain-of-ancestors.txt
+git add different-file-in-another-chain-of-ancestors.txt
+git commit -q -m c11
+
+git checkout main
+git merge different-branch-that-does-not-contain-file || true
+
 git blame --porcelain simple.txt > .git/simple.baseline
 git blame --porcelain multiline-hunks.txt > .git/multiline-hunks.baseline
 git blame --porcelain deleted-lines.txt > .git/deleted-lines.baseline
@@ -168,6 +182,8 @@ git blame --porcelain same-line-changed-twice.txt > .git/same-line-changed-twice
 git blame --porcelain coalesce-adjacent-hunks.txt > .git/coalesce-adjacent-hunks.baseline
 
 git blame --porcelain resolved-conflict.txt > .git/resolved-conflict.baseline
+git blame --porcelain file-in-one-chain-of-ancestors.txt > .git/file-in-one-chain-of-ancestors.baseline
+git blame --porcelain different-file-in-another-chain-of-ancestors.txt > .git/different-file-in-another-chain-of-ancestors.baseline
 
 git blame --porcelain empty-lines-histogram.txt > .git/empty-lines-histogram.baseline
 

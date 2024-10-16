@@ -407,7 +407,13 @@ pub fn process_change(
             }
         }
         (Some(hunk), Some(Change::Added(added, number_of_lines_deleted))) => {
-            let range_in_suspect = hunk.suspects.get(&suspect).expect("TODO").clone();
+            let Some(range_in_suspect) = hunk.suspects.get(&suspect) else {
+                new_hunks_to_blame.push(hunk);
+
+                return (None, Some(Change::Added(added, number_of_lines_deleted)));
+            };
+
+            let range_in_suspect = range_in_suspect.clone();
 
             match (
                 range_in_suspect.contains(&added.start),
@@ -853,10 +859,37 @@ pub fn blame_file<E>(
             }
         } else {
             for parent_id in parent_ids {
-                // Pass blame to parent.
-                hunks_to_blame
-                    .iter_mut()
-                    .for_each(|unblamed_hunk| unblamed_hunk.clone_blame(suspect, parent_id));
+                let changes_for_file_path = get_changes_for_file_path(&odb, file_path, item.id, parent_id);
+
+                let [ref modification]: [gix_diff::tree::recorder::Change] = changes_for_file_path[..] else {
+                    // None of the changes affected the file we’re currently blaming. Pass blame
+                    // to parent.
+                    hunks_to_blame
+                        .iter_mut()
+                        .for_each(|unblamed_hunk| unblamed_hunk.clone_blame(suspect, parent_id));
+
+                    continue;
+                };
+
+                match modification {
+                    gix_diff::tree::recorder::Change::Addition { .. } => {
+                        // Do nothing under the assumption that this always (or almost always)
+                        // implies that the file comes from a different parent, compared to which
+                        // it was modified, not added.
+                        //
+                        // TODO: I still have to figure out whether this is correct in all cases.
+                    }
+                    gix_diff::tree::recorder::Change::Deletion { .. } => todo!(),
+                    gix_diff::tree::recorder::Change::Modification { previous_oid, oid, .. } => {
+                        let changes = get_changes(&odb, resource_cache, *oid, *previous_oid, file_path);
+
+                        hunks_to_blame = process_changes(&mut out, &hunks_to_blame, &changes, suspect);
+
+                        hunks_to_blame
+                            .iter_mut()
+                            .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, parent_id));
+                    }
+                }
             }
 
             hunks_to_blame
