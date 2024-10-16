@@ -1,5 +1,6 @@
 use std::{ffi::OsStr, path::PathBuf, str::Lines};
 
+use anyhow::anyhow;
 use gix::bstr::BStr;
 
 pub fn blame_file(mut repo: gix::Repository, file: &OsStr, out: impl std::io::Write) -> anyhow::Result<()> {
@@ -13,7 +14,10 @@ pub fn blame_file(mut repo: gix::Repository, file: &OsStr, out: impl std::io::Wr
         .collect();
     let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
 
-    let work_dir: PathBuf = repo.work_dir().expect("TODO").into();
+    let work_dir: PathBuf = repo
+        .work_dir()
+        .ok_or_else(|| anyhow!("blame needs a workdir, but there is none"))?
+        .into();
     let file_path: &BStr = gix::path::os_str_into_bstr(file)?;
 
     let blame_entries = gix::blame::blame_file(
@@ -23,11 +27,10 @@ pub fn blame_file(mut repo: gix::Repository, file: &OsStr, out: impl std::io::Wr
         suspect.id,
         work_dir.clone(),
         file_path,
-    )
-    .expect("TODO");
+    )?;
 
     let absolute_path = work_dir.join(file);
-    let file_content = std::fs::read_to_string(absolute_path).expect("TODO");
+    let file_content = std::fs::read_to_string(absolute_path)?;
     let lines = file_content.lines();
 
     write_blame_entries(out, lines, blame_entries)?;
