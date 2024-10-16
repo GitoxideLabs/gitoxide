@@ -168,6 +168,19 @@ git commit -q -m c11
 git checkout main
 git merge different-branch-that-does-not-contain-file || true
 
+echo -e "line 1\nline 2\n line 3" > file-only-changed-in-branch.txt
+git add file-only-changed-in-branch.txt
+git commit -q -m c12
+
+git checkout -b branch-that-has-one-commit
+
+echo -e "line 1 changed\nline 2\n line 3" > file-only-changed-in-branch.txt
+git add file-only-changed-in-branch.txt
+git commit -q -m c13
+
+git checkout main
+git merge branch-that-has-one-commit || true
+
 git blame --porcelain simple.txt > .git/simple.baseline
 git blame --porcelain multiline-hunks.txt > .git/multiline-hunks.baseline
 git blame --porcelain deleted-lines.txt > .git/deleted-lines.baseline
@@ -184,6 +197,7 @@ git blame --porcelain coalesce-adjacent-hunks.txt > .git/coalesce-adjacent-hunks
 git blame --porcelain resolved-conflict.txt > .git/resolved-conflict.baseline
 git blame --porcelain file-in-one-chain-of-ancestors.txt > .git/file-in-one-chain-of-ancestors.baseline
 git blame --porcelain different-file-in-another-chain-of-ancestors.txt > .git/different-file-in-another-chain-of-ancestors.baseline
+git blame --porcelain file-only-changed-in-branch.txt > .git/file-only-changed-in-branch.baseline
 
 git blame --porcelain empty-lines-histogram.txt > .git/empty-lines-histogram.baseline
 
