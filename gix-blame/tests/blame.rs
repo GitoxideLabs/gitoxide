@@ -235,36 +235,13 @@ mktest!(added_line_before_changed_line, "added-line-before-changed-line", 3);
 mktest!(same_line_changed_twice, "same-line-changed-twice", 2);
 mktest!(coalesce_adjacent_hunks, "coalesce-adjacent-hunks", 1);
 
-#[test]
-#[ignore = "TODO: as of October 2024, passing blames to more than one parent is not fully implemented yet"]
-fn merge_commits() {
-    for case in ["resolved-conflict"] {
-        let Fixture {
-            worktree_path,
-            odb,
-            mut resource_cache,
-            suspect,
-            commits,
-        } = Fixture::new().unwrap();
-
-        let lines_blamed = blame_file(
-            &odb,
-            commits,
-            &mut resource_cache,
-            suspect,
-            worktree_path,
-            format!("{case}.txt").as_str().into(),
-        )
-        .unwrap();
-
-        assert_ne!(lines_blamed.len(), 0);
-
-        let git_dir = fixture_path().join(".git");
-        let baseline = Baseline::collect(git_dir.join(format!("{case}.baseline"))).unwrap();
-
-        assert_eq!(lines_blamed, baseline, "{case}");
-    }
-}
+mktest!(resolved_conflict, "resolved-conflict", 2);
+mktest!(file_in_one_chain_of_ancestors, "file-in-one-chain-of-ancestors", 1);
+mktest!(
+    different_file_in_another_chain_of_ancestors,
+    "different-file-in-another-chain-of-ancestors",
+    1
+);
 
 #[test]
 #[ignore = "TBD: figure out what the problem is"]
