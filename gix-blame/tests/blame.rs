@@ -236,6 +236,37 @@ mktest!(same_line_changed_twice, "same-line-changed-twice", 2);
 mktest!(coalesce_adjacent_hunks, "coalesce-adjacent-hunks", 1);
 
 #[test]
+#[ignore = "TODO: as of October 2024, passing blames to more than one parent is not fully implemented yet"]
+fn merge_commits() {
+    for case in ["resolved-conflict"] {
+        let Fixture {
+            worktree_path,
+            odb,
+            mut resource_cache,
+            suspect,
+            commits,
+        } = Fixture::new().unwrap();
+
+        let lines_blamed = blame_file(
+            &odb,
+            commits,
+            &mut resource_cache,
+            suspect,
+            worktree_path,
+            format!("{case}.txt").as_str().into(),
+        )
+        .unwrap();
+
+        assert_ne!(lines_blamed.len(), 0);
+
+        let git_dir = fixture_path().join(".git");
+        let baseline = Baseline::collect(git_dir.join(format!("{case}.baseline"))).unwrap();
+
+        assert_eq!(lines_blamed, baseline, "{case}");
+    }
+}
+
+#[test]
 #[ignore = "TBD: figure out what the problem is"]
 // As of 2024-09-24, these tests are expected to fail.
 //
