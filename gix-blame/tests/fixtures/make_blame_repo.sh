@@ -128,6 +128,32 @@ cp empty-lines-histogram.txt empty-lines-myers.txt
 git add empty-lines-histogram.txt empty-lines-myers.txt
 git commit -q -m c5.4
 
+# The commit history created by the commits above this line is linear, it only
+# contains commits that have exactly one parent.
+# Below this line, there’s also commits that have more than one parent.
+
+echo -e "line 1 original\nline 2\n line 3" > resolved-conflict.txt
+git add resolved-conflict.txt
+git commit -q -m c6
+
+echo -e "line 1 changed\nline 2\n line 3" > resolved-conflict.txt
+git add resolved-conflict.txt
+git commit -q -m c7
+
+git checkout -b different-branch-to-create-a-conflict
+git reset --hard HEAD~1
+
+echo -e "line 1 changed in a different way\nline 2\n line 3" > resolved-conflict.txt
+git add resolved-conflict.txt
+git commit -q -m c8
+
+git checkout main
+git merge different-branch-to-create-a-conflict || true
+
+echo -e "line 1 conflict resolved\nline 2\n line 3" > resolved-conflict.txt
+git add resolved-conflict.txt
+git commit -q -m c9
+
 git blame --porcelain simple.txt > .git/simple.baseline
 git blame --porcelain multiline-hunks.txt > .git/multiline-hunks.baseline
 git blame --porcelain deleted-lines.txt > .git/deleted-lines.baseline
@@ -140,6 +166,8 @@ git blame --porcelain switched-lines.txt > .git/switched-lines.baseline
 git blame --porcelain added-line-before-changed-line.txt > .git/added-line-before-changed-line.baseline
 git blame --porcelain same-line-changed-twice.txt > .git/same-line-changed-twice.baseline
 git blame --porcelain coalesce-adjacent-hunks.txt > .git/coalesce-adjacent-hunks.baseline
+
+git blame --porcelain resolved-conflict.txt > .git/resolved-conflict.baseline
 
 git blame --porcelain empty-lines-histogram.txt > .git/empty-lines-histogram.baseline
 
