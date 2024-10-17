@@ -1,4 +1,4 @@
-use gix_object::tree::EntryKind;
+use gix_object::tree::{Entry, EntryKind};
 use gix_object::Tree;
 
 #[test]
@@ -32,6 +32,19 @@ fn from_empty_cursor() -> crate::Result {
         "only one item is left in the tree, which also keeps it alive"
     );
     assert_eq!(num_writes_and_clear(), 1, "root tree");
+    assert_eq!(
+        cursor.get(None::<&str>),
+        None,
+        "the 'root' can't be obtained, no entry exists for it, ever"
+    );
+    assert_eq!(
+        cursor.get(Some("empty-dir-via-cursor")),
+        Some(&Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "empty-dir-via-cursor".into(),
+            oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
+        }),
+    );
 
     let actual = edit.write(&mut write)?;
     assert_eq!(
@@ -52,6 +65,20 @@ fn from_empty_cursor() -> crate::Result {
     let mut cursor = edit.cursor_at(cursor_path)?;
     let actual = cursor.remove(Some("empty-dir-via-cursor"))?.write(&mut write)?;
     assert_eq!(actual, empty_tree(), "it keeps the empty tree like the editor would");
+    assert_eq!(
+        edit.get(["some", "deeply", "nested", "path"]),
+        Some(&Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "path".into(),
+            oid: gix_hash::Kind::Sha1.null(),
+        }),
+        "the directory leading to the removed one is still present"
+    );
+    assert_eq!(
+        edit.get(["some", "deeply", "nested", "path", "empty-dir-via-cursor"]),
+        None,
+        "but the removed entry is indee removed"
+    );
 
     let actual = edit.write(&mut write)?;
     assert_eq!(
@@ -400,6 +427,11 @@ fn from_empty_add() -> crate::Result {
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"
     );
     assert_eq!(odb.access_count_and_clear(), 0);
+    assert_eq!(
+        edit.get(None::<&str>),
+        None,
+        "the 'root' can't be obtained, no entry exists for it, ever"
+    );
 
     let actual = edit
         .upsert(Some("hi"), EntryKind::Blob, gix_hash::Kind::Sha1.null())?
@@ -431,12 +463,28 @@ fn from_empty_add() -> crate::Result {
     assert_eq!(storage.borrow().len(), 1, "still nothing but empty trees");
     assert_eq!(odb.access_count_and_clear(), 0);
 
-    let actual = edit
-        .upsert(["a", "b"], EntryKind::Tree, empty_tree())?
+    edit.upsert(["a", "b"], EntryKind::Tree, empty_tree())?
         .upsert(["a", "b", "c"], EntryKind::Tree, empty_tree())?
-        .upsert(["a", "b", "d", "e"], EntryKind::Tree, empty_tree())?
-        .write(&mut write)
-        .expect("it's OK to write empty trees");
+        .upsert(["a", "b", "d", "e"], EntryKind::Tree, empty_tree())?;
+    assert_eq!(
+        edit.get(["a", "b"]),
+        Some(&Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "b".into(),
+            oid: hex_to_id("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+        }),
+        "before writing, entries are still present, just like they were written"
+    );
+    assert_eq!(
+        edit.get(["a", "b", "c"]),
+        Some(&Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "c".into(),
+            oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
+        }),
+    );
+
+    let actual = edit.write(&mut write).expect("it's OK to write empty trees");
     assert_eq!(
         display_tree(actual, &storage),
         "bf91a94ae659ac8a9da70d26acf42df1a36adb6e
@@ -450,6 +498,16 @@ fn from_empty_add() -> crate::Result {
     );
     assert_eq!(num_writes_and_clear(), 4, "it wrote the trees it needed to write");
     assert_eq!(odb.access_count_and_clear(), 0);
+    assert_eq!(edit.get(["a", "b"]), None, "nothing exists here");
+    assert_eq!(
+        edit.get(Some("a")),
+        Some(&Entry {
+            mode: EntryKind::Tree.into(),
+            filename: "a".into(),
+            oid: hex_to_id("850bf83c26003cb0541318718bc9217c4a5bde6d"),
+        }),
+        "but the top-level tree is still available and can yield its entries, as written with proper ids"
+    );
 
     let actual = edit
         .upsert(["a"], EntryKind::Blob, any_blob())?
@@ -532,6 +590,24 @@ fn from_empty_add() -> crate::Result {
         "still, only the root-tree changes effectively"
     );
     assert_eq!(odb.access_count_and_clear(), 0);
+
+    let actual = edit
+        .upsert(["a", "b"], EntryKind::Tree, empty_tree())?
+        .upsert(["a", "b", "c"], EntryKind::BlobExecutable, any_blob())?
+        // .upsert(["a", "b", "d"], EntryKind::Blob, any_blob())?
+        .write(&mut write)?;
+    assert_eq!(
+        display_tree(actual, &storage),
+        "d8d3f558776965f70452625b72363234f517b290
+└── a
+    └── b
+        └── c bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.100755
+",
+        "the intermediate tree is rewritten to be suitable to hold the blob"
+    );
+    assert_eq!(num_writes_and_clear(), 3, "root, and two child-trees");
+    assert_eq!(odb.access_count_and_clear(), 0);
+
     Ok(())
 }
 

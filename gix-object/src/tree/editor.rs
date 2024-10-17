@@ -46,7 +46,7 @@ impl<'a> Editor<'a> {
             find,
             object_hash,
             trees: HashMap::from_iter(Some((empty_path(), root))),
-            path_buf: Vec::with_capacity(256).into(),
+            path_buf: BString::from(Vec::with_capacity(256)).into(),
             tree_buf: Vec::with_capacity(512),
         }
     }
@@ -54,7 +54,8 @@ impl<'a> Editor<'a> {
 
 /// Operations
 impl Editor<'_> {
-    /// Write the entire in-memory state of all changed trees (and only changed trees) to `out`.
+    /// Write the entire in-memory state of all changed trees (and only changed trees) to `out`, and remove
+    /// written portions from our state except for the root tree, which affects [`get()`](Editor::get()).
     /// Note that the returned object id *can* be the empty tree if everything was removed or if nothing
     /// was added to the tree.
     ///
@@ -72,7 +73,7 @@ impl Editor<'_> {
     /// It is absolutely and intentionally possible to write out invalid trees with this method.
     /// Higher layers are expected to perform detailed validation.
     pub fn write<E>(&mut self, out: impl FnMut(&Tree) -> Result<ObjectId, E>) -> Result<ObjectId, E> {
-        self.path_buf.clear();
+        self.path_buf.borrow_mut().clear();
         self.write_at_pathbuf(out, WriteMode::Normal)
     }
 
@@ -85,8 +86,22 @@ impl Editor<'_> {
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
-        self.path_buf.clear();
+        self.path_buf.borrow_mut().clear();
         self.upsert_or_remove_at_pathbuf(rela_path, None)
+    }
+
+    /// Obtain the entry at `rela_path` or return `None` if none was found, or the tree wasn't yet written
+    /// to that point.
+    /// Note that after [writing](Self::write) only the root path remains, all other intermediate trees are removed.
+    /// The entry can be anything that can be stored in a tree, but may have a null-id if it's a newly
+    /// inserted tree. Also, ids of trees might not be accurate as they may have been changed in memory.
+    pub fn get<I, C>(&self, rela_path: I) -> Option<&tree::Entry>
+    where
+        I: IntoIterator<Item = C>,
+        C: AsRef<BStr>,
+    {
+        self.path_buf.borrow_mut().clear();
+        self.get_inner(rela_path)
     }
 
     /// Insert a new entry of `kind` with `id` at `rela_path`, an iterator over each path component in the tree,
@@ -108,8 +123,39 @@ impl Editor<'_> {
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
-        self.path_buf.clear();
+        self.path_buf.borrow_mut().clear();
         self.upsert_or_remove_at_pathbuf(rela_path, Some((kind, id, UpsertMode::Normal)))
+    }
+
+    fn get_inner<I, C>(&self, rela_path: I) -> Option<&tree::Entry>
+    where
+        I: IntoIterator<Item = C>,
+        C: AsRef<BStr>,
+    {
+        let mut path_buf = self.path_buf.borrow_mut();
+        let mut cursor = self.trees.get(path_buf.as_bstr()).expect("root is always present");
+        let mut rela_path = rela_path.into_iter().peekable();
+        while let Some(name) = rela_path.next() {
+            let name = name.as_ref();
+            let is_last = rela_path.peek().is_none();
+            match cursor
+                .entries
+                .binary_search_by(|e| cmp_entry_with_name(e, name, true))
+                .or_else(|_| cursor.entries.binary_search_by(|e| cmp_entry_with_name(e, name, false)))
+            {
+                Ok(idx) if is_last => return Some(&cursor.entries[idx]),
+                Ok(idx) => {
+                    if cursor.entries[idx].mode.is_tree() {
+                        push_path_component(&mut path_buf, name);
+                        cursor = self.trees.get(path_buf.as_bstr())?;
+                    } else {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            };
+        }
+        None
     }
 
     fn write_at_pathbuf<E>(
@@ -120,11 +166,12 @@ impl Editor<'_> {
         assert_ne!(self.trees.len(), 0, "there is at least the root tree");
 
         // back is for children, front is for parents.
+        let path_buf = self.path_buf.borrow_mut();
         let mut parents = vec![(
             None::<usize>,
-            self.path_buf.clone(),
+            path_buf.clone(),
             self.trees
-                .remove(&path_hash(&self.path_buf))
+                .remove(path_buf.as_bstr())
                 .expect("root tree is always present"),
         )];
         let mut children = Vec::new();
@@ -133,7 +180,7 @@ impl Editor<'_> {
             for entry in &tree.entries {
                 if entry.mode.is_tree() {
                     let prev_len = push_path_component(&mut rela_path, &entry.filename);
-                    if let Some(sub_tree) = self.trees.remove(&path_hash(&rela_path)) {
+                    if let Some(sub_tree) = self.trees.remove(&rela_path) {
                         all_entries_unchanged_or_written = false;
                         let next_parent_idx = parents.len();
                         children.push((Some(next_parent_idx), rela_path.clone(), sub_tree));
@@ -167,7 +214,7 @@ impl Editor<'_> {
                     }
                 } else if parents.is_empty() {
                     debug_assert!(children.is_empty(), "we consume children before parents");
-                    debug_assert_eq!(rela_path, self.path_buf, "this should always be the root tree");
+                    debug_assert_eq!(rela_path, **path_buf, "this should always be the root tree");
 
                     // There may be left-over trees if they are replaced with blobs for example.
                     match out(&tree) {
@@ -207,10 +254,8 @@ impl Editor<'_> {
         I: IntoIterator<Item = C>,
         C: AsRef<BStr>,
     {
-        let mut cursor = self
-            .trees
-            .get_mut(&path_hash(&self.path_buf))
-            .expect("root is always present");
+        let mut path_buf = self.path_buf.borrow_mut();
+        let mut cursor = self.trees.get_mut(path_buf.as_bstr()).expect("root is always present");
         let mut rela_path = rela_path.into_iter().peekable();
         let new_kind_is_tree = kind_and_id.map_or(false, |(kind, _, _)| kind == EntryKind::Tree);
         while let Some(name) = rela_path.next() {
@@ -294,9 +339,8 @@ impl Editor<'_> {
             if is_last && kind_and_id.map_or(false, |(_, _, mode)| mode == UpsertMode::Normal) {
                 break;
             }
-            push_path_component(&mut self.path_buf, name);
-            let path_id = path_hash(&self.path_buf);
-            cursor = match self.trees.entry(path_id) {
+            push_path_component(&mut path_buf, name);
+            cursor = match self.trees.entry(path_buf.clone()) {
                 hash_map::Entry::Occupied(e) => e.into_mut(),
                 hash_map::Entry::Vacant(e) => e.insert(
                     if let Some(tree_id) = tree_to_lookup.filter(|tree_id| !tree_id.is_empty_tree()) {
@@ -307,6 +351,7 @@ impl Editor<'_> {
                 ),
             };
         }
+        drop(path_buf);
         Ok(self)
     }
 
@@ -325,7 +370,7 @@ impl Editor<'_> {
 mod cursor {
     use crate::tree::editor::{Cursor, UpsertMode, WriteMode};
     use crate::tree::{Editor, EntryKind};
-    use crate::Tree;
+    use crate::{tree, Tree};
     use bstr::{BStr, BString};
     use gix_hash::ObjectId;
 
@@ -350,26 +395,41 @@ mod cursor {
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
         {
-            self.path_buf.clear();
+            self.path_buf.borrow_mut().clear();
             self.upsert_or_remove_at_pathbuf(
                 rela_path,
                 Some((EntryKind::Tree, self.object_hash.null(), UpsertMode::AssureTreeOnly)),
             )?;
+            let prefix = self.path_buf.borrow_mut().clone();
             Ok(Cursor {
-                prefix: self.path_buf.clone(), /* set during the upsert call */
+                prefix, /* set during the upsert call */
                 parent: self,
             })
         }
     }
 
     impl Cursor<'_, '_> {
+        /// Obtain the entry at `rela_path` or return `None` if none was found, or the tree wasn't yet written
+        /// to that point.
+        /// Note that after [writing](Self::write) only the root path remains, all other intermediate trees are removed.
+        /// The entry can be anything that can be stored in a tree, but may have a null-id if it's a newly
+        /// inserted tree. Also, ids of trees might not be accurate as they may have been changed in memory.
+        pub fn get<I, C>(&self, rela_path: I) -> Option<&tree::Entry>
+        where
+            I: IntoIterator<Item = C>,
+            C: AsRef<BStr>,
+        {
+            self.parent.path_buf.borrow_mut().clone_from(&self.prefix);
+            self.parent.get_inner(rela_path)
+        }
+
         /// Like [`Editor::upsert()`], but with the constraint of only editing in this cursor's tree.
         pub fn upsert<I, C>(&mut self, rela_path: I, kind: EntryKind, id: ObjectId) -> Result<&mut Self, super::Error>
         where
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
         {
-            self.parent.path_buf.clone_from(&self.prefix);
+            self.parent.path_buf.borrow_mut().clone_from(&self.prefix);
             self.parent
                 .upsert_or_remove_at_pathbuf(rela_path, Some((kind, id, UpsertMode::Normal)))?;
             Ok(self)
@@ -381,14 +441,14 @@ mod cursor {
             I: IntoIterator<Item = C>,
             C: AsRef<BStr>,
         {
-            self.parent.path_buf.clone_from(&self.prefix);
+            self.parent.path_buf.borrow_mut().clone_from(&self.prefix);
             self.parent.upsert_or_remove_at_pathbuf(rela_path, None)?;
             Ok(self)
         }
 
         /// Like [`Editor::write()`], but will write only the subtree of the cursor.
         pub fn write<E>(&mut self, out: impl FnMut(&Tree) -> Result<ObjectId, E>) -> Result<ObjectId, E> {
-            self.parent.path_buf.clone_from(&self.prefix);
+            self.parent.path_buf.borrow_mut().clone_from(&self.prefix);
             self.parent.write_at_pathbuf(out, WriteMode::FromCursor)
         }
     }
@@ -422,10 +482,6 @@ fn filename(path: &BStr) -> &BStr {
 
 fn empty_path() -> BString {
     BString::default()
-}
-
-fn path_hash(path: &[u8]) -> BString {
-    path.to_vec().into()
 }
 
 fn push_path_component(base: &mut BString, component: &[u8]) -> usize {
