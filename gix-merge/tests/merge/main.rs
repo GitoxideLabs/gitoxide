@@ -1,6 +1,6 @@
 extern crate core;
 
-#[cfg(feature = "blob")]
 mod blob;
+mod tree;
 
 pub use gix_testtools::Result;
