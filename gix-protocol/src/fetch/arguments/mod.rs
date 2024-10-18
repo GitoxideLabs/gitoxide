@@ -228,7 +228,7 @@ impl Arguments {
             }
             gix_transport::Protocol::V2 => {
                 supports_include_tag = true;
-                (Command::Fetch.initial_arguments(&features), None)
+                (Command::Fetch.initial_v2_arguments(&features), None)
             }
         };
 

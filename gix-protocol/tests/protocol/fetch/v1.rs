@@ -1,6 +1,7 @@
+use crate::fetch::_impl::FetchConnection;
 use bstr::ByteSlice;
 use gix_features::progress;
-use gix_protocol::{handshake, FetchConnection};
+use gix_protocol::handshake;
 use gix_transport::Protocol;
 
 use crate::fetch::{helper_unused, oid, transport, CloneDelegate, LsRemoteDelegate};
@@ -14,7 +15,7 @@ async fn clone() -> crate::Result {
             "v1/clone{}.response",
             with_keepalive.then_some("-with-keepalive").unwrap_or_default()
         );
-        gix_protocol::fetch(
+        crate::fetch(
             transport(
                 out,
                 &fixture,
@@ -38,7 +39,7 @@ async fn clone() -> crate::Result {
 async fn clone_empty_with_capabilities() -> crate::Result {
     let out = Vec::new();
     let mut dlg = CloneDelegate::default();
-    gix_protocol::fetch(
+    crate::fetch(
         transport(
             out,
             "v1/clone-empty-with-capabilities.response",
@@ -67,7 +68,7 @@ async fn ls_remote() -> crate::Result {
         Protocol::V1,
         gix_transport::client::git::ConnectMode::Daemon,
     );
-    gix_protocol::fetch(
+    crate::fetch(
         &mut transport,
         &mut delegate,
         helper_unused,
@@ -106,7 +107,7 @@ async fn ls_remote_handshake_failure_due_to_downgrade() -> crate::Result {
     let out = Vec::new();
     let delegate = LsRemoteDelegate::default();
 
-    gix_protocol::fetch(
+    crate::fetch(
         transport(
             out,
             "v1/clone.response",

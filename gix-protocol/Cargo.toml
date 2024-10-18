@@ -77,7 +77,6 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 gix-packetline = { path = "../gix-packetline", version = "^0.18.1" }
-gix-testtools = { path = "../tests/tools" }
 
 [package.metadata.docs.rs]
 features = ["blocking-client", "document-features", "serde"]

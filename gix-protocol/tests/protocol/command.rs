@@ -8,10 +8,8 @@ mod v1 {
     const GITHUB_CAPABILITIES: &str = "multi_ack thin-pack side-band ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag allow-tip-sha1-in-want allow-reachable-sha1-in-want no-done symref=HEAD:refs/heads/main filter agent=git/github-gdf51a71f0236";
     mod fetch {
         mod default_features {
-            use crate::{
-                command::tests::v1::{capabilities, GITHUB_CAPABILITIES},
-                Command,
-            };
+            use super::super::{capabilities, GITHUB_CAPABILITIES};
+            use gix_protocol::Command;
 
             #[test]
             fn it_chooses_the_best_multi_ack_and_sideband() {
@@ -60,7 +58,8 @@ mod v2 {
 
     mod fetch {
         mod default_features {
-            use crate::{command::tests::v2::capabilities, Command};
+            use super::super::capabilities;
+            use gix_protocol::Command;
 
             #[test]
             fn all_features() {
@@ -80,12 +79,13 @@ mod v2 {
         mod initial_arguments {
             use bstr::ByteSlice;
 
-            use crate::{command::tests::v2::capabilities, Command};
+            use super::super::capabilities;
+            use gix_protocol::Command;
 
             #[test]
             fn for_all_features() {
                 assert_eq!(
-                    Command::Fetch.initial_arguments(&Command::Fetch.default_features(
+                    Command::Fetch.initial_v2_arguments(&Command::Fetch.default_features(
                         gix_transport::Protocol::V2,
                         &capabilities("fetch", "shallow filter sideband-all packfile-uris")
                     )),
@@ -101,7 +101,8 @@ mod v2 {
 
     mod ls_refs {
         mod default_features {
-            use crate::{command::tests::v2::capabilities, Command};
+            use super::super::capabilities;
+            use gix_protocol::Command;
 
             #[test]
             fn default_as_there_are_no_features() {
@@ -118,37 +119,50 @@ mod v2 {
         mod validate {
             use bstr::ByteSlice;
 
-            use crate::{command::tests::v2::capabilities, Command};
+            use super::super::capabilities;
+            use gix_protocol::Command;
 
             #[test]
             fn ref_prefixes_can_always_be_used() {
-                Command::LsRefs.validate_argument_prefixes_or_panic(
-                    gix_transport::Protocol::V2,
-                    &capabilities("something else", "do-not-matter"),
-                    &[b"ref-prefix hello/".as_bstr().into()],
-                    &[],
-                );
+                assert!(Command::LsRefs
+                    .validate_argument_prefixes(
+                        gix_transport::Protocol::V2,
+                        &capabilities("something else", "do-not-matter"),
+                        &[b"ref-prefix hello/".as_bstr().into()],
+                        &[],
+                    )
+                    .is_ok());
             }
 
             #[test]
-            #[should_panic]
             fn unknown_argument() {
-                Command::LsRefs.validate_argument_prefixes_or_panic(
-                    gix_transport::Protocol::V2,
-                    &capabilities("other", "do-not-matter"),
-                    &[b"definitely-nothing-we-know".as_bstr().into()],
-                    &[],
+                assert_eq!(
+                    Command::LsRefs
+                        .validate_argument_prefixes(
+                            gix_transport::Protocol::V2,
+                            &capabilities("other", "do-not-matter"),
+                            &[b"definitely-nothing-we-know".as_bstr().into()],
+                            &[],
+                        )
+                        .unwrap_err()
+                        .to_string(),
+                    "ls-refs: argument definitely-nothing-we-know is not known or allowed"
                 );
             }
 
             #[test]
-            #[should_panic]
             fn unknown_feature() {
-                Command::LsRefs.validate_argument_prefixes_or_panic(
-                    gix_transport::Protocol::V2,
-                    &capabilities("other", "do-not-matter"),
-                    &[],
-                    &[("some-feature-that-does-not-exist", None)],
+                assert_eq!(
+                    Command::LsRefs
+                        .validate_argument_prefixes(
+                            gix_transport::Protocol::V2,
+                            &capabilities("other", "do-not-matter"),
+                            &[],
+                            &[("some-feature-that-does-not-exist", None)],
+                        )
+                        .unwrap_err()
+                        .to_string(),
+                    "ls-refs: capability some-feature-that-does-not-exist is not supported"
                 );
             }
         }
