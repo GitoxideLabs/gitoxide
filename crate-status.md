@@ -340,10 +340,11 @@ Check out the [performance discussion][gix-diff-performance] as well.
 
 * [x] three-way merge analysis of **blobs** with choice of how to resolve conflicts
     - [ ] choose how to resolve conflicts on the data-structure
-    - [ ] produce a new blob based on data-structure containing possible resolutions
+    - [x] produce a new blob based on data-structure containing possible resolutions
         - [x] `merge` style
         - [x] `diff3` style
         - [x] `zdiff` style
+    - [ ] various newlines-related options during the merge (see https://git-scm.com/docs/git-merge#Documentation/git-merge.txt-ignore-space-change).
     - [ ] a way to control inter-hunk merging based on proximity (maybe via `gix-diff` feature which could use the same)
 * [ ] diff-heuristics match Git perfectly
 * [x] API documentation

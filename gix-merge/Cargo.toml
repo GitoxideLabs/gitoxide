@@ -43,6 +43,7 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
 gix-odb = { path = "../gix-odb" }
+gix-utils = { version = "^0.1.12", path = "../gix-utils" }
 pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
