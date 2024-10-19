@@ -130,11 +130,7 @@ pub fn show(
                         status = "?",
                         rela_path =
                             gix::path::relativize_with_prefix(&gix::path::from_bstr(entry.rela_path), prefix).display(),
-                        slash = if entry.disk_kind.unwrap_or(gix::dir::entry::Kind::File).is_dir() {
-                            "/"
-                        } else {
-                            ""
-                        }
+                        slash = if entry.disk_kind.is_dir() { "/" } else { "" }
                     )?;
                 }
             }

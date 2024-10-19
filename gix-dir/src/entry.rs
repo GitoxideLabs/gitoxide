@@ -147,14 +147,17 @@ impl Entry {
     }
 }
 
-impl From<std::fs::FileType> for Kind {
-    fn from(value: std::fs::FileType) -> Self {
+impl TryFrom<std::fs::FileType> for Kind {
+    type Error = ();
+    fn try_from(value: std::fs::FileType) -> Result<Self, Self::Error> {
         if value.is_dir() {
-            Kind::Directory
+            Ok(Kind::Directory)
         } else if value.is_symlink() {
-            Kind::Symlink
+            Ok(Kind::Symlink)
+        } else if value.is_file() {
+            Ok(Kind::File)
         } else {
-            Kind::File
+            return Err(());
         }
     }
 }
@@ -175,18 +178,16 @@ impl Status {
     /// Use `pathspec_match` to determine if a pathspec matches in any way, affecting the decision to recurse.
     pub fn can_recurse(
         &self,
-        file_type: Option<Kind>,
+        file_type: Kind,
         pathspec_match: Option<PathspecMatch>,
         for_deletion: Option<ForDeletionMode>,
         worktree_root_is_repository: bool,
     ) -> bool {
-        let is_dir_on_disk = file_type.map_or(false, |ft| {
-            if worktree_root_is_repository {
-                ft.is_dir()
-            } else {
-                ft.is_recursable_dir()
-            }
-        });
+        let is_dir_on_disk = if worktree_root_is_repository {
+            file_type.is_dir()
+        } else {
+            file_type.is_recursable_dir()
+        };
         if !is_dir_on_disk {
             return false;
         }
