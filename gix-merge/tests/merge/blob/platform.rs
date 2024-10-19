@@ -46,7 +46,7 @@ mod merge {
         );
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -54,7 +54,7 @@ mod merge {
         );
 
         platform_ref.options.resolve_binary_with = Some(builtin_driver::binary::ResolveWith::Theirs);
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Theirs, Resolution::Complete),
@@ -86,7 +86,7 @@ mod merge {
         let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
         assert_eq!(platform_ref.driver, DriverChoice::BuiltIn(BuiltinDriver::Text));
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
         assert_eq!(
             buf.as_bstr(),
@@ -102,7 +102,7 @@ theirs
             style: ConflictStyle::Diff3,
             marker_size: 3,
         };
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
 
         assert_eq!(
@@ -119,7 +119,7 @@ theirs
         );
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithOurs;
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -128,23 +128,23 @@ theirs
         assert_eq!(buf.as_bstr(), "ours");
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithTheirs;
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete));
         assert_eq!(buf.as_bstr(), "theirs");
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithUnion;
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
         platform_ref.driver = DriverChoice::BuiltIn(BuiltinDriver::Union);
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::default();
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
         platform_ref.driver = DriverChoice::BuiltIn(BuiltinDriver::Binary);
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -163,7 +163,7 @@ theirs
             ("b\n", Pick::Ancestor, builtin_driver::binary::ResolveWith::Ancestor),
         ] {
             platform_ref.options.resolve_binary_with = Some(resolve);
-            let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+            let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
             assert_eq!(res, (expected_pick, Resolution::Complete));
             assert_eq!(platform_ref.buffer_by_pick(res.0).unwrap().as_bstr(), expected);
         }
@@ -202,7 +202,7 @@ theirs
 
         let platform_ref = platform.prepare_merge(&db, Default::default())?;
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete), "merge drivers always merge ");
         let mut lines = cleaned_driver_lines(&buf)?;
         for tmp_file in lines.by_ref().take(3) {
@@ -228,7 +228,7 @@ theirs
         let id = db.insert("binary\0");
         platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)?;
         let platform_ref = platform.prepare_merge(&db, Default::default())?;
-        let res = platform_ref.merge(&mut buf, default_labels(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -282,7 +282,7 @@ theirs
         let platform_ref = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, Default::default(), Default::default())?;
+        let res = platform_ref.merge(&mut buf, Default::default(), &Default::default())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -359,7 +359,7 @@ theirs
 
         let mut out = Vec::new();
         let err = platform_ref
-            .merge(&mut out, Default::default(), Default::default())
+            .merge(&mut out, Default::default(), &Default::default())
             .unwrap_err();
         assert!(matches!(err, platform::merge::Error::ResourceTooLarge));
 
