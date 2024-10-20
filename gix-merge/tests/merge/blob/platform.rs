@@ -100,7 +100,7 @@ theirs
         );
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::Keep {
             style: ConflictStyle::Diff3,
-            marker_size: 3,
+            marker_size: 3.try_into().unwrap(),
         };
         let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));

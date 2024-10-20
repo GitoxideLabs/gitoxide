@@ -74,7 +74,7 @@ impl Repository {
                         })
                         .transpose()?
                         .unwrap_or_default(),
-                    marker_size: text::Conflict::DEFAULT_MARKER_SIZE,
+                    marker_size: text::Conflict::DEFAULT_MARKER_SIZE.try_into().unwrap(),
                 },
             },
         })

@@ -1,0 +1,26 @@
+[package]
+name = "gix-merge-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+anyhow = "1.0.76"
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1.3.2", features = ["derive"] }
+imara-diff = { version = "0.1.7" }
+gix-merge = { path = ".." }
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "blob"
+path = "fuzz_targets/blob.rs"
+test = false
+doc = false
