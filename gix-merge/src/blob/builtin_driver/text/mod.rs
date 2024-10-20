@@ -1,4 +1,5 @@
 use bstr::BStr;
+use std::num::NonZeroU8;
 
 /// The way the built-in [text driver](crate::blob::BuiltinDriver::Text) will express
 /// merge conflicts in the resulting file.
@@ -87,7 +88,7 @@ pub enum Conflict {
         /// How to visualize conflicts in merged files.
         style: ConflictStyle,
         /// The amount of markers to draw, defaults to 7, i.e. `<<<<<<<`
-        marker_size: usize,
+        marker_size: NonZeroU8,
     },
     /// Chose our side to resolve a conflict.
     ResolveWithOurs,
@@ -99,12 +100,13 @@ pub enum Conflict {
 
 impl Conflict {
     /// The amount of conflict marker characters to print by default.
-    pub const DEFAULT_MARKER_SIZE: usize = 7;
+    // TODO: use NonZeroU8::new().unwrap() here once the MSRV supports it.
+    pub const DEFAULT_MARKER_SIZE: u8 = 7;
 
     /// The amount of conflict markers to print if this instance contains them, or `None` otherwise
-    pub fn marker_size(&self) -> Option<usize> {
+    pub fn marker_size(&self) -> Option<u8> {
         match self {
-            Conflict::Keep { marker_size, .. } => Some(*marker_size),
+            Conflict::Keep { marker_size, .. } => Some(marker_size.get()),
             Conflict::ResolveWithOurs | Conflict::ResolveWithTheirs | Conflict::ResolveWithUnion => None,
         }
     }
@@ -114,7 +116,7 @@ impl Default for Conflict {
     fn default() -> Self {
         Conflict::Keep {
             style: Default::default(),
-            marker_size: Conflict::DEFAULT_MARKER_SIZE,
+            marker_size: Conflict::DEFAULT_MARKER_SIZE.try_into().unwrap(),
         }
     }
 }

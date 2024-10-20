@@ -12,8 +12,11 @@ function baseline() {
 
   shift 4
   git merge-file --stdout "$@" "$ours" "$base" "$theirs" > "$output" || true
-
   echo "$ours" "$base" "$theirs" "$output" "$@" >> baseline.cases
+
+  local output="${output}-reversed"
+  git merge-file --stdout "$@" "$theirs" "$base" "$ours" > "${output}" || true
+  echo "$theirs" "$base" "$ours" "${output}" "$@" >> baseline-reversed.cases
 }
 
 mkdir simple

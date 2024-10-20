@@ -25,7 +25,8 @@ fn binary() {
 
 mod text {
     use bstr::ByteSlice;
-    use gix_merge::blob::Resolution;
+    use gix_merge::blob::builtin_driver::text::Conflict;
+    use gix_merge::blob::{builtin_driver, Resolution};
     use pretty_assertions::assert_str_eq;
 
     const DIVERGING: &[&str] = &[
@@ -71,60 +72,123 @@ mod text {
         "complex/spurious-c-conflicts/zdiff3-histogram.merged",
     ];
 
+    /// Should be a copy of `DIVERGING` once the reverse operation truly works like before
+    const DIVERGING_REVERSED: &[&str] = &[
+        // expected cases
+        // TODO: double-check them, maybe some could actually work, they seem to have similar failure modes as above
+        "zdiff3-middlecommon/merge.merged-reversed",
+        "zdiff3-middlecommon/merge-union.merged-reversed",
+        "zdiff3-interesting/merge.merged-reversed",
+        "zdiff3-interesting/merge-theirs.merged-reversed",
+        "zdiff3-interesting/diff3.merged-reversed",
+        "zdiff3-interesting/diff3-histogram.merged-reversed",
+        "zdiff3-interesting/zdiff3.merged-reversed",
+        "zdiff3-interesting/zdiff3-histogram.merged-reversed",
+        "zdiff3-interesting/merge-union.merged-reversed",
+        "zdiff3-evil/merge.merged-reversed",
+        "zdiff3-evil/merge-union.merged-reversed",
+        "complex/missing-LF-at-EOF/merge.merged-reversed",
+        "complex/missing-LF-at-EOF/diff3.merged-reversed",
+        "complex/missing-LF-at-EOF/diff3-histogram.merged-reversed",
+        "complex/missing-LF-at-EOF/zdiff3.merged-reversed",
+        "complex/missing-LF-at-EOF/zdiff3-histogram.merged-reversed",
+        "complex/missing-LF-at-EOF/merge-ours.merged-reversed",
+        "complex/missing-LF-at-EOF/merge-theirs.merged-reversed",
+        "complex/missing-LF-at-EOF/merge-union.merged-reversed",
+        "complex/auto-simplification/merge.merged-reversed",
+        "complex/auto-simplification/merge-union.merged-reversed",
+        "complex/marker-newline-handling-lf2/zdiff3.merged-reversed",
+        "complex/marker-newline-handling-lf2/zdiff3-histogram.merged-reversed",
+        "complex/spurious-c-conflicts/merge.merged-reversed",
+        "complex/spurious-c-conflicts/merge-union.merged-reversed",
+        "complex/spurious-c-conflicts/diff3-histogram.merged-reversed",
+        "complex/spurious-c-conflicts/zdiff3-histogram.merged-reversed",
+    ];
+
     // TODO: fix all of these eventually
-    fn is_case_diverging(case: &baseline::Expectation) -> bool {
-        DIVERGING.iter().any(|name| case.name == *name)
+    fn is_case_diverging(case: &baseline::Expectation, diverging: &[&str]) -> bool {
+        diverging.iter().any(|name| case.name == *name)
+    }
+
+    #[test]
+    fn fuzzed() {
+        for (ours, base, theirs, opts) in [
+            (
+                &[255, 10, 10, 255][..],
+                &[0, 10, 10, 13, 10, 193, 0, 51, 8, 33][..],
+                &[10, 255, 10, 10, 10, 0, 10][..],
+                builtin_driver::text::Options {
+                    conflict: Conflict::ResolveWithUnion,
+                    diff_algorithm: imara_diff::Algorithm::Myers,
+                },
+            ),
+            (
+                &[],
+                &[10, 255, 255, 255],
+                &[255, 10, 255, 10, 10, 255, 40],
+                builtin_driver::text::Options::default(),
+            ),
+        ] {
+            let mut out = Vec::new();
+            let mut input = imara_diff::intern::InternedInput::default();
+            gix_merge::blob::builtin_driver::text(&mut out, &mut input, Default::default(), ours, base, theirs, opts);
+        }
     }
 
     #[test]
     fn run_baseline() -> crate::Result {
         let root = gix_testtools::scripted_fixture_read_only("text-baseline.sh")?;
-        let cases = std::fs::read_to_string(root.join("baseline.cases"))?;
-        let mut out = Vec::new();
-        let mut num_diverging = 0;
-        let mut num_cases = 0;
-        for case in baseline::Expectations::new(&root, &cases) {
-            num_cases += 1;
-            let mut input = imara_diff::intern::InternedInput::default();
-            let actual = gix_merge::blob::builtin_driver::text(
-                &mut out,
-                &mut input,
-                case.labels(),
-                &case.ours,
-                &case.base,
-                &case.theirs,
-                case.options,
-            );
-            if is_case_diverging(&case) {
-                num_diverging += 1;
-            } else {
-                let expected_resolution = if case.expected.contains_str("<<<<<<<") {
-                    Resolution::Conflict
-                } else {
-                    Resolution::Complete
-                };
-                assert_eq!(out.as_bstr(), case.expected);
-                assert_str_eq!(
-                    out.as_bstr().to_str_lossy(),
-                    case.expected.to_str_lossy(),
-                    "{}: output mismatch\n{}",
-                    case.name,
-                    out.as_bstr()
+        for (baseline, diverging, expected_percentage) in [
+            ("baseline-reversed.cases", DIVERGING_REVERSED, 11),
+            ("baseline.cases", DIVERGING, 11),
+        ] {
+            let cases = std::fs::read_to_string(root.join(baseline))?;
+            let mut out = Vec::new();
+            let mut num_diverging = 0;
+            let mut num_cases = 0;
+            for case in baseline::Expectations::new(&root, &cases) {
+                num_cases += 1;
+                let mut input = imara_diff::intern::InternedInput::default();
+                let actual = gix_merge::blob::builtin_driver::text(
+                    &mut out,
+                    &mut input,
+                    case.labels(),
+                    &case.ours,
+                    &case.base,
+                    &case.theirs,
+                    case.options,
                 );
-                assert_eq!(actual, expected_resolution, "{}: resolution mismatch", case.name,);
+                if is_case_diverging(&case, diverging) {
+                    num_diverging += 1;
+                } else {
+                    let expected_resolution = if case.expected.contains_str("<<<<<<<") {
+                        Resolution::Conflict
+                    } else {
+                        Resolution::Complete
+                    };
+                    assert_str_eq!(
+                        out.as_bstr().to_str_lossy(),
+                        case.expected.to_str_lossy(),
+                        "{}: output mismatch\n{}",
+                        case.name,
+                        out.as_bstr()
+                    );
+                    assert_eq!(out.as_bstr(), case.expected);
+                    assert_eq!(actual, expected_resolution, "{}: resolution mismatch", case.name,);
+                }
             }
-        }
 
-        assert_eq!(
-            num_diverging,
-            DIVERGING.len(),
-            "Number of expected diverging cases must match the actual one - probably the implementation improved"
-        );
-        assert_eq!(
-            ((num_diverging as f32 / num_cases as f32) * 100.0) as usize,
-            11,
-            "Just to show the percentage of skipped tests - this should get better"
-        );
+            assert_eq!(
+                num_diverging,
+                diverging.len(),
+                "Number of expected diverging cases must match the actual one - probably the implementation improved"
+            );
+            assert_eq!(
+                ((num_diverging as f32 / num_cases as f32) * 100.0) as usize,
+                expected_percentage,
+                "Just to show the percentage of skipped tests - this should get better"
+            );
+        }
         Ok(())
     }
 
@@ -185,15 +249,16 @@ mod text {
                 let read = |rela_path: &str| read_blob(self.root, rela_path);
 
                 let mut options = gix_merge::blob::builtin_driver::text::Options::default();
+                let marker_size = 7.try_into().unwrap();
                 for arg in words {
                     options.conflict = match arg {
                         "--diff3" => Conflict::Keep {
                             style: ConflictStyle::Diff3,
-                            marker_size: 7,
+                            marker_size,
                         },
                         "--zdiff3" => Conflict::Keep {
                             style: ConflictStyle::ZealousDiff3,
-                            marker_size: 7,
+                            marker_size,
                         },
                         "--ours" => Conflict::ResolveWithOurs,
                         "--theirs" => Conflict::ResolveWithTheirs,
