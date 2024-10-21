@@ -39,7 +39,7 @@ pub mod is_git {
         Metadata { source: std::io::Error, path: PathBuf },
         #[error("The repository's config file doesn't exist or didn't have a 'bare' configuration or contained core.worktree without value")]
         Inconclusive,
-        #[error("Could not obtain current directory when conforming repository path")]
+        #[error("Could not obtain current directory for resolving the '.' repository path")]
         CurrentDir(#[from] std::io::Error),
     }
 }

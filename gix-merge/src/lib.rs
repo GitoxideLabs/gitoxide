@@ -2,5 +2,10 @@
 #![forbid(unsafe_code)]
 
 ///
-#[cfg(feature = "blob")]
 pub mod blob;
+///
+pub mod commit;
+pub use commit::function::commit;
+///
+pub mod tree;
+pub use tree::function::tree;

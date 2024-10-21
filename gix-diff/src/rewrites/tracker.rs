@@ -168,13 +168,13 @@ impl<T: Change> Tracker<T> {
             return Some(change);
         };
 
-        let relation = change
-            .relation()
-            .filter(|_| matches!(change_kind, ChangeKind::Addition | ChangeKind::Deletion));
         let entry_kind = change.entry_mode().kind();
         if entry_kind == EntryKind::Commit {
             return Some(change);
         }
+        let relation = change
+            .relation()
+            .filter(|_| matches!(change_kind, ChangeKind::Addition | ChangeKind::Deletion));
         if let (None, EntryKind::Tree) = (relation, entry_kind) {
             return Some(change);
         };

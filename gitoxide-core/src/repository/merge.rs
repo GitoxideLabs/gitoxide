@@ -83,7 +83,7 @@ pub fn file(
         other: Some(theirs.as_bstr()),
     };
     let mut buf = repo.empty_reusable_buffer();
-    let (pick, resolution) = platform.merge(&mut buf, labels, repo.command_context()?)?;
+    let (pick, resolution) = platform.merge(&mut buf, labels, &repo.command_context()?)?;
     let buf = platform.buffer_by_pick(pick).unwrap_or(&buf);
     out.write_all(buf)?;
 

@@ -2,6 +2,7 @@ use crate::{
     bstr::{BStr, BString},
     tree, Tree, TreeRef,
 };
+use std::cell::RefCell;
 use std::cmp::Ordering;
 
 ///
@@ -30,7 +31,7 @@ pub struct Editor<'a> {
     /// dropped when writing at the latest.
     trees: std::collections::HashMap<BString, Tree>,
     /// A buffer to build up paths when finding the tree to edit.
-    path_buf: BString,
+    path_buf: RefCell<BString>,
     /// Our buffer for storing tree-data in, right before decoding it.
     tree_buf: Vec<u8>,
 }
