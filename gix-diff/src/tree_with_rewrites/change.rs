@@ -4,7 +4,7 @@ use bstr::BString;
 use bstr::{BStr, ByteSlice};
 
 /// Represents any possible change in order to turn one tree into another, which references data owned by its producer.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChangeRef<'a> {
     /// An entry was added, like the addition of a file or directory.
     Addition {
@@ -101,7 +101,7 @@ pub enum ChangeRef<'a> {
 }
 
 /// Represents any possible change in order to turn one tree into another, with fully-owned data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     /// An entry was added, like the addition of a file or directory.
     Addition {
