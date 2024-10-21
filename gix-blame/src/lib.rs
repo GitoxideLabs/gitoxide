@@ -802,7 +802,7 @@ pub fn blame_file<E>(
     )];
     let mut out: Vec<BlameEntry> = vec![];
 
-    for item in traverse {
+    'outer: for item in traverse {
         let item = item?;
         let suspect = item.id;
 
@@ -887,6 +887,30 @@ pub fn blame_file<E>(
                 }
             }
         } else {
+            let mut buffer = Vec::new();
+            let commit_id = odb.find_commit(&suspect, &mut buffer).unwrap().tree();
+            let tree = odb.find_tree(&commit_id, &mut buffer).unwrap();
+            let entry = tree.bisect_entry(file_path, false).unwrap();
+
+            for parent_id in &parent_ids {
+                let mut buffer = Vec::new();
+                let parent_commit_id = odb.find_commit(parent_id, &mut buffer).unwrap().tree();
+                let parent_tree = odb.find_tree(&parent_commit_id, &mut buffer).unwrap();
+
+                if let Some(parent_entry) = parent_tree.bisect_entry(file_path, false) {
+                    if entry.oid == parent_entry.oid {
+                        // The blobs storing the blamed file in `entry` and `parent_entry` are
+                        // identical which is why we can pass blame to the parent without further
+                        // checks.
+                        hunks_to_blame
+                            .iter_mut()
+                            .for_each(|unblamed_hunk| unblamed_hunk.pass_blame(suspect, *parent_id));
+
+                        continue 'outer;
+                    }
+                }
+            }
+
             for parent_id in parent_ids {
                 let changes_for_file_path = get_changes_for_file_path(&odb, file_path, item.id, parent_id);
 
