@@ -112,7 +112,7 @@ struct Fixture {
     odb: gix_odb::Handle,
     resource_cache: gix_diff::blob::Platform,
     suspect: ObjectId,
-    commits: Vec<Result<gix_traverse::commit::Info, gix_traverse::commit::simple::Error>>,
+    commits: Vec<Result<gix_traverse::commit::Info, gix_traverse::commit::topo::Error>>,
 }
 
 impl Fixture {
@@ -139,10 +139,8 @@ impl Fixture {
 
         let head_id = reference.peel_to_id_in_place(&store, &odb)?;
 
-        let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head_id), &odb)
-            .sorting(gix_traverse::commit::simple::Sorting::ByCommitTime(
-                gix_traverse::commit::simple::CommitTimeOrder::NewestFirst,
-            ))?
+        let commits: Vec<_> = gix_traverse::commit::topo::Builder::from_iters(&odb, [head_id], None::<Vec<ObjectId>>)
+            .build()?
             .collect();
 
         let git_dir = worktree_path.join(".git");
