@@ -46,6 +46,7 @@ pub mod commitgraph;
 mod fsck;
 pub use fsck::function as fsck;
 pub mod index;
+pub mod log;
 pub mod mailmap;
 mod merge_base;
 pub use merge_base::merge_base;
