@@ -141,6 +141,9 @@ blob-diff = ["gix-diff/blob", "attributes"]
 ## Add functions to specifically merge files, using the standard three-way merge that git offers.
 blob-merge = ["dep:gix-merge", "gix-merge/blob", "attributes"]
 
+## Add blame command similar to `git blame`.
+blame = ["dep:gix-blame"]
+
 ## Make it possible to turn a tree into a stream of bytes, which can be decoded to entries and turned into various other formats.
 worktree-stream = ["gix-worktree-stream", "attributes"]
 
@@ -368,6 +371,7 @@ gix-command = { version = "^0.3.10", path = "../gix-command", optional = true }
 
 gix-worktree-stream = { version = "^0.16.0", path = "../gix-worktree-stream", optional = true }
 gix-archive = { version = "^0.16.0", path = "../gix-archive", default-features = false, optional = true }
+gix-blame = { version= "^0.0.0", path ="../gix-blame", optional = true }
 
 # For communication with remotes
 gix-protocol = { version = "^0.46.0", path = "../gix-protocol", optional = true }

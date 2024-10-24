@@ -5,7 +5,7 @@ name = "gix-blame"
 version = "0.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
-description = "A crate of the gitoxide project dedicated implementing a 'blame' algorithm"
+description = "A crate of the gitoxide project dedicated to implementing a 'blame' algorithm"
 authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2021"
 rust-version = "1.65"
@@ -14,6 +14,16 @@ rust-version = "1.65"
 doctest = false
 
 [dependencies]
+gix-diff = { version = "^0.47.0", path = "../gix-diff", default-features = false, features = ["blob"] }
+gix-object = { version = "^0.45.0", path = "../gix-object" }
+gix-hash = { version = "^0.15.0", path = "../gix-hash" }
+gix-worktree = { version = "^0.37.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-traverse = { version = "^0.42.0", path = "../gix-traverse" }
 
 [dev-dependencies]
+gix-ref = { version = "^0.48.0", path = "../gix-ref" }
+gix-filter = { version = "^0.14.0", path = "../gix-filter" }
+gix-fs = { version = "^0.12.0", path = "../gix-fs" }
+gix-index = { version = "^0.36.0", path = "../gix-index" }
+gix-odb = { version = "^0.64.0", path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }

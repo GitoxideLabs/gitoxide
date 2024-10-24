@@ -1325,6 +1325,7 @@ dependencies = [
  "gix-actor 0.33.0",
  "gix-archive",
  "gix-attributes 0.23.0",
+ "gix-blame",
  "gix-command",
  "gix-commitgraph 0.25.0",
  "gix-config",
@@ -1497,7 +1498,17 @@ dependencies = [
 name = "gix-blame"
 version = "0.0.0"
 dependencies = [
+ "gix-diff",
+ "gix-filter",
+ "gix-fs 0.12.0",
+ "gix-hash 0.15.0",
+ "gix-index 0.36.0",
+ "gix-object 0.45.0",
+ "gix-odb",
+ "gix-ref 0.48.0",
  "gix-testtools",
+ "gix-traverse 0.42.0",
+ "gix-worktree 0.37.0",
 ]
 
 [[package]]

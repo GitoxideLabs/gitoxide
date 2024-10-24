@@ -46,10 +46,9 @@ async-client = ["gix/async-network-client-async-std", "gix-transport-configurati
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
-
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.
-gix = { version = "^0.67.0", path = "../gix", default-features = false, features = ["blob-merge", "blob-diff", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk"] }
+gix = { version = "^0.67.0", path = "../gix", default-features = false, features = ["blob-merge", "blob-diff", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "blame"] }
 gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.54.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
 gix-transport-configuration-only = { package = "gix-transport", version = "^0.43.0", path = "../gix-transport", default-features = false }
 gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.16.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }

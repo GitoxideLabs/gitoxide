@@ -1464,6 +1464,15 @@ pub fn main() -> Result<()> {
                 },
             ),
         },
+        Subcommands::Blame { file } => prepare_and_run(
+            "blame",
+            trace,
+            verbose,
+            progress,
+            progress_keep_open,
+            None,
+            move |_progress, out, _err| core::repository::blame::blame_file(repository(Mode::Lenient)?, &file, out),
+        ),
         Subcommands::Completions { shell, out_dir } => {
             let mut app = Args::command();
 
