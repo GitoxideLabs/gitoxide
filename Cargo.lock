@@ -2082,10 +2082,12 @@ dependencies = [
  "gix-tempfile 15.0.0",
  "gix-testtools",
  "gix-trace 0.1.11",
+ "gix-utils 0.1.13",
  "gix-worktree 0.37.0",
  "imara-diff",
  "pretty_assertions",
  "serde",
+ "termtree",
  "thiserror",
 ]
 

@@ -18,16 +18,16 @@ pub enum Error {
 }
 
 /// A way to configure [`commit()`](crate::commit()).
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Options {
     /// If `true`, merging unrelated commits is allowed, with the merge-base being assumed as empty tree.
     pub allow_missing_merge_base: bool,
     /// Options to define how trees should be merged.
     pub tree_merge: crate::tree::Options,
-    /// Options to define how to merge blobs.
-    ///
-    /// Note that these are temporarily overwritten if multiple merge-bases are merged into one.
-    pub blob_merge: crate::blob::platform::merge::Options,
+    /// If `true`, do not merge multiple merge-bases into one. Instead, just use the first one.
+    // TODO: test
+    #[doc(alias = "no_recursive", alias = "git2")]
+    pub use_first_merge_base: bool,
 }
 
 pub(super) mod function {
@@ -51,7 +51,7 @@ pub(super) mod function {
     ///
     /// Note that `objects` *should* have an object cache to greatly accelerate tree-retrieval.
     #[allow(clippy::too_many_arguments)]
-    pub fn commit<'objects>(
+    pub fn commit<'objects, E>(
         our_commit: gix_hash::ObjectId,
         their_commit: gix_hash::ObjectId,
         mut labels: crate::blob::builtin_driver::text::Labels<'_>,
@@ -59,13 +59,21 @@ pub(super) mod function {
         diff_resource_cache: &mut gix_diff::blob::Platform,
         blob_merge: &mut crate::blob::Platform,
         objects: &'objects impl gix_object::FindObjectOrHeader,
+        write_blob_to_odb: impl FnMut(&[u8]) -> Result<gix_hash::ObjectId, E>,
         options: Options,
-    ) -> Result<crate::tree::Outcome<'objects>, Error> {
+    ) -> Result<crate::tree::Outcome<'objects>, Error>
+    where
+        E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    {
         let merge_bases_commit_ids = gix_revision::merge_base(our_commit, &[their_commit], graph)?;
         let (merge_base_commit_id, ancestor_name) = match merge_bases_commit_ids {
             Some(base_commit) if base_commit.len() == 1 => (base_commit[0], None),
             Some(base_commits) => {
-                let virtual_base_tree = *base_commits.first().expect("TODO: merge multiple bases into one");
+                let virtual_base_tree = if options.use_first_merge_base {
+                    *base_commits.first().expect("TODO: merge multiple bases into one")
+                } else {
+                    todo!("merge multiple merge bases")
+                };
                 (virtual_base_tree, Some("merged common ancestors".into()))
             }
             None => {
@@ -97,6 +105,7 @@ pub(super) mod function {
             &their_tree_id,
             labels,
             objects,
+            write_blob_to_odb,
             &mut state,
             diff_resource_cache,
             blob_merge,
