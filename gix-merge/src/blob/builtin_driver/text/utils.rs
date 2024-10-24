@@ -93,9 +93,9 @@ pub fn assure_ends_with_nl(out: &mut Vec<u8>, nl: &BStr) {
     }
 }
 
-pub fn write_conflict_marker(out: &mut Vec<u8>, marker: u8, label: Option<&BStr>, marker_size: usize, nl: &BStr) {
+pub fn write_conflict_marker(out: &mut Vec<u8>, marker: u8, label: Option<&BStr>, marker_size: u8, nl: &BStr) {
     assure_ends_with_nl(out, nl);
-    out.extend(std::iter::repeat(marker).take(marker_size));
+    out.extend(std::iter::repeat(marker).take(marker_size as usize));
     if let Some(label) = label {
         out.push(b' ');
         out.extend_from_slice(label);
@@ -132,8 +132,8 @@ pub fn fill_ancestor(Range { start, end }: &Range<u32>, in_out: &mut Vec<Hunk>) 
     for (idx, next_idx) in (first_idx..in_out.len()).map(|idx| (idx, idx + 1)) {
         let Some(next_hunk) = in_out.get(next_idx) else { break };
         let hunk = &in_out[idx];
-        if let Some(lines_to_add) = next_hunk.after.start.checked_sub(hunk.after.end).filter(is_nonzero) {
-            in_out.push(ancestor_hunk(hunk.after.end, lines_to_add));
+        if let Some(lines_to_add) = next_hunk.before.start.checked_sub(hunk.before.end).filter(is_nonzero) {
+            in_out.push(ancestor_hunk(hunk.before.end, lines_to_add));
             added_hunks = true;
         }
     }
@@ -414,21 +414,46 @@ fn write_tokens(
 }
 
 /// Find all hunks in `iter` which aren't from the same side as `hunk` and intersect with it.
-/// Return `true` if `out` is non-empty after the operation, indicating overlapping hunks were found.
-pub fn take_intersecting(hunk: &Hunk, iter: &mut Peekable<impl Iterator<Item = Hunk>>, out: &mut Vec<Hunk>) -> bool {
-    out.clear();
-    while iter
-        .peek()
-        .filter(|b_hunk| {
-            b_hunk.side != hunk.side
-                && (hunk.before.contains(&b_hunk.before.start)
-                    || (hunk.before.is_empty() && hunk.before.start == b_hunk.before.start))
-        })
-        .is_some()
-    {
-        out.extend(iter.next());
+/// Also put `hunk` into `input` so it's the first item, and possibly put more hunks of the side of `hunk` so
+/// `iter` doesn't have any overlapping hunks left.
+/// Return `true` if `intersecting` is non-empty after the operation, indicating overlapping hunks were found.
+pub fn take_intersecting(
+    iter: &mut Peekable<impl Iterator<Item = Hunk>>,
+    input: &mut Vec<Hunk>,
+    intersecting: &mut Vec<Hunk>,
+) -> Option<()> {
+    input.clear();
+    input.push(iter.next()?);
+    intersecting.clear();
+
+    fn left_overlaps_right(left: &Hunk, right: &Hunk) -> bool {
+        left.side != right.side
+            && (right.before.contains(&left.before.start)
+                || (right.before.is_empty() && right.before.start == left.before.start))
     }
-    !out.is_empty()
+
+    loop {
+        let hunk = input.last().expect("just pushed");
+        while iter.peek().filter(|b_hunk| left_overlaps_right(b_hunk, hunk)).is_some() {
+            intersecting.extend(iter.next());
+        }
+        // The hunks that overlap might themselves overlap with a following hunk of the other side.
+        // If so, split it so it doesn't overlap anymore.
+        let mut found_more_intersections = false;
+        while intersecting
+            .last_mut()
+            .zip(iter.peek_mut())
+            .filter(|(last_intersecting, candidate)| left_overlaps_right(candidate, last_intersecting))
+            .is_some()
+        {
+            input.extend(iter.next());
+            found_more_intersections = true;
+        }
+        if !found_more_intersections {
+            break;
+        }
+    }
+    Some(())
 }
 
 pub fn tokens(input: &[u8]) -> imara_diff::sources::ByteLines<'_, true> {

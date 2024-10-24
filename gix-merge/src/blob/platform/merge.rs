@@ -374,7 +374,7 @@ impl<'parent> PlatformRef<'parent> {
         &self,
         out: &mut Vec<u8>,
         labels: builtin_driver::text::Labels<'_>,
-        context: gix_command::Context,
+        context: &gix_command::Context,
     ) -> Result<(inner::builtin_merge::Pick, Resolution), Error> {
         let _span = gix_trace::coarse!(
             "gix_merge::blob::PlatformRef::merge()",
@@ -382,7 +382,7 @@ impl<'parent> PlatformRef<'parent> {
         );
         match self.configured_driver() {
             Ok(driver) => {
-                let mut cmd = self.prepare_external_driver(driver.command.clone(), labels, context)?;
+                let mut cmd = self.prepare_external_driver(driver.command.clone(), labels, context.clone())?;
                 let status = cmd.status().map_err(|err| Error::SpawnExternalDriver {
                     cmd: format!("{:?}", cmd.cmd),
                     source: err,

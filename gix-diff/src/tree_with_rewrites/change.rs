@@ -4,7 +4,7 @@ use bstr::BString;
 use bstr::{BStr, ByteSlice};
 
 /// Represents any possible change in order to turn one tree into another, which references data owned by its producer.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChangeRef<'a> {
     /// An entry was added, like the addition of a file or directory.
     Addition {
@@ -101,7 +101,7 @@ pub enum ChangeRef<'a> {
 }
 
 /// Represents any possible change in order to turn one tree into another, with fully-owned data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     /// An entry was added, like the addition of a file or directory.
     Addition {
@@ -444,6 +444,17 @@ impl<'a> ChangeRef<'a> {
             | ChangeRef::Rewrite { location, .. } => location,
         }
     }
+
+    /// Return the *previous* location of the resource where possible, i.e. the source of a rename or copy, or the
+    /// location at which an addition, deletion or modification took place.
+    pub fn source_location(&self) -> &BStr {
+        match self {
+            ChangeRef::Addition { location, .. }
+            | ChangeRef::Deletion { location, .. }
+            | ChangeRef::Modification { location, .. } => location,
+            ChangeRef::Rewrite { source_location, .. } => source_location,
+        }
+    }
 }
 
 impl Change {
@@ -475,6 +486,17 @@ impl Change {
             | Change::Deletion { location, .. }
             | Change::Modification { location, .. }
             | Change::Rewrite { location, .. } => location.as_bstr(),
+        }
+    }
+
+    /// Return the *previous* location of the resource where possible, i.e. the source of a rename or copy, or the
+    /// location at which an addition, deletion or modification took place.
+    pub fn source_location(&self) -> &BStr {
+        match self {
+            Change::Addition { location, .. }
+            | Change::Deletion { location, .. }
+            | Change::Modification { location, .. } => location.as_bstr(),
+            Change::Rewrite { source_location, .. } => source_location.as_bstr(),
         }
     }
 }

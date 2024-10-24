@@ -139,7 +139,7 @@ revparse-regex = ["regex", "revision"]
 blob-diff = ["gix-diff/blob", "attributes"]
 
 ## Add functions to specifically merge files, using the standard three-way merge that git offers.
-blob-merge = ["dep:gix-merge", "gix-merge/blob", "attributes"]
+blob-merge = ["dep:gix-merge", "attributes"]
 
 ## Make it possible to turn a tree into a stream of bytes, which can be decoded to entries and turned into various other formats.
 worktree-stream = ["gix-worktree-stream", "attributes"]

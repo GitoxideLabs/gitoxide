@@ -36,8 +36,10 @@ pub trait Visit {
 /// The state required to run [tree-diffs](super::tree()).
 #[derive(Default, Clone)]
 pub struct State {
-    buf1: Vec<u8>,
-    buf2: Vec<u8>,
+    /// A buffer for object data.
+    pub buf1: Vec<u8>,
+    /// Another buffer for object data.
+    pub buf2: Vec<u8>,
     trees: VecDeque<TreeInfoTuple>,
     change_id: visit::ChangeId,
 }
