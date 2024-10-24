@@ -125,7 +125,7 @@ impl<'repo> Pathspec<'repo> {
     pub fn pattern_matching_relative_path<'a>(
         &mut self,
         relative_path: impl Into<&'a BStr>,
-        is_dir: Option<bool>,
+        is_dir: bool,
     ) -> Option<gix_pathspec::search::Match<'_>> {
         self.search.pattern_matching_relative_path(
             relative_path.into(),
@@ -142,7 +142,7 @@ impl<'repo> Pathspec<'repo> {
 
     /// The simplified version of [`pattern_matching_relative_path()`](Self::pattern_matching_relative_path()) which returns
     /// `true` if `relative_path` is included in the set of positive pathspecs, while not being excluded.
-    pub fn is_included<'a>(&mut self, relative_path: impl Into<&'a BStr>, is_dir: Option<bool>) -> bool {
+    pub fn is_included<'a>(&mut self, relative_path: impl Into<&'a BStr>, is_dir: bool) -> bool {
         self.pattern_matching_relative_path(relative_path, is_dir)
             .map_or(false, |m| !m.is_excluded())
     }
@@ -157,7 +157,7 @@ impl<'repo> Pathspec<'repo> {
         index.prefixed_entries(self.search.common_prefix()).map(|entries| {
             entries.iter().filter_map(move |entry| {
                 let path = entry.path(index);
-                self.is_included(path, Some(false)).then_some((path, entry))
+                self.is_included(path, true).then_some((path, entry))
             })
         })
     }
@@ -179,7 +179,7 @@ impl PathspecDetached {
     pub fn pattern_matching_relative_path<'a>(
         &mut self,
         relative_path: impl Into<&'a BStr>,
-        is_dir: Option<bool>,
+        is_dir: bool,
     ) -> Option<gix_pathspec::search::Match<'_>> {
         self.search.pattern_matching_relative_path(
             relative_path.into(),
@@ -196,7 +196,7 @@ impl PathspecDetached {
 
     /// The simplified version of [`pattern_matching_relative_path()`](Self::pattern_matching_relative_path()) which returns
     /// `true` if `relative_path` is included in the set of positive pathspecs, while not being excluded.
-    pub fn is_included<'a>(&mut self, relative_path: impl Into<&'a BStr>, is_dir: Option<bool>) -> bool {
+    pub fn is_included<'a>(&mut self, relative_path: impl Into<&'a BStr>, is_dir: bool) -> bool {
         self.pattern_matching_relative_path(relative_path, is_dir)
             .map_or(false, |m| !m.is_excluded())
     }

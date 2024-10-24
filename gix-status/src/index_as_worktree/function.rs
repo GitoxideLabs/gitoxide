@@ -270,16 +270,12 @@ impl<'index> State<'_, 'index> {
         }
         let path = entry.path_in(self.path_backing);
         let is_excluded = pathspec
-            .pattern_matching_relative_path(
-                path,
-                Some(entry.mode.is_submodule()),
-                &mut |relative_path, case, is_dir, out| {
-                    self.attr_stack
-                        .set_case(case)
-                        .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), objects)
-                        .map_or(false, |platform| platform.matching_attributes(out))
-                },
-            )
+            .pattern_matching_relative_path(path, true, &mut |relative_path, case, is_dir, out| {
+                self.attr_stack
+                    .set_case(case)
+                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), objects)
+                    .map_or(false, |platform| platform.matching_attributes(out))
+            })
             .map_or(true, |m| m.is_excluded());
 
         if is_excluded {

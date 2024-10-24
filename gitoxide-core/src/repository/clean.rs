@@ -112,7 +112,7 @@ pub(crate) mod function {
         let mut pruned_entries = 0;
         let mut saw_ignored_directory = false;
         let mut saw_untracked_directory = false;
-        for (mut entry, dir_status) in entries.into_iter() {
+        for (entry, dir_status) in entries.into_iter() {
             if dir_status.is_some() {
                 if debug {
                     writeln!(
@@ -130,7 +130,7 @@ pub(crate) mod function {
                     .pathspec_match
                     .map_or(false, |m| m != gix::dir::entry::PathspecMatch::Excluded),
                 Some(pathspec) => pathspec
-                    .pattern_matching_relative_path(entry.rela_path.as_bstr(), entry.disk_kind.map(|k| k.is_dir()))
+                    .pattern_matching_relative_path(entry.rela_path.as_bstr(), entry.disk_kind.is_dir())
                     .map_or(false, |m| !m.is_excluded()),
             };
             pruned_entries += usize::from(!pathspec_includes_entry);
@@ -158,14 +158,7 @@ pub(crate) mod function {
                 }
                 Status::Untracked => true,
             };
-            if entry.disk_kind.is_none() {
-                entry.disk_kind = workdir
-                    .join(gix::path::from_bstr(entry.rela_path.as_bstr()))
-                    .metadata()
-                    .ok()
-                    .map(|e| e.file_type().into());
-            }
-            let mut disk_kind = entry.disk_kind.expect("present if not pruned");
+            let mut disk_kind = entry.disk_kind;
             if !keep {
                 if debug {
                     writeln!(err, "DBG: prune '{}' as -x or -p is missing", entry.rela_path).ok();

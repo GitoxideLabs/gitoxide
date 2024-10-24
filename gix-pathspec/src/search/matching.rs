@@ -28,7 +28,7 @@ impl Search {
     pub fn pattern_matching_relative_path(
         &mut self,
         relative_path: &BStr,
-        is_dir: Option<bool>,
+        is_dir: bool,
         attributes: &mut dyn FnMut(&BStr, Case, bool, &mut gix_attributes::search::Outcome) -> bool,
     ) -> Option<Match<'_>> {
         static MATCH_ALL_STAND_IN: Pattern = Pattern {
@@ -54,7 +54,6 @@ impl Search {
             return None;
         }
 
-        let is_dir = is_dir.unwrap_or(false);
         let patterns_len = self.patterns.len();
         let res = self.patterns.iter_mut().find_map(|mapping| {
             let ignore_case = mapping.value.pattern.signature.contains(MagicSignature::ICASE);
@@ -136,10 +135,9 @@ impl Search {
     ///
     /// This is useful if `relative_path` is a directory leading up to the item that is going to be matched in full later.
     /// Note that it should not end with `/` to indicate it's a directory, rather, use `is_dir` to indicate this.
-    /// `is_dir` is `true` if `relative_path` is a directory. If `None`, the fact that a pathspec might demand a directory match
-    /// is ignored.
+    /// TODO
     /// Returns `false` if this pathspec has no chance of ever matching `relative_path`.
-    pub fn can_match_relative_path(&self, relative_path: &BStr, is_dir: Option<bool>) -> bool {
+    pub fn can_match_relative_path(&self, relative_path: &BStr, is_dir: bool) -> bool {
         if self.patterns.is_empty() || relative_path.is_empty() {
             return true;
         }
@@ -178,8 +176,8 @@ impl Search {
                     } else {
                         is_match
                     };
-                    if let Some(is_dir) = is_dir.filter(|_| pattern.signature.contains(MagicSignature::MUST_BE_DIR)) {
-                        is_match = if is_dir {
+                    if is_dir {
+                        is_match = if pattern.signature.contains(MagicSignature::MUST_BE_DIR) {
                             matches!(pattern.path.get(common_len), None | Some(&b'/'))
                         } else {
                             relative_path.get(common_len) == Some(&b'/')

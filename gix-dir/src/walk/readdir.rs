@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use crate::entry::{PathspecMatch, Status};
+use crate::entry::{Kind, PathspecMatch, Status};
 use crate::walk::function::{can_recurse, emit_entry};
 use crate::walk::EmissionMode::CollapseDirectory;
 use crate::walk::{
@@ -59,12 +59,24 @@ pub(super) fn recursive(
         );
         current.push(file_name);
 
+        let disk_kind = {
+            let m = current.metadata().map_err(|err| Error::DirEntryFileType {
+                path: std::mem::take(current),
+                source: err,
+            })?;
+            match Kind::try_from(m.file_type()) {
+                Ok(kind) => kind,
+                Err(_err) => {
+                    continue;
+                }
+            }
+        };
+
         let mut info = classify::path(
             current,
             current_bstr,
             if prev_len == 0 { 0 } else { prev_len + 1 },
-            None,
-            || entry.file_type().ok().map(Into::into),
+            disk_kind,
             opts,
             ctx,
         )?;
@@ -94,7 +106,7 @@ pub(super) fn recursive(
             }
         } else {
             if opts.for_deletion == Some(ForDeletionMode::IgnoredDirectoriesCanHideNestedRepositories)
-                && info.disk_kind == Some(entry::Kind::Directory)
+                && info.disk_kind == entry::Kind::Directory
                 && matches!(info.status, Status::Ignored(_))
             {
                 info.disk_kind = classify::maybe_upgrade_to_repository(
@@ -227,7 +239,7 @@ impl Mark {
                 property: {
                     assert_ne!(
                         dir_info.disk_kind,
-                        Some(entry::Kind::Repository),
+                        entry::Kind::Repository,
                         "BUG: it shouldn't be possible to classify an empty dir as repository"
                     );
                     if !state.may_collapse(dir_path) {
@@ -241,7 +253,7 @@ impl Mark {
                 },
                 pathspec_match: ctx
                     .pathspec
-                    .pattern_matching_relative_path(dir_rela_path, Some(true), ctx.pathspec_attributes)
+                    .pattern_matching_relative_path(dir_rela_path, true, ctx.pathspec_attributes)
                     .map(|m| m.kind.into()),
                 ..dir_info
             };
@@ -300,7 +312,7 @@ impl Mark {
             .map(|e| (e.disk_kind, e.status, e.pathspec_match))
         {
             entries += 1;
-            if kind == Some(entry::Kind::Repository) {
+            if kind == entry::Kind::Repository {
                 return None;
             }
             if pathspec_match.map_or(false, |m| {
