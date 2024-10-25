@@ -445,7 +445,7 @@ pub mod diff {
 pub mod log {
     use gix::bstr::BString;
 
-    /// Print the history of a given file
+    /// List all commits in a repository, optionally limited to those that change a given path
     #[derive(Debug, clap::Parser)]
     pub struct Platform {
         /// The git path specification to show a log for.
