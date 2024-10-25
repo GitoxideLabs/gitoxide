@@ -450,7 +450,7 @@ pub mod log {
     pub struct Platform {
         /// The git path specification to show a log for.
         #[clap(value_parser = crate::shared::AsBString)]
-        pub pathspec: BString,
+        pub pathspec: Option<BString>,
     }
 }
 
