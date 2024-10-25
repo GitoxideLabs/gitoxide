@@ -2,7 +2,7 @@ use gix::bstr::{BStr, BString, ByteSlice};
 use gix::prelude::FindExt;
 use gix::ObjectId;
 
-pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, pathspec: BString) -> anyhow::Result<()> {
+pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) -> anyhow::Result<()> {
     repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
 
     let head = repo.head()?.peel_to_commit_in_place()?;
@@ -17,7 +17,7 @@ pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, pathspec: BS
         let tree_ref = repo.find_tree(commit.tree_id().unwrap()).unwrap();
         let tree = tree_ref.decode().unwrap();
 
-        let Some(entry) = tree.bisect_entry(pathspec.as_ref(), false) else {
+        let Some(entry) = tree.bisect_entry(path.as_ref(), false) else {
             continue;
         };
 
@@ -43,7 +43,7 @@ pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, pathspec: BS
                     .find_tree(&parent_commit.tree_id().unwrap(), &mut buffer)
                     .unwrap();
 
-                if let Some(parent_entry) = parent_tree.bisect_entry(pathspec.as_ref(), false) {
+                if let Some(parent_entry) = parent_tree.bisect_entry(path.as_ref(), false) {
                     if entry.oid == parent_entry.oid {
                         // The blobs storing the file in `entry` and `parent_entry` are
                         // identical which means the file was not changed in `commit`.
@@ -65,7 +65,7 @@ pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, pathspec: BS
 
         for parent_id in parent_ids_with_changes {
             let modifications =
-                get_modifications_for_file_path(&repo.objects, pathspec.as_ref(), commit.id, parent_id.into());
+                get_modifications_for_file_path(&repo.objects, path.as_ref(), commit.id, parent_id.into());
 
             if !modifications.is_empty() {
                 write_info(&repo, &mut *out, &info)?;
