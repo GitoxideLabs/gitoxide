@@ -14,8 +14,8 @@ pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, pathspec: BS
         let info = info?;
         let commit = repo.find_commit(info.id).unwrap();
 
-        let mut buffer = Vec::new();
-        let tree = repo.objects.find_tree(&commit.tree_id().unwrap(), &mut buffer).unwrap();
+        let tree_ref = repo.find_tree(commit.tree_id().unwrap()).unwrap();
+        let tree = tree_ref.decode().unwrap();
 
         let Some(entry) = tree.bisect_entry(pathspec.as_ref(), false) else {
             continue;
