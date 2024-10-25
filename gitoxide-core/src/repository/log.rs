@@ -14,11 +14,10 @@ pub fn log(mut repo: gix::Repository, out: &mut dyn std::io::Write, path: Option
 
 fn log_all(repo: gix::Repository, out: &mut dyn std::io::Write) -> Result<(), anyhow::Error> {
     let head = repo.head()?.peel_to_commit_in_place()?;
-    let mut topo =
-        gix::traverse::commit::topo::Builder::from_iters(&repo.objects, [head.id], None::<Vec<gix::ObjectId>>)
-            .build()?;
+    let topo = gix::traverse::commit::topo::Builder::from_iters(&repo.objects, [head.id], None::<Vec<gix::ObjectId>>)
+        .build()?;
 
-    while let Some(info) = topo.next() {
+    for info in topo {
         let info = info?;
 
         write_info(&repo, &mut *out, &info)?;
@@ -29,11 +28,10 @@ fn log_all(repo: gix::Repository, out: &mut dyn std::io::Write) -> Result<(), an
 
 fn log_file(repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) -> anyhow::Result<()> {
     let head = repo.head()?.peel_to_commit_in_place()?;
-    let mut topo =
-        gix::traverse::commit::topo::Builder::from_iters(&repo.objects, [head.id], None::<Vec<gix::ObjectId>>)
-            .build()?;
+    let topo = gix::traverse::commit::topo::Builder::from_iters(&repo.objects, [head.id], None::<Vec<gix::ObjectId>>)
+        .build()?;
 
-    while let Some(info) = topo.next() {
+    for info in topo {
         let info = info?;
         let commit = repo.find_commit(info.id).unwrap();
 
@@ -113,7 +111,7 @@ fn write_info(
         out,
         "{} {}",
         info.id.to_hex_with_len(8),
-        title.map(BString::from).unwrap_or_else(|| "<no message>".into())
+        title.map_or_else(|| "<no message>".into(), BString::from)
     )?;
 
     Ok(())
