@@ -35,10 +35,11 @@ fn log_file(repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) 
         let info = info?;
         let commit = repo.find_commit(info.id).unwrap();
 
-        let tree_ref = repo.find_tree(commit.tree_id().unwrap()).unwrap();
-        let tree = tree_ref.decode().unwrap();
+        let tree = repo.find_tree(commit.tree_id().unwrap()).unwrap();
 
-        let Some(entry) = tree.bisect_entry(path.as_ref(), false) else {
+        let entry = tree.lookup_entry_by_path(path.to_path().unwrap()).unwrap();
+
+        let Some(entry) = entry else {
             continue;
         };
 
@@ -57,15 +58,12 @@ fn log_file(repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) 
             .clone()
             .into_iter()
             .filter(|parent_id| {
-                let mut buffer = Vec::new();
                 let parent_commit = repo.find_commit(*parent_id).unwrap();
-                let parent_tree = repo
-                    .objects
-                    .find_tree(&parent_commit.tree_id().unwrap(), &mut buffer)
-                    .unwrap();
+                let parent_tree = repo.find_tree(parent_commit.tree_id().unwrap()).unwrap();
+                let parent_entry = parent_tree.lookup_entry_by_path(path.to_path().unwrap()).unwrap();
 
-                if let Some(parent_entry) = parent_tree.bisect_entry(path.as_ref(), false) {
-                    if entry.oid == parent_entry.oid {
+                if let Some(parent_entry) = parent_entry {
+                    if entry.oid() == parent_entry.oid() {
                         // The blobs storing the file in `entry` and `parent_entry` are
                         // identical which means the file was not changed in `commit`.
 
