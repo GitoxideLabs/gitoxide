@@ -31,7 +31,7 @@ fn log_file(repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) 
     let topo = gix::traverse::commit::topo::Builder::from_iters(&repo.objects, [head.id], None::<Vec<gix::ObjectId>>)
         .build()?;
 
-    for info in topo {
+    'outer: for info in topo {
         let info = info?;
         let commit = repo.find_commit(info.id).unwrap();
 
@@ -88,6 +88,11 @@ fn log_file(repo: gix::Repository, out: &mut dyn std::io::Write, path: BString) 
 
             if !modifications.is_empty() {
                 write_info(&repo, &mut *out, &info)?;
+
+                // We continue because we’ve already determined that this commit is part of the
+                // file’s history, so there’s no need to compare it to its other parents.
+
+                continue 'outer;
             }
         }
     }
