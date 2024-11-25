@@ -826,9 +826,13 @@ pub fn blame_file<E>(
 
         let mut buffer = Vec::new();
         let commit_id = odb.find_commit(&suspect, &mut buffer).unwrap().tree();
-        let tree = odb.find_tree(&commit_id, &mut buffer).unwrap();
+        let tree_iter = odb.find_tree_iter(&commit_id, &mut buffer).unwrap();
 
-        let Some(entry) = tree.bisect_entry(file_path, false) else {
+        let mut entry_buffer = Vec::new();
+        let Some(entry) = tree_iter
+            .lookup_entry_by_path(&odb, &mut entry_buffer, file_path.to_str().unwrap())
+            .unwrap()
+        else {
             continue;
         };
 
@@ -837,9 +841,13 @@ pub fn blame_file<E>(
 
             let mut buffer = Vec::new();
             let parent_commit_id = odb.find_commit(&parent_id, &mut buffer).unwrap().tree();
-            let parent_tree = odb.find_tree(&parent_commit_id, &mut buffer).unwrap();
+            let parent_tree_iter = odb.find_tree_iter(&parent_commit_id, &mut buffer).unwrap();
 
-            if let Some(parent_entry) = parent_tree.bisect_entry(file_path, false) {
+            let mut entry_buffer = Vec::new();
+            if let Some(parent_entry) = parent_tree_iter
+                .lookup_entry_by_path(&odb, &mut entry_buffer, file_path.to_str().unwrap())
+                .unwrap()
+            {
                 if entry.oid == parent_entry.oid {
                     // The blobs storing the blamed file in `entry` and `parent_entry` are identical
                     // which is why we can pass blame to the parent without further checks.
@@ -889,15 +897,24 @@ pub fn blame_file<E>(
         } else {
             let mut buffer = Vec::new();
             let commit_id = odb.find_commit(&suspect, &mut buffer).unwrap().tree();
-            let tree = odb.find_tree(&commit_id, &mut buffer).unwrap();
-            let entry = tree.bisect_entry(file_path, false).unwrap();
+            let tree_iter = odb.find_tree_iter(&commit_id, &mut buffer).unwrap();
+
+            let mut entry_buffer = Vec::new();
+            let entry = tree_iter
+                .lookup_entry_by_path(&odb, &mut entry_buffer, file_path.to_str().unwrap())
+                .unwrap()
+                .unwrap();
 
             for parent_id in &parent_ids {
                 let mut buffer = Vec::new();
                 let parent_commit_id = odb.find_commit(parent_id, &mut buffer).unwrap().tree();
-                let parent_tree = odb.find_tree(&parent_commit_id, &mut buffer).unwrap();
+                let parent_tree_iter = odb.find_tree_iter(&parent_commit_id, &mut buffer).unwrap();
 
-                if let Some(parent_entry) = parent_tree.bisect_entry(file_path, false) {
+                let mut entry_buffer = Vec::new();
+                if let Some(parent_entry) = parent_tree_iter
+                    .lookup_entry_by_path(&odb, &mut entry_buffer, file_path.to_str().unwrap())
+                    .unwrap()
+                {
                     if entry.oid == parent_entry.oid {
                         // The blobs storing the blamed file in `entry` and `parent_entry` are
                         // identical which is why we can pass blame to the parent without further
