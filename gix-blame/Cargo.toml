@@ -14,16 +14,16 @@ rust-version = "1.65"
 doctest = false
 
 [dependencies]
-gix-diff = { version = "^0.47.0", path = "../gix-diff", default-features = false, features = ["blob"] }
-gix-object = { version = "^0.45.0", path = "../gix-object" }
+gix-diff = { version = "^0.48.0", path = "../gix-diff", default-features = false, features = ["blob"] }
+gix-object = { version = "^0.46.0", path = "../gix-object" }
 gix-hash = { version = "^0.15.0", path = "../gix-hash" }
-gix-worktree = { version = "^0.37.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-traverse = { version = "^0.42.0", path = "../gix-traverse" }
+gix-worktree = { version = "^0.38.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-traverse = { version = "^0.43.0", path = "../gix-traverse" }
 
 [dev-dependencies]
-gix-ref = { version = "^0.48.0", path = "../gix-ref" }
-gix-filter = { version = "^0.14.0", path = "../gix-filter" }
+gix-ref = { version = "^0.49.0", path = "../gix-ref" }
+gix-filter = { version = "^0.15.0", path = "../gix-filter" }
 gix-fs = { version = "^0.12.0", path = "../gix-fs" }
-gix-index = { version = "^0.36.0", path = "../gix-index" }
-gix-odb = { version = "^0.64.0", path = "../gix-odb" }
+gix-index = { version = "^0.37.0", path = "../gix-index" }
+gix-odb = { version = "^0.65.0", path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }
