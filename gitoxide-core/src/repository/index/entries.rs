@@ -160,30 +160,26 @@ pub(crate) mod function {
                 // Note that we intentionally ignore `_case` so that we act like git does, attribute matching case is determined
                 // by the repository, not the pathspec.
                 let entry_is_excluded = pathspec
-                    .pattern_matching_relative_path(
-                        entry.path(&index),
-                        Some(false),
-                        &mut |rela_path, _case, is_dir, out| {
-                            cache
-                                .as_mut()
-                                .map(|(attrs, cache)| {
-                                    match last_match {
-                                        // The user wants the attributes for display, so the match happened already.
-                                        Some(matched) => {
-                                            attrs.copy_into(cache.attributes_collection(), out);
-                                            matched
-                                        }
-                                        // The user doesn't want attributes, so we set the cache position on demand only
-                                        None => cache
-                                            .at_entry(rela_path, Some(is_dir_to_mode(is_dir)))
-                                            .ok()
-                                            .map(|platform| platform.matching_attributes(out))
-                                            .unwrap_or_default(),
+                    .pattern_matching_relative_path(entry.path(&index), true, &mut |rela_path, _case, is_dir, out| {
+                        cache
+                            .as_mut()
+                            .map(|(attrs, cache)| {
+                                match last_match {
+                                    // The user wants the attributes for display, so the match happened already.
+                                    Some(matched) => {
+                                        attrs.copy_into(cache.attributes_collection(), out);
+                                        matched
                                     }
-                                })
-                                .unwrap_or_default()
-                        },
-                    )
+                                    // The user doesn't want attributes, so we set the cache position on demand only
+                                    None => cache
+                                        .at_entry(rela_path, Some(is_dir_to_mode(is_dir)))
+                                        .ok()
+                                        .map(|platform| platform.matching_attributes(out))
+                                        .unwrap_or_default(),
+                                }
+                            })
+                            .unwrap_or_default()
+                    })
                     .map_or(true, |m| m.is_excluded());
 
                 let entry_is_submodule = entry.mode.is_submodule();

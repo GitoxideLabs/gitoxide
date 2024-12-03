@@ -463,17 +463,18 @@ pub(super) mod function {
 
             fn entry_mode(&self) -> EntryMode {
                 match self {
-                    ModificationOrDirwalkEntry::Modification(c) => c.entry.mode.to_tree_entry_mode(),
-                    ModificationOrDirwalkEntry::DirwalkEntry { entry, .. } => entry.disk_kind.map(|kind| {
-                        match kind {
-                            Kind::File => gix_object::tree::EntryKind::Blob,
-                            Kind::Symlink => gix_object::tree::EntryKind::Link,
-                            Kind::Repository | Kind::Directory => gix_object::tree::EntryKind::Tree,
-                        }
-                        .into()
-                    }),
+                    ModificationOrDirwalkEntry::Modification(c) => c
+                        .entry
+                        .mode
+                        .to_tree_entry_mode()
+                        .unwrap_or(gix_object::tree::EntryKind::Blob.into()),
+                    ModificationOrDirwalkEntry::DirwalkEntry { entry, .. } => match entry.disk_kind {
+                        Kind::File => gix_object::tree::EntryKind::Blob,
+                        Kind::Symlink => gix_object::tree::EntryKind::Link,
+                        Kind::Repository | Kind::Directory => gix_object::tree::EntryKind::Tree,
+                    }
+                    .into(),
                 }
-                .unwrap_or(gix_object::tree::EntryKind::Blob.into())
             }
 
             fn id_and_entry_mode(&self) -> (&oid, EntryMode) {
@@ -487,7 +488,7 @@ pub(super) mod function {
         pub(super) fn calculate_worktree_id(
             object_hash: gix_hash::Kind,
             worktree_root: &Path,
-            disk_kind: Option<gix_dir::entry::Kind>,
+            disk_kind: gix_dir::entry::Kind,
             rela_path: &BStr,
             filter: &mut gix_filter::Pipeline,
             attrs: &mut gix_worktree::Stack,
@@ -495,11 +496,7 @@ pub(super) mod function {
             buf: &mut Vec<u8>,
             should_interrupt: &std::sync::atomic::AtomicBool,
         ) -> Result<gix_hash::ObjectId, Error> {
-            let Some(kind) = disk_kind else {
-                return Ok(object_hash.null());
-            };
-
-            Ok(match kind {
+            Ok(match disk_kind {
                 Kind::File => {
                     let platform = attrs
                         .at_entry(rela_path, None, objects)
