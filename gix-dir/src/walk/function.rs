@@ -70,9 +70,9 @@ pub fn walk(
 
     let can_recurse = can_recurse(
         buf.as_bstr(),
-        if root == worktree_root && root_info.disk_kind == Some(entry::Kind::Symlink) && current.is_dir() {
+        if root == worktree_root && root_info.disk_kind == entry::Kind::Symlink && current.is_dir() {
             classify::Outcome {
-                disk_kind: Some(entry::Kind::Directory),
+                disk_kind: entry::Kind::Directory,
                 ..root_info
             }
         } else {
@@ -83,7 +83,7 @@ pub fn walk(
         delegate,
     );
     if !can_recurse {
-        if buf.is_empty() && !root_info.disk_kind.map_or(false, |kind| kind.is_dir()) {
+        if buf.is_empty() && !root_info.disk_kind.is_dir() {
             return Err(Error::WorktreeRootIsFile { root: root.to_owned() });
         }
         if options.precompose_unicode {
@@ -159,7 +159,7 @@ pub(super) fn can_recurse(
     worktree_root_is_repository: bool,
     delegate: &mut dyn Delegate,
 ) -> bool {
-    let is_dir = info.disk_kind.map_or(false, |k| k.is_dir());
+    let is_dir = info.disk_kind.is_dir();
     if !is_dir {
         return false;
     }

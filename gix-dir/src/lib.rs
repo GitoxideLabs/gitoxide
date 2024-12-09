@@ -32,8 +32,7 @@ pub struct EntryRef<'a> {
     /// Additional properties of the entry.
     pub property: Option<entry::Property>,
     /// Further specify what the entry is on disk, similar to a file mode.
-    /// This is `None` if we decided it's not worth it to exit early and avoid trying to obtain this information.
-    pub disk_kind: Option<entry::Kind>,
+    pub disk_kind: entry::Kind,
     /// The kind of entry according to the index, if tracked. *Usually* the same as `disk_kind`.
     pub index_kind: Option<entry::Kind>,
     /// Determines how the pathspec matched.
@@ -51,7 +50,7 @@ pub struct Entry {
     /// Additional flags that further clarify properties of the entry.
     pub property: Option<entry::Property>,
     /// Further specify what the entry is on disk, similar to a file mode.
-    pub disk_kind: Option<entry::Kind>,
+    pub disk_kind: entry::Kind,
     /// The kind of entry according to the index, if tracked. *Usually* the same as `disk_kind`.
     /// Note that even if tracked, this might be `None` which indicates this is a worktree placed
     /// within the parent repository.
