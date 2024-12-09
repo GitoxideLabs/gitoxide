@@ -37,12 +37,12 @@ async-client = [
 serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde"]
 
 [[test]]
-name = "blocking-client-protocol"
+name = "blocking"
 path = "tests/blocking-protocol.rs"
 required-features = ["blocking-client"]
 
 [[test]]
-name = "async-client-protocol"
+name = "async"
 path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
