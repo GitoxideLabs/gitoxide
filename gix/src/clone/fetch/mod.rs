@@ -37,6 +37,9 @@ pub enum Error {
     },
     #[error("Failed to update HEAD with values from remote")]
     HeadUpdate(#[from] crate::reference::edit::Error),
+    #[cfg(feature = "revision")]
+    #[error("Failed to parse revision")]
+    RefParseError(#[from] crate::revision::spec::parse::single::Error),
     #[error("The remote didn't have any ref that matched '{}'", wanted.as_ref().as_bstr())]
     RefNameMissing { wanted: gix_ref::PartialName },
     #[error("The remote has {} refs for '{}', try to use a specific name: {}", candidates.len(), wanted.as_ref().as_bstr(), candidates.iter().filter_map(|n| n.to_str().ok()).collect::<Vec<_>>().join(", "))]
@@ -231,13 +234,19 @@ impl PrepareFetch {
         P::SubProgress: 'static,
     {
         let (repo, fetch_outcome) = self.fetch_only(progress, should_interrupt)?;
-        Ok((
-            crate::clone::PrepareCheckout {
-                repo: repo.into(),
-                ref_name: self.ref_name.clone(),
-            },
-            fetch_outcome,
-        ))
+
+        let mut checkout = crate::clone::PrepareCheckout {
+            repo: repo.into(),
+            checkout_object: None,
+        };
+
+        if let Some(ref_name) = self.ref_name.as_ref() {
+            let bstring: &gix_ref::PartialNameRef = ref_name.as_ref();
+            let rev = checkout.repo().rev_parse_single(bstring.as_bstr())?.detach();
+            checkout = checkout.with_rev_single(Some(rev));
+        }
+
+        Ok((checkout, fetch_outcome))
     }
 }
 

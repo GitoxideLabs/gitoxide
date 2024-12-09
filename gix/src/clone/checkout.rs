@@ -4,6 +4,7 @@ use crate::{clone::PrepareCheckout, Repository};
 pub mod main_worktree {
     use std::{path::PathBuf, sync::atomic::AtomicBool};
 
+    use crate::ext::ObjectIdExt;
     use crate::{clone::PrepareCheckout, Progress, Repository};
 
     /// The error returned by [`PrepareCheckout::main_worktree()`].
@@ -59,6 +60,13 @@ pub mod main_worktree {
 
     /// Modification
     impl PrepareCheckout {
+        /// Set the reference to checkout from the tree.
+        pub fn with_rev_single(mut self, object_id: Option<gix_hash::ObjectId>) -> PrepareCheckout {
+            self.checkout_object = object_id;
+
+            self
+        }
+
         /// Checkout the main worktree, determining how many threads to use by looking at `checkout.workers`, defaulting to using
         /// on thread per logical core.
         ///
@@ -96,8 +104,8 @@ pub mod main_worktree {
                 git_dir: repo.git_dir().to_owned(),
             })?;
 
-            let root_tree_id = match &self.ref_name {
-                Some(reference_val) => Some(repo.find_reference(reference_val)?.peel_to_id_in_place()?),
+            let root_tree_id = match self.checkout_object {
+                Some(reference_val) => Some(reference_val.attach(repo)),
                 None => repo.head()?.try_peel_to_id_in_place()?,
             };
 
