@@ -55,6 +55,7 @@ gix-hash = { version = "^0.15.1", path = "../gix-hash" }
 gix-date = { version = "^0.9.2", path = "../gix-date" }
 gix-credentials = { version = "^0.25.1", path = "../gix-credentials" }
 gix-utils = { version = "^0.1.13", path = "../gix-utils" }
+gix-refspec = { version = "^0.27.0", path = "../gix-refspec" }
 
 thiserror = "2.0.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
