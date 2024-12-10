@@ -1,7 +1,4 @@
-use gix::{
-    prelude::ObjectIdExt,
-    revision::{spec::parse::Error, Spec},
-};
+use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
     revision::spec::from_bytes::{parse_spec, parse_spec_no_baseline, repo},
@@ -78,10 +75,13 @@ fn by_index() {
 }
 
 #[test]
-fn by_date_is_planned_until_git_date_crate_is_implements_parsing() {
+fn by_date() {
     let repo = repo("complex_graph").unwrap();
-    assert!(matches!(
-        parse_spec_no_baseline("main@{1979-02-26 18:30:00}", &repo).unwrap_err(),
-        Error::Planned { .. }
-    ));
+
+    let spec = parse_spec_no_baseline("main@{1979-02-26 18:30:00}", &repo).unwrap();
+
+    assert_eq!(
+        spec,
+        Spec::from_id(hex_to_id("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
+    );
 }

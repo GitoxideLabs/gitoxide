@@ -66,6 +66,7 @@ mod sign {
 
 mod impls {
     use crate::{time::Sign, Time};
+    use std::ops::Sub;
 
     impl Default for Time {
         fn default() -> Self {
@@ -74,6 +75,20 @@ mod impls {
                 offset: 0,
                 sign: Sign::Plus,
             }
+        }
+    }
+
+    impl Sub for Time {
+        type Output = i64;
+
+        fn sub(self, rhs: Self) -> Self::Output {
+            self.local_time() - rhs.local_time()
+        }
+    }
+
+    impl Time {
+        fn local_time(&self) -> i64 {
+            self.seconds + self.offset as i64
         }
     }
 }
