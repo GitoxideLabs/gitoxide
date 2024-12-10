@@ -195,12 +195,12 @@ mod impl_ {
             }
 
             // Admin-group owned folders are considered owned by the current user, if they are in the admin group
-            if IsWellKnownSid(token_owner, WinBuiltinAdministratorsSid) == 0 {
+            if IsWellKnownSid(folder_owner, WinBuiltinAdministratorsSid) == 0 {
                 return Ok(false);
             }
 
             let mut is_member = 0;
-            if CheckTokenMembership(0, token_owner, &mut is_member) == 0 {
+            if CheckTokenMembership(0, folder_owner, &mut is_member) == 0 {
                 error!("Couldn't check if user is an administrator");
             }
 
