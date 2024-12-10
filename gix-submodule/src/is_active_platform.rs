@@ -39,7 +39,7 @@ impl IsActivePlatform {
         };
         if let Some(val) = self.search.as_mut().map(|search| {
             search
-                .pattern_matching_relative_path(name, Some(true), attributes)
+                .pattern_matching_relative_path(name, true, attributes)
                 .map_or(false, |m| !m.is_excluded())
         }) {
             return Ok(val);

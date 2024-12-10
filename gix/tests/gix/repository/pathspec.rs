@@ -29,7 +29,7 @@ fn defaults_are_taken_from_repo_config() -> crate::Result {
     assert!(!pathspec.is_included("ho", Some(false)));
     assert!(!pathspec.is_included("hip", Some(false)));
     assert!(pathspec
-        .pattern_matching_relative_path("hip", Some(false))
+        .pattern_matching_relative_path("hip", true)
         .expect("match")
         .is_excluded());
 

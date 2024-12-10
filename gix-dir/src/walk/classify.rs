@@ -1,7 +1,7 @@
 use crate::{entry, Entry, EntryRef};
 use std::borrow::Cow;
 
-use crate::entry::PathspecMatch;
+use crate::entry::{Kind, PathspecMatch};
 use crate::walk::{Context, Error, ForDeletionMode, Options};
 use bstr::{BStr, BString, ByteSlice};
 use std::path::{Path, PathBuf};
@@ -20,11 +20,21 @@ pub fn root(
     let mut last_length = None;
     let mut path_buf = worktree_root.to_owned();
     // These initial values kick in if worktree_relative_root.is_empty();
-    let file_kind = path_buf.symlink_metadata().map(|m| m.file_type().into()).ok();
-    let mut out = path(&mut path_buf, buf, 0, file_kind, || None, options, ctx)?;
-    let worktree_root_is_repository = out
-        .disk_kind
-        .map_or(false, |kind| matches!(kind, entry::Kind::Repository));
+    let compute_file_kind = |path_buf: &mut PathBuf| {
+        let file_type = path_buf
+            .symlink_metadata()
+            .map_err(|err| Error::SymlinkMetadata {
+                source: err,
+                path: std::mem::take(path_buf),
+            })?
+            .file_type();
+        Kind::try_from(file_type).map_err(|()| Error::WorktreeRootIsFile {
+            root: std::mem::take(path_buf),
+        })
+    };
+    let file_kind = compute_file_kind(&mut path_buf)?;
+    let mut out = path(&mut path_buf, buf, 0, file_kind, options, ctx)?;
+    let worktree_root_is_repository = out.disk_kind == entry::Kind::Repository;
 
     for component in worktree_relative_root.components() {
         if last_length.is_some() {
@@ -32,14 +42,13 @@ pub fn root(
         }
         path_buf.push(component);
         buf.extend_from_slice(gix_path::os_str_into_bstr(component.as_os_str()).expect("no illformed UTF8"));
-        let file_kind = path_buf.symlink_metadata().map(|m| m.file_type().into()).ok();
+        let file_kind = compute_file_kind(&mut path_buf)?;
 
         out = path(
             &mut path_buf,
             buf,
             last_length.map(|l| l + 1 /* slash */).unwrap_or_default(),
             file_kind,
-            || None,
             options,
             ctx,
         )?;
@@ -67,7 +76,7 @@ pub struct Outcome {
     ///
     /// Note that the index is used to avoid disk access provided its entries are marked uptodate
     /// (possibly by a prior call to update the status).
-    pub disk_kind: Option<entry::Kind>,
+    pub disk_kind: entry::Kind,
     /// What the entry looks like in the index, or `None` if we aborted early.
     pub index_kind: Option<entry::Kind>,
     /// If a pathspec matched, this is how it matched. Maybe `None` if computation didn't see the need to evaluate it.
@@ -80,7 +89,7 @@ impl Outcome {
         self
     }
 
-    fn with_kind(mut self, disk_kind: Option<entry::Kind>, index_kind: Option<entry::Kind>) -> Self {
+    fn with_kind(mut self, disk_kind: entry::Kind, index_kind: Option<entry::Kind>) -> Self {
         self.disk_kind = disk_kind;
         self.index_kind = index_kind;
         self
@@ -126,8 +135,7 @@ pub fn path(
     path: &mut PathBuf,
     rela_path: &mut BString,
     filename_start_idx: usize,
-    disk_kind: Option<entry::Kind>,
-    on_demand_disk_kind: impl FnOnce() -> Option<entry::Kind>,
+    disk_kind: entry::Kind,
     Options {
         ignore_case,
         recurse_repositories,
@@ -150,11 +158,7 @@ pub fn path(
     if is_eq(rela_path[filename_start_idx..].as_bstr(), ".git", ignore_case) {
         out.pathspec_match = ctx
             .pathspec
-            .pattern_matching_relative_path(
-                rela_path.as_bstr(),
-                disk_kind.map(|ft| ft.is_dir()),
-                ctx.pathspec_attributes,
-            )
+            .pattern_matching_relative_path(rela_path.as_bstr(), disk_kind.is_dir(), ctx.pathspec_attributes)
             .map(Into::into);
         if for_deletion.is_some() {
             if let Some(excluded) = ctx
@@ -164,7 +168,7 @@ pub fn path(
                     stack
                         .at_entry(
                             rela_path.as_bstr(),
-                            disk_kind.map(|ft| is_dir_to_mode(ft.is_dir())),
+                            Some(is_dir_to_mode(disk_kind.is_dir())),
                             ctx.objects,
                         )
                         .map(|platform| platform.excluded_kind())
@@ -180,9 +184,9 @@ pub fn path(
     }
     let pathspec_could_match = ctx
         .pathspec
-        .can_match_relative_path(rela_path.as_bstr(), disk_kind.map(|ft| ft.is_dir()));
+        .can_match_relative_path(rela_path.as_bstr(), disk_kind.is_dir());
     if !pathspec_could_match {
-        return Ok(out.with_status(entry::Status::Pruned));
+        return Ok(out);
     }
 
     let (uptodate_index_kind, index_kind, property) = resolve_file_type_with_index(
@@ -190,22 +194,22 @@ pub fn path(
         ctx.index,
         ctx.ignore_case_index_lookup.filter(|_| ignore_case),
     );
-    let mut kind = uptodate_index_kind.or(disk_kind).or_else(on_demand_disk_kind);
+    let mut kind = uptodate_index_kind.unwrap_or(disk_kind);
 
     // We always check the pathspec to have the value filled in reliably.
     out.pathspec_match = ctx
         .pathspec
-        .pattern_matching_relative_path(rela_path.as_bstr(), kind.map(|ft| ft.is_dir()), ctx.pathspec_attributes)
+        .pattern_matching_relative_path(rela_path.as_bstr(), kind.is_dir(), ctx.pathspec_attributes)
         .map(Into::into);
 
     if worktree_relative_worktree_dirs.map_or(false, |worktrees| worktrees.contains(&*rela_path)) {
         return Ok(out
-            .with_kind(Some(entry::Kind::Repository), None)
+            .with_kind(entry::Kind::Repository, None)
             .with_status(entry::Status::Tracked));
     }
 
     let maybe_status = if property.is_none() {
-        (index_kind.map(|k| k.is_dir()) == kind.map(|k| k.is_dir())).then_some(entry::Status::Tracked)
+        (index_kind.map(|k| k.is_dir()) == Some(kind.is_dir())).then_some(entry::Status::Tracked)
     } else {
         out.property = property;
         Some(entry::Status::Pruned)
@@ -213,11 +217,11 @@ pub fn path(
 
     let is_dir = if symlinks_to_directories_are_ignored_like_directories
         && ctx.excludes.is_some()
-        && kind.map_or(false, |ft| ft == entry::Kind::Symlink)
+        && kind == entry::Kind::Symlink
     {
         path.metadata().ok().map(|md| is_dir_to_mode(md.is_dir()))
     } else {
-        kind.map(|ft| is_dir_to_mode(ft.is_dir()))
+        Some(is_dir_to_mode(kind.is_dir()))
     };
 
     let mut maybe_upgrade_to_repository = |current_kind, find_harder: bool| {
@@ -231,7 +235,7 @@ pub fn path(
         )
     };
     if let Some(status) = maybe_status {
-        if kind == Some(entry::Kind::Directory) && index_kind == Some(entry::Kind::Repository) {
+        if kind == entry::Kind::Directory && index_kind == Some(entry::Kind::Repository) {
             kind = maybe_upgrade_to_repository(kind, false);
         }
         return Ok(out.with_status(status).with_kind(kind, index_kind));
@@ -265,7 +269,7 @@ pub fn path(
                     ),
                 );
             }
-            if kind.map_or(false, |d| d.is_recursable_dir())
+            if kind.is_recursable_dir()
                 && (out.pathspec_match.is_none()
                     || worktree_relative_worktree_dirs.map_or(false, |worktrees| {
                         for_deletion.is_some()
@@ -287,7 +291,7 @@ pub fn path(
     debug_assert!(maybe_status.is_none());
     let mut status = entry::Status::Untracked;
 
-    if kind.map_or(false, |ft| ft.is_dir()) {
+    if kind.is_dir() {
         kind = maybe_upgrade_to_repository(kind, classify_untracked_bare_repositories);
     } else if out.pathspec_match.is_none() {
         status = entry::Status::Pruned;
@@ -296,13 +300,13 @@ pub fn path(
 }
 
 pub fn maybe_upgrade_to_repository(
-    current_kind: Option<entry::Kind>,
+    current_kind: entry::Kind,
     find_harder: bool,
     recurse_repositories: bool,
     path: &mut PathBuf,
     current_dir: &Path,
     git_dir_realpath: &Path,
-) -> Option<entry::Kind> {
+) -> entry::Kind {
     if recurse_repositories {
         return current_kind;
     }
@@ -315,7 +319,7 @@ pub fn maybe_upgrade_to_repository(
             is_nested_repo = !git_dir_is_our_own;
         }
         if is_nested_repo {
-            return Some(entry::Kind::Repository);
+            return entry::Kind::Repository;
         }
     }
     path.push(gix_discover::DOT_GIT_DIR);
@@ -329,7 +333,7 @@ pub fn maybe_upgrade_to_repository(
     path.pop();
 
     if is_nested_nonbare_repo {
-        Some(entry::Kind::Repository)
+        entry::Kind::Repository
     } else {
         current_kind
     }
