@@ -10,6 +10,11 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg, doc_auto_cfg))]
 #![deny(missing_docs, rust_2018_idioms, unsafe_code)]
 
+/// A function that performs a given credential action, trying to obtain credentials for an operation that needs it.
+///
+/// Useful for both `fetch` and `push`.
+pub type AuthenticateFn<'a> = Box<dyn FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + 'a>;
+
 /// A selector for V2 commands to invoke on the server for purpose of pre-invocation validation.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 pub enum Command {
@@ -34,11 +39,6 @@ pub use maybe_async;
 ///
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub mod fetch;
-
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-mod fetch_fn;
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-pub use fetch_fn::{fetch, FetchConnection};
 
 mod remote_progress;
 pub use remote_progress::RemoteProgress;

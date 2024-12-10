@@ -37,12 +37,12 @@ async-client = [
 serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde"]
 
 [[test]]
-name = "blocking-client-protocol"
+name = "blocking"
 path = "tests/blocking-protocol.rs"
 required-features = ["blocking-client"]
 
 [[test]]
-name = "async-client-protocol"
+name = "async"
 path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
@@ -55,6 +55,7 @@ gix-hash = { version = "^0.15.1", path = "../gix-hash" }
 gix-date = { version = "^0.9.2", path = "../gix-date" }
 gix-credentials = { version = "^0.25.1", path = "../gix-credentials" }
 gix-utils = { version = "^0.1.13", path = "../gix-utils" }
+gix-refspec = { version = "^0.27.0", path = "../gix-refspec" }
 
 thiserror = "2.0.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
@@ -77,7 +78,6 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 async-std = { version = "1.9.0", features = ["attributes"] }
 gix-packetline = { path = "../gix-packetline", version = "^0.18.1" }
-gix-testtools = { path = "../tests/tools" }
 
 [package.metadata.docs.rs]
 features = ["blocking-client", "document-features", "serde"]

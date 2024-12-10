@@ -90,9 +90,10 @@ mod with_io {
             }
         }
 
-        /// Compute initial arguments based on the given `features`. They are typically provided by the `default_features(…)` method.
-        /// Only useful for V2
-        pub(crate) fn initial_arguments(&self, features: &[Feature]) -> Vec<BString> {
+        /// Provide the initial arguments based on the given `features`.
+        /// They are typically provided by the [`Self::default_features`] method.
+        /// Only useful for V2, and based on heuristics/experimentation.
+        pub fn initial_v2_arguments(&self, features: &[Feature]) -> Vec<BString> {
             match self {
                 Command::Fetch => ["thin-pack", "ofs-delta"]
                     .iter()
@@ -157,20 +158,24 @@ mod with_io {
                 Command::LsRefs => vec![],
             }
         }
-        /// Panics if the given arguments and features don't match what's statically known. It's considered a bug in the delegate.
-        pub(crate) fn validate_argument_prefixes_or_panic(
+        /// Return an error if the given `arguments` and `features` don't match what's statically known.
+        pub fn validate_argument_prefixes(
             &self,
             version: gix_transport::Protocol,
             server: &Capabilities,
             arguments: &[BString],
             features: &[Feature],
-        ) {
+        ) -> Result<(), validate_argument_prefixes::Error> {
+            use validate_argument_prefixes::Error;
             let allowed = self.all_argument_prefixes();
             for arg in arguments {
                 if allowed.iter().any(|allowed| arg.starts_with(allowed.as_bytes())) {
                     continue;
                 }
-                panic!("{}: argument {} is not known or allowed", self.as_str(), arg);
+                return Err(Error::UnsupportedArgument {
+                    command: self.as_str(),
+                    argument: arg.clone(),
+                });
             }
             match version {
                 gix_transport::Protocol::V0 | gix_transport::Protocol::V1 => {
@@ -181,14 +186,17 @@ mod with_io {
                         {
                             continue;
                         }
-                        panic!("{}: capability {} is not supported", self.as_str(), feature);
+                        return Err(Error::UnsupportedCapability {
+                            command: self.as_str(),
+                            feature: feature.to_string(),
+                        });
                     }
                 }
                 gix_transport::Protocol::V2 => {
                     let allowed = server
                         .iter()
                         .find_map(|c| {
-                            if c.name() == self.as_str().as_bytes().as_bstr() {
+                            if c.name() == self.as_str() {
                                 c.values().map(|v| v.map(ToString::to_string).collect::<Vec<_>>())
                             } else {
                                 None
@@ -201,14 +209,34 @@ mod with_io {
                         }
                         match *feature {
                             "agent" => {}
-                            _ => panic!("{}: V2 feature/capability {} is not supported", self.as_str(), feature),
+                            _ => {
+                                return Err(Error::UnsupportedCapability {
+                                    command: self.as_str(),
+                                    feature: feature.to_string(),
+                                })
+                            }
                         }
                     }
                 }
             }
+            Ok(())
+        }
+    }
+
+    ///
+    pub mod validate_argument_prefixes {
+        use bstr::BString;
+
+        /// The error returned by [Command::validate_argument_prefixes()](super::Command::validate_argument_prefixes()).
+        #[derive(Debug, thiserror::Error)]
+        #[allow(missing_docs)]
+        pub enum Error {
+            #[error("{command}: argument {argument} is not known or allowed")]
+            UnsupportedArgument { command: &'static str, argument: BString },
+            #[error("{command}: capability {feature} is not supported")]
+            UnsupportedCapability { command: &'static str, feature: String },
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
+#[cfg(any(test, feature = "async-client", feature = "blocking-client"))]
+pub use with_io::validate_argument_prefixes;
