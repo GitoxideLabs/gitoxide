@@ -146,6 +146,7 @@ pub enum Subcommands {
     MergeBase(merge_base::Command),
     Merge(merge::Platform),
     Diff(diff::Platform),
+    Log(log::Platform),
     Worktree(worktree::Platform),
     /// Subcommands that need no git repository to run.
     #[clap(subcommand)]
@@ -496,6 +497,18 @@ pub mod diff {
             #[clap(value_parser = crate::shared::AsBString)]
             new_treeish: BString,
         },
+    }
+}
+
+pub mod log {
+    use gix::bstr::BString;
+
+    /// List all commits in a repository, optionally limited to those that change a given path
+    #[derive(Debug, clap::Parser)]
+    pub struct Platform {
+        /// The git path specification to show a log for.
+        #[clap(value_parser = crate::shared::AsBString)]
+        pub pathspec: Option<BString>,
     }
 }
 
