@@ -2384,7 +2384,6 @@ dependencies = [
  "gix-features 0.39.1",
  "gix-hash 0.15.1",
  "gix-packetline",
- "gix-testtools",
  "gix-transport",
  "gix-utils 0.1.13",
  "maybe-async",
