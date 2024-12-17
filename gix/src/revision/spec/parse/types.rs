@@ -77,8 +77,6 @@ pub enum Error {
         direction: remote::Direction,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[error("This feature will be implemented once {dependency}")]
-    Planned { dependency: &'static str },
     #[error("Reference {reference:?} does not have a reference log, cannot {action}")]
     MissingRefLog { reference: BString, action: &'static str },
     #[error("HEAD has {available} prior checkouts and checkout number {desired} is out of range")]
@@ -194,4 +192,6 @@ pub enum Error {
     Walk(#[from] crate::revision::walk::Error),
     #[error("Spec does not contain a single object id")]
     SingleNotFound,
+    #[error("Reflog does not contain any entries")]
+    EmptyReflog,
 }
