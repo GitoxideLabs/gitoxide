@@ -38,7 +38,7 @@ mod baseline {
         HEADER_FIELDS.contains(field)
     }
 
-    impl<'a> Baseline<'a> {
+    impl Baseline<'_> {
         pub fn collect(baseline_path: impl AsRef<Path>) -> std::io::Result<Vec<BlameEntry>> {
             let content = std::fs::read(baseline_path)?;
 
@@ -46,7 +46,7 @@ mod baseline {
         }
     }
 
-    impl<'a> Iterator for Baseline<'a> {
+    impl Iterator for Baseline<'_> {
         type Item = BlameEntry;
 
         fn next(&mut self) -> Option<Self::Item> {
