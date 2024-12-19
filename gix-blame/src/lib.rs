@@ -1,10 +1,23 @@
 //! A crate to implement an algorithm to annotate lines in tracked files with the commits that changed them.
+//!
+//! ### Terminology
+//!
+//! * **Original File**
+//!    - The file as it exists in `HEAD`.
+//!    - the initial state with all lines that we need to associate with a *Blamed File*.
+//! * **Blamed File**
+//!    - A file at a version (i.e. commit) that introduces hunks into the final 'image'.
+//! * **Suspects**
+//!    - The versions of the files that can contain hunks that we could use in the final 'image'
+//!    - multiple at the same time as the commit-graph may split up.
+//!    - turns into *Blamed File* once we have found an association into the *Original File*.
+//!    - every [`UnblamedHunk`] can have multiple suspects of which we find the best match.
 #![deny(rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
 use std::{
     collections::BTreeMap,
-    ops::{Add, AddAssign, Range, SubAssign},
+    ops::{AddAssign, Range, SubAssign},
     path::PathBuf,
 };
 
@@ -12,45 +25,13 @@ use gix_hash::ObjectId;
 use gix_object::bstr::BStr;
 use gix_object::FindExt;
 
+/// Describes the offset of a particular hunk relative to the *Original File*.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Offset {
+    /// The amount of lines to add.
     Added(u32),
+    /// The amount of lines to remove.
     Deleted(u32),
-}
-
-impl Add<u32> for Offset {
-    type Output = Offset;
-
-    fn add(self, rhs: u32) -> Self::Output {
-        let Self::Added(added) = self else { todo!() };
-
-        Self::Added(added + rhs)
-    }
-}
-
-impl Add<Offset> for Offset {
-    type Output = Offset;
-
-    fn add(self, rhs: Offset) -> Self::Output {
-        match (self, rhs) {
-            (Self::Added(added), Offset::Added(added_rhs)) => Self::Added(added + added_rhs),
-            (Self::Added(added), Offset::Deleted(deleted_rhs)) => {
-                if deleted_rhs > added {
-                    Self::Deleted(deleted_rhs - added)
-                } else {
-                    Self::Added(added - deleted_rhs)
-                }
-            }
-            (Self::Deleted(deleted), Offset::Added(added_rhs)) => {
-                if added_rhs > deleted {
-                    Self::Added(added_rhs - deleted)
-                } else {
-                    Self::Deleted(deleted - added_rhs)
-                }
-            }
-            (Self::Deleted(deleted), Offset::Deleted(deleted_rhs)) => Self::Deleted(deleted + deleted_rhs),
-        }
-    }
 }
 
 impl AddAssign<u32> for Offset {
@@ -83,23 +64,33 @@ impl SubAssign<u32> for Offset {
     }
 }
 
+/// A mapping of a section of the *Original File* to the section in a *Blamed File* that introduced it.
+///
+/// Both ranges are of the same size, but may use different [starting points](Range::start). Naturally,
+/// they have the same content, which is the reason they are in what is returned by [`blame_file()`].
+// TODO: see if this can be encoded as `start_in_original_file` and `start_in_blamed_file` and a single `len`.
 #[derive(Debug, PartialEq)]
 pub struct BlameEntry {
+    /// The section of tokens in the tokenized version of the *Blamed File* (typically lines).
     pub range_in_blamed_file: Range<u32>,
+    /// The section of tokens in the tokenized version of the *Original File* (typically lines).
     pub range_in_original_file: Range<u32>,
+    /// The commit that introduced the section into the *Blamed File*.
     pub commit_id: ObjectId,
 }
 
 impl BlameEntry {
+    /// Create a new instance.
     pub fn new(range_in_blamed_file: Range<u32>, range_in_original_file: Range<u32>, commit_id: ObjectId) -> Self {
-        assert!(
+        debug_assert!(
             range_in_blamed_file.end > range_in_blamed_file.start,
             "{range_in_blamed_file:?}"
         );
-        assert!(
+        debug_assert!(
             range_in_original_file.end > range_in_original_file.start,
             "{range_in_original_file:?}"
         );
+        debug_assert_eq!(range_in_original_file.len(), range_in_blamed_file.len());
 
         Self {
             range_in_blamed_file: range_in_blamed_file.clone(),
@@ -108,8 +99,9 @@ impl BlameEntry {
         }
     }
 
+    /// Create a new instance by creating `range_in_blamed_file` after applying `offset` to `range_in_original_file`.
     fn with_offset(range_in_original_file: Range<u32>, commit_id: ObjectId, offset: Offset) -> Self {
-        assert!(
+        debug_assert!(
             range_in_original_file.end > range_in_original_file.start,
             "{range_in_original_file:?}"
         );
@@ -121,7 +113,7 @@ impl BlameEntry {
                 commit_id,
             },
             Offset::Deleted(deleted) => {
-                assert!(
+                debug_assert!(
                     range_in_original_file.start >= deleted,
                     "{range_in_original_file:?} {offset:?}"
                 );
@@ -136,8 +128,9 @@ impl BlameEntry {
         }
     }
 
+    ///
     fn from_unblamed_hunk(unblamed_hunk: &UnblamedHunk, commit_id: ObjectId) -> Self {
-        let range_in_original_file = unblamed_hunk.suspects.get(&commit_id).expect("TODO");
+        let range_in_original_file = unblamed_hunk.suspects.get(&commit_id).unwrap();
 
         Self {
             range_in_blamed_file: unblamed_hunk.range_in_blamed_file.clone(),
@@ -170,6 +163,7 @@ impl LineRange for Range<u32> {
     }
 }
 
+/// A hunk in the *Original File* which
 #[derive(Clone, Debug, PartialEq)]
 pub struct UnblamedHunk {
     pub range_in_blamed_file: Range<u32>,
@@ -761,6 +755,33 @@ fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
 }
 
 // TODO: do not instantiate anything, get everything passed as argument.
+/// ## The algorithm
+///
+/// *For brevity, `HEAD` denotes the starting point of the blame operation. It could be any commit, or even commits that
+/// represent the worktree state.
+/// We begin with a single [`UnblamedHunk`] and a single suspect, usually `HEAD` as the commit containing the *Original File*.
+/// We traverse the commit graph starting at `HEAD`, and see if there have been changes to `worktree_path`. If so, we have found
+/// a *Blamed File* and a *Suspect* commit, and have hunks that represent these changes. Now the [`UnblamedHunk`]s is split at
+/// the boundaries of each matching hunk, creating a new [`UnblamedHunk`] on each side, along with a [`BlameEntry`] to represent
+/// the match.
+/// This is repeated until there are no non-empty [`UnblamedHunk`]s left.
+///
+/// At a high level, what we want to do is the following:
+///
+/// - get the commit that belongs to a commit id
+/// - walk through parents
+///   - for each parent, do a diff and mark lines that don’t have a suspect (this is the term
+///     used in `libgit2`) yet, but that have been changed in this commit
+///
+/// The algorithm in `libgit2` works by going through parents and keeping a linked list of blame
+/// suspects. It can be visualized as follows:
+//
+// <---------------------------------------->
+// <---------------><----------------------->
+// <---><----------><----------------------->
+// <---><----------><-------><-----><------->
+// <---><---><-----><-------><-----><------->
+// <---><---><-----><-------><-----><-><-><->
 pub fn blame_file<E>(
     odb: impl gix_object::Find + gix_object::FindHeader,
     traverse: impl IntoIterator<Item = Result<gix_traverse::commit::Info, E>>,
@@ -770,22 +791,6 @@ pub fn blame_file<E>(
     file_path: &BStr,
 ) -> Result<Vec<BlameEntry>, E> {
     // TODO
-    // At a high level, what we want to do is the following:
-    //
-    // - get the commit that belongs to a commit id
-    // - walk through parents
-    //   - for each parent, do a diff and mark lines that don’t have a suspect (this is the term
-    //     used in `libgit2`) yet, but that have been changed in this commit
-    //
-    // The algorithm in `libgit2` works by going through parents and keeping a linked list of blame
-    // suspects. It can be visualized as follows:
-    //
-    // <---------------------------------------->
-    // <---------------><----------------------->
-    // <---><----------><----------------------->
-    // <---><----------><-------><-----><------->
-    // <---><---><-----><-------><-----><------->
-    // <---><---><-----><-------><-----><-><-><->
 
     // Needed for `to_str`.
     use gix_object::bstr::ByteSlice;
