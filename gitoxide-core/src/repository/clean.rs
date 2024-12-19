@@ -163,7 +163,7 @@ pub(crate) mod function {
                     .join(gix::path::from_bstr(entry.rela_path.as_bstr()))
                     .metadata()
                     .ok()
-                    .and_then(|e| gix::dir::entry::Kind::try_from_file_type(e.file_type()));
+                    .map(|e| e.file_type().into());
             }
             let mut disk_kind = entry.disk_kind.expect("present if not pruned");
             if !keep {
@@ -183,6 +183,7 @@ pub(crate) mod function {
             }
 
             match disk_kind {
+                Kind::NonFile => unreachable!("these are always considered pruned, and they were skipped earlier."),
                 Kind::File | Kind::Symlink => {}
                 Kind::Directory => {
                     if !directories {
@@ -254,6 +255,7 @@ pub(crate) mod function {
                     "WOULD remove"
                 },
                 suffix = match disk_kind {
+                    Kind::NonFile => unreachable!("these are always considered pruned, and they were skipped earlier."),
                     Kind::Directory if entry.property == Some(gix::dir::entry::Property::EmptyDirectory) => {
                         " empty"
                     }

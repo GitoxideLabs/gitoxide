@@ -20,10 +20,7 @@ pub fn root(
     let mut last_length = None;
     let mut path_buf = worktree_root.to_owned();
     // These initial values kick in if worktree_relative_root.is_empty();
-    let file_kind = path_buf
-        .symlink_metadata()
-        .ok()
-        .and_then(|m| entry::Kind::try_from_file_type(m.file_type()));
+    let file_kind = path_buf.symlink_metadata().ok().map(|m| m.file_type().into());
     let mut out = path(&mut path_buf, buf, 0, file_kind, || None, options, ctx)?;
     let worktree_root_is_repository = out
         .disk_kind
@@ -35,10 +32,7 @@ pub fn root(
         }
         path_buf.push(component);
         buf.extend_from_slice(gix_path::os_str_into_bstr(component.as_os_str()).expect("no illformed UTF8"));
-        let file_kind = path_buf
-            .symlink_metadata()
-            .ok()
-            .and_then(|m| entry::Kind::try_from_file_type(m.file_type()));
+        let file_kind = path_buf.symlink_metadata().ok().map(|m| m.file_type().into());
 
         out = path(
             &mut path_buf,
@@ -199,6 +193,12 @@ pub fn path(
         ctx.ignore_case_index_lookup.filter(|_| ignore_case),
     );
     let mut kind = uptodate_index_kind.or(disk_kind).or_else(on_demand_disk_kind);
+
+    // Detect non-files as early as possible and pre-mark them as pruned.
+    if kind == Some(entry::Kind::NonFile) {
+        out.disk_kind = kind;
+        return Ok(out.with_status(entry::Status::Pruned));
+    }
 
     // We always check the pathspec to have the value filled in reliably.
     out.pathspec_match = ctx

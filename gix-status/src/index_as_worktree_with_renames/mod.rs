@@ -466,6 +466,7 @@ pub(super) mod function {
                     ModificationOrDirwalkEntry::Modification(c) => c.entry.mode.to_tree_entry_mode(),
                     ModificationOrDirwalkEntry::DirwalkEntry { entry, .. } => entry.disk_kind.map(|kind| {
                         match kind {
+                            Kind::NonFile => unreachable!("we rejected non-file entries earlier"),
                             Kind::File => gix_object::tree::EntryKind::Blob,
                             Kind::Symlink => gix_object::tree::EntryKind::Link,
                             Kind::Repository | Kind::Directory => gix_object::tree::EntryKind::Tree,
@@ -495,11 +496,12 @@ pub(super) mod function {
             buf: &mut Vec<u8>,
             should_interrupt: &std::sync::atomic::AtomicBool,
         ) -> Result<gix_hash::ObjectId, Error> {
-            let Some(kind) = disk_kind else {
+            let Some(kind) = disk_kind.filter(|kind| !matches!(kind, Kind::NonFile)) else {
                 return Ok(object_hash.null());
             };
 
             Ok(match kind {
+                Kind::NonFile => unreachable!("rejected earlier"),
                 Kind::File => {
                     let platform = attrs
                         .at_entry(rela_path, None, objects)

@@ -1,6 +1,7 @@
 use crate::walk::ForDeletionMode;
 use crate::{Entry, EntryRef};
 use std::borrow::Cow;
+use std::fs::FileType;
 
 /// A way of attaching additional information to an [Entry] .
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -25,6 +26,10 @@ pub enum Property {
 /// The kind of the entry, seated in their kinds available on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Kind {
+    /// Something that is not a file, like a named pipe or character device.
+    ///
+    /// These can only exist in the filesystem.
+    NonFile,
     /// The entry is a blob, executable or not.
     File,
     /// The entry is a symlink.
@@ -147,20 +152,17 @@ impl Entry {
     }
 }
 
-impl Kind {
-    /// Try to represent the file type `t` as `Entry`, or return `None` if it cannot be represented.
-    ///
-    /// The latter can happen if it's a `pipe` for instance.
-    pub fn try_from_file_type(t: std::fs::FileType) -> Option<Self> {
-        Some(if t.is_dir() {
+impl From<std::fs::FileType> for Kind {
+    fn from(value: FileType) -> Self {
+        if value.is_dir() {
             Kind::Directory
-        } else if t.is_symlink() {
+        } else if value.is_symlink() {
             Kind::Symlink
-        } else if t.is_file() {
+        } else if value.is_file() {
             Kind::File
         } else {
-            return None;
-        })
+            Kind::NonFile
+        }
     }
 }
 
