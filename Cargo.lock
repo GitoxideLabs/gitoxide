@@ -1538,7 +1538,17 @@ dependencies = [
 name = "gix-blame"
 version = "0.0.0"
 dependencies = [
+ "gix-diff",
+ "gix-filter",
+ "gix-fs 0.12.0",
+ "gix-hash 0.15.1",
+ "gix-index 0.37.0",
+ "gix-object 0.46.0",
+ "gix-odb",
+ "gix-ref 0.49.0",
  "gix-testtools",
+ "gix-traverse 0.43.0",
+ "gix-worktree 0.38.0",
 ]
 
 [[package]]
