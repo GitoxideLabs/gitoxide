@@ -1,4 +1,17 @@
 //! A crate to implement an algorithm to annotate lines in tracked files with the commits that changed them.
+//!
+//! ### Terminology
+//!
+//! * **Original File**
+//!    - The file as it exists in `HEAD`.
+//!    - the initial state with all lines that we need to associate with a *Blamed File*.
+//! * **Blamed File**
+//!    - A file at a version (i.e. commit) that introduces hunks into the final 'image'.
+//! * **Suspects**
+//!    - The versions of the files that can contain hunks that we could use in the final 'image'
+//!    - multiple at the same time as the commit-graph may split up.
+//!    - turns into *Blamed File* once we have found an association into the *Original File*.
+//!    - every [`UnblamedHunk`] can have multiple suspects of which we find the best match.
 #![deny(rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
@@ -14,6 +27,7 @@ use gix_object::FindExt;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Offset {
+    /// The amount of lines to add to the original range in
     Added(u32),
     Deleted(u32),
 }

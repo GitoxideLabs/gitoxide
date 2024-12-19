@@ -365,8 +365,9 @@ Check out the [performance discussion][gix-diff-performance] as well.
 
 * [ ] commit-annotations for a single file
     - [ ] progress
-    - [ ] interruptability
+    - [ ] interruptibility
     - [ ] streaming
+- [ ] support for worktree changes (creates virtual commit on top of `HEAD`) 
 * [x] API documentation
     * [ ] Examples
 
