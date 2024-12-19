@@ -1365,6 +1365,7 @@ dependencies = [
  "gix-actor 0.33.1",
  "gix-archive",
  "gix-attributes 0.23.1",
+ "gix-blame",
  "gix-command",
  "gix-commitgraph 0.25.1",
  "gix-config",
