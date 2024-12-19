@@ -64,7 +64,7 @@ pub(super) fn recursive(
             current_bstr,
             if prev_len == 0 { 0 } else { prev_len + 1 },
             None,
-            || entry.file_type().ok().and_then(entry::Kind::try_from_file_type),
+            || entry.file_type().ok().map(Into::into),
             opts,
             ctx,
         )?;
