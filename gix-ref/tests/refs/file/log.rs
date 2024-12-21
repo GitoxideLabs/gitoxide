@@ -29,6 +29,23 @@ mod line {
             Ok(())
         }
     }
+
+    mod parse {
+        use gix_ref::file::log;
+
+        #[test]
+        fn angle_bracket_in_comment() -> crate::Result {
+            let line = log::LineRef::from_bytes(b"7b114132d03c468a9cd97836901553658c9792de 306cdbab5457c323d1201aa8a59b3639f600a758 First Last <first.last@example.com> 1727013187 +0200\trebase (pick): Replace Into<Range<u32>> by From<LineRange>")?;
+            assert_eq!(line.signature.name, "First Last");
+            assert_eq!(line.signature.email, "first.last@example.com");
+            assert_eq!(line.signature.time.seconds, 1727013187);
+            assert_eq!(
+                line.message,
+                "rebase (pick): Replace Into<Range<u32>> by From<LineRange>"
+            );
+            Ok(())
+        }
+    }
 }
 
 mod iter {
@@ -204,7 +221,7 @@ mod iter {
 
             let mut iter = gix_ref::file::log::iter::forward(log_first_broken.as_bytes());
             let err = iter.next().expect("error is not none").expect_err("the line is broken");
-            assert_eq!(err.to_string(), "In line 1: \"134385fbroken7062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\\tcommit\" did not match '<old-hexsha> <new-hexsha> <name> <<email>> <timestamp> <tz>\\t<message>'");
+            assert_eq!(err.to_string(), "In line 1: \"0000000000000000000000000000000000000000 134385fbroken7062102c6a483440bfda2a03 committer <committer@example.com> 946771200 +0000\\tcommit\" did not match '<old-hexsha> <new-hexsha> <name> <<email>> <timestamp> <tz>\\t<message>'");
             assert!(iter.next().expect("a second line").is_ok(), "line parses ok");
             assert!(iter.next().is_none(), "iterator exhausted");
         }
