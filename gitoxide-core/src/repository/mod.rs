@@ -21,6 +21,7 @@ pub enum PathsOrPatterns {
 pub mod archive;
 pub mod cat;
 pub use cat::function::cat;
+pub mod blame;
 pub mod commit;
 pub mod config;
 mod credential;

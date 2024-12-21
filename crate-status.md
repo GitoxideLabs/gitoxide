@@ -361,6 +361,16 @@ Check out the [performance discussion][gix-diff-performance] as well.
 * [x] API documentation
     * [ ] Examples
 
+### gix-blame
+
+* [ ] commit-annotations for a single file
+    - [ ] progress
+    - [ ] interruptibility
+    - [ ] streaming
+- [ ] support for worktree changes (creates virtual commit on top of `HEAD`) 
+* [x] API documentation
+    * [ ] Examples
+
 ### gix-traverse
 
 Check out the [performance discussion][gix-traverse-performance] as well.
