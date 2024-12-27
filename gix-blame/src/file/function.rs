@@ -688,8 +688,8 @@ fn find_path_entry_in_commit(
     Ok(res.map(|e| e.oid))
 }
 
-/// Return an iterator over tokens for use in diffing. These usually lines, but iit's important to unify them
-/// so the later access shows the right thing.
+/// Return an iterator over tokens for use in diffing. These are usually lines, but it's important
+/// to unify them so the later access shows the right thing.
 pub(crate) fn tokens_for_diffing(data: &[u8]) -> impl TokenSource<Token = &[u8]> {
     gix_diff::blob::sources::byte_lines_with_terminator(data)
 }
