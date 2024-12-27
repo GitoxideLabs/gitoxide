@@ -7,6 +7,9 @@ use gix_object::{
     bstr::{BStr, BString},
     FindExt,
 };
+use gix_traverse::commit::find;
+use smallvec::SmallVec;
+use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::ops::Range;
 
@@ -103,20 +106,115 @@ where
         suspects: [(suspect, range_in_blamed_file)].into(),
     }];
 
+    // TODO
+    // Get `cache` as an argument to `file`.
+    let cache: Option<gix_commitgraph::Graph> = None;
+
+    let mut buf = Vec::new();
+    let commit = find(cache.as_ref(), &odb, &suspect, &mut buf)?;
+
+    // TODO
+    // This is a simplified version of `GenAndCommitTime` in
+    // `gix-traverse/src/commit/topo/iter.rs`. There, generation is also part of the key. It’s
+    // possible we need generation, but I have too little context to know.
+    type CommitTime = i64;
+
+    let mut queue: gix_revwalk::PriorityQueue<CommitTime, ObjectId> = gix_revwalk::PriorityQueue::new();
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+
+    // TODO
+    // This is a simplified version of `gen_and_commit_time` in
+    // `gix-traverse/src/commit/topo/iter.rs`. It can probably be extracted.
+    let commit_time = match commit {
+        gix_traverse::commit::Either::CommitRefIter(commit_ref_iter) => {
+            let mut commit_time = 0;
+            for token in commit_ref_iter {
+                use gix_object::commit::ref_iter::Token as T;
+                match token {
+                    Ok(T::Tree { .. }) => continue,
+                    Ok(T::Parent { .. }) => continue,
+                    Ok(T::Author { .. }) => continue,
+                    Ok(T::Committer { signature }) => {
+                        commit_time = signature.time.seconds;
+                        break;
+                    }
+                    Ok(_unused_token) => break,
+                    Err(_err) => todo!(),
+                }
+            }
+            commit_time
+        }
+        gix_traverse::commit::Either::CachedCommit(commit) => commit.committer_timestamp() as i64,
+    };
+
+    queue.insert(commit_time, suspect);
+
     let mut out = Vec::new();
     let mut diff_state = gix_diff::tree::State::default();
     let mut previous_entry: Option<(ObjectId, ObjectId)> = None;
-    'outer: while let Some(item) = traverse.next() {
+    'outer: while let Some(suspect) = queue.pop_value() {
         if hunks_to_blame.is_empty() {
             break;
         }
-        let commit = item.map_err(|err| Error::Traverse(err.into()))?;
-        let suspect = commit.id;
+
+        let was_inserted = seen.insert(suspect);
+
+        if !was_inserted {
+            // We have already visited `suspect` and can continue with the next one.
+            continue 'outer;
+        }
+
         stats.commits_traversed += 1;
 
-        let parent_ids = commit.parent_ids;
+        let commit = find(cache.as_ref(), &odb, &suspect, &mut buf)?;
+
+        type ParentIds = SmallVec<[(gix_hash::ObjectId, i64); 2]>;
+        let mut parent_ids: ParentIds = Default::default();
+
+        // TODO
+        // This is a simplified version of `collect_parents` in
+        // `gix-traverse/src/commit/topo/iter.rs`. It can probably be extracted.
+        match commit {
+            gix_traverse::commit::Either::CachedCommit(commit) => {
+                let cache = cache
+                    .as_ref()
+                    .expect("find returned a cached commit, so we expect cache to be present");
+                for parent_id in commit.iter_parents() {
+                    match parent_id {
+                        Ok(pos) => {
+                            let parent = cache.commit_at(pos);
+
+                            parent_ids.push((parent.id().to_owned(), parent.committer_timestamp() as i64));
+                        }
+                        Err(_) => todo!(),
+                    }
+                }
+            }
+            gix_traverse::commit::Either::CommitRefIter(commit_ref_iter) => {
+                for token in commit_ref_iter {
+                    match token {
+                        Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
+                        Ok(gix_object::commit::ref_iter::Token::Parent { id }) => {
+                            let mut buf = Vec::new();
+                            let parent = odb.find_commit_iter(id.as_ref(), &mut buf).ok();
+                            let parent_commit_time = parent
+                                .and_then(|parent| parent.committer().ok().map(|committer| committer.time.seconds))
+                                .unwrap_or_default();
+
+                            parent_ids.push((id, parent_commit_time));
+                        }
+                        Ok(_unused_token) => break,
+                        Err(_err) => todo!(),
+                    }
+                }
+            }
+        };
+
         if parent_ids.is_empty() {
-            if traverse.peek().is_none() {
+            if queue.is_empty() {
+                // TODO
+                // Adapt comment. Also all other comments that mention `traverse`.
+                //
                 // I’m not entirely sure if this is correct yet. `suspect`, at this point, is the `id` of
                 // the last `item` that was yielded by `traverse`, so it makes sense to assign the
                 // remaining lines to it, even though we don’t explicitly check whether that is true
@@ -143,7 +241,7 @@ where
             continue;
         };
 
-        for (pid, parent_id) in parent_ids.iter().enumerate() {
+        for (pid, (parent_id, parent_commit_time)) in parent_ids.iter().enumerate() {
             if let Some(parent_entry_id) =
                 find_path_entry_in_commit(&odb, parent_id, file_path, &mut buf, &mut buf2, &mut stats)?
             {
@@ -153,17 +251,19 @@ where
                 }
                 if no_change_in_entry {
                     pass_blame_from_to(suspect, *parent_id, &mut hunks_to_blame);
+                    queue.insert(*parent_commit_time, *parent_id);
                     continue 'outer;
                 }
             }
         }
 
         let more_than_one_parent = parent_ids.len() > 1;
-        for parent_id in parent_ids {
+        for (parent_id, parent_commit_time) in parent_ids {
+            queue.insert(parent_commit_time, parent_id);
             let changes_for_file_path = tree_diff_at_file_path(
                 &odb,
                 file_path,
-                commit.id,
+                suspect,
                 parent_id,
                 &mut stats,
                 &mut diff_state,
