@@ -67,12 +67,16 @@ pub struct Info {
     pub commit_time: Option<gix_date::SecondsSinceUnixEpoch>,
 }
 
-enum Either<'buf, 'cache> {
+/// TODO
+pub enum Either<'buf, 'cache> {
+    /// TODO
     CommitRefIter(gix_object::CommitRefIter<'buf>),
+    /// TODO
     CachedCommit(gix_commitgraph::file::Commit<'cache>),
 }
 
-fn find<'cache, 'buf, Find>(
+/// TODO
+pub fn find<'cache, 'buf, Find>(
     cache: Option<&'cache gix_commitgraph::Graph>,
     objects: Find,
     id: &gix_hash::oid,

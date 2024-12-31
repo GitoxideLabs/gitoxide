@@ -14,6 +14,8 @@ rust-version = "1.65"
 doctest = false
 
 [dependencies]
+gix-commitgraph = { version = "^0.25.1", path = "../gix-commitgraph" }
+gix-revwalk = { version = "^0.17.0", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.11", path = "../gix-trace" }
 gix-diff = { version = "^0.49.0", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-object = { version = "^0.46.0", path = "../gix-object" }
@@ -21,6 +23,7 @@ gix-hash = { version = "^0.15.0", path = "../gix-hash" }
 gix-worktree = { version = "^0.38.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-traverse = { version = "^0.43.0", path = "../gix-traverse" }
 
+smallvec = "1.10.0"
 thiserror = "2.0.0"
 
 [dev-dependencies]
