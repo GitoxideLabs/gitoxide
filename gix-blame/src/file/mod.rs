@@ -16,10 +16,10 @@ pub(super) mod function;
 ///
 /// This is the core of the blame implementation as it matches regions in *Source File* to the *Blamed File*.
 fn process_change(
-    out: &mut Vec<BlameEntry>,
     new_hunks_to_blame: &mut Vec<UnblamedHunk>,
     offset: &mut Offset,
     suspect: ObjectId,
+    parent: ObjectId,
     hunk: Option<UnblamedHunk>,
     change: Option<Change>,
 ) -> (Option<UnblamedHunk>, Option<Change>) {
@@ -40,6 +40,8 @@ fn process_change(
     match (hunk, change) {
         (Some(hunk), Some(Change::Unchanged(unchanged))) => {
             let Some(range_in_suspect) = hunk.suspects.get(&suspect) else {
+                // We don’t clone blame to `parent` as `suspect` has nothing to do with this
+                // `hunk`.
                 new_hunks_to_blame.push(hunk);
                 return (None, Some(Change::Unchanged(unchanged)));
             };
@@ -64,7 +66,7 @@ fn process_change(
 
                     // Nothing to do with `hunk` except shifting it,
                     // but `unchanged` needs to be checked against the next hunk to catch up.
-                    new_hunks_to_blame.push(hunk.shift_by(suspect, *offset));
+                    new_hunks_to_blame.push(hunk.clone_blame(suspect, parent).shift_by(parent, *offset));
                     (None, Some(Change::Unchanged(unchanged)))
                 }
                 (false, false) => {
@@ -93,7 +95,7 @@ fn process_change(
 
                         // Nothing to do with `hunk` except shifting it,
                         // but `unchanged` needs to be checked against the next hunk to catch up.
-                        new_hunks_to_blame.push(hunk.shift_by(suspect, *offset));
+                        new_hunks_to_blame.push(hunk.clone_blame(suspect, parent).shift_by(parent, *offset));
                         (None, Some(Change::Unchanged(unchanged)))
                     }
                 }
@@ -123,7 +125,7 @@ fn process_change(
                         }
                         Either::Right((before, after)) => {
                             // requeue the left side `before` after offsetting it…
-                            new_hunks_to_blame.push(before.shift_by(suspect, *offset));
+                            new_hunks_to_blame.push(before.clone_blame(suspect, parent).shift_by(parent, *offset));
                             // …and treat `after` as `new_hunk`, which contains the `added` range.
                             after
                         }
@@ -132,20 +134,18 @@ fn process_change(
                     *offset += added.end - added.start;
                     *offset -= number_of_lines_deleted;
 
-                    //  The overlapping `added` section was successfully located.
-                    out.push(BlameEntry::with_offset(
-                        added.clone(),
-                        suspect,
-                        hunk_starting_at_added.offset_for(suspect),
-                    ));
-
+                    // The overlapping `added` section was successfully located.
                     // Re-split at the end of `added` to continue with what's after.
                     match hunk_starting_at_added.split_at(suspect, added.end) {
-                        Either::Left(_) => {
+                        Either::Left(hunk) => {
+                            new_hunks_to_blame.push(hunk);
+
                             // Nothing to split, so we are done with this hunk.
                             (None, None)
                         }
-                        Either::Right((_, after)) => {
+                        Either::Right((hunk, after)) => {
+                            new_hunks_to_blame.push(hunk);
+
                             // Keep processing the unblamed range after `added`
                             (Some(after), None)
                         }
@@ -162,17 +162,13 @@ fn process_change(
                         Either::Left(hunk) => hunk,
                         Either::Right((before, after)) => {
                             // Keep looking for the left side of the unblamed portion.
-                            new_hunks_to_blame.push(before.shift_by(suspect, *offset));
+                            new_hunks_to_blame.push(before.clone_blame(suspect, parent).shift_by(parent, *offset));
                             after
                         }
                     };
 
                     // We can 'blame' the overlapping area of `added` and `hunk`.
-                    out.push(BlameEntry::with_offset(
-                        added.start..range_in_suspect.end,
-                        suspect,
-                        hunk_starting_at_added.offset_for(suspect),
-                    ));
+                    new_hunks_to_blame.push(hunk_starting_at_added);
                     // Keep processing `added`, it's portion past `hunk` may still contribute.
                     (None, Some(Change::AddedOrReplaced(added, number_of_lines_deleted)))
                 }
@@ -183,18 +179,20 @@ fn process_change(
                     //    <--->      (blamed)
                     //         <-->  (new hunk)
 
-                    out.push(BlameEntry::with_offset(
-                        range_in_suspect.start..added.end,
-                        suspect,
-                        hunk.offset_for(suspect),
-                    ));
-
                     *offset += added.end - added.start;
                     *offset -= number_of_lines_deleted;
 
                     match hunk.split_at(suspect, added.end) {
-                        Either::Left(_) => (None, None),
-                        Either::Right((_, after)) => (Some(after), None),
+                        Either::Left(hunk) => {
+                            new_hunks_to_blame.push(hunk);
+
+                            (None, None)
+                        }
+                        Either::Right((before, after)) => {
+                            new_hunks_to_blame.push(before);
+
+                            (Some(after), None)
+                        }
                     }
                 }
                 (false, false) => {
@@ -222,7 +220,7 @@ fn process_change(
                         //       <---->  (added)
 
                         // Retry `hunk` once there is overlapping changes to process.
-                        new_hunks_to_blame.push(hunk.shift_by(suspect, *offset));
+                        new_hunks_to_blame.push(hunk.clone_blame(suspect, parent).shift_by(parent, *offset));
 
                         // Let hunks catchup with this change.
                         (
@@ -237,11 +235,7 @@ fn process_change(
                         //    <--->      (blamed)
 
                         // Successfully blame the whole range.
-                        out.push(BlameEntry::with_offset(
-                            range_in_suspect.clone(),
-                            suspect,
-                            hunk.offset_for(suspect),
-                        ));
+                        new_hunks_to_blame.push(hunk);
 
                         // And keep processing `added` with future `hunks` that might be affected by it.
                         (
@@ -279,7 +273,7 @@ fn process_change(
                     }
                     Either::Right((before, after)) => {
                         // `before` isn't affected by deletion, so keep it for later.
-                        new_hunks_to_blame.push(before.shift_by(suspect, *offset));
+                        new_hunks_to_blame.push(before.clone_blame(suspect, parent).shift_by(parent, *offset));
                         // after will be affected by offset, and we will see if there are more changes affecting it.
                         after
                     }
@@ -291,7 +285,8 @@ fn process_change(
                 //         |  (line_number_in_destination)
 
                 // Catchup with changes.
-                new_hunks_to_blame.push(hunk.shift_by(suspect, *offset));
+                new_hunks_to_blame.push(hunk.clone_blame(suspect, parent).shift_by(parent, *offset));
+
                 (
                     None,
                     Some(Change::Deleted(line_number_in_destination, number_of_lines_deleted)),
@@ -300,7 +295,7 @@ fn process_change(
         }
         (Some(hunk), None) => {
             // nothing to do - changes are exhausted, re-evaluate `hunk`.
-            new_hunks_to_blame.push(hunk.shift_by(suspect, *offset));
+            new_hunks_to_blame.push(hunk.clone_blame(suspect, parent).shift_by(parent, *offset));
             (None, None)
         }
         (None, Some(Change::Unchanged(_))) => {
@@ -328,10 +323,10 @@ fn process_change(
 /// Consume `hunks_to_blame` and `changes` to pair up matches ranges (also overlapping) with each other.
 /// Once a match is found, it's pushed onto `out`.
 fn process_changes(
-    out: &mut Vec<BlameEntry>,
     hunks_to_blame: Vec<UnblamedHunk>,
     changes: Vec<Change>,
     suspect: ObjectId,
+    parent: ObjectId,
 ) -> Vec<UnblamedHunk> {
     let mut hunks_iter = hunks_to_blame.into_iter();
     let mut changes_iter = changes.into_iter();
@@ -344,10 +339,10 @@ fn process_changes(
 
     loop {
         (hunk, change) = process_change(
-            out,
             &mut new_hunks_to_blame,
             &mut offset_in_destination,
             suspect,
+            parent,
             hunk,
             change,
         );
@@ -407,19 +402,6 @@ impl UnblamedHunk {
         }
     }
 
-    fn offset_for(&self, suspect: ObjectId) -> Offset {
-        let range_in_suspect = self
-            .suspects
-            .get(&suspect)
-            .expect("Internal and we know suspect is present");
-
-        if self.range_in_blamed_file.start > range_in_suspect.start {
-            Offset::Added(self.range_in_blamed_file.start - range_in_suspect.start)
-        } else {
-            Offset::Deleted(range_in_suspect.start - self.range_in_blamed_file.start)
-        }
-    }
-
     /// Transfer all ranges from the commit at `from` to the commit at `to`.
     fn pass_blame(&mut self, from: ObjectId, to: ObjectId) {
         if let Some(range_in_suspect) = self.suspects.remove(&from) {
@@ -427,10 +409,13 @@ impl UnblamedHunk {
         }
     }
 
-    fn clone_blame(&mut self, from: ObjectId, to: ObjectId) {
+    // TODO
+    // Should this also accept `&mut self` as the other functions do?
+    fn clone_blame(mut self, from: ObjectId, to: ObjectId) -> Self {
         if let Some(range_in_suspect) = self.suspects.get(&from) {
             self.suspects.insert(to, range_in_suspect.clone());
         }
+        self
     }
 
     fn remove_blame(&mut self, suspect: ObjectId) {
@@ -439,36 +424,6 @@ impl UnblamedHunk {
 }
 
 impl BlameEntry {
-    /// Create a new instance by creating `range_in_blamed_file` after applying `offset` to `range_in_source_file`.
-    fn with_offset(range_in_source_file: Range<u32>, commit_id: ObjectId, offset: Offset) -> Self {
-        debug_assert!(
-            range_in_source_file.end > range_in_source_file.start,
-            "{range_in_source_file:?}"
-        );
-
-        match offset {
-            Offset::Added(added) => Self {
-                start_in_blamed_file: range_in_source_file.start + added,
-                start_in_source_file: range_in_source_file.start,
-                len: force_non_zero(range_in_source_file.len() as u32),
-                commit_id,
-            },
-            Offset::Deleted(deleted) => {
-                debug_assert!(
-                    range_in_source_file.start >= deleted,
-                    "{range_in_source_file:?} {offset:?}"
-                );
-
-                Self {
-                    start_in_blamed_file: range_in_source_file.start - deleted,
-                    start_in_source_file: range_in_source_file.start,
-                    len: force_non_zero(range_in_source_file.len() as u32),
-                    commit_id,
-                }
-            }
-        }
-    }
-
     /// Create an offset from a portion of the *Blamed File*.
     fn from_unblamed_hunk(unblamed_hunk: &UnblamedHunk, commit_id: ObjectId) -> Option<Self> {
         let range_in_source_file = unblamed_hunk.suspects.get(&commit_id)?;

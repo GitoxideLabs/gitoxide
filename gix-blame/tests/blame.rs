@@ -234,6 +234,7 @@ mktest!(
     1
 );
 mktest!(file_only_changed_in_branch, "file-only-changed-in-branch", 2);
+mktest!(file_changed_in_two_branches, "file-changed-in-two-branches", 3);
 
 /// As of 2024-09-24, these tests are expected to fail.
 ///

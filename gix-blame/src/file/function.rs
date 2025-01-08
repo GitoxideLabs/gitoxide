@@ -172,9 +172,10 @@ where
                 if more_than_one_parent {
                     // None of the changes affected the file we’re currently blaming.
                     // Copy blame to parent.
-                    for unblamed_hunk in &mut hunks_to_blame {
-                        unblamed_hunk.clone_blame(suspect, parent_id);
-                    }
+                    hunks_to_blame = hunks_to_blame
+                        .into_iter()
+                        .map(|unblamed_hunk| unblamed_hunk.clone_blame(suspect, parent_id))
+                        .collect();
                 } else {
                     pass_blame_from_to(suspect, parent_id, &mut hunks_to_blame);
                 }
@@ -196,14 +197,59 @@ where
                 }
                 gix_diff::tree::recorder::Change::Modification { previous_oid, oid, .. } => {
                     let changes = blob_changes(&odb, resource_cache, oid, previous_oid, file_path, &mut stats)?;
-                    hunks_to_blame = process_changes(&mut out, hunks_to_blame, changes, suspect);
-                    pass_blame_from_to(suspect, parent_id, &mut hunks_to_blame);
+                    hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent_id);
                 }
             }
         }
-        if more_than_one_parent {
-            for unblamed_hunk in &mut hunks_to_blame {
+
+        hunks_to_blame = hunks_to_blame
+            .into_iter()
+            .filter_map(|mut unblamed_hunk| {
+                if unblamed_hunk.suspects.len() == 1 {
+                    if let Some(entry) = BlameEntry::from_unblamed_hunk(&unblamed_hunk, suspect) {
+                        // At this point, we have copied blame for every hunk to a parent. Hunks
+                        // that have only `suspect` left in `suspects` have not passed blame to any
+                        // parent and so they can be converted to a `BlameEntry` and moved to
+                        // `out`.
+                        out.push(entry);
+
+                        return None;
+                    }
+                }
+
                 unblamed_hunk.remove_blame(suspect);
+
+                Some(unblamed_hunk)
+            })
+            .collect();
+
+        // This block asserts that line ranges for each suspect never overlap. If they did overlap
+        // this would mean that the same line in a *Source File* would map to more than one line in
+        // the *Blamed File* and this is not possible.
+        #[cfg(debug_assertions)]
+        {
+            let ranges = hunks_to_blame.iter().fold(
+                std::collections::BTreeMap::<ObjectId, Vec<Range<u32>>>::new(),
+                |mut acc, hunk| {
+                    for (suspect, range) in hunk.suspects.clone() {
+                        acc.entry(suspect).or_insert(Vec::new()).push(range);
+                    }
+
+                    acc
+                },
+            );
+
+            for (_, mut ranges) in ranges {
+                ranges.sort_by(|a, b| a.start.cmp(&b.start));
+
+                for window in ranges.windows(2) {
+                    match window {
+                        [a, b] => {
+                            assert!(a.end <= b.start, "#{hunks_to_blame:#?}");
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     }
