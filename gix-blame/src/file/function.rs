@@ -232,7 +232,7 @@ where
                 std::collections::BTreeMap::<ObjectId, Vec<Range<u32>>>::new(),
                 |mut acc, hunk| {
                     for (suspect, range) in hunk.suspects.clone() {
-                        acc.entry(suspect).or_insert(Vec::new()).push(range);
+                        acc.entry(suspect).or_default().push(range);
                     }
 
                     acc
@@ -243,11 +243,8 @@ where
                 ranges.sort_by(|a, b| a.start.cmp(&b.start));
 
                 for window in ranges.windows(2) {
-                    match window {
-                        [a, b] => {
-                            assert!(a.end <= b.start, "#{hunks_to_blame:#?}");
-                        }
-                        _ => {}
+                    if let [a, b] = window {
+                        assert!(a.end <= b.start, "#{hunks_to_blame:#?}");
                     }
                 }
             }
