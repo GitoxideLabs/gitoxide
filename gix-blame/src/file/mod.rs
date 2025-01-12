@@ -66,7 +66,7 @@ fn process_change(
 
                     // Nothing to do with `hunk` except shifting it,
                     // but `unchanged` needs to be checked against the next hunk to catch up.
-                    new_hunks_to_blame.push(hunk.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                    new_hunks_to_blame.push(hunk.passed_blame(suspect, parent).shift_by(parent, *offset));
                     (None, Some(Change::Unchanged(unchanged)))
                 }
                 (false, false) => {
@@ -95,7 +95,7 @@ fn process_change(
 
                         // Nothing to do with `hunk` except shifting it,
                         // but `unchanged` needs to be checked against the next hunk to catch up.
-                        new_hunks_to_blame.push(hunk.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                        new_hunks_to_blame.push(hunk.passed_blame(suspect, parent).shift_by(parent, *offset));
                         (None, Some(Change::Unchanged(unchanged)))
                     }
                 }
@@ -125,7 +125,7 @@ fn process_change(
                         }
                         Either::Right((before, after)) => {
                             // requeue the left side `before` after offsetting it…
-                            new_hunks_to_blame.push(before.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                            new_hunks_to_blame.push(before.passed_blame(suspect, parent).shift_by(parent, *offset));
                             // …and treat `after` as `new_hunk`, which contains the `added` range.
                             after
                         }
@@ -162,7 +162,7 @@ fn process_change(
                         Either::Left(hunk) => hunk,
                         Either::Right((before, after)) => {
                             // Keep looking for the left side of the unblamed portion.
-                            new_hunks_to_blame.push(before.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                            new_hunks_to_blame.push(before.passed_blame(suspect, parent).shift_by(parent, *offset));
                             after
                         }
                     };
@@ -220,7 +220,7 @@ fn process_change(
                         //       <---->  (added)
 
                         // Retry `hunk` once there is overlapping changes to process.
-                        new_hunks_to_blame.push(hunk.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                        new_hunks_to_blame.push(hunk.passed_blame(suspect, parent).shift_by(parent, *offset));
 
                         // Let hunks catchup with this change.
                         (
@@ -273,7 +273,7 @@ fn process_change(
                     }
                     Either::Right((before, after)) => {
                         // `before` isn't affected by deletion, so keep it for later.
-                        new_hunks_to_blame.push(before.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                        new_hunks_to_blame.push(before.passed_blame(suspect, parent).shift_by(parent, *offset));
                         // after will be affected by offset, and we will see if there are more changes affecting it.
                         after
                     }
@@ -285,7 +285,7 @@ fn process_change(
                 //         |  (line_number_in_destination)
 
                 // Catchup with changes.
-                new_hunks_to_blame.push(hunk.cloned_blame(suspect, parent).shift_by(parent, *offset));
+                new_hunks_to_blame.push(hunk.passed_blame(suspect, parent).shift_by(parent, *offset));
 
                 (
                     None,
@@ -295,7 +295,7 @@ fn process_change(
         }
         (Some(hunk), None) => {
             // nothing to do - changes are exhausted, re-evaluate `hunk`.
-            new_hunks_to_blame.push(hunk.cloned_blame(suspect, parent).shift_by(parent, *offset));
+            new_hunks_to_blame.push(hunk.passed_blame(suspect, parent).shift_by(parent, *offset));
             (None, None)
         }
         (None, Some(Change::Unchanged(_))) => {
@@ -400,6 +400,15 @@ impl UnblamedHunk {
                 }
             }
         }
+    }
+
+    /// This is like [`Self::pass_blame()`], but easier to use in places where the 'passing' is
+    /// done 'inline'.
+    fn passed_blame(mut self, from: ObjectId, to: ObjectId) -> Self {
+        if let Some(range_in_suspect) = self.suspects.remove(&from) {
+            self.suspects.insert(to, range_in_suspect);
+        }
+        self
     }
 
     /// Transfer all ranges from the commit at `from` to the commit at `to`.

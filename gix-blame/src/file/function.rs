@@ -120,7 +120,6 @@ where
     type CommitTime = i64;
 
     let mut queue: gix_revwalk::PriorityQueue<CommitTime, ObjectId> = gix_revwalk::PriorityQueue::new();
-    let mut seen: HashSet<ObjectId> = HashSet::new();
 
     // TODO
     // This is a simplified version of `gen_and_commit_time` in
@@ -157,10 +156,11 @@ where
             break;
         }
 
-        let was_inserted = seen.insert(suspect);
+        let is_still_suspect = hunks_to_blame.iter().any(|hunk| hunk.suspects.contains_key(&suspect));
 
-        if !was_inserted {
-            // We have already visited `suspect` and can continue with the next one.
+        if !is_still_suspect {
+            // There are no `UnblamedHunk`s associated with this `suspect`, so we can continue with
+            // the next one.
             continue 'outer;
         }
 

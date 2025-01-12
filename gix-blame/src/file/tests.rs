@@ -115,7 +115,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 0..2,
-                    suspects: [(suspect, 0..2), (parent, 0..2)].into()
+                    suspects: [(parent, 0..2)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 2..3,
@@ -155,7 +155,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 10..12,
-                    suspects: [(suspect, 10..12), (parent, 5..7)].into()
+                    suspects: [(parent, 5..7)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 12..13,
@@ -196,7 +196,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 12..14,
-                    suspects: [(suspect, 7..9), (parent, 7..9)].into()
+                    suspects: [(parent, 7..9)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 14..15,
@@ -306,7 +306,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 3..4,
-                    suspects: [(suspect, 2..3), (parent, 0..1)].into()
+                    suspects: [(parent, 0..1)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..6,
@@ -399,7 +399,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 71..107,
-                    suspects: [(suspect, 70..106), (parent, 70..106)].into()
+                    suspects: [(parent, 70..106)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 107..109,
@@ -434,7 +434,7 @@ mod process_change {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 149..155,
-                    suspects: [(suspect, 137..143), (parent, 137..143)].into()
+                    suspects: [(parent, 137..143)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 155..156,
@@ -468,7 +468,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 3..6,
-                suspects: [(suspect, 2..5), (parent, 5..8)].into()
+                suspects: [(parent, 5..8)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Deleted(3));
@@ -584,7 +584,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 15..16,
-                suspects: [(suspect, 17..18), (parent, 16..17)].into()
+                suspects: [(parent, 16..17)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Added(1));
@@ -677,7 +677,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 12..14,
-                suspects: [(suspect, 13..15), (parent, 10..12)].into()
+                suspects: [(parent, 10..12)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Added(1));
@@ -706,7 +706,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 110..114,
-                suspects: [(suspect, 109..113), (parent, 106..110)].into()
+                suspects: [(parent, 106..110)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Added(3));
@@ -762,7 +762,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 0..5,
-                suspects: [(suspect, 0..5), (parent, 0..5)].into()
+                suspects: [(parent, 0..5)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Added(0));
@@ -821,7 +821,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 0..5,
-                suspects: [(suspect, 0..5), (parent, 0..5)].into()
+                suspects: [(parent, 0..5)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Added(0));
@@ -883,7 +883,7 @@ mod process_change {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 2..14,
-                suspects: [(suspect, 2..14), (parent, 2..14)].into()
+                suspects: [(parent, 2..14)].into()
             }]
         );
         assert_eq!(offset_in_destination, Offset::Deleted(4));
@@ -1003,7 +1003,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..6,
-                    suspects: [(suspect, 4..6), (parent, 0..2)].into(),
+                    suspects: [(parent, 0..2)].into(),
                 },
             ]
         );
@@ -1026,7 +1026,7 @@ mod process_changes {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 0..2,
-                    suspects: [(suspect, 0..2), (parent, 0..2)].into(),
+                    suspects: [(parent, 0..2)].into(),
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 2..4,
@@ -1034,7 +1034,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..6,
-                    suspects: [(suspect, 4..6), (parent, 2..4)].into(),
+                    suspects: [(parent, 2..4)].into(),
                 },
             ]
         );
@@ -1065,7 +1065,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..6,
-                    suspects: [(suspect, 4..6), (parent, 0..2)].into(),
+                    suspects: [(parent, 0..2)].into(),
                 }
             ]
         );
@@ -1088,7 +1088,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 1..6,
-                    suspects: [(suspect, 1..6), (parent, 0..5)].into(),
+                    suspects: [(parent, 0..5)].into(),
                 }
             ]
         );
@@ -1111,7 +1111,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 3..6,
-                    suspects: [(suspect, 1..4), (parent, 0..3)].into(),
+                    suspects: [(parent, 0..3)].into(),
                 }
             ]
         );
@@ -1134,7 +1134,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..6,
-                    suspects: [(suspect, 4..6), (parent, 3..5)].into(),
+                    suspects: [(parent, 3..5)].into(),
                 }
             ]
         );
@@ -1152,7 +1152,7 @@ mod process_changes {
             new_hunks_to_blame,
             [UnblamedHunk {
                 range_in_blamed_file: 4..6,
-                suspects: [(suspect, 3..5), (parent, 0..2)].into(),
+                suspects: [(parent, 0..2)].into(),
             }]
         );
     }
@@ -1174,7 +1174,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 2..3,
-                    suspects: [(suspect, 1..2), (parent, 2..3)].into(),
+                    suspects: [(parent, 2..3)].into(),
                 }
             ]
         );
@@ -1201,7 +1201,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 2..3,
-                    suspects: [(suspect, 2..3), (parent, 0..1)].into(),
+                    suspects: [(parent, 0..1)].into(),
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 3..4,
@@ -1237,7 +1237,7 @@ mod process_changes {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 0..16,
-                    suspects: [(suspect, 0..16), (parent, 0..16)].into()
+                    suspects: [(parent, 0..16)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 16..17,
@@ -1245,11 +1245,11 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 17..30,
-                    suspects: [(suspect, 17..30), (parent, 16..29)].into()
+                    suspects: [(parent, 16..29)].into()
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 31..37,
-                    suspects: [(suspect, 31..37), (parent, 30..36)].into()
+                    suspects: [(parent, 30..36)].into()
                 }
             ]
         );
@@ -1285,11 +1285,11 @@ mod process_changes {
             [
                 UnblamedHunk {
                     range_in_blamed_file: 1..3,
-                    suspects: [(suspect, 1..3), (parent, 1..3)].into(),
+                    suspects: [(parent, 1..3)].into(),
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 5..6,
-                    suspects: [(suspect, 5..6), (parent, 5..6)].into(),
+                    suspects: [(parent, 5..6)].into(),
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 6..7,
@@ -1301,7 +1301,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 9..10,
-                    suspects: [(suspect, 9..10), (parent, 6..7)].into(),
+                    suspects: [(parent, 6..7)].into(),
                 },
             ]
         );
@@ -1327,7 +1327,7 @@ mod process_changes {
                 },
                 UnblamedHunk {
                     range_in_blamed_file: 4..7,
-                    suspects: [(suspect, 4..7), (parent, 3..6)].into()
+                    suspects: [(parent, 3..6)].into()
                 }
             ]
         );
