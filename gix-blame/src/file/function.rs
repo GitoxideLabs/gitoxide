@@ -241,6 +241,40 @@ where
             continue;
         };
 
+        // This block asserts that, for every `UnblamedHunk`, all lines in the *Blamed File* are
+        // identical to the corresponding lines in the *Source File*.
+        #[cfg(debug_assertions)]
+        {
+            let source_blob = odb.find_blob(&entry_id, &mut buf)?.data.to_vec();
+            let mut source_interner = gix_diff::blob::intern::Interner::new(source_blob.len() / 100);
+            let source_lines_as_tokens: Vec<_> = tokens_for_diffing(&source_blob)
+                .tokenize()
+                .map(|token| source_interner.intern(token))
+                .collect();
+
+            let mut blamed_interner = gix_diff::blob::intern::Interner::new(blamed_file_blob.len() / 100);
+            let blamed_lines_as_tokens: Vec<_> = tokens_for_diffing(&blamed_file_blob)
+                .tokenize()
+                .map(|token| blamed_interner.intern(token))
+                .collect();
+
+            for hunk in hunks_to_blame.iter() {
+                if let Some(range_in_suspect) = hunk.suspects.get(&suspect) {
+                    let range_in_blamed_file = hunk.range_in_blamed_file.clone();
+
+                    for (blamed_line_number, source_line_number) in range_in_blamed_file.zip(range_in_suspect.clone()) {
+                        let source_token = source_lines_as_tokens[source_line_number as usize];
+                        let blame_token = blamed_lines_as_tokens[blamed_line_number as usize];
+
+                        let source_line = BString::new(source_interner[source_token].into());
+                        let blamed_line = BString::new(blamed_interner[blame_token].into());
+
+                        assert_eq!(source_line, blamed_line);
+                    }
+                }
+            }
+        }
+
         for (pid, (parent_id, parent_commit_time)) in parent_ids.iter().enumerate() {
             if let Some(parent_entry_id) =
                 find_path_entry_in_commit(&odb, parent_id, file_path, &mut buf, &mut buf2, &mut stats)?
