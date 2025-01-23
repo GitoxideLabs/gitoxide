@@ -37,6 +37,7 @@ pub struct PrepareFetch {
     /// The name of the reference to fetch. If `None`, the reference pointed to by `HEAD` will be checked out.
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
     ref_name: Option<gix_ref::PartialName>,
+    leave_dirty: bool,
 }
 
 /// The error returned by [`PrepareFetch::new()`].
@@ -126,6 +127,7 @@ impl PrepareFetch {
             configure_connection: None,
             shallow: remote::fetch::Shallow::NoChange,
             ref_name: None,
+            leave_dirty: false,
         })
     }
 }
@@ -140,6 +142,7 @@ pub struct PrepareCheckout {
     pub(self) repo: Option<crate::Repository>,
     /// The name of the reference to check out. If `None`, the reference pointed to by `HEAD` will be checked out.
     pub(self) ref_name: Option<gix_ref::PartialName>,
+    pub(self) leave_dirty: bool,
 }
 
 // This module encapsulates functionality that works with both feature toggles. Can be combined with `fetch`
@@ -168,6 +171,13 @@ mod access_feat {
         /// Set additional options to adjust parts of the fetch operation that are not affected by the git configuration.
         pub fn with_fetch_options(mut self, opts: crate::remote::ref_map::Options) -> Self {
             self.fetch_options = opts;
+            self
+        }
+
+        /// Set whether to delete the repo directory when the PrepareFetch or PrepareCheckout
+        /// object is dropped.
+        pub fn with_leave_dirty(mut self, leave_dirty: bool) -> Self {
+            self.leave_dirty = leave_dirty;
             self
         }
     }

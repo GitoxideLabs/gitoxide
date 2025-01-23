@@ -227,6 +227,7 @@ impl PrepareFetch {
             crate::clone::PrepareCheckout {
                 repo: repo.into(),
                 ref_name: self.ref_name.clone(),
+                leave_dirty: self.leave_dirty,
             },
             fetch_outcome,
         ))
