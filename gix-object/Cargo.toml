@@ -4,12 +4,12 @@ lints.workspace = true
 name = "gix-object"
 version = "0.47.0"
 description = "Immutable and mutable git objects with decoding and encoding support"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
-edition = "2021"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

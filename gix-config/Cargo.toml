@@ -3,15 +3,15 @@ lints.workspace = true
 [package]
 name = "gix-config"
 version = "0.43.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
+repository.workspace = true
 description = "A git-config file parser and editor from the gitoxide project"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 authors = ["Edward Shen <code@eddie.sh>"]
-edition = "2021"
+edition.workspace = true
 keywords = ["git-config", "git", "config", "gitoxide"]
 categories = ["config", "parser-implementations"]
 include = ["src/**/*", "LICENSE-*", "README.md"]
-rust-version = "1.70"
+rust-version.workspace = true
 autotests = false
 
 [features]

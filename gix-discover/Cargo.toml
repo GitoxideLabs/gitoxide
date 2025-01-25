@@ -3,13 +3,13 @@ lints.workspace = true
 [package]
 name = "gix-discover"
 version = "0.38.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "Discover git repositories and check if a directory is a git repository"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

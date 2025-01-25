@@ -3,12 +3,12 @@ lints.workspace = true
 [package]
 name = "gix-bitmap"
 version = "0.2.14"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A crate of the gitoxide project dedicated implementing the standard git bitmap format"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.70"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 exclude = ["CHANGELOG.md"]
 
 [lib]

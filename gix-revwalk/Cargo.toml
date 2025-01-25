@@ -3,13 +3,13 @@ lints.workspace = true
 [package]
 name = "gix-revwalk"
 version = "0.18.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A crate providing utilities for walking the revision graph"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

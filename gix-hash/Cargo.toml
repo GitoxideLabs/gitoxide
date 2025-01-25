@@ -4,12 +4,12 @@ lints.workspace = true
 name = "gix-hash"
 version = "0.16.0"
 description = "Borrowed and owned git hash digests used to identify git objects"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
-edition = "2021"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

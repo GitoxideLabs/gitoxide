@@ -3,13 +3,13 @@ lints.workspace = true
 [package]
 name = "gix-hashtable"
 version = "0.7.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A crate that provides hashtable based data structures optimized to utilize ObjectId keys"
 authors = ["Pascal Kuthe <pascal.kuthe@semimod.de>"]
-edition = "2021"
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

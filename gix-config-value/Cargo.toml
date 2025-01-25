@@ -3,12 +3,12 @@ lints.workspace = true
 [package]
 name = "gix-config-value"
 version = "0.14.11"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A crate of the gitoxide project providing git-config value parsing"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.70"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 include = ["src/**/*", "LICENSE-*"]
 
 [lib]

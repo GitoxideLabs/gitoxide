@@ -3,13 +3,13 @@ lints.workspace = true
 [package]
 name = "gix-tempfile"
 version = "16.0.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A tempfile implementation with a global registry to assure cleanup"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*", "README.md"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [[example]]
 name = "delete-tempfiles-on-sigterm"

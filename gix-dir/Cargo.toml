@@ -3,12 +3,12 @@ lints.workspace = true
 [package]
 name = "gix-dir"
 version = "0.12.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+license.workspace = true
 description = "A crate of the gitoxide project dealing with directory walks"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.70"
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 
 [lib]
 doctest = false

@@ -3,12 +3,12 @@ lints.workspace = true
 [package]
 name = "gix-trace"
 description = "A crate to provide minimal `tracing` support that can be turned off to zero cost"
-repository = "https://github.com/GitoxideLabs/gitoxide"
+repository.workspace = true
 version = "0.1.12"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.70"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 include = ["src/**/*", "LICENSE-*"]
 
 [lib]

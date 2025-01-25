@@ -3,14 +3,14 @@ lints.workspace = true
 [package]
 name = "gix-commitgraph"
 version = "0.26.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
+repository.workspace = true
 documentation = "https://git-scm.com/docs/commit-graph#:~:text=The%20commit-graph%20file%20is%20a%20supplemental%20data%20structure,or%20in%20the%20info%20directory%20of%20an%20alternate."
-license = "MIT OR Apache-2.0"
+license.workspace = true
 description = "Read-only access to the git commitgraph file format"
 authors = ["Conor Davis <gitoxide@conor.fastmail.fm>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

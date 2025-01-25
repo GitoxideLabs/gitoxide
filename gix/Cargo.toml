@@ -2,14 +2,14 @@ lints.workspace = true
 
 [package]
 name = "gix"
-repository = "https://github.com/GitoxideLabs/gitoxide"
+repository.workspace = true
 description = "Interact with git repositories just like git would"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 version = "0.70.0"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+authors.workspace = true
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 
 [lib]
 doctest = false

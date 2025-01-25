@@ -3,13 +3,13 @@ lints.workspace = true
 [package]
 name = "gix-odb"
 version = "0.67.0"
-repository = "https://github.com/GitoxideLabs/gitoxide"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-license = "MIT OR Apache-2.0"
+repository.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Implements various git object databases"
-edition = "2021"
+edition.workspace = true
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version.workspace = true
 autotests = false
 
 [lib]

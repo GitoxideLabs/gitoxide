@@ -3,11 +3,11 @@ lints.workspace = true
 [package]
 name = "gitoxide-core"
 description = "The library implementing all capabilities of the gitoxide CLI"
-repository = "https://github.com/GitoxideLabs/gitoxide"
+repository.workspace = true
 version = "0.45.0"
-authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-license = "MIT OR Apache-2.0"
-edition = "2021"
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
 
 [lib]
 doctest = false

@@ -11,6 +11,7 @@ version = "0.41.0"
 default-run = "gix"
 include = ["src/**/*", "/build.rs", "LICENSE-*", "README.md"]
 resolver = "2"
+rust-version = "1.70"
 
 [[bin]]
 name = "ein"
@@ -306,6 +307,13 @@ members = [
     "gix-traverse/tests",
     "gix-shallow"
 ]
+
+[workspace.package]
+repository = "https://github.com/GitoxideLabs/gitoxide"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.79"
 
 [workspace.dependencies]
 
