@@ -1582,6 +1582,7 @@ dependencies = [
  "gix-quote 0.4.15",
  "gix-testtools",
  "gix-trace 0.1.12",
+ "once_cell",
  "shell-words",
 ]
 
