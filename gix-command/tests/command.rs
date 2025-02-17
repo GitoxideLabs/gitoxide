@@ -222,10 +222,13 @@ mod context {
 }
 
 mod prepare {
-    #[cfg(windows)]
-    const SH: &str = "sh";
-    #[cfg(not(windows))]
-    const SH: &str = "/bin/sh";
+    use once_cell::sync::Lazy;
+
+    static SH: Lazy<&'static str> = Lazy::new(|| {
+        gix_path::env::shell()
+            .to_str()
+            .expect("`prepare` tests must be run where 'sh' path is valid Unicode")
+    });
 
     fn quoted(input: &[&str]) -> String {
         input.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" ")
@@ -275,7 +278,7 @@ mod prepare {
             if cfg!(windows) {
                 quoted(&["ls", "first", "second", "third"])
             } else {
-                quoted(&[SH, "-c", "ls first second third", "--"])
+                quoted(&[*SH, "-c", "ls first second third", "--"])
             },
             "with shell, this works as it performs word splitting"
         );
@@ -311,7 +314,8 @@ mod prepare {
             if cfg!(windows) {
                 quoted(&["ls", "--foo", "a b", "additional"])
             } else {
-                format!(r#""{SH}" "-c" "ls --foo \"a b\" \"$@\"" "--" "additional""#)
+                let sh = *SH;
+                format!(r#""{sh}" "-c" "ls --foo \"a b\" \"$@\"" "--" "additional""#)
             },
             "with shell, this works as it performs word splitting"
         );
@@ -334,7 +338,7 @@ mod prepare {
         let cmd = std::process::Command::from(
             gix_command::prepare("ls --foo=\"a b\"").command_may_be_shell_script_disallow_manual_argument_splitting(),
         );
-        assert_eq!(format!("{cmd:?}"), quoted(&[SH, "-c", r#"ls --foo=\"a b\""#, "--"]));
+        assert_eq!(format!("{cmd:?}"), quoted(&[*SH, "-c", r#"ls --foo=\"a b\""#, "--"]));
     }
 
     #[test]
@@ -347,7 +351,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[SH, "-c", "ls \\\"$@\\\"", "--", "--foo=a b"])
+            quoted(&[*SH, "-c", "ls \\\"$@\\\"", "--", "--foo=a b"])
         );
     }
 
@@ -362,7 +366,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[SH, "-c", "\\'ls\\' \\\"$@\\\"", "--", "--foo=a b"]),
+            quoted(&[*SH, "-c", "\\'ls\\' \\\"$@\\\"", "--", "--foo=a b"]),
             "looks strange thanks to debug printing, but is the right amount of quotes actually"
         );
     }
@@ -379,7 +383,7 @@ mod prepare {
         assert_eq!(
             format!("{cmd:?}"),
             quoted(&[
-                SH,
+                *SH,
                 "-c",
                 "\\'C:\\\\Users\\\\O\\'\\\\\\'\\'Shaughnessy\\\\with space.exe\\' \\\"$@\\\"",
                 "--",
@@ -394,9 +398,10 @@ mod prepare {
         let cmd = std::process::Command::from(
             gix_command::prepare("ls --foo=~/path").command_may_be_shell_script_allow_manual_argument_splitting(),
         );
+        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{SH}" "-c" "ls --foo=~/path" "--""#),
+            format!(r#""{sh}" "-c" "ls --foo=~/path" "--""#),
             "splitting can also handle quotes"
         );
     }
@@ -405,9 +410,10 @@ mod prepare {
     fn tilde_path_and_multiple_arguments_as_part_of_command_with_shell() {
         let cmd =
             std::process::Command::from(gix_command::prepare("~/bin/exe --foo \"a b\"").command_may_be_shell_script());
+        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{SH}" "-c" "~/bin/exe --foo \"a b\"" "--""#),
+            format!(r#""{sh}" "-c" "~/bin/exe --foo \"a b\"" "--""#),
             "this always needs a shell as we need tilde expansion"
         );
     }
@@ -419,9 +425,10 @@ mod prepare {
                 .command_may_be_shell_script()
                 .arg("store"),
         );
+        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{SH}" "-c" "echo \"$@\" >&2" "--" "store""#),
+            format!(r#""{sh}" "-c" "echo \"$@\" >&2" "--" "store""#),
             "this is how credential helpers have to work as for some reason they don't get '$@' added in Git.\
             We deal with it by not doubling the '$@' argument, which seems more flexible."
         );
@@ -435,9 +442,10 @@ mod prepare {
                 .with_quoted_command()
                 .arg("store"),
         );
+        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{SH}" "-c" "echo \"$@\" >&2" "--" "store""#)
+            format!(r#""{sh}" "-c" "echo \"$@\" >&2" "--" "store""#)
         );
     }
 }
