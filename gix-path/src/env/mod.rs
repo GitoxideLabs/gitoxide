@@ -30,18 +30,35 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 
 /// Return the shell that Git would use, the shell to execute commands from.
 ///
-/// On Windows, this is the full path to `sh.exe` bundled with Git, and on
-/// Unix it's `/bin/sh` as posix compatible shell.
-/// If the bundled shell on Windows cannot be found, `sh` is returned as the name of a shell
-/// as it could possibly be found in `PATH`.
-/// Note that the returned path might not be a path on disk.
+/// On Windows, this is the full path to `sh.exe` bundled with Git for Windows if we can find it.
+/// If the bundled shell on Windows cannot be found, `sh.exe` is returned as the name of a shell,
+/// as it could possibly be found in `PATH`. On Unix it's `/bin/sh` as the POSIX-compatible shell.
+///
+/// Note that the returned path might not be a path on disk, if it is a fallback path or if the
+/// file was moved or deleted since the first time this function is called.
 pub fn shell() -> &'static OsStr {
     static PATH: Lazy<OsString> = Lazy::new(|| {
         if cfg!(windows) {
             core_dir()
-                .and_then(|p| p.ancestors().nth(3)) // Skip something like mingw64/libexec/git-core.
-                .map(|p| p.join("usr").join("bin").join("sh.exe"))
-                .map_or_else(|| OsString::from("sh"), Into::into)
+                .and_then(|git_core| {
+                    // Go up above something that is expected to be like mingw64/libexec/git-core.
+                    git_core.ancestors().nth(3)
+                })
+                .map(OsString::from)
+                .map(|mut raw_path| {
+                    // Go down to where `sh.exe` usually is. To avoid breaking shell scripts that
+                    // wrongly assume the shell's own path contains no `\`, as well as to produce
+                    // more readable messages, append literally with `/` separators. The path from
+                    // `git --exec-path` will already have all `/` separators (and no trailing `/`)
+                    // unless it was explicitly overridden to an unusual value via `GIT_EXEC_PATH`.
+                    raw_path.push("/usr/bin/sh.exe");
+                    raw_path
+                })
+                .filter(|raw_path| {
+                    // Check if there is something that could be a usable shell there.
+                    Path::new(raw_path).is_file()
+                })
+                .unwrap_or_else(|| "sh.exe".into())
         } else {
             "/bin/sh".into()
         }
