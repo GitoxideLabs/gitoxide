@@ -1,12 +1,17 @@
 use gix_credentials::{helper, program::Kind, Program};
+use once_cell::sync::Lazy;
 
-static GIT: once_cell::sync::Lazy<&'static str> =
-    once_cell::sync::Lazy::new(|| gix_path::env::exe_invocation().to_str().expect("not illformed"));
+static GIT: once_cell::sync::Lazy<&'static str> = once_cell::sync::Lazy::new(|| {
+    gix_path::env::exe_invocation()
+        .to_str()
+        .expect("some `from_custom_definition` tests must be run where 'git' path is valid Unicode")
+});
 
-#[cfg(windows)]
-const SH: &str = "sh";
-#[cfg(not(windows))]
-const SH: &str = "/bin/sh";
+static SH: Lazy<&'static str> = Lazy::new(|| {
+    gix_path::env::shell()
+        .to_str()
+        .expect("some `from_custom_definition` tests must be run where 'sh' path is valid Unicode")
+});
 
 #[test]
 fn empty() {
@@ -47,11 +52,12 @@ fn name_with_args() {
 fn name_with_special_args() {
     let input = "name --arg --bar=~/folder/in/home";
     let prog = Program::from_custom_definition(input);
+    let sh = *SH;
     let git = *GIT;
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
-        format!(r#""{SH}" "-c" "{git} credential-name --arg --bar=~/folder/in/home \"$@\"" "--" "store""#)
+        format!(r#""{sh}" "-c" "{git} credential-name --arg --bar=~/folder/in/home \"$@\"" "--" "store""#)
     );
 }
 
@@ -73,12 +79,13 @@ fn path_with_args_that_definitely_need_shell() {
     let input = "/abs/name --arg --bar=\"a b\"";
     let prog = Program::from_custom_definition(input);
     assert!(matches!(&prog.kind, Kind::ExternalPath{path_and_args} if path_and_args == input));
+    let sh = *SH;
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
         if cfg!(windows) {
             r#""/abs/name" "--arg" "--bar=a b" "store""#.to_owned()
         } else {
-            format!(r#""{SH}" "-c" "/abs/name --arg --bar=\"a b\" \"$@\"" "--" "store""#)
+            format!(r#""{sh}" "-c" "/abs/name --arg --bar=\"a b\" \"$@\"" "--" "store""#)
         }
     );
 }
@@ -100,12 +107,13 @@ fn path_with_simple_args() {
     let input = "/abs/name a b";
     let prog = Program::from_custom_definition(input);
     assert!(matches!(&prog.kind, Kind::ExternalPath{path_and_args} if path_and_args == input));
+    let sh = *SH;
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
         if cfg!(windows) {
             r#""/abs/name" "a" "b" "store""#.to_owned()
         } else {
-            format!(r#""{SH}" "-c" "/abs/name a b \"$@\"" "--" "store""#)
+            format!(r#""{sh}" "-c" "/abs/name a b \"$@\"" "--" "store""#)
         },
         "a shell is used as there are arguments, and it's generally more flexible, but on windows we split ourselves"
     );
