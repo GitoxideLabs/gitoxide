@@ -653,20 +653,27 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 }
 
 fn bash_program() -> &'static Path {
-    if cfg!(windows) {
-        // TODO(deps): Once `gix_path::env::shell()` is available, maybe do `shell().parent()?.join("bash.exe")`
-        static GIT_BASH: Lazy<Option<PathBuf>> = Lazy::new(|| {
+    // TODO(deps): *Maybe* add something to `gix-path` like `env::shell()` that can be used to
+    //             find bash and, once the version `gix-testtools` depends on has it, use it.
+    static GIT_BASH: Lazy<PathBuf> = Lazy::new(|| {
+        if cfg!(windows) {
             GIT_CORE_DIR
-                .parent()?
-                .parent()?
-                .parent()
-                .map(|installation_dir| installation_dir.join("bin").join("bash.exe"))
+                .ancestors()
+                .nth(3)
+                .map(OsString::from)
+                .map(|mut raw_path| {
+                    // Go down to where `bash.exe` usually is. Keep using `/` separators (not `\`).
+                    raw_path.push("/bin/bash.exe");
+                    raw_path
+                })
+                .map(PathBuf::from)
                 .filter(|bash| bash.is_file())
-        });
-        GIT_BASH.as_deref().unwrap_or(Path::new("bash.exe"))
-    } else {
-        Path::new("bash")
-    }
+                .unwrap_or_else(|| "bash.exe".into())
+        } else {
+            "bash".into()
+        }
+    });
+    GIT_BASH.as_ref()
 }
 
 fn write_failure_marker(failure_marker: &Path) {
@@ -1058,5 +1065,33 @@ mod tests {
     #[cfg(not(windows))]
     fn bash_program_ok_for_platform() {
         assert_eq!(bash_program(), Path::new("bash"));
+    }
+
+    #[test]
+    fn bash_program_unix_path() {
+        let path = bash_program()
+            .to_str()
+            .expect("This test depends on the bash path being valid Unicode");
+        assert!(
+            !path.contains('\\'),
+            "The path to bash should have no backslashes, barring very unusual environments"
+        );
+    }
+
+    fn is_rooted_relative(path: impl AsRef<Path>) -> bool {
+        let p = path.as_ref();
+        p.is_relative() && p.has_root()
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn unix_style_absolute_is_rooted_relative() {
+        assert!(is_rooted_relative("/bin/bash"), "can detect paths like /bin/bash");
+    }
+
+    #[test]
+    fn bash_program_absolute_or_unrooted() {
+        let bash = bash_program();
+        assert!(!is_rooted_relative(bash), "{bash:?}");
     }
 }
