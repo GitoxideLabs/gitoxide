@@ -190,6 +190,7 @@ macro_rules! mktest {
                 suspect,
                 None,
                 &mut resource_cache,
+                None,
                 format!("{}.txt", $case).as_str().into(),
                 None,
             )?
@@ -257,6 +258,7 @@ fn diff_disparity() {
             suspect,
             None,
             &mut resource_cache,
+            None,
             format!("{case}.txt").as_str().into(),
             None,
         )
@@ -285,6 +287,7 @@ fn line_range() {
         suspect,
         None,
         &mut resource_cache,
+        None,
         "simple.txt".into(),
         Some(1..2),
     )

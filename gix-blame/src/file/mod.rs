@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use gix_hash::ObjectId;
 
-use crate::types::{BlameEntry, Either, LineRange};
+use crate::types::{BlameEntry, BlameLines, ChangeLines, Either, LineRange};
 use crate::types::{Change, Offset, UnblamedHunk};
 
 pub(super) mod function;
@@ -355,6 +355,147 @@ fn process_changes(
         }
     }
     new_hunks_to_blame
+}
+
+/// Consume `cached_blames` and `changes`. With the changes we update the cached blames. 
+/// This function returns the updated blames and the new hunks to blame.
+fn update_blame_with_changes(
+    cached_blames: Vec<BlameEntry>,
+    changes: Vec<Change>,
+    head_id: ObjectId,
+) -> (Vec<BlameEntry>, Vec<UnblamedHunk>) {
+    fn blame_fully_contained_by_change(
+        blame_lines: &BlameLines,
+        blame: &BlameEntry,
+        change_lines: &ChangeLines,
+        change: &Change,
+    ) -> bool {
+        blame_lines.get_remaining(blame) < change_lines.get_remaining(change)
+    }
+
+    let mut updated_blames = Vec::new();
+    let mut new_hunks_to_blame = Vec::new();
+
+    let mut blame_iter = cached_blames.into_iter().peekable();
+
+    // This is a nested loop where we iterate over the changes and the blames.
+    // We keep track of the assigned lines in the change and the blame.
+    // For each of the three possible cases (Unchanged, Deleted, AddedOrReplaced) we have different
+    // rules for how to update the blame.
+    'change: for change in changes {
+        let mut change_assigned = ChangeLines::default();
+        while let Some(blame) = blame_iter.peek_mut() {
+            let mut blame_assigned = BlameLines::default();
+
+            // For each of the three cases we have to check if the blame is fully contained by the change.
+            // If so we can update the blame with the remaining length of the blame.
+            // If not we have to update the blame with the remaining length of the change.
+            match change {
+                Change::Unchanged(ref range) => {
+                    match blame_fully_contained_by_change(&blame_assigned, blame, &change_assigned, &change) {
+                        true => {
+                            updated_blames.push(BlameEntry {
+                                start_in_blamed_file: range.start + change_assigned.assigned.get_assigned(),
+                                start_in_source_file: blame.start_in_source_file,
+                                len: blame.len,
+                                commit_id: blame.commit_id,
+                            });
+
+                            change_assigned.assigned.add_assigned(blame.len.get());
+                            blame_assigned.assigned.add_assigned(blame.len.get());
+                        }
+                        false => {
+                            updated_blames.push(BlameEntry {
+                                start_in_blamed_file: range.start + change_assigned.assigned.get_assigned(),
+                                start_in_source_file: blame.start_in_source_file,
+                                len: NonZeroU32::new(change_assigned.get_remaining(&change)).unwrap(),
+                                commit_id: blame.commit_id,
+                            });
+
+                            blame_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                            change_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                        }
+                    }
+                }
+                Change::Deleted(_start_deletion, _lines_deleted) => {
+                    match blame_fully_contained_by_change(&blame_assigned, blame, &change_assigned, &change) {
+                        true => {
+                            blame_assigned.assigned.add_assigned(blame.len.get());
+                            change_assigned.assigned.add_assigned(blame.len.get());
+                        }
+                        false => {
+                            blame_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                            change_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                        }
+                    }
+                }
+                Change::AddedOrReplaced(ref range, lines_deleted) => {
+                    let new_unblamed_hunk = |range: &Range<u32>, head_id: ObjectId| UnblamedHunk {
+                        range_in_blamed_file: range.clone(),
+                        suspects: [(head_id, range.clone())].into(),
+                    };
+                    match blame_fully_contained_by_change(&blame_assigned, blame, &change_assigned, &change) {
+                        true => {
+                            if lines_deleted == 0 {
+                                new_hunks_to_blame.push(new_unblamed_hunk(range, head_id));
+                            }
+
+                            change_assigned.assigned.add_assigned(blame.len.get());
+                            blame_assigned.assigned.add_assigned(blame.len.get());
+                        }
+                        false => {
+                            new_hunks_to_blame.push(new_unblamed_hunk(range, head_id));
+                            
+                            blame_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                            change_assigned
+                                .assigned
+                                .add_assigned(change_assigned.get_remaining(&change));
+                        }
+                    }
+                }
+            }
+
+            // Check if the blame or the change is fully assigned.
+            // If the blame is fully assigned we can continue with the next blame.
+            // If the change is fully assigned we can continue with the next change.
+            // Since we have a mutable reference to the blame we can update it and reset the assigned blame lines.
+            // If both are fully assigned we can continue with the next blame and change.
+            match (
+                blame_assigned.has_remaining(blame),
+                change_assigned.has_remaining(&change),
+            ) {
+                (true, true) => {
+                    // Both have remaining
+                    blame.update_blame(&blame_assigned.assigned);
+                }
+                (true, false) => {
+                    // Change is fully assigned
+                    blame.update_blame(&blame_assigned.assigned);
+                    continue 'change;
+                }
+                (false, true) => {
+                    // Blame is fully assigned
+                    blame_iter.next();
+                }
+                (false, false) => {
+                    // Both are fully assigned
+                    blame_iter.next();
+                    continue 'change;
+                }
+            };
+        }
+    }
+    (updated_blames, new_hunks_to_blame)
 }
 
 impl UnblamedHunk {
