@@ -4,7 +4,7 @@ use clap_complete::Shell;
 use gitoxide_core as core;
 use gix::bstr::BString;
 
-use crate::shared::AsRange;
+use crate::shared::{AsRange, AsTime};
 
 #[derive(Debug, clap::Parser)]
 #[clap(name = "gix", about = "The git underworld", version = option_env!("GIX_VERSION"))]
@@ -167,6 +167,9 @@ pub enum Subcommands {
         /// Only blame lines in the given 1-based inclusive range '<start>,<end>', e.g. '20,40'.
         #[clap(short='L', value_parser=AsRange)]
         range: Option<std::ops::Range<u32>>,
+        /// Don't consider commits before the given date.
+        #[clap(long,  value_parser=AsTime, value_name = "DATE")]
+        since: Option<gix::date::Time>,
     },
     /// Generate shell completions to stdout or a directory.
     #[clap(visible_alias = "generate-completions", visible_alias = "shell-completions")]
