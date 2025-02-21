@@ -12,7 +12,7 @@ bitflags! {
         /// The mask to obtain the length of the path associated with this entry, up to 4095 characters without extension.
         const PATH_LEN = 0x0fff;
         /// The mask to apply to obtain the stage number of an entry, encoding three value: 0 = base, 1 = ours, 2 = theirs.
-        const STAGE_MASK = 1<<12 | 1<<13;
+        const STAGE_MASK = (1<<12) | (1<<13);
         /// If set, additional bits need to be written to storage.
         const EXTENDED = 1<<14;
         /// If set, the entry be assumed to match with the version on the working tree, as a way to avoid `lstat()`  checks.
