@@ -1,10 +1,11 @@
-use super::{process_changes, Change, UnblamedHunk};
+use super::{process_changes, update_blame_with_changes, Change, UnblamedHunk};
+use crate::types::BlameCacheObject;
 use crate::{BlameEntry, Error, Outcome, Statistics};
 use gix_diff::blob::intern::TokenSource;
 use gix_diff::tree::Visit;
 use gix_hash::ObjectId;
 use gix_object::{
-    bstr::{BStr, BString},
+    bstr::{BStr, BString, ByteSlice},
     FindExt,
 };
 use gix_traverse::commit::find as find_commit;
@@ -66,6 +67,7 @@ pub fn file(
     suspect: ObjectId,
     cache: Option<gix_commitgraph::Graph>,
     resource_cache: &mut gix_diff::blob::Platform,
+    blame_cache: Option<BlameCacheObject>,
     file_path: &BStr,
     range: Option<Range<u32>>,
 ) -> Result<Outcome, Error> {
@@ -87,17 +89,56 @@ pub fn file(
     }
 
     let range_in_blamed_file = one_based_inclusive_to_zero_based_exclusive_range(range, num_lines_in_blamed)?;
-    let mut hunks_to_blame = vec![UnblamedHunk {
-        range_in_blamed_file: range_in_blamed_file.clone(),
-        suspects: [(suspect, range_in_blamed_file)].into(),
-    }];
+
+    let (blame_entries, mut hunks_to_blame) = match blame_cache {
+        Some(blame_cache) => {
+            // If there is a cache, we first get the diff between the current commit and the commit
+            // we passed as the cache.
+            let old_file_id = file_id(&blame_cache.cache_id, &mut buf, &mut buf2)?;            
+            let changes = blob_changes(
+                &odb,
+                resource_cache,
+                blamed_file_entry_id,
+                old_file_id,
+                file_path.as_bstr(),
+                &mut stats,
+            )?;
+
+            // If there are no changes, we can return the cache as is immediately.
+            if changes.iter().all(|change| matches!(change, Change::Unchanged(_))) {
+                return Ok(Outcome {
+                    entries: blame_cache.entries.clone(),
+                    blob: blamed_file_blob,
+                    statistics: stats,
+                });
+            }
+            // Otherwise, we update the cache with the new changes.
+            let (blame_entries, hunks_to_blame) = update_blame_with_changes(blame_cache.entries, changes, suspect);
+            // If there are no more hunks to blame, we can return the result immediately.
+            if hunks_to_blame.is_empty() {
+                return Ok(Outcome {
+                    entries: blame_entries,
+                    blob: blamed_file_blob,
+                    statistics: stats,
+                });
+            }
+            (blame_entries, hunks_to_blame)
+        }
+        None => {
+            let hunks_to_blame = vec![UnblamedHunk {
+                range_in_blamed_file: range_in_blamed_file.clone(),
+                suspects: [(suspect, range_in_blamed_file)].into(),
+            }];
+            (Vec::new(), hunks_to_blame)
+        }
+    };
 
     let (mut buf, mut buf2) = (Vec::new(), Vec::new());
     let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
     let mut queue: gix_revwalk::PriorityQueue<CommitTime, ObjectId> = gix_revwalk::PriorityQueue::new();
     queue.insert(commit_time(commit)?, suspect);
 
-    let mut out = Vec::new();
+    let mut out = blame_entries;
     let mut diff_state = gix_diff::tree::State::default();
     let mut previous_entry: Option<(ObjectId, ObjectId)> = None;
     'outer: while let Some(suspect) = queue.pop_value() {
