@@ -414,6 +414,57 @@ fn overlay_iter() -> crate::Result {
 }
 
 #[test]
+fn overlay_iter_reproduce_1850() -> crate::Result {
+    let store = store_at("make_repo_for_1850_repro.sh")?;
+    let ref_names = store
+        .iter()?
+        .all()?
+        .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
+        .collect::<Result<Vec<_>, _>>()?;
+    insta::assert_debug_snapshot!(ref_names, @r#"
+    [
+        (
+            "refs/heads/ig-branch-remote",
+            Object(
+                Sha1(17dad46c0ce3be4d4b6d45def031437ab2e40666),
+            ),
+        ),
+        (
+            "refs/heads/ig-inttest",
+            Object(
+                Sha1(83a70366fcc1255d35a00102138293bac673b331),
+            ),
+        ),
+        (
+            "refs/heads/ig/aliases",
+            Object(
+                Sha1(d773228d0ee0012fcca53fffe581b0fce0b1dc56),
+            ),
+        ),
+        (
+            "refs/heads/ig/cifail",
+            Object(
+                Sha1(ba37abe04f91fec76a6b9a817d40ee2daec47207),
+            ),
+        ),
+        (
+            "refs/heads/ig/push-name",
+            Object(
+                Sha1(d22f46f3d7d2504d56c573b5fe54919bd16be48a),
+            ),
+        ),
+        (
+            "refs/heads/ig-pr4021",
+            Object(
+                Sha1(4dec145966c546402c5a9e28b932e7c8c939e01e),
+            ),
+        ),
+    ]
+    "#);
+    Ok(())
+}
+
+#[test]
 fn overlay_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
     let store = store_with_packed_refs()?;
     #[cfg(not(windows))]
