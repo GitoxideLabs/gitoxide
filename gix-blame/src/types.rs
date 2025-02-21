@@ -7,6 +7,17 @@ use std::{
     ops::{AddAssign, Range, SubAssign},
 };
 
+/// Options to be passed to [`file()`](crate::file()).
+#[derive(Default, Debug, Clone)]
+pub struct Options {
+    /// A 1-based inclusive range, in order to mirror `git`’s behaviour. `Some(20..40)` represents
+    /// 21 lines, spanning from line 20 up to and including line 40. This will be converted to
+    /// `19..40` internally as the algorithm uses 0-based ranges that are exclusive at the end.
+    pub range: Option<std::ops::Range<u32>>,
+    /// Don't consider commits before the given date.
+    pub since: Option<gix_date::Time>,
+}
+
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
