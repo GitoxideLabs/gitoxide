@@ -73,19 +73,11 @@ pub fn file(
 
     let mut stats = Statistics::default();
     let (mut buf, mut buf2, mut buf3) = (Vec::new(), Vec::new(), Vec::new());
-    let blamed_file_entry_id = find_path_entry_in_commit(
-        &odb,
-        &suspect,
-        file_path,
-        cache.as_ref(),
-        &mut buf,
-        &mut buf2,
-        &mut stats,
-    )?
-    .ok_or_else(|| Error::FileMissing {
+    let mut file_id = |commit, buf: &mut Vec<u8>, buf2: &mut Vec<u8>| find_path_entry_in_commit(&odb, commit, file_path, cache.as_ref(), buf, buf2, &mut stats)?.ok_or_else(|| Error::FileMissing {
         file_path: file_path.to_owned(),
         commit_id: suspect,
-    })?;
+    });
+    let blamed_file_entry_id = file_id(&suspect, &mut buf, &mut buf2)?;
     let blamed_file_blob = odb.find_blob(&blamed_file_entry_id, &mut buf)?.data.to_vec();
     let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
 
