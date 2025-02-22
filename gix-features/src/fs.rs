@@ -338,8 +338,21 @@ pub mod walkdir {
     ///
     /// Use `precompose_unicode` to represent the `core.precomposeUnicode` configuration option.
     pub fn walkdir_sorted_new(root: &Path, _: Parallelism, precompose_unicode: bool) -> WalkDir {
+        fn ft_to_number(ft: std::fs::FileType) -> usize {
+            if ft.is_file() {
+                1
+            } else {
+                2
+            }
+        }
         WalkDir {
-            inner: WalkDirImpl::new(root).sort_by_file_name().into(),
+            inner: WalkDirImpl::new(root)
+                .sort_by(|a, b| {
+                    ft_to_number(a.file_type())
+                        .cmp(&ft_to_number(b.file_type()))
+                        .then_with(|| a.file_name().cmp(b.file_name()))
+                })
+                .into(),
             precompose_unicode,
         }
     }
