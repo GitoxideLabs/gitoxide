@@ -257,6 +257,7 @@ impl super::Store {
 
         // Figure out this number based on what we see while handling the existing indices
         let mut num_loaded_indices = 0;
+        dbg!(indices_by_modification_time.len());
         for (index_info, mtime) in indices_by_modification_time.into_iter().map(|(a, b, _)| (a, b)) {
             match idx_by_index_path.remove(index_info.path()) {
                 Some(slot_idx) => {
@@ -295,10 +296,11 @@ impl super::Store {
             .map_or(0, |idx| (idx + 1) % self.files.len());
         let mut num_indices_checked = 0;
         let mut needs_generation_change = false;
+        dbg!(index_paths_to_add.len(), next_possibly_free_index);
         let mut slot_indices_to_remove: Vec<_> = idx_by_index_path.into_values().collect();
         while let Some((mut index_info, mtime, move_from_slot_idx)) = index_paths_to_add.pop_front() {
             'increment_slot_index: loop {
-                if num_indices_checked == self.files.len() {
+                if dbg!(num_indices_checked) == dbg!(self.files.len()) {
                     return Err(Error::InsufficientSlots {
                         current: self.files.len(),
                         needed: index_paths_to_add.len() + 1, /*the one currently popped off*/
