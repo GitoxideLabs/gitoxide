@@ -260,7 +260,7 @@ impl File {
                 &first_entry,
                 consumed_input.expect("consumed bytes as set by cache"),
             ));
-        };
+        }
 
         // First pass will decompress all delta data and keep it in our output buffer
         // [<possibly resolved base object>]<delta-1..delta-n>...

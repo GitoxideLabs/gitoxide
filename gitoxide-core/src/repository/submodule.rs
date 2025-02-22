@@ -28,7 +28,7 @@ fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::i
     let mut sm_repo = sm.open()?;
     if let Some(repo) = sm_repo.as_mut() {
         repo.object_cache_size_if_unset(4 * 1024 * 1024);
-    };
+    }
     writeln!(
         out,
         " {is_active} {path} {config} head:{head_id} index:{index_id} ({worktree}) [{url}]",

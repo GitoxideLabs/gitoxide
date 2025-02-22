@@ -305,7 +305,7 @@ fn from_bytes<'a, 'b>(
                         events: std::mem::take(&mut events),
                     });
                 }
-            };
+            }
             header = match convert(Event::SectionHeader(next_header)) {
                 Event::SectionHeader(h) => h,
                 _ => unreachable!("BUG: convert must not change the event type, just the lifetime"),

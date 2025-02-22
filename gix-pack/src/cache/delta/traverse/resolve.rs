@@ -251,8 +251,8 @@ where
 }
 
 /// * `initial_threads` is the threads we may spawn, not accounting for our own thread which is still considered used by the parent
-///    system. Since this thread will take a controlling function, we may spawn one more than that. In threaded mode, we will finish
-///    all remaining work.
+///   system. Since this thread will take a controlling function, we may spawn one more than that. In threaded mode, we will finish
+///   all remaining work.
 #[allow(clippy::too_many_arguments)]
 fn deltas_mt<T, F, MBFN, E, R>(
     mut threads_to_create: isize,

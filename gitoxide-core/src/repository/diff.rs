@@ -99,7 +99,7 @@ fn write_changes(
                     writeln!(out, "  {:o} -> {:o}", source_entry_mode.0, entry_mode.0)?;
                 }
             }
-        };
+        }
     }
 
     Ok(())

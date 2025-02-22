@@ -40,9 +40,11 @@ impl Remote<'_> {
     ) -> Result<Self, remote::init::Error> {
         self.push_url = push_url.into();
 
-        let (_, push_url_alias) = should_rewrite_urls
-            .then(|| remote::init::rewrite_urls(&self.repo.config, None, self.push_url.as_ref()))
-            .unwrap_or(Ok((None, None)))?;
+        let (_, push_url_alias) = if should_rewrite_urls {
+            remote::init::rewrite_urls(&self.repo.config, None, self.push_url.as_ref())
+        } else {
+            Ok((None, None))
+        }?;
         self.push_url_alias = push_url_alias;
 
         Ok(self)

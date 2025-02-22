@@ -72,7 +72,7 @@ impl output::Entry {
     ) -> Option<Result<Self, Error>> {
         if entry.version != target_version {
             return None;
-        };
+        }
 
         let pack_offset_must_be_zero = 0;
         let pack_entry = match data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.as_slice().len())
@@ -144,7 +144,7 @@ impl output::Entry {
                         std::io::ErrorKind::Other => return Err(Error::ZlibDeflate(err)),
                         err => unreachable!("Should never see other errors than zlib, but got {:?}", err,),
                     }
-                };
+                }
                 out.flush()?;
                 out.into_inner()
             },

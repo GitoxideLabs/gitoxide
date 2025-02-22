@@ -201,7 +201,7 @@ fn long_describe_prefix(name: &BStr) -> Option<(&BStr, delegate::PrefixHint<'_>)
     let candidate = iter.by_ref().find_map(|substr| {
         if substr.first()? != &b'g' {
             return None;
-        };
+        }
         let rest = substr.get(1..)?;
         rest.iter().all(u8::is_ascii_hexdigit).then(|| rest.as_bstr())
     })?;
@@ -213,7 +213,7 @@ fn long_describe_prefix(name: &BStr) -> Option<(&BStr, delegate::PrefixHint<'_>)
         .and_then(|generation| {
             iter.next().map(|token| {
                 let last_token_len = token.len();
-                let first_token_ptr = iter.last().map_or(token.as_ptr(), <[_]>::as_ptr);
+                let first_token_ptr = iter.next_back().map_or(token.as_ptr(), <[_]>::as_ptr);
                 // SAFETY: both pointers are definitely part of the same object
                 #[allow(unsafe_code)]
                 let prior_tokens_len: usize = unsafe { token.as_ptr().offset_from(first_token_ptr) }
@@ -274,7 +274,7 @@ fn parens(input: &[u8]) -> Result<Option<InsideParensRestConsumed<'_>>, Error> {
             _ => {
                 if ignore_next {
                     skip_list.pop();
-                };
+                }
                 ignore_next = false;
             }
         }
@@ -307,7 +307,7 @@ fn try_parse<T: FromStr + PartialEq + Default>(input: &BStr) -> Result<Option<T>
             n.parse().ok().map(|n| {
                 if n == T::default() && input[0] == b'-' {
                     return Err(Error::NegativeZero { input: input.into() });
-                };
+                }
                 Ok(n)
             })
         })
@@ -337,7 +337,7 @@ where
         [b':', b'2', b':', path @ ..] => return consume_all(delegate.index_lookup(path.as_bstr(), 2)),
         [b':', path @ ..] => return consume_all(delegate.index_lookup(path.as_bstr(), 0)),
         _ => {}
-    };
+    }
 
     let mut sep_pos = None;
     let mut consecutive_hex_chars = Some(0);

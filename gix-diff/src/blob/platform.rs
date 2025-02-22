@@ -362,7 +362,7 @@ impl Platform {
     /// * `mode` is the kind of object (only blobs and links are allowed)
     /// * `rela_path` is the relative path as seen from the (work)tree root.
     /// * `kind` identifies the side of the diff this resource will be used for.
-    ///    A diff needs both `OldOrSource` *and* `NewOrDestination`.
+    ///   A diff needs both `OldOrSource` *and* `NewOrDestination`.
     /// * `objects` provides access to the object database in case the resource can't be read from a worktree.
     ///
     /// Note that it's assumed that either `id + mode (` or `rela_path` can serve as unique identifier for the resource,

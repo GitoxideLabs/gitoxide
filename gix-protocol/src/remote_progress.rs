@@ -66,7 +66,7 @@ impl RemoteProgress<'_> {
                     }
                 }
                 None => progress.set_name(progress_name(progress.name(), text)),
-            };
+            }
         }
     }
 }

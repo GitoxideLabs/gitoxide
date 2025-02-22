@@ -283,7 +283,7 @@ impl delegate::Revision for Delegate<'_> {
                     return Some(());
                 }
             },
-        };
+        }
         None
     }
 }

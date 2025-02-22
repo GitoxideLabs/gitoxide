@@ -395,7 +395,7 @@ impl Pipeline {
                         && header.size > self.options.large_file_threshold_bytes
                     {
                         is_binary = Some(true);
-                    };
+                    }
                     let data = if is_binary == Some(true) {
                         Data::Binary { size: header.size }
                     } else {
@@ -461,27 +461,25 @@ impl Pipeline {
                                     out.clear();
                                     run_cmd(rela_path, cmd, out)?;
                                 }
-                                None => {
-                                    match res {
-                                        ToWorktreeOutcome::Unchanged(_) => {}
-                                        ToWorktreeOutcome::Buffer(src) => {
-                                            out.clear();
-                                            out.try_reserve(src.len())?;
-                                            out.extend_from_slice(src);
-                                        }
-                                        ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
-                                            std::io::copy(&mut stream, out).map_err(|err| {
-                                                convert_to_diffable::Error::StreamCopy {
-                                                    rela_path: rela_path.to_owned(),
-                                                    source: err,
-                                                }
-                                            })?;
-                                        }
-                                        ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
-                                            unreachable!("we prohibit this")
-                                        }
-                                    };
-                                }
+                                None => match res {
+                                    ToWorktreeOutcome::Unchanged(_) => {}
+                                    ToWorktreeOutcome::Buffer(src) => {
+                                        out.clear();
+                                        out.try_reserve(src.len())?;
+                                        out.extend_from_slice(src);
+                                    }
+                                    ToWorktreeOutcome::Process(MaybeDelayed::Immediate(mut stream)) => {
+                                        std::io::copy(&mut stream, out).map_err(|err| {
+                                            convert_to_diffable::Error::StreamCopy {
+                                                rela_path: rela_path.to_owned(),
+                                                source: err,
+                                            }
+                                        })?;
+                                    }
+                                    ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
+                                        unreachable!("we prohibit this")
+                                    }
+                                },
                             }
                         }
 

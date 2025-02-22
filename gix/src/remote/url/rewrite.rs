@@ -89,7 +89,7 @@ impl Rewrite {
                         *bytes_matched = replace.find.len();
                         *prev_rewrite_with = replace.with.as_slice().into();
                     }
-                };
+                }
                 acc
             })
             .map(|(bytes_matched, replace_with)| {

@@ -153,7 +153,7 @@ impl Editor<'_> {
                     }
                 }
                 Err(_) => break,
-            };
+            }
         }
         None
     }

@@ -162,7 +162,7 @@ where
                                             "interrupted by user",
                                         ))
                                     }
-                                };
+                                }
                             }
                             BandRef::Error(d) => {
                                 let text = TextRef::from(d).0;
@@ -174,9 +174,9 @@ where
                                             "interrupted by user",
                                         ))
                                     }
-                                };
+                                }
                             }
-                        };
+                        }
                     }
                     None => {
                         break match line.as_slice() {

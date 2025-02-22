@@ -113,9 +113,11 @@ pub(super) mod function {
                         let is_http = matches!(pattern.scheme, gix_url::Scheme::Https | gix_url::Scheme::Http);
                         let scheme = &pattern.scheme;
                         let host = pattern.host();
-                        let ports = is_http
-                            .then(|| (pattern.port_or_default(), url.port_or_default()))
-                            .unwrap_or((pattern.port, url.port));
+                        let ports = if is_http {
+                            (pattern.port_or_default(), url.port_or_default())
+                        } else {
+                            (pattern.port, url.port)
+                        };
                         let path = (!(is_http && pattern.path_is_root())).then_some(&pattern.path);
 
                         if !path.map_or(true, |path| path == &url.path) {

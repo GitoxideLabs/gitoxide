@@ -684,7 +684,7 @@ fn collect_parents(
                 parent_ids.push((id, parent_commit_time));
             }
         }
-    };
+    }
     Ok(parent_ids)
 }
 

@@ -203,8 +203,8 @@ mod init {
         /// Create a new instance.
         ///
         /// * `find` - a way to lookup new object data during traversal by their `ObjectId`, writing their data into buffer and returning
-        ///    an iterator over commit tokens if the object is present and is a commit. Caching should be implemented within this function
-        ///    as needed.
+        ///   an iterator over commit tokens if the object is present and is a commit. Caching should be implemented within this function
+        ///   as needed.
         /// * `tips`
         ///   * the starting points of the iteration, usually commits
         ///   * each commit they lead to will only be returned once, including the tip that started it

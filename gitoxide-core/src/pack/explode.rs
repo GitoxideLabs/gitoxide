@@ -161,7 +161,7 @@ pub fn pack_or_pack_index(
         )
     })?;
 
-    if !object_path.as_ref().map_or(true, |p| p.as_ref().is_dir()) {
+    if !object_path.as_ref().is_none_or(|p| p.as_ref().is_dir()) {
         return Err(anyhow!(
             "The object directory at '{}' is inaccessible",
             object_path

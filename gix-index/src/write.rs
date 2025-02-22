@@ -176,7 +176,7 @@ fn entries<T: std::io::Write>(out: &mut CountBytes<T>, state: &State, header_siz
                 let eight_null_bytes = [0u8; 8];
                 out.write_all(&eight_null_bytes[n as usize..])?;
             }
-        };
+        }
     }
 
     Ok(out.count)

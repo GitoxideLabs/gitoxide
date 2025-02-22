@@ -220,7 +220,7 @@ fn digest_statistics(traverse::Outcome { roots, children }: traverse::Outcome<En
             Tree => res.num_trees += 1,
             Tag => res.num_tags += 1,
             Commit => res.num_commits += 1,
-        };
+        }
     }
 
     let num_nodes = roots.len() + children.len();

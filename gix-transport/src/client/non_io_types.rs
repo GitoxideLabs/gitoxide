@@ -76,7 +76,7 @@ pub(crate) mod connect {
                     #[cfg(feature = "blocking-client")]
                     if let Some(err) = err.downcast_ref::<crate::client::git::connect::Error>() {
                         return err.is_spurious();
-                    };
+                    }
                     if let Some(err) = err.downcast_ref::<crate::client::Error>() {
                         return err.is_spurious();
                     }

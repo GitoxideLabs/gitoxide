@@ -137,7 +137,7 @@ fn missing_parentheses() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert!(matches!(output.unwrap_err(), Error::MissingClosingParenthesis { .. }));
+    assert!(matches!(output.unwrap_err(), Error::MissingClosingParenthesis));
 }
 
 #[test]

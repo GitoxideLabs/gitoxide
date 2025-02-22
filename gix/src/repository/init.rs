@@ -51,7 +51,7 @@ pub(crate) fn setup_objects(objects: &mut crate::OdbHandle, config: &crate::conf
             Some(bytes) => objects.set_pack_cache(move || -> Box<gix_odb::cache::PackCache> {
                 Box::new(gix_pack::cache::lru::MemoryCappedHashmap::new(bytes))
             }),
-        };
+        }
         if config.object_cache_bytes == 0 {
             objects.unset_object_cache();
         } else {

@@ -13,7 +13,7 @@ pub fn pattern(mut pat: &[u8], may_alter: bool) -> Option<(&[u8], pattern::Mode,
     let mut mode = Mode::empty();
     if pat.is_empty() {
         return None;
-    };
+    }
     if may_alter {
         if pat.first() == Some(&b'!') {
             mode |= Mode::NEGATIVE;

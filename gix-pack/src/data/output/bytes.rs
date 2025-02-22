@@ -107,7 +107,7 @@ where
                     if entry.is_invalid() {
                         self.pack_offsets_and_validity.push((0, false));
                         continue;
-                    };
+                    }
                     self.pack_offsets_and_validity.push((self.written, true));
                     let header = entry.to_entry_header(self.entry_version, |index| {
                         let (base_offset, is_valid_object) = self.pack_offsets_and_validity[index];
@@ -128,7 +128,7 @@ where
                 self.is_done = true;
                 self.trailer = Some(gix_hash::ObjectId::from(digest));
             }
-        };
+        }
         Ok(self.written - previous_written)
     }
 }

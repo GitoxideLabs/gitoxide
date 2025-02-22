@@ -180,7 +180,7 @@ where
                         break;
                     }
                     Err(err) => return Err(err.into()),
-                };
+                }
             }
             if let Some(tx) = tx_tree_id {
                 tx.send(chunk).ok();

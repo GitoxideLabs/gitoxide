@@ -581,7 +581,7 @@ pub mod apply_index_entries {
                         index.entry_index_by_path_and_stage_bounded(path, gix_index::entry::Stage::Unconflicted, len)
                     {
                         index.entries_mut()[pos].flags.insert(gix_index::entry::Flags::REMOVE);
-                    };
+                    }
                     match idx_by_path_stage.entry((stage, path)) {
                         hash_map::Entry::Occupied(map_entry) => {
                             // This can happen due to the way the algorithm works.
@@ -604,7 +604,7 @@ pub mod apply_index_entries {
                                 path,
                             );
                         }
-                    };
+                    }
                 }
             }
 

@@ -441,7 +441,7 @@ fn rename_by_similarity_reports_limit_if_encountered() -> crate::Result {
                 1 => assert_eq!(dst.location, "b"),
                 2 => assert_eq!(dst.location, "c"),
                 _ => panic!("too many elements emitted"),
-            };
+            }
             calls += 1;
             Action::Continue
         },
@@ -511,7 +511,7 @@ fn rename_by_50_percent_similarity() -> crate::Result {
                     assert_eq!(dst.location, "c");
                 }
                 _ => panic!("too many elements emitted"),
-            };
+            }
             calls += 1;
             Action::Continue
         },

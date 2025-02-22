@@ -77,7 +77,7 @@ pub(crate) mod function {
         let mut offset_in_seconds = hours * 3600 + minutes * 60;
         if sign == Sign::Minus {
             offset_in_seconds *= -1;
-        };
+        }
         let time = Time {
             seconds,
             offset: offset_in_seconds,

@@ -27,7 +27,7 @@ impl Drop for SnapshotMut<'_> {
     fn drop(&mut self) {
         if let Some(repo) = self.repo.take() {
             self.commit_inner(repo).ok();
-        };
+        }
     }
 }
 

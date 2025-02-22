@@ -188,7 +188,7 @@ pub(in crate::handshake::refs) fn parse_v1(
                     object,
                     path: path.into(),
                 }),
-            };
+            }
         }
     }
     Ok(())

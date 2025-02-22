@@ -134,7 +134,7 @@ pub fn update_head(
                                 name: referent.clone(),
                                 deref: false,
                             });
-                        };
+                        }
                         edits
                     },
                     gix_lock::acquire::Fail::Immediately,
@@ -179,7 +179,7 @@ pub fn update_head(
                 deref: false,
             })?;
         }
-    };
+    }
     Ok(())
 }
 

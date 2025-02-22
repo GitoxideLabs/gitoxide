@@ -36,7 +36,7 @@ impl IsActivePlatform {
     ) -> Result<bool, gix_config::value::Error> {
         if let Some(val) = config.boolean(format!("submodule.{name}.active")).transpose()? {
             return Ok(val);
-        };
+        }
         if let Some(val) = self.search.as_mut().map(|search| {
             search
                 .pattern_matching_relative_path(name, Some(true), attributes)

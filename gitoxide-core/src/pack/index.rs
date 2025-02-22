@@ -114,7 +114,7 @@ pub fn from_pack(
         OutputFormat::Human => drop(human_output(out, res)),
         #[cfg(feature = "serde")]
         OutputFormat::Json => serde_json::to_writer_pretty(out, &res)?,
-    };
+    }
     Ok(())
 }
 

@@ -61,7 +61,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
-        };
+        }
         if depth != 0 {
             out.push(dir);
         }

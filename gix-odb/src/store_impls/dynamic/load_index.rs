@@ -418,7 +418,7 @@ impl super::Store {
                 // Safety: can't race as we hold the lock, have to set the generation beforehand to help avoid others to observe the value.
                 slot.generation.store(generation, Ordering::SeqCst);
                 *files_mut = None;
-            };
+            }
             slot.files.store(files);
         }
 

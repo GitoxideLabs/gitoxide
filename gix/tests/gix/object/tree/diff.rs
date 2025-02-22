@@ -50,7 +50,7 @@ fn changes_against_tree_modified() -> crate::Result {
                 Change::Rewrite { .. } | Change::Deletion { .. } | Change::Addition { .. } => {
                     unreachable!("only modification is expected")
                 }
-            };
+            }
 
             let mut diff = change.diff(&mut cache).expect("objects available");
             let count = diff.line_counts().expect("no diff error").expect("no binary blobs");
@@ -63,15 +63,14 @@ fn changes_against_tree_modified() -> crate::Result {
                         assert_eq!(lines.len(), 1);
                         assert_eq!(
                             lines[0],
-                            expected_data[expected_previous_data.len()..]
-                                .as_bytes()
+                            expected_data.as_bytes()[expected_previous_data.len()..]
                                 .as_bstr()
                                 .trim(),
                             "diffed lines don't have newlines anymore"
                         );
                     }
                     lines::Change::Modification { .. } => unreachable!("there was no modification"),
-                };
+                }
                 Ok::<_, Infallible>(())
             })
             .expect("infallible");

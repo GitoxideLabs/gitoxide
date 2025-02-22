@@ -335,7 +335,7 @@ impl Url {
             }
             (None, None) => {}
             (Some(_user), None) => unreachable!("BUG: should not be possible to have a user but no host"),
-        };
+        }
         if let Some(port) = &self.port {
             write!(&mut out, ":{port}")?;
         }

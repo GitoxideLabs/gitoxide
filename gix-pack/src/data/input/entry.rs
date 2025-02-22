@@ -59,7 +59,7 @@ fn compress_data(obj: &gix_object::Data<'_>) -> Result<Vec<u8>, input::Error> {
                 unreachable!("Should never see other errors than zlib, but got {:?}", err,)
             }
         }
-    };
+    }
     out.flush().expect("zlib flush should never fail");
     Ok(out.into_inner())
 }

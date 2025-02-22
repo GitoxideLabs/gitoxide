@@ -327,7 +327,7 @@ impl Iter {
                 self.index_changes.push((entry_index, ApplyChange::SetSizeToZero));
             }
             _ => {}
-        };
+        }
         Some(item)
     }
 }

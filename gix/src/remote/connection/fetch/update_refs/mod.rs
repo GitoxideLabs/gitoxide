@@ -314,7 +314,7 @@ pub(crate) fn update(
                 Change::Delete { .. } => {
                     unreachable!("we don't do that here")
                 }
-            };
+            }
         }
     }
 
@@ -376,7 +376,7 @@ fn update_needs_adjustment_as_edits_symbolic_target_is_missing(
                 Change::Delete { .. } => {
                     unreachable!("we don't ever delete here")
                 }
-            };
+            }
             let target_ref_exists_locally = repo.refs.try_find(new_target_ref).ok().flatten().is_some();
             if target_ref_exists_locally {
                 return false;

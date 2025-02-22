@@ -61,7 +61,7 @@ impl ProgramKind {
                     });
                 }
             }
-        };
+        }
 
         let host_maybe_with_user_as_ssh_arg = match (url.user_as_argument(), url.host_as_argument()) {
             (Usable(user), Usable(host)) => format!("{user}@{host}"),

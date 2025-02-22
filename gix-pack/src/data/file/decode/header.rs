@@ -88,7 +88,7 @@ impl File {
                         None => return Err(Error::DeltaBaseUnresolved(base_id)),
                     }
                 }
-            };
+            }
         }
     }
 

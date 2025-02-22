@@ -100,7 +100,7 @@ fn accidental_writes_through_symlinks_are_prevented_if_overwriting_is_forbidden(
         assert_eq!(stripped_prefix(&source_tree, &source_files), paths(expected));
         assert_eq!(stripped_prefix(&destination, &worktree_files), paths(expected));
         assert!(outcome.collisions.is_empty());
-    };
+    }
 }
 
 #[test]
@@ -134,7 +134,7 @@ fn writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed() {
         assert_eq!(stripped_prefix(&source_tree, &source_files), paths(expected));
         assert_eq!(stripped_prefix(&destination, &worktree_files), paths(expected));
         assert!(outcome.collisions.is_empty());
-    };
+    }
 }
 
 #[test]

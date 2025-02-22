@@ -447,7 +447,7 @@ pub fn update(
                     break;
                 }
                 Err(err) => return Err(err.into()),
-            };
+            }
         }
         db.send_last_chunk();
         let saw_new_commits = !commits.is_empty();

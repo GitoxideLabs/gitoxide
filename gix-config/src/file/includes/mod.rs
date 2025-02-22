@@ -32,7 +32,7 @@ impl File<'static> {
     ///   which later overwrite portions of the included file, which seems unusual as these would be related to `includes`.
     ///   We can fix this by 'splitting' the include section if needed so the included sections are put into the right place.
     /// - `hasconfig:remote.*.url` will not prevent itself to include files with `[remote "name"]\nurl = x` values, but it also
-    ///    won't match them, i.e. one cannot include something that will cause the condition to match or to always be true.
+    ///   won't match them, i.e. one cannot include something that will cause the condition to match or to always be true.
     pub fn resolve_includes(&mut self, options: init::Options<'_>) -> Result<(), Error> {
         if options.includes.max_depth == 0 {
             return Ok(());

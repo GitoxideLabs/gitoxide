@@ -264,7 +264,7 @@ pub mod baseline {
                                 lhs = "HEAD".as_bytes();
                             } else {
                                 tokens.next();
-                            };
+                            }
                             let rhs = tokens.next().unwrap().trim();
                             let local = (rhs != b"FETCH_HEAD").then(|| full_tracking_ref(rhs.into()));
                             if !(lhs.as_bstr() == "HEAD" && local.is_none()) {

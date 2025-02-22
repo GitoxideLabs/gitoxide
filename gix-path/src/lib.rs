@@ -12,8 +12,8 @@
 //! - mingw [is used for the conversion](https://github.com/git/git/blob/main/compat/mingw.h#L579:L579) and it appears they handle surrogates during the conversion, maybe some sort of non-strict UTF-8 converter? Actually it uses [WideCharToMultiByte](https://docs.microsoft.com/en-us/windows/win32/api/stringapiset/nf-stringapiset-widechartomultibyte)
 //!   under the hood which by now does fail if the UTF-8 would be invalid unicode, i.e. unicode pairs.
 //! - `OsString` on windows already stores strings as WTF-8, which supports [surrogate pairs](https://unicodebook.readthedocs.io/unicode_encodings.html),
-//!    something that UTF-8 isn't allowed do it for security reasons, after all it's UTF-16 specific and exists only to extend
-//!    the encodable code-points.
+//!   something that UTF-8 isn't allowed do it for security reasons, after all it's UTF-16 specific and exists only to extend
+//!   the encodable code-points.
 //! - informative reading on [WTF-8](https://simonsapin.github.io/wtf-8/#motivation) which is the encoding used by Rust
 //!   internally that deals with surrogates and non-wellformed surrogates (those that aren't in pairs).
 //! * **unix**

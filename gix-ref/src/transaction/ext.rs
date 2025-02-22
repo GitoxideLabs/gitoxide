@@ -66,7 +66,7 @@ where
                 let edit = edit.borrow_mut();
                 if !edit.deref {
                     continue;
-                };
+                }
 
                 // we can't tell what happened and we are here because it's a non-existing ref or an invalid one.
                 // In any case, we don't want the following algorithms to try dereffing it and assume they deal with

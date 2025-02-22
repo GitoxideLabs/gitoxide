@@ -22,7 +22,7 @@ use std::convert::Infallible;
 /// * `labels` are relevant for text-merges and will be shown in conflicts.
 /// * `objects` provides access to trees when diffing them.
 /// * `write_blob_to_odb(content) -> Result<ObjectId, E>` writes newly merged content into the odb to obtain an id
-///    that will be used in merged trees.
+///   that will be used in merged trees.
 /// * `diff_state` is state used for diffing trees.
 /// * `diff_resource_cache` is used for similarity checks.
 /// * `blob_merge` is a pre-configured platform to merge any content.
@@ -208,7 +208,7 @@ where
                                 [None, None, None],
                             )) {
                                 break 'outer;
-                            };
+                            }
                             editor.remove(to_components(theirs.location()))?;
                         }
                         apply_change(&mut editor, theirs, rewritten_location.as_ref().map(|t| &t.0))?;
@@ -274,7 +274,7 @@ where
                                 }
                                 if should_fail_on_conflict(conflict) {
                                     break 'outer;
-                                };
+                                }
                             } else if matches!(candidate, PossibleConflict::TreeToNonTree { .. }) {
                                 let (mode, id) = theirs.entry_mode_and_id();
                                 let location = theirs.location();
@@ -316,7 +316,7 @@ where
                                 their_changes[theirs_idx].was_written = true;
                                 if should_fail_on_conflict(conflict) {
                                     break 'outer;
-                                };
+                                }
                             } else if matches!(candidate, PossibleConflict::NonTreeToTree { .. }) {
                                 // We are writing on top of what was a file, a conflict we probably already saw and dealt with.
                                 let location = theirs.location();
@@ -543,7 +543,7 @@ where
                                     ],
                                 )) {
                                     break 'outer;
-                                };
+                                }
                             }
                             (
                                 Change::Addition {
@@ -795,10 +795,10 @@ where
                                                     editor.remove(toc(location))?;
                                                 }
                                                 _ => unreachable!("parent-match assures this"),
-                                            };
+                                            }
                                         }
                                         Some(ResolveWith::Ancestor) => {}
-                                    };
+                                    }
                                     should_fail_on_conflict(Conflict::without_resolution(
                                         ResolutionFailure::OursModifiedTheirsDeleted,
                                         (ours, theirs, side, outer_side),
@@ -807,7 +807,7 @@ where
                                 };
                                 if should_break {
                                     break 'outer;
-                                };
+                                }
                             }
                             (
                                 Change::Modification { .. },
@@ -921,7 +921,7 @@ where
                                         ],
                                     )) {
                                         break 'outer;
-                                    };
+                                    }
                                     match tree_conflicts {
                                         None => {
                                             let our_addition = Change::Addition {
@@ -983,7 +983,7 @@ where
                                         ],
                                     )) {
                                         break 'outer;
-                                    };
+                                    }
                                 }
                                 if let Some(addition) = our_addition {
                                     push_deferred((addition, Some(ours_idx)), our_changes);
@@ -1054,7 +1054,7 @@ where
                                     ],
                                 )) {
                                     break 'outer;
-                                };
+                                }
 
                                 let ours_is_rewrite = side.is_swapped();
                                 if tree_conflicts.is_none()
@@ -1139,7 +1139,7 @@ where
                                             [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
                                         )) {
                                             break 'outer;
-                                        };
+                                        }
                                     }
 
                                     // Because this constellation can only be found by the lookup tree, there is
@@ -1236,7 +1236,7 @@ where
                                 }
                                 if should_fail_on_conflict(Conflict::unknown((ours, theirs, Original, outer_side))) {
                                     break 'outer;
-                                };
+                                }
                             }
                         }
                         their_changes[theirs_idx].was_written = true;

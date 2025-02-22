@@ -102,7 +102,7 @@ impl curl::easy::Handler for Handler {
                         .ok();
                 }
             }
-        };
+        }
         true
     }
 }
@@ -338,7 +338,7 @@ pub fn new() -> (
                         body.channel.try_send(err).ok();
                     }
                     (None, None) => {}
-                };
+                }
             } else {
                 let handler = handle.get_mut();
                 if let Some((action, authenticate)) = proxy_auth_action {

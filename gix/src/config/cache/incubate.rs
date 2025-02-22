@@ -72,7 +72,7 @@ impl StageOne {
                 lenient,
             )?;
             config.append(worktree_config);
-        };
+        }
         let precompose_unicode = config
             .boolean(&Core::PRECOMPOSE_UNICODE)
             .map(|v| Core::PRECOMPOSE_UNICODE.enrich_error(v))
@@ -144,7 +144,7 @@ fn load_config(
         } else {
             return Err(err);
         }
-    };
+    }
 
     let config = gix_config::File::from_bytes_owned(
         buf,

@@ -130,7 +130,7 @@ fn http_will_use_pipelining() {
         Ok(_) => unreachable!("expecting permission denied to be detected"),
         Err(gix_transport::client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {}
         Err(err) => unreachable!("{err:?}"),
-    };
+    }
     client
         .set_identity(gix_sec::identity::Account {
             username: "foo".into(),
@@ -141,7 +141,7 @@ fn http_will_use_pipelining() {
         Ok(_) => unreachable!("expecting permission denied to be detected"),
         Err(gix_transport::client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {}
         Err(err) => unreachable!("{err:?}"),
-    };
+    }
     thread.join().unwrap();
 }
 

@@ -111,7 +111,7 @@ where
             if !extra_refspecs.contains(&tag_spec) {
                 extra_refspecs.push(tag_spec);
             }
-        };
+        }
         let mut credentials_storage;
         let url = self.transport.inner.to_url();
         let authenticate = match self.authenticate.as_mut() {

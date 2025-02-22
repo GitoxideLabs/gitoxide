@@ -180,7 +180,7 @@ where
                 let buf = &mut self.buf[..n];
                 if let Err(err) = read.read_exact(buf) {
                     return Some(Err(err.into()));
-                };
+                }
 
                 let last_byte = *buf.last().expect("we have read non-zero bytes before");
                 self.last_nl_pos = Some(if last_byte != b'\n' { buf.len() } else { buf.len() - 1 });

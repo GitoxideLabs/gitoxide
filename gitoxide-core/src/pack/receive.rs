@@ -306,6 +306,6 @@ fn receive_pack_blocking(
         OutputFormat::Json => {
             serde_json::to_writer_pretty(&mut out, &JsonOutcome::from_outcome_and_refs(outcome, refs))?;
         }
-    };
+    }
     Ok(())
 }

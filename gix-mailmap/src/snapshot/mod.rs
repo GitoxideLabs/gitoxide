@@ -46,7 +46,7 @@ impl Snapshot {
                 Err(insert_pos) => {
                     self.entries_by_old_email.insert(insert_pos, entry.into());
                 }
-            };
+            }
         }
         self
     }

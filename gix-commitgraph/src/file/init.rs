@@ -85,7 +85,7 @@ impl File {
             x => {
                 return Err(Error::UnsupportedVersion(x));
             }
-        };
+        }
         ofs += 1;
 
         let object_hash = gix_hash::Kind::try_from(data[ofs]).map_err(Error::UnsupportedHashVersion)?;

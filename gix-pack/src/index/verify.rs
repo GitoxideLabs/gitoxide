@@ -262,7 +262,7 @@ impl index::File {
                     }
                 }
                 Blob => {}
-            };
+            }
         }
         Ok(())
     }

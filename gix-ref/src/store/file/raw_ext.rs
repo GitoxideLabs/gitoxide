@@ -124,7 +124,7 @@ impl ReferenceExt for Reference {
                             })?;
                         }
                         _ => break oid,
-                    };
+                    }
                 };
                 self.peeled = Some(peeled_id);
                 self.target = Target::Object(peeled_id);

@@ -110,7 +110,7 @@ impl Transaction<'_, '_> {
                                     full_name: change.name(),
                                 });
                             }
-                        };
+                        }
                     }
                 }
                 Change::Delete { .. } => {}

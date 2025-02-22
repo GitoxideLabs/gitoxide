@@ -70,7 +70,7 @@ where
                     }
                     Some((None, None, _)) => unreachable!("BUG: it makes no sense to fill the stack with empties"),
                     None => return Ok(()),
-                };
+                }
                 pop_path = false;
             }
             (Some(lhs), Some(rhs)) => {
@@ -328,7 +328,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                 .cancelled()
             {
                 return Err(Error::Cancelled);
-            };
+            }
 
             let relation = relation_to_propagate.or_else(|| {
                 *change_id += 1;
@@ -343,7 +343,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                 .cancelled()
             {
                 return Err(Error::Cancelled);
-            };
+            }
             queue.push_back((None, Some(rhs.oid.to_owned()), to_child(relation)));
         }
         (true, _) => {
@@ -371,7 +371,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                 .cancelled()
             {
                 return Err(Error::Cancelled);
-            };
+            }
             queue.push_back((Some(lhs.oid.to_owned()), None, to_child(relation)));
         }
         (false, false) => {
@@ -390,7 +390,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                 return Err(Error::Cancelled);
             }
         }
-    };
+    }
     Ok(())
 }
 

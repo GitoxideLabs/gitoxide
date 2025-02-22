@@ -160,7 +160,7 @@ pub fn into(
         if dot_git.is_dir() {
             return Err(Error::DirectoryExists { path: dot_git });
         }
-    };
+    }
     create_dir(&dot_git)?;
 
     {

@@ -325,6 +325,7 @@ bin-dir = "gitoxide-max-pure-v{ version }-{ target }/{ bin }{ binary-ext }"
 pedantic = { level = "warn", priority = -1 }
 #
 # Reviewed and allowed lints
+needless_continue = "allow"
 enum_glob_use = "allow"  # x97
 missing_errors_doc = "allow"  # x1792
 missing_panics_doc = "allow"  # x447

@@ -23,7 +23,7 @@ impl crate::IsSpuriousError for Error {
                 #[cfg(feature = "http-client-curl")]
                 if let Some(err) = source.downcast_ref::<crate::client::http::curl::Error>() {
                     return err.is_spurious();
-                };
+                }
                 #[cfg(feature = "http-client-reqwest")]
                 if let Some(err) = source.downcast_ref::<crate::client::http::reqwest::remote::Error>() {
                     return err.is_spurious();

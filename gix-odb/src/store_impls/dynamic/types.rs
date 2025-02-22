@@ -61,7 +61,7 @@ impl PackId {
                     midx <= Self::max_packs_in_multi_index(),
                     "There shouldn't be more than 2^16 packs per multi-index"
                 );
-                ((self.index as gix_pack::data::Id | 1 << 15) | midx << 16) as gix_pack::data::Id
+                (self.index as gix_pack::data::Id | (1 << 15)) | (midx << 16) as gix_pack::data::Id
             }
         }
     }

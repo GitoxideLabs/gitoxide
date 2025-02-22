@@ -86,7 +86,7 @@ pub use discover::discover;
 pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Human {
         bail!("JSON output isn't supported");
-    };
+    }
 
     let width = 15;
     writeln!(

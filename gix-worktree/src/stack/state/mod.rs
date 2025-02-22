@@ -153,7 +153,7 @@ impl State {
                                     return None;
                                 }
                             }
-                        };
+                        }
                     }
                     Some((path.to_owned(), entry.id))
                 } else {

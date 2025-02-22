@@ -66,11 +66,11 @@ pub fn optimize_chunk_size_and_thread_limit(
 ///
 /// * `desired_chunk_size` is the amount of items per chunk you think should be used.
 /// * `num_items` is the total amount of items in the iteration, if `Some`.
-///    Otherwise this knowledge will not affect the output of this function.
+///   Otherwise this knowledge will not affect the output of this function.
 /// * `thread_limit` is the amount of threads to use at most, if `Some`.
-///    Otherwise this knowledge will not affect the output of this function.
+///   Otherwise this knowledge will not affect the output of this function.
 /// * `available_threads` is the total amount of threads available, if `Some`.
-///    Otherwise the actual amount of available threads is determined by querying the system.
+///   Otherwise the actual amount of available threads is determined by querying the system.
 ///
 /// `Note` that this implementation is available only if the `parallel` feature toggle is set.
 #[cfg(feature = "parallel")]

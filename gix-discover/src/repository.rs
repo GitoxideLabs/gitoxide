@@ -76,7 +76,11 @@ mod path {
                     None => {
                         let mut dir = normalize_on_trailing_dot_dot(dir)?;
                         dir.pop(); // ".git" suffix
-                        let work_dir = dir.as_os_str().is_empty().then(|| PathBuf::from(".")).unwrap_or(dir);
+                        let work_dir = if dir.as_os_str().is_empty() {
+                            PathBuf::from(".")
+                        } else {
+                            dir
+                        };
                         Path::WorkTree(work_dir)
                     }
                 },

@@ -56,24 +56,22 @@ impl<'repo> Delegate<'repo> {
                 let candidates = candidates.take();
                 match candidates {
                     None => *out = None,
-                    Some(candidates) => {
-                        match candidates.len() {
-                            0 => unreachable!(
-                                "BUG: let's avoid still being around if no candidate matched the requirements"
-                            ),
-                            1 => {
-                                *out = candidates.into_iter().next();
-                            }
-                            _ => {
-                                errors.insert(
-                                    0,
-                                    Error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo),
-                                );
-                                return Err(Error::from_errors(errors));
-                            }
-                        };
-                    }
-                };
+                    Some(candidates) => match candidates.len() {
+                        0 => {
+                            unreachable!("BUG: let's avoid still being around if no candidate matched the requirements")
+                        }
+                        1 => {
+                            *out = candidates.into_iter().next();
+                        }
+                        _ => {
+                            errors.insert(
+                                0,
+                                Error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo),
+                            );
+                            return Err(Error::from_errors(errors));
+                        }
+                    },
+                }
             }
             Ok(out)
         }
@@ -215,8 +213,8 @@ impl Delegate<'_> {
                     }
                 }) {
                     obj_opt.get_or_insert_with(HashSet::default).insert(id);
-                };
-            };
+                }
+            }
         }
         Some(())
     }

@@ -126,7 +126,7 @@ fn parse_bounds(bounds: &Punctuated<TypeParamBound, Token![+]>) -> Option<Conver
         return None;
     }
     if let TypeParamBound::Trait(ref tb) = bounds.first().unwrap() {
-        if let Some(seg) = tb.path.segments.iter().last() {
+        if let Some(seg) = tb.path.segments.iter().next_back() {
             if let PathArguments::AngleBracketed(ref gen_args) = seg.arguments {
                 if let GenericArgument::Type(_) = gen_args.args.first().unwrap() {
                     if seg.ident == "Into" {

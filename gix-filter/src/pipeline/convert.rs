@@ -202,7 +202,7 @@ impl Pipeline {
         let (src, dest) = bufs.src_and_dest();
         if eol::convert_to_worktree(src, digest, dest, self.options.eol_config)? {
             bufs.swap();
-        };
+        }
 
         if let Some(encoding) = encoding {
             let (src, dest) = bufs.src_and_dest();

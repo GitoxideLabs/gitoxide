@@ -92,16 +92,16 @@ mod serde_only {
                     });
                     if f.link().is_some() {
                         names.push("link");
-                    };
+                    }
                     if f.resolve_undo().is_some() {
                         names.push("resolve-undo (REUC)");
-                    };
+                    }
                     if f.untracked().is_some() {
                         names.push("untracked (UNTR)");
-                    };
+                    }
                     if f.fs_monitor().is_some() {
                         names.push("fs-monitor (FSMN)");
-                    };
+                    }
                     if f.had_offset_table() {
                         names.push("offset-table (IEOT)");
                     }

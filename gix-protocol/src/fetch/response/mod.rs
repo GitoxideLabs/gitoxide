@@ -224,7 +224,7 @@ impl Response {
                 }
                 Err(_) => return true,
             },
-        };
+        }
         false
     }
 }

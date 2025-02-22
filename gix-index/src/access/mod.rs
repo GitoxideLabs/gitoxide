@@ -194,7 +194,7 @@ impl State {
                 let entry_path = e.path(self);
                 if entry_path == path {
                     return true;
-                };
+                }
                 if !ignore_case {
                     return false;
                 }
@@ -222,7 +222,7 @@ impl State {
                 let dir_path = dir.path(self);
                 if dir_path == directory {
                     return true;
-                };
+                }
                 if !ignore_case {
                     return false;
                 }

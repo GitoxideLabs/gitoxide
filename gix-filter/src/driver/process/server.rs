@@ -126,7 +126,7 @@ impl Server {
                     }
                 }
                 None => continue,
-            };
+            }
         }
 
         for cap in &capabilities {

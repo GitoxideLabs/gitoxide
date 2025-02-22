@@ -17,11 +17,11 @@ where
     /// with a given `chunk_size` allowing a maximum `chunks_in_flight`.
     ///
     /// * `chunk_size` describes how many items returned by `iter` will be a single item of this `EagerIter`.
-    ///    This helps to reduce the overhead imposed by transferring many small items.
-    ///    If this number is 1, each item will become a single chunk. 0 is invalid.
+    ///   This helps to reduce the overhead imposed by transferring many small items.
+    ///   If this number is 1, each item will become a single chunk. 0 is invalid.
     /// * `chunks_in_flight` describes how many chunks can be kept in memory in case the consumer of the `EagerIter`s items
-    ///    isn't consuming them fast enough. Setting this number to 0 effectively turns off any caching, but blocks `EagerIter`
-    ///    if its items aren't consumed fast enough.
+    ///   isn't consuming them fast enough. Setting this number to 0 effectively turns off any caching, but blocks `EagerIter`
+    ///   if its items aren't consumed fast enough.
     pub fn new(iter: I, chunk_size: usize, chunks_in_flight: usize) -> Self {
         let (sender, receiver) = std::sync::mpsc::sync_channel(chunks_in_flight);
         let size_hint = iter.size_hint();

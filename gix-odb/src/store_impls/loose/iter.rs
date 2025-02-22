@@ -34,7 +34,7 @@ impl loose::Iter {
                 }
             }
             Err(err) => return Some(Err(err)),
-        };
+        }
         None
     }
 }

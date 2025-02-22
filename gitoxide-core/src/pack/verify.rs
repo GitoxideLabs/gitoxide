@@ -177,7 +177,7 @@ where
                         #[cfg(feature = "serde")]
                         Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &multi_index.index_names().iter().zip(res.pack_traverse_statistics).collect::<Vec<_>>())?,
                         _ => {}
-                    };
+                    }
                     return Ok(())
                 },
                 _ => return Err(anyhow!(
@@ -195,7 +195,7 @@ where
             #[cfg(feature = "serde")]
             Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, stats)?,
             _ => {}
-        };
+        }
     }
     Ok(())
 }

@@ -188,7 +188,7 @@ impl file::Store {
                                 res.strip_namespace(namespace);
                             }
                             return Ok(Some(res));
-                        };
+                        }
                     }
                 }
                 Ok(None)
@@ -225,9 +225,13 @@ impl file::Store {
                 use crate::Category::*;
                 let sn = FullNameRef::new_unchecked(sn);
                 match c {
-                    LinkedPseudoRef { name: worktree_name } => is_reflog
-                        .then(|| (linked_git_dir(worktree_name).into(), sn))
-                        .unwrap_or((commondir.into(), name)),
+                    LinkedPseudoRef { name: worktree_name } => {
+                        if is_reflog {
+                            (linked_git_dir(worktree_name).into(), sn)
+                        } else {
+                            (commondir.into(), name)
+                        }
+                    }
                     Tag | LocalBranch | RemoteBranch | Note => (commondir.into(), name),
                     MainRef | MainPseudoRef => (commondir.into(), sn),
                     LinkedRef { name: worktree_name } => sn

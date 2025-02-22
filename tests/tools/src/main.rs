@@ -21,6 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(unix)]
         "umask" => umask()?,
         _ => unreachable!("Unknown subcommand: {}", scmd),
-    };
+    }
     Ok(())
 }

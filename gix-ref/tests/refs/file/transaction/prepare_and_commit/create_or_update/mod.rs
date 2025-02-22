@@ -96,7 +96,7 @@ fn reference_with_equally_named_empty_or_non_empty_directory_already_in_place_ca
                     assert_eq!(source.to_string(), "Directory not empty");
                 }
                 _ => unreachable!("other errors shouldn't happen here"),
-            };
+            }
         }
     }
     Ok(())

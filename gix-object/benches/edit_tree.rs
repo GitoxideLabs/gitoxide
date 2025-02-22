@@ -155,7 +155,7 @@ fn new_inmemory_writes() -> (TreeStore, impl FnMut(&Tree) -> Result<ObjectId, st
                 Entry::Vacant(e) => {
                     e.insert(tree.clone());
                 }
-            };
+            }
             Ok(id)
         }
     };

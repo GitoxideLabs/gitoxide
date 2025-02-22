@@ -157,7 +157,7 @@ pub(crate) mod function {
                                         t_ch = t.1;
                                     }
                                     None => break,
-                                };
+                                }
                             }
                             if t_ch != p_ch {
                                 return NoMatch;
@@ -177,7 +177,7 @@ pub(crate) mod function {
                                 t_ch = t.1;
                             }
                             None => break AbortAll,
-                        };
+                        }
                     };
                 }
                 BRACKET_OPEN => {
@@ -187,7 +187,7 @@ pub(crate) mod function {
                             p_ch = t.1;
                         }
                         None => return AbortAll,
-                    };
+                    }
 
                     if p_ch == b'^' {
                         p_ch = NEGATE_CLASS;
@@ -326,7 +326,7 @@ pub(crate) mod function {
                                             }
                                         }
                                         _ => return AbortAll,
-                                    };
+                                    }
                                     prev_p_ch = 0;
                                 }
                             }
@@ -336,7 +336,7 @@ pub(crate) mod function {
                                     matched = true;
                                 }
                             }
-                        };
+                        }
                         next = p.next();
                         if let Some((_, BRACKET_CLOSE)) = next {
                             break;

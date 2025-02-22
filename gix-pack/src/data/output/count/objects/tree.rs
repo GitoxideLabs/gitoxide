@@ -57,7 +57,7 @@ pub mod changes {
                     }
                 }
                 Change::Deletion { .. } => {}
-            };
+            }
             Action::Continue
         }
     }

@@ -184,7 +184,7 @@ pub(crate) mod function {
                                 .unwrap_or_default()
                         },
                     )
-                    .map_or(true, |m| m.is_excluded());
+                    .is_none_or(|m| m.is_excluded());
 
                 let entry_is_submodule = entry.mode.is_submodule();
                 if entry_is_excluded && (!entry_is_submodule || !recurse_submodules) {

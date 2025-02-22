@@ -213,7 +213,7 @@ pub(crate) mod function {
                         continue;
                     }
                 }
-            };
+            }
 
             let is_ignored = matches!(entry.status, gix::dir::entry::Status::Ignored(_));
             let entry_path = gix::path::from_bstr(entry.rela_path);

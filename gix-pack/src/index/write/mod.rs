@@ -69,10 +69,10 @@ impl crate::index::File {
     /// * `kind` is the version of pack index to produce, use [`crate::index::Version::default()`] if in doubt.
     /// * `tread_limit` is used for a parallel tree traversal for obtaining object hashes with optimal performance.
     /// * `root_progress` is the top-level progress to stay informed about the progress of this potentially long-running
-    ///    computation.
+    ///   computation.
     /// * `object_hash` defines what kind of object hash we write into the index file.
     /// * `pack_version` is the version of the underlying pack for which `entries` are read. It's used in case none of these objects are provided
-    ///    to compute a pack-hash.
+    ///   to compute a pack-hash.
     ///
     /// # Remarks
     ///
@@ -164,7 +164,7 @@ impl crate::index::File {
                         },
                     )?;
                 }
-            };
+            }
             last_seen_trailer = trailer;
             num_objects += 1;
             objects_progress.inc();

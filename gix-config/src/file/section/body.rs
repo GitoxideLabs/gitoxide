@@ -151,7 +151,7 @@ impl Body<'_> {
                         value_range.end = i;
                     } else {
                         value_range.start = i;
-                    };
+                    }
                 }
                 _ => (),
             }

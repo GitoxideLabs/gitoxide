@@ -12,7 +12,7 @@ const SH: &str = "/bin/sh";
 fn empty() {
     let prog = Program::from_custom_definition("");
     let git = *GIT;
-    assert!(matches!(&prog.kind, Kind::ExternalName { name_and_args } if name_and_args == ""));
+    assert!(matches!(&prog.kind, Kind::ExternalName { name_and_args } if name_and_args.is_empty()));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
         format!(r#""{git}" "credential-" "store""#),

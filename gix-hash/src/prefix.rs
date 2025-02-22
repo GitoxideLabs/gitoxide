@@ -100,7 +100,7 @@ impl Prefix {
             return Err(from_hex::Error::TooLong { hex_len });
         } else if hex_len < Self::MIN_HEX_LEN {
             return Err(from_hex::Error::TooShort { hex_len });
-        };
+        }
 
         let src = if value.len() % 2 == 0 {
             let mut out = Vec::from_iter(std::iter::repeat(0).take(value.len() / 2));

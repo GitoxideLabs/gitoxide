@@ -8,7 +8,7 @@
 # More documentation for the advisories section can be found here:
 # https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
-ignore = []
+ignore = ['RUSTSEC-2025-0007']
 
 
 

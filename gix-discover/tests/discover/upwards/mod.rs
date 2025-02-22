@@ -319,7 +319,7 @@ fn do_not_shorten_absolute_paths() -> crate::Result {
             assert!(work_dir.is_absolute());
         }
         _ => panic!("expected worktree path"),
-    };
+    }
 
     Ok(())
 }
@@ -345,7 +345,7 @@ mod dot_git_only {
                 assert_eq!(work_dir, expected.as_ref());
             }
             _ => panic!("expected worktree path"),
-        };
+        }
     }
 
     #[test]

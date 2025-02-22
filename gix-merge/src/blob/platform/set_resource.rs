@@ -97,7 +97,7 @@ impl Platform {
                 storage.data = out;
                 storage.mode = mode;
             }
-        };
+        }
         Ok(())
     }
 }

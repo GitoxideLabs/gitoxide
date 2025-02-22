@@ -122,8 +122,8 @@ impl<'a> Path<'a> {
     ///    the `home_for_user` function to be provided.
     ///    The interpolation uses `getpwnam` sys call and is therefore not available on windows.
     ///  - `%(prefix)/` is expanded to the location where `gitoxide` is installed.
-    ///     This location is not known at compile time and therefore need to be
-    ///     optionally provided by the caller through `git_install_dir`.
+    ///    This location is not known at compile time and therefore need to be
+    ///    optionally provided by the caller through `git_install_dir`.
     ///
     /// Any other, non-empty path value is returned unchanged and error is returned in case of an empty path value or if required input
     /// wasn't provided.

@@ -237,12 +237,7 @@ impl Outcome {
     }
 
     fn reduce_and_check_if_done(&mut self, attr: AttributeId) -> bool {
-        if self.selected.is_empty()
-            || self
-                .selected
-                .iter()
-                .any(|(_name, id)| id.map_or(false, |id| id == attr))
-        {
+        if self.selected.is_empty() || self.selected.iter().any(|(_name, id)| *id == Some(attr)) {
             *self.remaining.as_mut().expect("initialized") -= 1;
         }
         self.is_done()

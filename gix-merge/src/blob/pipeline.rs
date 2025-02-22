@@ -293,7 +293,7 @@ impl Pipeline {
                                     ToWorktreeOutcome::Process(MaybeDelayed::Delayed(_)) => {
                                         unreachable!("we prohibit this")
                                     }
-                                };
+                                }
                             }
 
                             let res = self.filter.convert_to_git(

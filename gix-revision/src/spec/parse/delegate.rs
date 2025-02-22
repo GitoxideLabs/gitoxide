@@ -73,7 +73,7 @@ pub trait Navigate {
     ///
     /// * `stage` ranges from 0 to 2, with 0 being the base, 1 being ours, 2 being theirs.
     /// * `path` without prefix is relative to the root of the repository, while prefixes like `./` and `../` make it
-    ///    relative to the current working directory.
+    ///   relative to the current working directory.
     fn index_lookup(&mut self, path: &BStr, stage: u8) -> Option<()>;
 }
 

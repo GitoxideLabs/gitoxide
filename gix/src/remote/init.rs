@@ -40,9 +40,11 @@ impl<'repo> Remote<'repo> {
             url.is_some() || push_url.is_some(),
             "BUG: fetch or push url must be set at least"
         );
-        let (url_alias, push_url_alias) = should_rewrite_urls
-            .then(|| rewrite_urls(&repo.config, url.as_ref(), push_url.as_ref()))
-            .unwrap_or(Ok((None, None)))?;
+        let (url_alias, push_url_alias) = if should_rewrite_urls {
+            rewrite_urls(&repo.config, url.as_ref(), push_url.as_ref())
+        } else {
+            Ok((None, None))
+        }?;
         Ok(Remote {
             name: name_or_url.map(Into::into),
             url,
@@ -77,9 +79,11 @@ impl<'repo> Remote<'repo> {
         should_rewrite_urls: bool,
         repo: &'repo Repository,
     ) -> Result<Self, Error> {
-        let (url_alias, _) = should_rewrite_urls
-            .then(|| rewrite_urls(&repo.config, Some(&url), None))
-            .unwrap_or(Ok((None, None)))?;
+        let (url_alias, _) = if should_rewrite_urls {
+            rewrite_urls(&repo.config, Some(&url), None)
+        } else {
+            Ok((None, None))
+        }?;
         Ok(Remote {
             name: None,
             url: Some(url),

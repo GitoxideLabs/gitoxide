@@ -151,7 +151,7 @@ fn run_baseline() -> crate::Result {
             if !tree_path.exists() {
                 skipped_tree_resolve_cases += 1;
                 continue;
-            };
+            }
             let expected_tree_id = gix_hash::ObjectId::from_hex(std::fs::read_to_string(tree_path)?.trim().as_bytes())?;
             options.tree_merge.tree_conflicts = Some(tree_resolution);
             let resolve_with_ours = tree_resolution == gix_merge::tree::ResolveWith::Ours;

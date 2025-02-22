@@ -114,7 +114,7 @@ pub(crate) mod function {
                     &mut err,
                 )?;
             }
-        };
+        }
 
         if let Some(gix::worktree::state::checkout::Outcome { collisions, errors, .. }) = outcome {
             if !(collisions.is_empty() && errors.is_empty()) {

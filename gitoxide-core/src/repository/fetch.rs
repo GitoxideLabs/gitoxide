@@ -264,7 +264,7 @@ pub(crate) mod function {
                 gix::remote::fetch::refmap::Source::Ref(r) => {
                     crate::repository::remote::refs::print_ref(&mut out, r)?;
                 }
-            };
+            }
             let mode_and_type = update.type_change.map_or_else(
                 || format!("{}", update.mode),
                 |type_change| {

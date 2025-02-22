@@ -55,7 +55,7 @@ impl Mode {
             Mode::FILE if executable_bit && stat.is_executable() => return Some(Change::ExecutableBit),
             Mode::FILE_EXECUTABLE if executable_bit && !stat.is_executable() => return Some(Change::ExecutableBit),
             _ => return None,
-        };
+        }
         let new_mode = if stat.is_dir() {
             Mode::COMMIT
         } else if executable_bit && stat.is_executable() {

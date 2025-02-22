@@ -208,7 +208,7 @@ where
         *i = 0;
         if let Err(e) = self.expand_topo_walk(&commit.id) {
             return Some(Err(e));
-        };
+        }
 
         Some(Ok(commit))
     }
@@ -289,7 +289,7 @@ where
                 }
             }
         }
-    };
+    }
     Ok(parents)
 }
 

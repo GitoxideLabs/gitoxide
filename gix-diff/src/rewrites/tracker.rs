@@ -166,9 +166,9 @@ impl<T: Change> Tracker<T> {
     /// We may refuse the push if that information isn't needed for what we have to track.
     pub fn try_push_change(&mut self, change: T, location: &BStr) -> Option<T> {
         let change_kind = change.kind();
-        if let (None, ChangeKind::Modification { .. }) = (self.rewrites.copies, change_kind) {
+        if let (None, ChangeKind::Modification) = (self.rewrites.copies, change_kind) {
             return Some(change);
-        };
+        }
 
         let entry_kind = change.entry_mode().kind();
         if entry_kind == EntryKind::Commit {
@@ -179,7 +179,7 @@ impl<T: Change> Tracker<T> {
             .filter(|_| matches!(change_kind, ChangeKind::Addition | ChangeKind::Deletion));
         if let (None, EntryKind::Tree) = (relation, entry_kind) {
             return Some(change);
-        };
+        }
 
         let start = self.path_backing.len();
         self.path_backing.extend_from_slice(location);
@@ -514,7 +514,7 @@ impl<T: Change> Tracker<T> {
                     dst_items.push((item.change.id().to_owned(), item));
                 }
                 _ => continue,
-            };
+            }
         }
 
         for ((src_id, src_item), (dst_id, dst_item)) in src_items.into_iter().zip(dst_items) {
@@ -758,7 +758,7 @@ fn find_match<'a, T: Change>(
                 Operation::SourceOrDestinationIsBinary => {
                     // TODO: figure out if git does more here
                 }
-            };
+            }
         }
     }
     Ok(None)

@@ -155,7 +155,7 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
                     keyword: BString::from(keyword),
                 });
             }
-        };
+        }
         Ok(())
     })
 }

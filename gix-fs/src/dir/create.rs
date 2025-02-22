@@ -165,7 +165,7 @@ impl<'a> Iterator for Iter<'a> {
                         }
                         if self.retries.on_create_directory_failure < 1 {
                             return self.permanent_failure(dir, NotFound);
-                        };
+                        }
                         self.cursors.push(dir);
                         self.cursors.push(match dir.parent() {
                             None => return self.permanent_failure(dir, InvalidInput),
@@ -177,7 +177,7 @@ impl<'a> Iterator for Iter<'a> {
                         self.retries.on_interrupt -= 1;
                         if self.retries.on_interrupt <= 1 {
                             return self.permanent_failure(dir, Interrupted);
-                        };
+                        }
                         self.cursors.push(dir);
                         self.intermediate_failure(dir, err)
                     }

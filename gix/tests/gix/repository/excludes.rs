@@ -19,7 +19,7 @@ fn empty_core_excludes() -> crate::Result {
                 "The value for `core.excludesFile` could not be read from configuration"
             );
         }
-    };
+    }
 
     let repo = gix::open_opts(repo.git_dir(), repo.open_options().clone().strict_config(false))?;
     repo.excludes(&index, None, Source::WorktreeThenIdMappingIfNotSkipped)

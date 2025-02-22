@@ -86,7 +86,7 @@ impl<T> Tree<T> {
             let pack_offset = get_pack_offset(&data);
             if let Some(previous_offset) = previous_cursor_position {
                 Self::advance_cursor_to_pack_offset(&mut r, pack_offset, previous_offset)?;
-            };
+            }
             let entry = crate::data::Entry::from_read(&mut r, pack_offset, hash_len).map_err(|err| Error::Io {
                 source: err,
                 message: "EOF while parsing header",
@@ -111,7 +111,7 @@ impl<T> Tree<T> {
                         .expect("in bound distance for deltas");
                     tree.add_child(base_pack_offset, pack_offset, data)?;
                 }
-            };
+            }
             progress.inc();
             if idx % 10_000 == 0 && should_interrupt.load(Ordering::SeqCst) {
                 return Err(Error::Interrupted);

@@ -105,7 +105,7 @@ mod refs_impl {
                         out,
                         &map.remote_refs.into_iter().map(JsonRef::from).collect::<Vec<_>>(),
                     )?,
-                };
+                }
                 Ok(())
             }
         }

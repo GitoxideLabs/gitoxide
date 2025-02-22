@@ -272,11 +272,8 @@ fn matching_remote<'a>(
         })
         .into_iter(),
     );
-    out.mappings.into_iter().next().and_then(|m| {
-        m.rhs.map(|name| {
-            FullName::try_from(name.into_owned())
-                .map(Cow::Owned)
-                .map_err(Into::into)
-        })
-    })
+    out.mappings
+        .into_iter()
+        .next()
+        .and_then(|m| m.rhs.map(|name| FullName::try_from(name.into_owned()).map(Cow::Owned)))
 }

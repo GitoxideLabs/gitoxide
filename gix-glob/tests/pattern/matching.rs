@@ -88,7 +88,7 @@ fn compare_baseline_with_ours() {
                     panics += 1;
                     continue;
                 }
-            };
+            }
         }
     }
 

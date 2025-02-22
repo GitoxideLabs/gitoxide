@@ -171,7 +171,7 @@ mod text {
                             "{}: resolution mismatch",
                             case.name
                         );
-                    };
+                    }
                     assert_str_eq!(
                         out.as_bstr().to_str_lossy(),
                         case.expected.to_str_lossy(),

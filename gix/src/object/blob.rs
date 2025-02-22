@@ -123,7 +123,7 @@ pub mod diff {
                     unreachable!("we disabled that")
                 }
                 Operation::SourceOrDestinationIsBinary => {}
-            };
+            }
             Ok(prep)
         }
 

@@ -94,7 +94,7 @@ impl<'a> Needle<'a> {
                     }
                     None => return Match::None,
                     _ => {}
-                };
+                }
                 let tail = &name[*asterisk_pos + 1..];
                 if !item.full_ref_name.ends_with(tail) {
                     return Match::None;

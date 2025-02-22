@@ -116,7 +116,7 @@ impl File<'static> {
                         return Err(Error::Io { source: err, path });
                     }
                 }
-            };
+            }
             meta.path = Some(path);
 
             let config = Self::from_bytes_owned(buf, meta, options)?;

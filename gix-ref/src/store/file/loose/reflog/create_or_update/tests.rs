@@ -112,7 +112,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                     "there is no logs in disabled mode"
                 );
             }
-        };
+        }
 
         // create onto existing directory
         let full_name_str = "refs/heads/other";
