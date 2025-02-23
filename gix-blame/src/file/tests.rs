@@ -27,6 +27,246 @@ fn one_sha() -> ObjectId {
     ObjectId::from_str("1111111111111111111111111111111111111111").unwrap()
 }
 
+fn two_sha() -> ObjectId {
+    use std::str::FromStr;
+
+    ObjectId::from_str("2222222222222222222222222222222222222222").unwrap()
+}
+
+mod blame_cache_to_hunks {
+    use super::*;
+    use crate::file::{update_blame_with_changes, BlameEntry, Change, UnblamedHunk};
+
+    fn single_blame_entry() -> Vec<BlameEntry> {
+        vec![BlameEntry::new(0..5, 0..5, zero_sha())]
+    }
+
+    fn multiple_blame_entries() -> Vec<BlameEntry> {
+        vec![
+            BlameEntry::new(0..5, 0..5, zero_sha()),
+            BlameEntry::new(5..10, 0..5, one_sha()),
+        ]
+    }
+
+    #[test]
+    fn no_changes() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Unchanged(0..5)];
+
+        let expected_blame = single_blame_entry();
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn deleted_line_full_blame() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Deleted(0, 5)];
+        let expected_blame = vec![];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn deleted_line_partial_first_delete() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Deleted(0, 3), Change::Unchanged(0..2)];
+        let expected_blame = vec![BlameEntry::new(0..2, 3..5, zero_sha())];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn deleted_line_partial_first_unchanged() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Unchanged(0..2), Change::Deleted(0, 3)];
+        let expected_blame = vec![BlameEntry::new(0..2, 0..2, zero_sha())];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn deleted_line_spanning() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Unchanged(0..1), Change::Deleted(1, 3), Change::Unchanged(1..2)];
+        let expected_blame = vec![
+            BlameEntry::new(0..1, 0..1, zero_sha()),
+            BlameEntry::new(1..2, 4..5, zero_sha()),
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn add_or_replace_full_blame_delete() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::AddedOrReplaced(0..5, 5)];
+        let expected_blame = vec![];
+        let expected_unblamed_hunks = vec![UnblamedHunk {
+            range_in_blamed_file: 0..5,
+            suspects: [(two_sha(), 0..5)].into(),
+        }];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+
+    #[test]
+    fn add_or_replace_first_partial_blame_delete() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::AddedOrReplaced(0..5, 3), Change::Unchanged(5..7)];
+        let expected_blame = vec![BlameEntry::new(5..7, 3..5, zero_sha())];
+        let expected_unblamed_hunks = vec![UnblamedHunk {
+            range_in_blamed_file: 0..5,
+            suspects: [(two_sha(), 0..5)].into(),
+        }];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+
+    #[test]
+    fn add_or_replace_first_unchanged_partial_blame_delete() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![Change::Unchanged(0..3), Change::AddedOrReplaced(0..5, 2)];
+        let expected_blame = vec![BlameEntry::new(0..3, 0..3, zero_sha())];
+        let expected_unblamed_hunks = vec![UnblamedHunk {
+            range_in_blamed_file: 0..5,
+            suspects: [(two_sha(), 0..5)].into(),
+        }];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+
+    #[test]
+    fn add_or_replace_unchanged_replace_unchanged() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![
+            Change::Unchanged(0..2),
+            Change::AddedOrReplaced(0..5, 1),
+            Change::Unchanged(7..9),
+        ];
+        let expected_blame = vec![
+            BlameEntry::new(0..2, 0..2, zero_sha()),
+            BlameEntry::new(7..9, 3..5, zero_sha()),
+        ];
+        let expected_unblamed_hunks = vec![UnblamedHunk {
+            range_in_blamed_file: 0..5,
+            suspects: [(two_sha(), 0..5)].into(),
+        }];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+
+    #[test]
+    fn add_or_replace_no_deletion() {
+        let cached_blames = single_blame_entry();
+        let changes = vec![
+            Change::Unchanged(0..2),
+            Change::AddedOrReplaced(0..5, 0),
+            Change::Unchanged(6..9),
+        ];
+        let expected_blame = vec![
+            BlameEntry::new(0..2, 0..2, zero_sha()),
+            BlameEntry::new(6..9, 2..5, zero_sha()),
+        ];
+        let expected_unblamed_hunks = vec![UnblamedHunk {
+            range_in_blamed_file: 0..5,
+            suspects: [(two_sha(), 0..5)].into(),
+        }];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+
+    #[test]
+    fn multiple_blames_no_change() {
+        let cached_blames = multiple_blame_entries();
+        let changes = vec![Change::Unchanged(0..10)];
+        let expected_blame = vec![
+            BlameEntry::new(0..5, 0..5, zero_sha()),
+            BlameEntry::new(5..10, 0..5, one_sha()),
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn multiple_blames_change_spans_multiple_lines_first_unchanged() {
+        let cached_blames = multiple_blame_entries();
+        let changes = vec![Change::Unchanged(0..6), Change::Deleted(6, 4)];
+        let expected_blame = vec![
+            BlameEntry::new(0..5, 0..5, zero_sha()),
+            BlameEntry::new(5..6, 0..1, one_sha()),
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn multiple_blames_change_spans_multiple_lines_first_delete() {
+        let cached_blames = multiple_blame_entries();
+        let changes = vec![Change::Deleted(0, 4), Change::Unchanged(0..6)];
+        let expected_blame = vec![
+            BlameEntry::new(0..1, 4..5, zero_sha()),
+            BlameEntry::new(1..6, 0..5, one_sha()),
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn multiple_blames_change_spans_delete_spanning() {
+        let cached_blames = multiple_blame_entries();
+        let changes = vec![Change::Unchanged(0..4), Change::Deleted(4, 4), Change::Unchanged(4..6)];
+        let expected_blame = vec![
+            BlameEntry::new(0..4, 0..4, zero_sha()),
+            BlameEntry::new(4..6, 3..5, one_sha()),
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, one_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert!(new_unblamed_hunks.is_empty());
+    }
+
+    #[test]
+    fn multiple_blames_add_or_replace_blame_delete_spanning() {
+        let cached_blames = multiple_blame_entries();
+        let changes = vec![
+            Change::Unchanged(0..4),
+            Change::AddedOrReplaced(4..9, 3),
+            Change::Unchanged(9..10),
+            Change::AddedOrReplaced(10..12, 2),
+        ];
+        let expected_blame = vec![
+            BlameEntry::new(0..4, 0..4, zero_sha()),
+            BlameEntry::new(9..10, 2..3, one_sha()),
+        ];
+        let expected_unblamed_hunks = vec![
+            UnblamedHunk {
+                range_in_blamed_file: 4..9,
+                suspects: [(two_sha(), 4..9)].into(),
+            },
+            UnblamedHunk {
+                range_in_blamed_file: 10..12,
+                suspects: [(two_sha(), 10..12)].into(),
+            },
+        ];
+        let (updated_blame_entries, new_unblamed_hunks) = update_blame_with_changes(cached_blames, changes, two_sha());
+        assert_eq!(updated_blame_entries, expected_blame);
+        assert_eq!(new_unblamed_hunks, expected_unblamed_hunks);
+    }
+}
+
 mod process_change {
     use super::*;
     use crate::file::{process_change, Change, Offset, UnblamedHunk};

@@ -117,6 +117,15 @@ impl SubAssign<u32> for Offset {
     }
 }
 
+#[derive(Debug, PartialEq)]
+/// A cache of blame entries that can be used to speed up subsequent blames.
+pub struct BlameCacheObject {
+    /// The entries of the cache.
+    pub entries: Vec<BlameEntry>,
+    /// The commit that was blamed to produce these entries.
+    pub cache_id: ObjectId,
+}
+
 /// A mapping of a section of the *Blamed File* to the section in a *Source File* that introduced it.
 ///
 /// Both ranges are of the same size, but may use different [starting points](Range::start). Naturally,
@@ -170,6 +179,15 @@ impl BlameEntry {
     }
 }
 
+impl BlameEntry {
+    /// Update the `start_in_blamed_file` and `start_in_source_file` fields by the lines that are already assigned.
+    pub(crate) fn update_blame(&mut self, offset: &LinesAssigned) {
+        self.start_in_blamed_file += offset.get_assigned();
+        self.start_in_source_file += offset.get_assigned();
+        self.len = NonZeroU32::new(u32::from(self.len) - offset.get_assigned()).unwrap();
+    }
+}
+
 pub(crate) trait LineRange {
     fn shift_by(&self, offset: Offset) -> Self;
 }
@@ -204,4 +222,53 @@ pub enum Change {
     AddedOrReplaced(Range<u32>, u32),
     /// `(line_to_start_deletion_at, num_deleted_in_before)`
     Deleted(u32, u32),
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LinesAssigned {
+    lines_assigned: u32,
+}
+
+impl LinesAssigned {
+    pub(crate) fn add_assigned(&mut self, lines: u32) {
+        self.lines_assigned += lines;
+    }
+
+    pub(crate) fn get_assigned(&self) -> u32 {
+        self.lines_assigned
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct BlameLines {
+    pub(crate) assigned: LinesAssigned,
+}
+
+impl BlameLines {
+    pub(crate) fn get_remaining(&self, blame: &BlameEntry) -> u32 {
+        blame.len.get() - self.assigned.get_assigned()
+    }
+
+    pub(crate) fn has_remaining(&self, blame: &BlameEntry) -> bool {
+        self.get_remaining(blame) > 0
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ChangeLines {
+    pub(crate) assigned: LinesAssigned,
+}
+
+impl ChangeLines {
+    pub(crate) fn get_remaining(&self, change: &Change) -> u32 {
+        match &change {
+            Change::Unchanged(range) => range.len() as u32 - self.assigned.get_assigned(),
+            Change::AddedOrReplaced(_, deleted_in_before) => *deleted_in_before - self.assigned.get_assigned(),
+            Change::Deleted(_, deleted_in_before) => *deleted_in_before - self.assigned.get_assigned(),
+        }
+    }
+
+    pub(crate) fn has_remaining(&self, change: &Change) -> bool {
+        self.get_remaining(change) > 0
+    }
 }
