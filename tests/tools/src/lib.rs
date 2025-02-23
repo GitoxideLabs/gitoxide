@@ -663,7 +663,7 @@ fn bash_program() -> &'static Path {
                 .map(OsString::from)
                 .map(|mut raw_path| {
                     // Go down to where `bash.exe` usually is. Keep using `/` separators (not `\`).
-                    raw_path.push("/bin/bash.exe");
+                    raw_path.push("/usr/bin/bash.exe");
                     raw_path
                 })
                 .map(PathBuf::from)
