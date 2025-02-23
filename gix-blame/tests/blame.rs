@@ -191,7 +191,10 @@ macro_rules! mktest {
                 None,
                 &mut resource_cache,
                 format!("{}.txt", $case).as_str().into(),
-                None,
+                gix_blame::Options {
+                    range: None,
+                    since: None,
+                },
             )?
             .entries;
 
@@ -258,7 +261,10 @@ fn diff_disparity() {
             None,
             &mut resource_cache,
             format!("{case}.txt").as_str().into(),
-            None,
+            gix_blame::Options {
+                range: None,
+                since: None,
+            },
         )
         .unwrap()
         .entries;
@@ -286,7 +292,10 @@ fn line_range() {
         None,
         &mut resource_cache,
         "simple.txt".into(),
-        Some(1..2),
+        gix_blame::Options {
+            range: Some(1..2),
+            since: None,
+        },
     )
     .unwrap()
     .entries;
@@ -295,6 +304,36 @@ fn line_range() {
 
     let git_dir = fixture_path().join(".git");
     let baseline = Baseline::collect(git_dir.join("simple-lines-1-2.baseline")).unwrap();
+
+    assert_eq!(lines_blamed, baseline);
+}
+
+#[test]
+fn since() {
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::new().unwrap();
+
+    let lines_blamed = gix_blame::file(
+        &odb,
+        suspect,
+        None,
+        &mut resource_cache,
+        "simple.txt".into(),
+        gix_blame::Options {
+            range: None,
+            since: Some(gix_date::parse("2025-01-31", None).unwrap()),
+        },
+    )
+    .unwrap()
+    .entries;
+
+    assert_eq!(lines_blamed.len(), 1);
+
+    let git_dir = fixture_path().join(".git");
+    let baseline = Baseline::collect(git_dir.join("simple-since.baseline")).unwrap();
 
     assert_eq!(lines_blamed, baseline);
 }

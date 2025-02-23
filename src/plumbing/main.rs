@@ -1546,6 +1546,7 @@ pub fn main() -> Result<()> {
             statistics,
             file,
             range,
+            since,
         } => prepare_and_run(
             "blame",
             trace,
@@ -1557,7 +1558,7 @@ pub fn main() -> Result<()> {
                 core::repository::blame::blame_file(
                     repository(Mode::Lenient)?,
                     &file,
-                    range,
+                    gix::blame::Options { range, since },
                     out,
                     statistics.then_some(err),
                 )

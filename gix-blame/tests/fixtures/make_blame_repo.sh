@@ -227,6 +227,7 @@ git merge branch-that-has-earlier-commit || true
 
 git blame --porcelain simple.txt > .git/simple.baseline
 git blame --porcelain -L 1,2 simple.txt > .git/simple-lines-1-2.baseline
+git blame --porcelain --since 2025-01-31 simple.txt > .git/simple-since.baseline
 git blame --porcelain multiline-hunks.txt > .git/multiline-hunks.baseline
 git blame --porcelain deleted-lines.txt > .git/deleted-lines.baseline
 git blame --porcelain deleted-lines-multiple-hunks.txt > .git/deleted-lines-multiple-hunks.baseline

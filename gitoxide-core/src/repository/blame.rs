@@ -5,7 +5,7 @@ use std::ffi::OsStr;
 pub fn blame_file(
     mut repo: gix::Repository,
     file: &OsStr,
-    range: Option<std::ops::Range<u32>>,
+    options: gix::blame::Options,
     out: impl std::io::Write,
     err: Option<&mut dyn std::io::Write>,
 ) -> anyhow::Result<()> {
@@ -44,7 +44,7 @@ pub fn blame_file(
         cache,
         &mut resource_cache,
         file.as_bstr(),
-        range,
+        options,
     )?;
     let statistics = outcome.statistics;
     write_blame_entries(out, outcome)?;
