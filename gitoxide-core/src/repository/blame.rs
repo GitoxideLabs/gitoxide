@@ -43,6 +43,7 @@ pub fn blame_file(
         suspect,
         cache,
         &mut resource_cache,
+        None,
         file.as_bstr(),
         range,
     )?;
