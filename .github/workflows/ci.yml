@@ -194,7 +194,6 @@ jobs:
       - name: Compare expected and actual failures
         run: |
           # Fail on any differences, even unexpectedly passing tests, so they can be investigated.
-          # (If the job is made blocking for PRs, it may make sense to make this less stringent.)
           git --no-pager diff --no-index --exit-code --unified=1000000 --color=always -- `
             etc/test-fixtures-windows-expected-failures-see-issue-1358.txt actual-failures.txt
 
