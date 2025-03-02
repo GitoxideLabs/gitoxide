@@ -39,25 +39,42 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 pub fn shell() -> &'static OsStr {
     static PATH: Lazy<OsString> = Lazy::new(|| {
         if cfg!(windows) {
+            const MSYS_PREFIX_NAMES: &[&str] = &[
+                "mingw64",
+                "mingw32",
+                "clangarm64",
+                "clang64",
+                "clang32",
+                "ucrt64",
+                "usr",
+            ];
+            const RAW_SUFFIXES: &[&str] = &[
+                "/bin/sh.exe", // Usually a shim, which currently we prefer, if available.
+                "/usr/bin/sh.exe",
+            ];
+            fn raw_join(path: &Path, raw_suffix: &str) -> OsString {
+                let mut raw_path = OsString::from(path);
+                raw_path.push(raw_suffix);
+                raw_path
+            }
             core_dir()
-                .and_then(|git_core| {
-                    // Go up above something that is expected to be like mingw64/libexec/git-core.
-                    git_core.ancestors().nth(3)
+                .filter(|core| core.is_absolute() && core.ends_with("libexec/git-core"))
+                .and_then(|core| core.ancestors().nth(2))
+                .filter(|prefix| {
+                    // Only use `libexec/git-core` from inside something `usr`-like, such as `mingw64`.
+                    MSYS_PREFIX_NAMES.iter().any(|name| prefix.ends_with(name))
                 })
-                .map(OsString::from)
-                .map(|mut raw_path| {
-                    // Go down to where `sh.exe` usually is. To avoid breaking shell scripts that
-                    // wrongly assume the shell's own path contains no `\`, as well as to produce
+                .and_then(|prefix| prefix.parent())
+                .into_iter()
+                .flat_map(|git_root| {
+                    // Enumerate the locations where `sh.exe` usually is. To avoid breaking shell
+                    // scripts that assume the shell's own path contains no `\`, and to produce
                     // more readable messages, append literally with `/` separators. The path from
                     // `git --exec-path` will already have all `/` separators (and no trailing `/`)
                     // unless it was explicitly overridden to an unusual value via `GIT_EXEC_PATH`.
-                    raw_path.push("/usr/bin/sh.exe");
-                    raw_path
+                    RAW_SUFFIXES.iter().map(|raw_suffix| raw_join(git_root, raw_suffix))
                 })
-                .filter(|raw_path| {
-                    // Check if there is something that could be a usable shell there.
-                    Path::new(raw_path).is_file()
-                })
+                .find(|raw_path| Path::new(raw_path).is_file())
                 .unwrap_or_else(|| "sh.exe".into())
         } else {
             "/bin/sh".into()
