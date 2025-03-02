@@ -98,26 +98,25 @@ jobs:
           ln -s -- /usr/local/bin/wrapper1 "$base"
           EOF
 
-          # Define a script that wires up the `~/display` symlink that `wrapper1` uses to report
-          # calls as GitHub Actions step output (in addition to writing them to a log file). This
-          # is needed because stdout and stderr are both redirected elsewhere when the wrapper
-          # actually runs, and `/dev/tty` is not usable. This script must be run in the same step
-          # as the `cargo` command that causes wrapped executables to be run, because different
-          # steps write to different pipe objects. (As implemented, this also needs the calling
-          # shell to remain running, but that is not the cause of the underlying limitation.)
-          cat >/usr/local/bin/set-display <<'EOF'
-          #!/bin/sh
+          # Define a helper file that, when sourced, wires up the `~/display` symlink `wrapper1`
+          # uses to report calls as GitHub Actions step output (in addition to writing them to a
+          # log file). This is needed because stdout and stderr are both redirected elsewhere when
+          # the wrapper actually runs, and `/dev/tty` is not usable. This must be sourced in the
+          # same step as the `cargo` command that causes wrapped executables to be run, because
+          # different steps write to different pipe objects. (This also needs the shell that
+          # sourced it to remain running. But that is not the cause of the underlying limitation.)
+          cat >/usr/local/bin/set-display.sh <<'EOF'
           ln -s -- "/proc/$$/fd/1" ~/display
           EOF
 
-          chmod +x /usr/local/bin/wrapper1 /usr/local/bin/wrap1 /usr/local/bin/set-display
+          chmod +x /usr/local/bin/wrapper1 /usr/local/bin/wrap1
           mkdir /run/lock/wrapper1.fbd136bd-9b1b-448d-84a9-e18be53ae63c.lock
 
           find /usr/lib/gcc \( -name cc1 -o -name cc1plus \) \
             -print -exec /usr/local/bin/wrap1 {} \;
       - name: Build max-pure with limited dev tools and log cc1
         run: |
-          /usr/local/bin/set-display
+          . /usr/local/bin/set-display.sh
           cargo install --debug --locked --no-default-features --features max-pure --path .
       - name: Show logged C and C++ compilations (should be none)
         run: |
