@@ -68,16 +68,29 @@ jobs:
           ! grep -qP '(?<!\blinux-raw)-sys\b' tree.txt
       - name: Wrap cc1 (and cc1plus if present) to record calls
         run: |
+          set -o noclobber  # Catch any collisions with existing entries in /usr/local.
+
+          # Define the wrapper script for a compiler driver (for cc1 or cc1plus). This wrapper
+          # records calls, then delegates to the executable it wraps. When recording calls, writes
+          # to the log are synchronized so fragments of separate log entries aren't interleaved,
+          # even in concurrent runs. This wrapper knows what executable it is wrapping because,
+          # when deployed, this wrapper (or a symlink) replaces that executable, which will itself
+          # have been moved aside by being renamed with a `.orig` suffix, so this can call it.
           cat >/usr/local/bin/wrapper1 <<'EOF'
-          #!/bin/sh -e
+          #!/bin/sh
+          set -e
           printf '%s\n' "$0 $*" |
             flock /run/lock/wrapper1.fbd136bd-9b1b-448d-84a9-e18be53ae63c.lock \
             tee -a -- /var/log/wrapper1.log ~/display >/dev/null  # We'll link ~/display later.
           exec "$0.orig" "$@"
           EOF
 
+          # Define the script that performs the wrapping. This script shall be run once for each
+          # executable to be wrapped, renaming it with a `.orig` suffix and replacing it with a
+          # symlink to the wrapper script, defined above.
           cat >/usr/local/bin/wrap1 <<'EOF'
-          #!/bin/sh -e
+          #!/bin/sh
+          set -e
           dir="$(dirname -- "$1")"
           base="$(basename -- "$1")"
           cd -- "$dir"
@@ -85,14 +98,26 @@ jobs:
           ln -s -- /usr/local/bin/wrapper1 "$base"
           EOF
 
-          chmod +x /usr/local/bin/wrap1 /usr/local/bin/wrapper1
+          # Define a script that wires up the `~/display` symlink that `wrapper1` uses to report
+          # calls as GitHub Actions step output (in addition to writing them to a log file). This
+          # is needed because stdout and stderr are both redirected elsewhere when the wrapper
+          # actually runs, and `/dev/tty` is not usable. This script must be run in the same step
+          # as the `cargo` command that causes wrapped executables to be run, because different
+          # steps write to different pipe objects. (As implemented, this also needs the calling
+          # shell to remain running, but that is not the cause of the underlying limitation.)
+          cat >/usr/local/bin/set-display <<'EOF'
+          #!/bin/sh
+          ln -s -- "/proc/$$/fd/1" ~/display
+          EOF
+
+          chmod +x /usr/local/bin/wrapper1 /usr/local/bin/wrap1 /usr/local/bin/set-display
           mkdir /run/lock/wrapper1.fbd136bd-9b1b-448d-84a9-e18be53ae63c.lock
 
           find /usr/lib/gcc \( -name cc1 -o -name cc1plus \) \
             -print -exec /usr/local/bin/wrap1 {} \;
       - name: Build max-pure with limited dev tools and log cc1
         run: |
-          ln -s -- "/proc/$$/fd/1" ~/display  # Bypass `cc1` redirection.
+          /usr/local/bin/set-display
           cargo install --debug --locked --no-default-features --features max-pure --path .
       - name: Show logged C and C++ compilations (should be none)
         run: |
