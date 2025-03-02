@@ -2,8 +2,6 @@ gix-glob::glob pattern::matching::compare_baseline_with_ours
 gix-pathspec::pathspec parse::baseline
 gix-pathspec::pathspec parse::valid::glob_negations_are_always_literal
 gix-pathspec::pathspec parse::valid::whitespace_in_pathspec
-gix-pathspec::pathspec search::files
-gix-pathspec::pathspec search::prefixes_are_always_case_sensitive
 gix-submodule::submodule file::baseline::common_values_and_names_by_path
 gix-submodule::submodule file::is_active_platform::pathspecs_matter_even_if_they_do_not_match
 gix-submodule::submodule file::is_active_platform::submodules_with_active_config_are_considered_active_or_inactive
