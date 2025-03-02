@@ -32,8 +32,8 @@ git update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "!a"
 for p in bar bAr BAR foo/bar foo/bAr foo/BAR fOo/bar fOo/bAr fOo/BAR FOO/bar FOO/bAr FOO/BAR; do
   git -c core.ignoreCase=false update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "$p"
 done
-git -c core.ignoreCase=false update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "    " # 4 x space
-git -c core.ignoreCase=false update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "  hi  " # 2 x space hi 2 x space
+git -c core.protectNTFS=false update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "    " # 4 x space
+git -c core.protectNTFS=false update-index --add --cacheinfo 100644 "$(git rev-parse HEAD:goo)" "  hi  " # 2 x space hi 2 x space
 
 git ls-files > paths
 
