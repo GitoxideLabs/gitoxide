@@ -70,9 +70,9 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 /// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
 /// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
 ///
-/// This is currently only used (and only exercised in tests) for finding `sh.exe`. It may be used
-/// to find other executables in the future, but may require adjustment. In particular, depending
-/// on the desired semantics, it should possibly also check inside a `cmd` directory; directories
+/// This is currently only used (and only heavily exercised in tests) for finding `sh.exe`. It may
+/// be used to find other executables in the future, but may need adjustment. In particular,
+/// depending on desired semantics, it should possibly also check a `cmd` directory; directories
 /// like `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()`
 /// itself, which it could safely check even if its value is not safe for inferring other paths.
 fn find_git_associated_windows_executable(stem: &str) -> Option<OsString> {
@@ -100,4 +100,64 @@ pub(super) fn find_git_associated_windows_executable_with_fallback(stem: &str) -
         raw_path.push(".exe");
         raw_path
     })
+}
+
+#[cfg(all(windows, test))]
+mod tests {
+    use std::path::Path;
+
+    /// Some commands with `.exe` files in `bin` and `usr/bin` that should be found.
+    ///
+    /// Tests are expected to run with a full Git for Windows installation (not MinGit).
+    const SHOULD_FIND: &[&str] = &[
+        "sh", "bash", "dash", "diff", "tar", "less", "sed", "awk", "perl", "cygpath",
+    ];
+
+    /// Shouldn't find anything nonexistent, or only in PATH or in `bin`s we don't mean to search.
+    ///
+    /// If dirs like `mingsw64/bin` are added, `git-credential-manager` should be moved to `SHOULD_FIND`.
+    /// Likewise, if `super::core_dir()` is added, `git-daemon` should be moved to `SHOULD_FIND`.
+    const SHOULD_NOT_FIND: &[&str] = &[
+        "nonexistent-command",
+        "cmd",
+        "powershell",
+        "explorer",
+        "git-credential-manager",
+        "git-daemon",
+    ];
+
+    #[test]
+    fn find_git_associated_windows_executable() {
+        for stem in SHOULD_FIND {
+            let path = super::find_git_associated_windows_executable(stem);
+            assert!(path.is_some(), "should find {stem:?}");
+        }
+    }
+
+    #[test]
+    fn find_git_associated_windows_executable_no_extra() {
+        for stem in SHOULD_NOT_FIND {
+            let path = super::find_git_associated_windows_executable(stem);
+            assert_eq!(path, None, "should not find {stem:?}");
+        }
+    }
+
+    #[test]
+    fn find_git_associated_windows_executable_with_fallback() {
+        for stem in SHOULD_FIND {
+            let path = super::find_git_associated_windows_executable_with_fallback(stem);
+            assert!(Path::new(&path).is_absolute(), "should find {stem:?}");
+        }
+    }
+
+    #[test]
+    fn find_git_associated_windows_executable_with_fallback_falls_back() {
+        for stem in SHOULD_NOT_FIND {
+            let path = super::find_git_associated_windows_executable_with_fallback(stem)
+                .to_str()
+                .expect("valid Unicode")
+                .to_owned();
+            assert_eq!(path, format!("{stem}.exe"), "should fall back for {stem:?}");
+        }
+    }
 }
