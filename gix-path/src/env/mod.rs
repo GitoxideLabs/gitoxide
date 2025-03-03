@@ -40,7 +40,7 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 pub fn shell() -> &'static OsStr {
     static PATH: Lazy<OsString> = Lazy::new(|| {
         if cfg!(windows) {
-            auxiliary::find_sh_on_windows().unwrap_or_else(|| "sh.exe".into())
+            auxiliary::find_git_associated_windows_executable_with_fallback("sh")
         } else {
             "/bin/sh".into()
         }

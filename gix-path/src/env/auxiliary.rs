@@ -24,9 +24,9 @@ use once_cell::sync::Lazy;
 /// more prefixes or matching a broad pattern of platform-like strings might be too broad. So only
 /// prefixes that have been used in MSYS2 are considered.
 ///
-/// Second, we don't recognize `usr` itself here, even though is a plausible prefix. In MSYS2, it
-/// is the prefix for MSYS2 non-native programs, i.e. those that use `msys-2.0.dll`. But unlike the
-/// `<platform>` names we recognize, `usr` also has an effectively unbounded range of plausible
+/// Second, we don't recognize `usr` itself here, even though it is a plausible prefix. In MSYS2,
+/// it is the prefix for MSYS2 non-native programs, i.e. those that use `msys-2.0.dll`. But unlike
+/// the `<platform>` names we recognize, `usr` also has an effectively unbounded range of plausible
 /// meanings on non-Unix systems (for example, what should we take `Z:\usr` to mean?), which might
 /// occasionally relate to subdirectories with contents controlled by different *user accounts*.
 ///
@@ -60,30 +60,44 @@ fn git_for_windows_root() -> Option<&'static Path> {
     GIT_ROOT.as_deref()
 }
 
-/// Shell path fragments to concatenate to the root of a Git for Windows or MSYS2 installation.
-///
-/// When appended to the root of a Git for Windows installation, these are locations where `sh.exe`
-/// can usually be found. The leading `/` allow these to be used (only) with `raw_join()`.
+/// `bin` directory paths to try relative to the root of a Git for Windows or MSYS2 installation.
 ///
 /// These are ordered so that a shim is preferred over a non-shim when they are tried in order.
-const RAW_SH_EXE_PATH_SUFFIXES: &[&str] = &["/bin/sh.exe", "/usr/bin/sh.exe"];
+const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 
-/// Concatenate a path by appending a raw suffix, which must contain its own leading separator.
-fn raw_join(path: &Path, raw_suffix: &str) -> OsString {
-    let mut raw_path = OsString::from(path);
-    raw_path.push(raw_suffix);
-    raw_path
-}
-
-/// Obtain a path to a `sh.exe` on Windows associated with Git, if one can be found.
+/// Obtain a path to an executable command on Windows associated with Git, if one can be found.
 ///
 /// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
 /// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
-pub(super) fn find_sh_on_windows() -> Option<OsString> {
+///
+/// This is currently only used (and only exercised in tests) for finding `sh.exe`. It may be used
+/// to find other executables in the future, but may require adjustment. (In particular, depending
+/// on the desired semantics, it should possibly also check inside a `cmd` directory, possibly also
+/// check inside `super::core_dir()` itself, and could safely check the latter location even if its
+/// value is not suitable to use in inferring any other paths.)
+fn find_git_associated_windows_executable(stem: &str) -> Option<OsString> {
     let git_root = git_for_windows_root()?;
 
-    RAW_SH_EXE_PATH_SUFFIXES
+    BIN_DIR_FRAGMENTS
         .iter()
-        .map(|raw_suffix| raw_join(git_root, raw_suffix))
+        .map(|bin_dir_fragment| {
+            // Perform explicit raw concatenation with `/` to avoid introducing any `\` separators.
+            let mut raw_path = OsString::from(git_root);
+            raw_path.push("/");
+            raw_path.push(bin_dir_fragment);
+            raw_path.push("/");
+            raw_path.push(stem);
+            raw_path.push(".exe");
+            raw_path
+        })
         .find(|raw_path| Path::new(raw_path).is_file())
+}
+
+/// Like `find_associated_windows_executable`, but if not found, fall back to a simple filename.
+pub(super) fn find_git_associated_windows_executable_with_fallback(stem: &str) -> OsString {
+    find_git_associated_windows_executable(stem).unwrap_or_else(|| {
+        let mut raw_path = OsString::from(stem);
+        raw_path.push(".exe");
+        raw_path
+    })
 }
