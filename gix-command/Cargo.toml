@@ -24,3 +24,4 @@ shell-words = "1.0"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
+once_cell = "1.17.1"

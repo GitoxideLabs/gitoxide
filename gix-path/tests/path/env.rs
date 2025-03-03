@@ -1,3 +1,5 @@
+use std::path::Path;
+
 #[test]
 fn exe_invocation() {
     let actual = gix_path::env::exe_invocation();
@@ -10,8 +12,27 @@ fn exe_invocation() {
 #[test]
 fn shell() {
     assert!(
-        std::path::Path::new(gix_path::env::shell()).exists(),
-        "On CI and on Unix we'd expect a full path to the shell that exists on disk"
+        Path::new(gix_path::env::shell()).exists(),
+        "On CI and on Unix we expect a usable path to the shell that exists on disk"
+    );
+}
+
+#[test]
+fn shell_absolute() {
+    assert!(
+        Path::new(gix_path::env::shell()).is_absolute(),
+        "On CI and on Unix we currently expect the path to the shell always to be absolute"
+    );
+}
+
+#[test]
+fn shell_unix_path() {
+    let shell = gix_path::env::shell()
+        .to_str()
+        .expect("This test depends on the shell path being valid Unicode");
+    assert!(
+        !shell.contains('\\'),
+        "The path to the shell should have no backslashes, barring strange `GIT_EXEC_PATH` values"
     );
 }
 
