@@ -1,5 +1,7 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use once_cell::sync::Lazy;
 
 /// `usr`-like directory component names that MSYS2 may provide, other than for `/usr` itself.
 ///
@@ -25,19 +27,47 @@ use std::path::Path;
 /// Second, we don't recognize `usr` itself here, even though is a plausible prefix. In MSYS2, it
 /// is the prefix for MSYS2 non-native programs, i.e. those that use `msys-2.0.dll`. But unlike the
 /// `<platform>` names we recognize, `usr` also has an effectively unbounded range of plausible
-/// meanings on non-Unix systems, which may occasionally relate to subdirectories whose contents
-/// are controlled by different user accounts.
+/// meanings on non-Unix systems (for example, what should we take `Z:\usr` to mean?), which might
+/// occasionally relate to subdirectories with contents controlled by different *user accounts*.
 ///
 /// If we start with a `libexec/git-core` directory that we already use and trust, and it is in a
 /// directory with a name like `mingw64`, we infer that this `mingw64` directory has the expected
-/// meaning and that its `usr` sibling, if present, is acceptable to treat as though it is a
-/// first-level directory inside an MSYS2-like tree. So we are willing to traverse down to
-/// `usr/sh.exe` and attempt to use it. But if the `libexec/git-core` we use and trust is inside a
+/// meaning and accordingly infer that its `usr` sibling, if present, is acceptable to treat as
+/// though it is a first-level directory inside an MSYS2-like tree. So we are willing to traverse
+/// down to `usr/sh.exe` and try to use it. But if the `libexec/git-core` we use and trust is in a
 /// directory named `usr`, that `usr` directory may still not have the meaning we expect of `usr`.
 ///
-/// The conditions for a privilege escalation attack or other serious malfunction seem unlikely. If
-/// research indicates the risk is low enough, `usr` may be added. But for now it is omitted.
+/// Conditions for a privilege escalation attack or other serious malfunction seem far-fetched. If
+/// further research finds the risk is low enough, `usr` may be added. But for now it is omitted.
 const MSYS_USR_VARIANTS: &[&str] = &["mingw64", "mingw32", "clangarm64", "clang64", "clang32", "ucrt64"];
+
+/// Find a Git for Windows installation directory based on `git --exec-path` output.
+///
+/// Currently this is used only for finding the path to an `sh.exe` associated with Git. This is
+/// separate from `installation_config()` and `installation_config_prefix()` in `gix_path::env`,
+/// which guess where `etc/gitconfig` is based on `EXEPATH` or the location of the highest-scope
+/// config file.
+///
+/// The techniques might be combined or unified in some way in the future. The techniques those
+/// functions currently use shouldn't be used to find `sh.exe`, because `EXEPATH` can take on other
+/// values in some environments, and the highest scope config file may be unavailable or in another
+/// location if `GIT_CONFIG_SYSTEM` or `GIT_CONFIG_NOSYSTEM` are set or if there are no variables
+/// of system scope. Then paths found relative to it could be different. In contrast, the technique
+/// used here may be usable for those functions, though may need to cover more directory layouts.
+fn git_for_windows_root() -> Option<&'static Path> {
+    static GIT_ROOT: Lazy<Option<PathBuf>> = Lazy::new(|| {
+        super::core_dir()
+            .filter(|core| core.is_absolute() && core.ends_with("libexec/git-core"))
+            .and_then(|core| core.ancestors().nth(2))
+            .filter(|prefix| {
+                // Only use `libexec/git-core` from inside something `usr`-like, such as `mingw64`.
+                MSYS_USR_VARIANTS.iter().any(|name| prefix.ends_with(name))
+            })
+            .and_then(|prefix| prefix.parent())
+            .map(Into::into)
+    });
+    GIT_ROOT.as_deref()
+}
 
 /// Shell path fragments to concatenate to the root of a Git for Windows or MSYS2 installation.
 ///
@@ -56,16 +86,9 @@ fn raw_join(path: &Path, raw_suffix: &str) -> OsString {
     raw_path
 }
 
-///
+/// Obtain a path to a `sh.exe` on Windows associated with Git, if one can be found.
 pub(super) fn find_sh_on_windows() -> Option<OsString> {
-    super::core_dir()
-        .filter(|core| core.is_absolute() && core.ends_with("libexec/git-core"))
-        .and_then(|core| core.ancestors().nth(2))
-        .filter(|prefix| {
-            // Only use `libexec/git-core` from inside something `usr`-like, such as `mingw64`.
-            MSYS_USR_VARIANTS.iter().any(|name| prefix.ends_with(name))
-        })
-        .and_then(|prefix| prefix.parent())
+    git_for_windows_root()
         .into_iter()
         .flat_map(|git_root| {
             // Enumerate locations where `sh.exe` usually is. To avoid breaking scripts that assume the
