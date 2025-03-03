@@ -32,7 +32,7 @@ gix-object = { version = "^0.47.0", path = "../gix-object" }
 gix-path = { version = "^0.10.14", path = "../gix-path", optional = true }
 gix-date = { version = "^0.9.3", path = "../gix-date" }
 
-flate2 = { version = "1.0.33", optional = true }
+flate2 = { version = "1.0.33", optional = true, default-features = false }
 zip = { version = "2.1.0", optional = true, default-features = false, features = ["deflate"] }
 jiff = { version = "0.2.0", default-features = false, features = ["std"] }
 
