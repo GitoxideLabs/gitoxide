@@ -44,16 +44,7 @@ const MSYS_USR_VARIANTS: &[&str] = &["mingw64", "mingw32", "clangarm64", "clang6
 /// Find a Git for Windows installation directory based on `git --exec-path` output.
 ///
 /// Currently this is used only for finding the path to an `sh.exe` associated with Git. This is
-/// separate from `installation_config()` and `installation_config_prefix()` in `gix_path::env`,
-/// which guess where `etc/gitconfig` is based on `EXEPATH` or the location of the highest-scope
-/// config file.
-///
-/// The techniques might be combined or unified in some way in the future. The techniques those
-/// functions currently use shouldn't be used to find `sh.exe`, because `EXEPATH` can take on other
-/// values in some environments, and the highest scope config file may be unavailable or in another
-/// location if `GIT_CONFIG_SYSTEM` or `GIT_CONFIG_NOSYSTEM` are set or if there are no variables
-/// of system scope. Then paths found relative to it could be different. In contrast, the technique
-/// used here may be usable for those functions, though may need to cover more directory layouts.
+/// separate from `installation_config()` and `installation_config_prefix()` in `gix_path::env`.
 fn git_for_windows_root() -> Option<&'static Path> {
     static GIT_ROOT: Lazy<Option<PathBuf>> = Lazy::new(|| {
         super::core_dir()
