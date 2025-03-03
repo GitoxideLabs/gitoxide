@@ -114,7 +114,7 @@ pub(super) fn find_git_associated_windows_executable_with_fallback(stem: &str) -
     })
 }
 
-#[cfg(all(windows, test))]
+#[cfg(test)]
 mod tests {
     use std::path::Path;
 
@@ -139,6 +139,7 @@ mod tests {
     ];
 
     #[test]
+    #[cfg_attr(not(windows), ignore)]
     fn find_git_associated_windows_executable() {
         for stem in SHOULD_FIND {
             let path = super::find_git_associated_windows_executable(stem);
@@ -147,6 +148,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore)]
     fn find_git_associated_windows_executable_no_extra() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable(stem);
@@ -155,6 +157,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore)]
     fn find_git_associated_windows_executable_with_fallback() {
         for stem in SHOULD_FIND {
             let path = super::find_git_associated_windows_executable_with_fallback(stem);
@@ -163,6 +166,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(not(windows), ignore)]
     fn find_git_associated_windows_executable_with_fallback_falls_back() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable_with_fallback(stem)
