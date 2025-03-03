@@ -62,15 +62,13 @@ fn git_for_windows_root() -> Option<&'static Path> {
 
 /// Shell path fragments to concatenate to the root of a Git for Windows or MSYS2 installation.
 ///
-/// These look like absolute Unix-style paths, but the leading `/` separators are present because
-/// they simplify forming paths like `C:/Program Files/Git` obtained by removing trailing
-/// components from the output of `git --exec-path`.
-const RAW_SH_EXE_PATH_SUFFIXES: &[&str] = &[
-    "/bin/sh.exe", // Usually a shim, which currently we prefer, if available.
-    "/usr/bin/sh.exe",
-];
-
+/// When appended to the root of a Git for Windows installation, these are locations where `sh.exe`
+/// can usually be found. The leading `/` allow these to be used (only) with `raw_join()`.
 ///
+/// These are ordered so that a shim is preferred over a non-shim when they are tried in order.
+const RAW_SH_EXE_PATH_SUFFIXES: &[&str] = &["/bin/sh.exe", "/usr/bin/sh.exe"];
+
+/// Concatenate a path by appending a raw suffix, which must contain its own leading separator.
 fn raw_join(path: &Path, raw_suffix: &str) -> OsString {
     let mut raw_path = OsString::from(path);
     raw_path.push(raw_suffix);
@@ -78,17 +76,14 @@ fn raw_join(path: &Path, raw_suffix: &str) -> OsString {
 }
 
 /// Obtain a path to a `sh.exe` on Windows associated with Git, if one can be found.
+///
+/// The resulting path uses only `/` separators so long as the path obtained from `git --exec-path`
+/// does, which is the case unless it is overridden by setting `GIT_EXEC_PATH` to an unusual value.
 pub(super) fn find_sh_on_windows() -> Option<OsString> {
-    git_for_windows_root()
-        .into_iter()
-        .flat_map(|git_root| {
-            // Enumerate locations where `sh.exe` usually is. To avoid breaking scripts that assume the
-            // shell's own path contains no `\`, and so messages are more readable, append literally
-            // with `/` separators. The path from `git --exec-path` already uses `/` separators (and no
-            // trailing `/`) unless explicitly overridden to an unusual value via `GIT_EXEC_PATH`.
-            RAW_SH_EXE_PATH_SUFFIXES
-                .iter()
-                .map(|raw_suffix| raw_join(git_root, raw_suffix))
-        })
+    let git_root = git_for_windows_root()?;
+
+    RAW_SH_EXE_PATH_SUFFIXES
+        .iter()
+        .map(|raw_suffix| raw_join(git_root, raw_suffix))
         .find(|raw_path| Path::new(raw_path).is_file())
 }
