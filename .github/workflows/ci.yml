@@ -208,11 +208,11 @@ jobs:
           - container-arch: i386
             runner-arch: amd64
             runner-os: ubuntu-latest
-            toolchain: stable-i686-unknown-linux-gnu
+            host-triple: i686-unknown-linux-gnu
           - container-arch: arm32v7
             runner-arch: arm64
             runner-os: ubuntu-24.04-arm
-            toolchain: stable-armv7-unknown-linux-gnueabihf
+            host-triple: armv7-unknown-linux-gnueabihf
 
     runs-on: ${{ matrix.runner-os }}
 
@@ -241,7 +241,7 @@ jobs:
         run: |
           # Specify toolchain to avoid possible misdetection based on the 64-bit running kernel.
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
-            sh -s -- -y --default-toolchain ${{ matrix.toolchain }} --profile minimal
+            sh -s -- -y --default-host ${{ matrix.host-triple }} --profile minimal
       - name: Add Rust tools to path
         run: echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
