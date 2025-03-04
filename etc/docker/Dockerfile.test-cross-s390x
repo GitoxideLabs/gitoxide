@@ -8,6 +8,6 @@ RUN set -xC && \
     apt-key adv --keyserver keyserver.ubuntu.com \
         --recv-keys F911AB184317630C59970973E363C90F8F1B6217 && \
     apt-get update && \
-    apt-get install --no-install-recommends -y git && \
+    apt-get install --no-install-recommends -y git jq && \
     rm -rf /var/lib/apt/lists/* && \
     git config --system gitoxide.imaginary.arbitraryVariable arbitraryValue
