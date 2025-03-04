@@ -70,7 +70,7 @@ fn generation_numbers_overflow_is_handled_in_chained_graph() {
 }
 
 #[test]
-fn octupus_merges() {
+fn octopus_merges() {
     let (cg, refs) = graph_and_expected(
         "octopus_merges.sh",
         &[
