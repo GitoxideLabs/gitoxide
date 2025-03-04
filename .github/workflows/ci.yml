@@ -53,7 +53,9 @@ jobs:
             fi
           done
       - name: Install Rust via Rustup
-        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --profile minimal
       - name: Add Rust tools to path
         run: echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
       - name: Generate dependency tree
@@ -235,10 +237,13 @@ jobs:
           apt-get install --no-install-recommends -y -- "${prerequisites[@]}"
         shell: bash
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          # Avoid possible misdetection based on the 64-bit running kernel.
-          toolchain: ${{ matrix.toolchain }}
+      - name: Install Rust via Rustup
+        run: |
+          # Specify toolchain to avoid possible misdetection based on the 64-bit running kernel.
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --default-toolchain ${{ matrix.toolchain }} --profile minimal
+      - name: Add Rust tools to path
+        run: echo "PATH=$HOME/.cargo/bin:$PATH" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
