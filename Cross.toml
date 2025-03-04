@@ -1,0 +1,2 @@
+[target.s390x-unknown-linux-gnu]
+image = "cross-rs-gitoxide/s390x-unknown-linux-gnu"
