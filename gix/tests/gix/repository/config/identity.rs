@@ -9,10 +9,13 @@ use std::path::Path;
 #[serial]
 fn author_included_by_hasconfig() -> crate::Result {
     let repo = named_subrepo_opts("make_config_repos.sh", "with-hasconfig", gix::open::Options::isolated())?;
-    let _env = Env::new().set(
-        "GIT_CONFIG_SYSTEM",
-        repo.git_dir().join("system.config").display().to_string(),
-    );
+    let _env = Env::new()
+        .set(
+            "GIT_CONFIG_SYSTEM",
+            repo.git_dir().join("system.config").display().to_string(),
+        )
+        .unset("GIT_AUTHOR_NAME")
+        .unset("GIT_COMMITTER_NAME");
     let repo = gix::open_opts(repo.git_dir(), allow_system_options(repo.open_options().clone()))?;
     let author = repo.author().expect("set in system config via include")?;
     assert_eq!(author.name, "works");
@@ -146,7 +149,9 @@ fn author_from_different_config_sections() -> crate::Result {
         .set("GIT_CONFIG_GLOBAL", work_dir.join("global.config").to_str().unwrap())
         .set("GIT_CONFIG_SYSTEM", work_dir.join("system.config").to_str().unwrap())
         .set("GIT_AUTHOR_DATE", "1979-02-26 18:30:00")
+        .unset("GIT_AUTHOR_NAME")
         .set("GIT_COMMITTER_DATE", "1980-02-26 18:30:00 +0000")
+        .unset("GIT_COMMITTER_NAME")
         .set("EMAIL", "general@email-unused");
 
     let repo = gix::open_opts(
