@@ -2,7 +2,7 @@
 set -ex
 
 # Build the customized `cross` container image.
-docker build -t cross-rs-gitoxide/s390x-unknown-linux-gnu \
+docker build -t cross-rs-gitoxide:s390x-unknown-linux-gnu \
     - <etc/docker/Dockerfile.test-cross-s390x
 
 # Clean files that could cause tests to wrongly pass or fail.
