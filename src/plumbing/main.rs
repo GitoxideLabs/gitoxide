@@ -277,6 +277,21 @@ pub fn main() -> Result<()> {
                     core::repository::diff::tree(repository(Mode::Lenient)?, out, old_treeish, new_treeish)
                 },
             ),
+            crate::plumbing::options::diff::SubCommands::File {
+                old_treeish,
+                new_treeish,
+                path,
+            } => prepare_and_run(
+                "diff-file",
+                trace,
+                verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| {
+                    core::repository::diff::file(repository(Mode::Lenient)?, out, old_treeish, new_treeish, path)
+                },
+            ),
         },
         Subcommands::Log(crate::plumbing::options::log::Platform { pathspec }) => prepare_and_run(
             "log",
