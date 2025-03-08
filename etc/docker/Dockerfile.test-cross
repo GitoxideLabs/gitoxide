@@ -1,0 +1,15 @@
+ARG TARGET
+
+FROM ghcr.io/cross-rs/${TARGET}:latest
+
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
+    release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)" && \
+    echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
+        >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list && \
+    apt-key adv --keyserver keyserver.ubuntu.com \
+        --recv-keys F911AB184317630C59970973E363C90F8F1B6217 && \
+    apt-get update && \
+    apt-get install --no-install-recommends -y git jq && \
+    rm -rf /var/lib/apt/lists/* && \
+    git config --system gitoxide.imaginary.arbitraryVariable arbitraryValue

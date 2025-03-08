@@ -1,15 +1,22 @@
 #!/bin/sh
-set -ex
+
+# Usage:
+#
+#   etc/run-cross-experiment.sh armv7-linux-androideabi
+#   etc/run-cross-experiment.sh s390x-unknown-linux-gnu
+
+set -eux
+target="$1"
 
 # Build the customized `cross` container image.
-docker build -t cross-rs-gitoxide:s390x-unknown-linux-gnu \
-    - <etc/docker/Dockerfile.test-cross-s390x
+docker build --build-arg "TARGET=$target" -t "cross-rs-gitoxide:$target" \
+    - <etc/docker/Dockerfile.test-cross
 
 # Clean files that could cause tests to wrongly pass or fail.
 cargo clean
 gix clean -xd -m '*generated*' -e
 
 # Run the test suite.
-cross test --workspace --no-fail-fast --target s390x-unknown-linux-gnu \
+cross test --workspace --no-fail-fast --target "$target" \
     --no-default-features --features max-pure \
     -- --skip realpath::fuzzed_timeout

@@ -12,5 +12,8 @@ passthrough = [
     "GIX_VERSION",
 ]
 
+[target.armv7-linux-androideabi]
+image = "cross-rs-gitoxide:armv7-linux-androideabi"
+
 [target.s390x-unknown-linux-gnu]
 image = "cross-rs-gitoxide:s390x-unknown-linux-gnu"
