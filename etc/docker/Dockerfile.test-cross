@@ -10,7 +10,7 @@ RUN apt-get update && \
     apt-key adv --keyserver keyserver.ubuntu.com \
         --recv-keys F911AB184317630C59970973E363C90F8F1B6217 && \
     apt-get update && \
-    apt-get install --no-install-recommends -y git jq && \
+    apt-get install --no-install-recommends -y git jq patch && \
     rm -rf /var/lib/apt/lists/* && \
     to_patch=/android-runner && \
     patcher='s/^export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/' && \
