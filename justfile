@@ -228,7 +228,8 @@ cross-image target:
 
 # Test another platform with `cross`
 cross-test target: (cross-image target)
-    NO_PRELOAD_CXX=1 cross test --workspace --no-fail-fast --target "{{ target }}" \
+    CROSS_CONFIG=etc/docker/test-cross.toml NO_PRELOAD_CXX=1 \
+        cross test --workspace --no-fail-fast --target "{{ target }}" \
         --no-default-features --features max-pure \
         -- --skip realpath::fuzzed_timeout
 
