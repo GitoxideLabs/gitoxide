@@ -1,3 +1,7 @@
+# `cross` configuration for running tests. Treated like `Cross.toml` if enabled
+# with `CROSS_CONFIG=etc/docker/test-cross.toml`. This avoids affecting other
+# `cross` usage, e.g. in `release.yml`. See `cross-test` recipes in `justfile`.
+
 [build.env]
 passthrough = [
     "CI",
