@@ -236,7 +236,7 @@ cross-test target: (cross-image target)
 # Test s390x with `cross`
 cross-test-s390x: (cross-test 's390x-unknown-linux-gnu')
 
-# Test Android with `cross` (limited)
+# Test Android with `cross`
 cross-test-android: (cross-test 'armv7-linux-androideabi')
 
 # Run cargo-diet on all crates to see that they are still in bound
