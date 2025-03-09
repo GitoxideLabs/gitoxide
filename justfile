@@ -221,6 +221,23 @@ journey-tests-async:
     cargo build -p gix-testtools
     ./tests/journey.sh {{ ein }} {{ gix }} {{ jtt }} async
 
+# Build a customized `cross` container image for testing
+cross-image target:
+    docker build --build-arg "TARGET={{ target }}" -t "cross-rs-gitoxide:{{ target }}" \
+        - <etc/docker/Dockerfile.test-cross
+
+# Test another platform with `cross`
+cross-test target: (cross-image target)
+    NO_PRELOAD_CXX=1 cross test --workspace --no-fail-fast --target "{{ target }}" \
+        --no-default-features --features max-pure \
+        -- --skip realpath::fuzzed_timeout
+
+# Test s390x with `cross`
+cross-test-s390x: (cross-test 's390x-unknown-linux-gnu')
+
+# Test Android with `cross` (limited)
+cross-test-android: (cross-test 'armv7-linux-androideabi')
+
 # Run cargo-diet on all crates to see that they are still in bound
 check-size:
     ./etc/check-package-size.sh
