@@ -17,6 +17,6 @@ cargo clean
 gix clean -xd -m '*generated*' -e
 
 # Run the test suite.
-cross test --workspace --no-fail-fast --target "$target" \
+NO_PRELOAD_CXX=1 cross test --workspace --no-fail-fast --target "$target" \
     --no-default-features --features max-pure \
     -- --skip realpath::fuzzed_timeout
