@@ -12,4 +12,5 @@ RUN apt-get update && \
     apt-get update && \
     apt-get install --no-install-recommends -y git jq && \
     rm -rf /var/lib/apt/lists/* && \
+    sed -i.orig 's/^export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/' /android-runner && \
     git config --system gitoxide.imaginary.arbitraryVariable arbitraryValue

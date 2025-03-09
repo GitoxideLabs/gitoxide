@@ -10,6 +10,7 @@ passthrough = [
     "GIX_TEST_EXPECT_REDUCED_TRUST",
     "GIX_TEST_IGNORE_ARCHIVES",
     "GIX_VERSION",
+    "NO_PRELOAD_CXX",
 ]
 
 [target.armv7-linux-androideabi]
