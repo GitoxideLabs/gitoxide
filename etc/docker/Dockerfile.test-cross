@@ -5,14 +5,17 @@ FROM ghcr.io/cross-rs/${TARGET}:latest
 ARG TARGET
 
 RUN set -uC && \
+    apt-get update && \
+    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
     apt_suffix= && \
     if target_arch="$(dpkg-architecture --host-type "$TARGET" --query DEB_HOST_ARCH)"; then \
         dpkg --add-architecture "$target_arch" && \
         apt_suffix=":$target_arch"; \
     fi && \
-    apt-get update && \
-    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
     release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)" && \
+    for pocket in "$release" "$release-security" "$release-updates" "$release-backports"; do \
+        echo "deb http://ports.ubuntu.com/ubuntu-ports/ $pocket main universe"; \
+    done >/etc/apt/sources.list.d/ports.list && \
     echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
         >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list && \
     apt-key adv --keyserver keyserver.ubuntu.com \
