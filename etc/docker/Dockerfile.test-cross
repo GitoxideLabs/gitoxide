@@ -15,10 +15,12 @@ RUN set -uC && \
     add-apt-repository -y ppa:git-core/ppa && \
     apt-get update && \
     apt-get install --no-install-recommends -y "libc6$apt_suffix" "libcurl3-gnutls$apt_suffix" \
-        "libexpat1$apt_suffix" "libpcre2-8-0$apt_suffix" "zlib1g$apt_suffix" "perl$apt_suffix" \
-        liberror-perl git-man patch jq && \
+        "libexpat1$apt_suffix" "libpcre2-8-0$apt_suffix" "zlib1g$apt_suffix" perl liberror-perl \
+        git-man patch jq && \
     apt-get download "git$apt_suffix" && \
-    dpkg --ignore-depends="liberror-perl$apt_suffix" -i ./git[-_]*.deb && \
+    dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" -i git[-_]*.deb && \
+    echo INSTALLED/UPGRADED GIT && \
+    rm git[-_]*.deb && \
     apt-get purge --autoremove software-properties-common && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
