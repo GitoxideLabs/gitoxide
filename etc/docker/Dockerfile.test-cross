@@ -5,23 +5,18 @@ FROM ghcr.io/cross-rs/${TARGET}:latest
 ARG TARGET
 
 RUN set -uC && \
-    apt-get update && \
-    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
     apt_suffix= && \
     if target_arch="$(dpkg-architecture --host-type "$TARGET" --query DEB_HOST_ARCH)"; then \
         dpkg --add-architecture "$target_arch" && \
         apt_suffix=":$target_arch"; \
     fi && \
-    release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)" && \
-    for pocket in "$release" "$release-security" "$release-updates" "$release-backports"; do \
-        echo "deb http://ports.ubuntu.com/ubuntu-ports/ $pocket main universe"; \
-    done >/etc/apt/sources.list.d/ports.list && \
-    echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
-        >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list && \
-    apt-key adv --keyserver keyserver.ubuntu.com \
-        --recv-keys F911AB184317630C59970973E363C90F8F1B6217 && \
+    apt-get update && \
+    apt-get install --no-install-recommends -y software-properties-common && \
+    add-apt-repository -y ppa:git-core/ppa && \
     apt-get update && \
     apt-get install --no-install-recommends -y "git$apt_suffix" jq patch && \
+    apt-get purge --autoremove software-properties-common && \
+    apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     if test -f /android-runner; then \
         sed -i.orig 's/^export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/' \
