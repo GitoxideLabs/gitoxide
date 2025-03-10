@@ -11,17 +11,23 @@ RUN set -uC && \
         apt_suffix=":$target_arch"; \
     fi && \
     apt-get update && \
-    apt-get install --no-install-recommends -y software-properties-common && \
-    add-apt-repository -y ppa:git-core/ppa && \
+    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
+    release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)" && \
+    echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
+        >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list && \
+    apt-key adv --keyserver keyserver.ubuntu.com \
+        --recv-keys F911AB184317630C59970973E363C90F8F1B6217 && \
     apt-get update && \
+    apt-get purge --autoremove -y git && \
     apt-get install --no-install-recommends -y "libc6$apt_suffix" "libcurl3-gnutls$apt_suffix" \
         "libexpat1$apt_suffix" "libpcre2-8-0$apt_suffix" "zlib1g$apt_suffix" perl liberror-perl \
-        git-man patch jq && \
+        git-man file jq patch && \
     apt-get download "git$apt_suffix" && \
     dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" -i git[-_]*.deb && \
-    echo INSTALLED/UPGRADED GIT && \
+    git version --build-options && \
+    git="$(command -v git)" && \
+    file -- "$git" && \
     rm git[-_]*.deb && \
-    apt-get purge --autoremove software-properties-common && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     if test -f /android-runner; then \
