@@ -25,14 +25,11 @@ RUN set -uC && \
     apt-get install --no-install-recommends -y "libc6$apt_suffix" "libcurl3-gnutls$apt_suffix" \
         "libexpat1$apt_suffix" "libpcre2-8-0$apt_suffix" "zlib1g$apt_suffix" perl liberror-perl \
         git-man file jq patch && \
-    apt-get download "git$apt_suffix" && \
-    dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" -i git[-_]*.deb && \
-    git version --build-options && \
-    git="$(command -v git)" && \
-    file -- "$git" && \
-    rm git[-_]*.deb && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/* && \
+    mkdir /tmp/dl && chown _apt /tmp/dl && \
+    (cd /tmp/dl && apt-get download "git$apt_suffix") && \
+    dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" -i /tmp/dl/git[-_]*.deb && \
+    git version --build-options && git="$(command -v git)" && file -- "$git" && \
+    apt-get clean && rm -rf /tmp/dl /var/lib/apt/lists/* && \
     if test -f /android-runner; then \
         sed -i.orig 's/^export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/' \
             /android-runner; \
