@@ -5,13 +5,16 @@ FROM ghcr.io/cross-rs/${TARGET}:latest
 ARG TARGET
 
 RUN set -uC && \
+    export DEBIAN_FRONTEND=noninteractive TZ=UTC && \
+    apt-get update && \
+    apt-get install --no-install-recommends -y apt-utils && \
+    apt-get install --no-install-recommends -y apt-transport-https dpkg-dev gnupg && \
+    type dpkg-architecture && \
     apt_suffix= && \
     if target_arch="$(dpkg-architecture --host-type "$TARGET" --query DEB_HOST_ARCH)"; then \
         dpkg --add-architecture "$target_arch" && \
         apt_suffix=":$target_arch"; \
     fi && \
-    apt-get update && \
-    apt-get install --no-install-recommends -y apt-transport-https gnupg && \
     release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)" && \
     echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
         >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list && \
