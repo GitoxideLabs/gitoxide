@@ -227,17 +227,17 @@ cross-image target:
         - <etc/docker/Dockerfile.test-cross
 
 # Test another platform with `cross`
-cross-test target: (cross-image target)
+cross-test target *cargo-test-args: (cross-image target)
     CROSS_CONFIG=etc/docker/test-cross.toml NO_PRELOAD_CXX=1 \
-        cross test --workspace --no-fail-fast --target "{{ target }}" \
-        --no-default-features --features max-pure \
-        -- --skip realpath::fuzzed_timeout
+        cross test --workspace --no-fail-fast --target {{ target }} \
+        {{ cargo-test-args }} -- --skip realpath::fuzzed_timeout
 
 # Test s390x with `cross`
 cross-test-s390x: (cross-test 's390x-unknown-linux-gnu')
 
-# Test Android with `cross`
-cross-test-android: (cross-test 'armv7-linux-androideabi')
+# Test Android with `cross` (max-pure)
+cross-test-android: (cross-test 'armv7-linux-androideabi' \
+                     '--no-default-features' '--features' 'max-pure')
 
 # Run cargo-diet on all crates to see that they are still in bound
 check-size:

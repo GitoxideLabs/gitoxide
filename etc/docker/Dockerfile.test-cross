@@ -24,7 +24,8 @@ RUN set -uC && \
     apt-get purge --autoremove -y git && \
     apt-get install --no-install-recommends -y "libc6$apt_suffix" "libcurl3-gnutls$apt_suffix" \
         "libexpat1$apt_suffix" "libpcre2-8-0$apt_suffix" "zlib1g$apt_suffix" perl liberror-perl \
-        git-man file jq patch && \
+        git-man ca-certificates cmake "curl$apt_suffix" file jq "libc-dev$apt_suffix" \
+        "libssl-dev$apt_suffix" patch pkgconf && \
     mkdir /tmp/dl && chown _apt /tmp/dl && \
     (cd /tmp/dl && apt-get download "git$apt_suffix") && \
     dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" -i /tmp/dl/git[-_]*.deb && \
