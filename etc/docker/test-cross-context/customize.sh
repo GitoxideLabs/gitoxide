@@ -2,6 +2,7 @@
 set -euxC
 
 target="$1"
+test -n "$target"
 
 # Arrange for the indirect `tzdata` dependency to be installed and configured
 # without prompting for the time zone. (Passing `-y` is not enough.)
@@ -14,16 +15,30 @@ apt-get install --no-install-recommends -y apt-utils
 apt-get install --no-install-recommends -y apt-transport-https dpkg-dev gnupg
 type dpkg-architecture  # Make sure we really have this.
 
-# Decide what architecture to use for `git`, shared libraries for gitoxide when
-# attempting to build `max`, and shared libraries used by `git` itself.
+# Decide what architecture to use for `git`, shared libraries `git` links to,
+# and shared libraries gitoxide links to when building `max`. Instead of this
+# custom logic, we could use `$CROSS_DEB_ARCH`, which `cross` tries to provide
+# (https://github.com/cross-rs/cross/blob/v0.2.5/src/lib.rs#L268), and which is
+# available for roughly the same architectures where this logic gets a nonempty
+# value. But using `$CROSS_DEB_ARCH` may make it harder to build and test the
+# image manually. In particular, if it is not passed, we would conclude that we
+# should install the versions of those packages with the host's architecture.
 apt_suffix=
-if target_arch="$(dpkg-architecture --host-type "$target" --query DEB_HOST_ARCH)"; then
+if target_arch="$(dpkg-architecture --host-type "$target" --query DEB_HOST_ARCH)"
+then
     dpkg --add-architecture "$target_arch"
     apt_suffix=":$target_arch"
+    printf 'INFO: Using target architecture for `git` and libs in container.\n'
+    printf 'INFO: This architecture is %s.\n' "$target_arch"
+else
+    apt_suffix=''
+    printf 'WARNING: Using HOST architecture for `git` and libs in container.\n'
 fi
 
-# Add the git-core PPA manually. (Faster than installing `add-apt-repository`.)
+# Get release codename. Like `lsb_release -sc`. (`lsb_release` may be absent.)
 release="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)"
+
+# Add the git-core PPA manually. (Faster than installing `add-apt-repository`.)
 echo "deb https://ppa.launchpadcontent.net/git-core/ppa/ubuntu $release main" \
     >/etc/apt/sources.list.d/git-core-ubuntu-ppa.list
 apt-key adv --keyserver keyserver.ubuntu.com \
@@ -94,19 +109,17 @@ file -- "$git"
 apt-get clean
 rm -rf /tmp/dl /var/lib/apt/lists/*
 
-# If this is an Android-related image or otherwise has a runner script `cross`
-# uses for Android, then patch the script to add the ability to suppress its
-# customization of `LD_PRELOAD`. This runner script sets `LD_PRELOAD` to the
-# path of `libc++_shared.so` in the vendored Android NDK. But this causes a
-# problem for us because, when a non-Android (i.e. a host-architecture) program
-# is run, `ld.so` shows a message about the "wrong ELF class". Such programs
-# can still run, but when we make an assertion about, parse, or otherwise rely
-# on their output to standard error, we get test failures. (That especially
-# affects fixtures.) This change lets us pass `NO_PRELOAD_CXX=1` to avoid that.
-if test -f /android-runner; then
-    sed -i.orig 's/^export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/'
-        /android-runner
-fi
+# If this image has a runner script `cross` uses for Android, patch the script
+# to add the ability to suppress its customization of `LD_PRELOAD`. The runner
+# script sets `LD_PRELOAD` to the path of `libc++_shared.so` in the Android NDK
+# (https://github.com/cross-rs/cross/blob/v0.2.5/docker/android-runner#L34).
+# But this causes a problem for us. When a host-architecture program is run,
+# `ld.so` shows a message about the "wrong ELF class". Such programs can still
+# run, but when we rely on their specific output to stderr, fixtures and tests
+# fail. The change we make here lets us set `NO_PRELOAD_CXX=1` to avoid that.
+runner=/android-runner
+patch='s/^[[:blank:]]*export LD_PRELOAD=/test "${NO_PRELOAD_CXX:-0}" != 0 || &/'
+if test -f "$runner"; then sed -i.orig "$patch" -- "$runner"; fi
 
 # Ensure a nonempty Git `system` scope (for the `installation_config` tests).
 git config --system gitoxide.imaginary.arbitraryVariable arbitraryValue
