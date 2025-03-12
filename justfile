@@ -223,8 +223,9 @@ journey-tests-async:
 
 # Build a customized `cross` container image for testing
 cross-image target:
-    docker build --build-arg "TARGET={{ target }}" -t "cross-rs-gitoxide:{{ target }}" \
-        - <etc/docker/Dockerfile.test-cross
+    docker build --build-arg "TARGET={{ target }}" \
+        -t "cross-rs-gitoxide:{{ target }}" \
+        -f etc/docker/Dockerfile.test-cross etc/docker/test-cross-context
 
 # Test another platform with `cross`
 cross-test target *cargo-test-args: (cross-image target)
