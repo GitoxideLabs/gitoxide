@@ -1545,6 +1545,7 @@ name = "gix-blame"
 version = "0.0.0"
 dependencies = [
  "gix-commitgraph 0.26.0",
+ "gix-date 0.9.3",
  "gix-diff",
  "gix-filter",
  "gix-fs 0.13.0",

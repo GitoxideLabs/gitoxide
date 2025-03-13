@@ -1,5 +1,5 @@
 use super::{process_changes, Change, UnblamedHunk};
-use crate::{BlameEntry, Error, Outcome, Statistics};
+use crate::{BlameEntry, Error, Options, Outcome, Statistics};
 use gix_diff::blob::intern::TokenSource;
 use gix_diff::tree::Visit;
 use gix_hash::ObjectId;
@@ -67,7 +67,7 @@ pub fn file(
     cache: Option<gix_commitgraph::Graph>,
     resource_cache: &mut gix_diff::blob::Platform,
     file_path: &BStr,
-    range: Option<Range<u32>>,
+    options: Options,
 ) -> Result<Outcome, Error> {
     let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?suspect);
 
@@ -94,7 +94,7 @@ pub fn file(
         return Ok(Outcome::default());
     }
 
-    let range_in_blamed_file = one_based_inclusive_to_zero_based_exclusive_range(range, num_lines_in_blamed)?;
+    let range_in_blamed_file = one_based_inclusive_to_zero_based_exclusive_range(options.range, num_lines_in_blamed)?;
     let mut hunks_to_blame = vec![UnblamedHunk {
         range_in_blamed_file: range_in_blamed_file.clone(),
         suspects: [(suspect, range_in_blamed_file)].into(),
@@ -103,7 +103,7 @@ pub fn file(
     let (mut buf, mut buf2) = (Vec::new(), Vec::new());
     let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
     let mut queue: gix_revwalk::PriorityQueue<CommitTime, ObjectId> = gix_revwalk::PriorityQueue::new();
-    queue.insert(commit_time(commit)?, suspect);
+    queue.insert(commit_time(&commit)?, suspect);
 
     let mut out = Vec::new();
     let mut diff_state = gix_diff::tree::State::default();
@@ -122,7 +122,20 @@ pub fn file(
         }
 
         let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
+        let commit_time = commit_time(&commit)?;
+
+        if let Some(since) = options.since {
+            if commit_time < since.seconds {
+                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                    break 'outer;
+                }
+
+                continue;
+            }
+        }
+
         let parent_ids: ParentIds = collect_parents(commit, &odb, cache.as_ref(), &mut buf2)?;
+
         if parent_ids.is_empty() {
             if queue.is_empty() {
                 // I’m not entirely sure if this is correct yet. `suspect`, at this point, is the
@@ -647,7 +660,7 @@ fn find_path_entry_in_commit(
 
 type CommitTime = i64;
 
-fn commit_time(commit: gix_traverse::commit::Either<'_, '_>) -> Result<CommitTime, gix_object::decode::Error> {
+fn commit_time(commit: &gix_traverse::commit::Either<'_, '_>) -> Result<CommitTime, gix_object::decode::Error> {
     match commit {
         gix_traverse::commit::Either::CommitRefIter(commit_ref_iter) => {
             commit_ref_iter.committer().map(|c| c.time.seconds)

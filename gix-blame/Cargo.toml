@@ -17,6 +17,7 @@ doctest = false
 gix-commitgraph = { version = "^0.26.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.18.0", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
+gix-date = { version = "^0.9.3", path = "../gix-date" }
 gix-diff = { version = "^0.50.0", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-object = { version = "^0.47.0", path = "../gix-object" }
 gix-hash = { version = "^0.16.0", path = "../gix-hash" }
