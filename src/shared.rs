@@ -441,7 +441,7 @@ pub use self::clap::{
 
 #[cfg(test)]
 mod value_parser_tests {
-    use super::{AsRange, ParseRenameFraction};
+    use super::{AsRange, AsTime, ParseRenameFraction};
     use clap::Parser;
 
     #[test]
@@ -478,5 +478,17 @@ mod value_parser_tests {
 
         let c = Cmd::parse_from(["cmd", "-l=1,10"]);
         assert_eq!(c.arg, Some(1..10));
+    }
+
+    #[test]
+    fn since() {
+        #[derive(Debug, clap::Parser)]
+        pub struct Cmd {
+            #[clap(long, long="since", value_parser = AsTime)]
+            pub arg: Option<gix::date::Time>,
+        }
+
+        let c = Cmd::parse_from(["cmd", "--since", "2 weeks ago"]);
+        assert!(matches!(c.arg, Some(gix::date::Time { .. })));
     }
 }
