@@ -17,7 +17,7 @@
 mod error;
 pub use error::Error;
 mod types;
-pub use types::{BlameEntry, Outcome, Statistics};
+pub use types::{BlameCacheObject, BlameEntry, Outcome, Statistics};
 
 mod file;
 pub use file::function::file;
