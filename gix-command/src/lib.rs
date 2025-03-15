@@ -280,10 +280,8 @@ mod prepare {
                         cmd
                     }
                     None => {
-                        let mut cmd = Command::new(
-                            prep.shell_program
-                                .unwrap_or(if cfg!(windows) { "sh" } else { "/bin/sh" }.into()),
-                        );
+                        let shell = prep.shell_program.unwrap_or_else(|| gix_path::env::shell().into());
+                        let mut cmd = Command::new(shell);
                         cmd.arg("-c");
                         if !prep.args.is_empty() {
                             if prep.command.to_str().map_or(true, |cmd| !cmd.contains("$@")) {
