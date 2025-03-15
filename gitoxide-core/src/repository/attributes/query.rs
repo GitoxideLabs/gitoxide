@@ -83,7 +83,7 @@ pub(crate) mod function {
                         gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                             .adjust_for_bare(repo.is_bare()),
                     )?;
-                    let workdir = repo.work_dir();
+                    let workdir = repo.workdir();
                     for pattern in pathspec.search().patterns() {
                         let path = pattern.path();
                         let entry = cache.at_entry(

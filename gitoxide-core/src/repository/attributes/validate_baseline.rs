@@ -114,7 +114,7 @@ pub(crate) mod function {
         };
         let work_dir = ignore
             .then(|| {
-                repo.work_dir()
+                repo.workdir()
                     .map(ToOwned::to_owned)
                     .ok_or_else(|| anyhow!("repository at {:?} must have a worktree checkout", repo.path()))
             })
@@ -249,7 +249,7 @@ pub(crate) mod function {
             }
             bail!(
                 "{}: Validation failed with {} mismatches out of {}",
-                gix::path::realpath(repo.work_dir().unwrap_or(repo.git_dir()))?.display(),
+                gix::path::realpath(repo.workdir().unwrap_or(repo.git_dir()))?.display(),
                 mismatches.len(),
                 progress.counter().load(Ordering::Relaxed)
             );

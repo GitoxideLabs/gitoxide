@@ -1,7 +1,7 @@
+use crate::util::named_subrepo_opts;
+use gix::bstr::BString;
 use std::borrow::Cow;
 use std::error::Error;
-
-use crate::util::named_subrepo_opts;
 
 #[test]
 fn on_root_with_decomposed_unicode() -> crate::Result {
@@ -19,7 +19,7 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
         .expect("created by init based on fs-capabilities");
 
     assert!(repo.git_dir().is_dir());
-    let work_dir = repo.work_dir().expect("non-bare");
+    let work_dir = repo.workdir().expect("non-bare");
     assert!(work_dir.is_dir());
 
     if precompose_unicode {
@@ -47,6 +47,10 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
             Cow::Owned(_),
         ));
     }
+    assert!(
+        repo.workdir_path("").expect("non-bare").is_dir(),
+        "decomposed or not, we generate a valid path given what Git would store"
+    );
 
     Ok(())
 }
@@ -62,7 +66,7 @@ fn bare_repo_with_index() -> crate::Result {
         repo.is_bare(),
         "it's properly classified as it reads the configuration (and has no worktree)"
     );
-    assert_eq!(repo.work_dir(), None);
+    assert_eq!(repo.workdir(), None);
     Ok(())
 }
 
@@ -77,7 +81,7 @@ fn non_bare_turned_bare() -> crate::Result {
         repo.is_bare(),
         "the configuration dictates this, even though it looks like a main worktree"
     );
-    assert_eq!(repo.work_dir(), None);
+    assert_eq!(repo.workdir(), None);
     Ok(())
 }
 
@@ -90,7 +94,7 @@ fn worktree_of_bare_repo() -> crate::Result {
     )?;
     assert!(!repo.is_bare(), "even though the main worktree is bare, this isn't");
     assert_ne!(
-        repo.work_dir(),
+        repo.workdir(),
         None,
         "we have opened the repo through a worktree, which is never bare"
     );
@@ -105,7 +109,7 @@ fn non_bare_non_git_repo_without_worktree() -> crate::Result {
         gix::open::Options::isolated(),
     )?;
     assert!(!repo.is_bare());
-    assert_eq!(repo.work_dir(), None, "it doesn't assume that workdir exists");
+    assert_eq!(repo.workdir(), None, "it doesn't assume that workdir exists");
 
     let repo = gix::open_opts(
         repo.git_dir().join("objects").join(".."),
@@ -113,7 +117,7 @@ fn non_bare_non_git_repo_without_worktree() -> crate::Result {
     )?;
     assert!(!repo.is_bare());
     assert_eq!(
-        repo.work_dir(),
+        repo.workdir(),
         None,
         "it figures this out even if a non-normalized gitdir is used"
     );
@@ -129,6 +133,20 @@ fn none_bare_repo_without_index() -> crate::Result {
     )?;
     assert!(!repo.is_bare(), "worktree isn't dependent on an index file");
     assert!(repo.worktree().is_some());
+    assert_eq!(
+        repo.workdir_path(BString::from("this")).map(|p| p.is_file()),
+        Some(true)
+    );
+    #[allow(clippy::needless_borrows_for_generic_args)]
+    let actual = repo.workdir_path(&BString::from("this")).map(|p| p.is_file());
+    assert_eq!(actual, Some(true));
+    assert!(
+        repo.workdir_path("this")
+            .expect("non-bare")
+            .strip_prefix(repo.workdir().expect("non-bare"))
+            .is_ok(),
+        "this is a minimal path"
+    );
     Ok(())
 }
 
@@ -146,7 +164,7 @@ fn non_bare_split_worktree() -> crate::Result {
             "worktree is actually configured, and it's non-bare by configuration"
         );
         assert_eq!(
-            repo.work_dir().expect("worktree is configured").is_dir(),
+            repo.workdir().expect("worktree is configured").is_dir(),
             worktree_exists
         );
     }
@@ -196,7 +214,7 @@ mod missing_config_file {
             repo.is_bare(),
             "without config, we can't really know what the repo is actually but can guess by not having a worktree"
         );
-        assert_eq!(repo.work_dir(), None);
+        assert_eq!(repo.workdir(), None);
         assert!(repo.worktree().is_none());
         assert_eq!(
             repo.config_snapshot().meta().source,
@@ -217,7 +235,7 @@ mod missing_config_file {
             !repo.is_bare(),
             "without config, we can't really know what the repo is actually but can guess as there is a worktree"
         );
-        assert!(repo.work_dir().is_some());
+        assert!(repo.workdir().is_some());
         assert!(repo.worktree().is_some());
         assert_eq!(
             repo.config_snapshot().meta().source,
@@ -289,12 +307,12 @@ mod submodules {
             ] {
                 let repo = discover_repo(discover_dir).unwrap();
                 // assert_eq!(repo.kind(), gix::Kind::Submodule);
-                assert_eq!(repo.work_dir().expect("non-bare"), dir.join(&submodule_m1_workdir));
+                assert_eq!(repo.workdir().expect("non-bare"), dir.join(&submodule_m1_workdir));
                 assert_eq!(repo.git_dir(), dir.join(&submodule_m1_gitdir));
 
-                let repo = gix::open_opts(repo.work_dir().expect("non-bare"), gix::open::Options::isolated()).unwrap();
+                let repo = gix::open_opts(repo.workdir().expect("non-bare"), gix::open::Options::isolated()).unwrap();
                 assert_eq!(repo.kind(), gix::repository::Kind::Submodule);
-                assert_eq!(repo.work_dir().expect("non-bare"), dir.join(&submodule_m1_workdir));
+                assert_eq!(repo.workdir().expect("non-bare"), dir.join(&submodule_m1_workdir));
                 assert_eq!(repo.git_dir(), dir.join(&submodule_m1_gitdir));
             }
         }
@@ -358,7 +376,7 @@ mod worktree {
             let base_config = base.config_snapshot();
 
             assert_eq!(
-                base.work_dir(),
+                base.workdir(),
                 Some(fixture_dir.join("repo").as_path()),
                 "the main worktree"
             );
@@ -387,7 +405,7 @@ mod worktree {
             let wt1 = open(fixture_dir.join("wt-1"))?;
             let wt1_config = wt1.config_snapshot();
             assert_eq!(
-                wt1.work_dir(),
+                wt1.workdir(),
                 Some(fixture_dir.join("wt-1").as_path()),
                 "a linked worktree in its own location"
             );
@@ -420,7 +438,7 @@ mod worktree {
             let wt2 = open(fixture_dir.join("wt-2"))?;
             let wt2_config = wt2.config_snapshot();
             assert_eq!(
-                wt2.work_dir(),
+                wt2.workdir(),
                 Some(fixture_dir.join("wt-2").as_path()),
                 "another linked worktree as sibling to wt-1"
             );

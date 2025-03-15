@@ -444,7 +444,7 @@ fn insert_head(
     head: Option<crate::Head<'_>>,
     out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>,
 ) -> Result<(), update::Error> {
-    if let Some((head, wd)) = head.and_then(|head| head.repo.work_dir().map(|wd| (head, wd))) {
+    if let Some((head, wd)) = head.and_then(|head| head.repo.workdir().map(|wd| (head, wd))) {
         out.entry("HEAD".try_into().expect("valid"))
             .or_default()
             .push(wd.to_owned());

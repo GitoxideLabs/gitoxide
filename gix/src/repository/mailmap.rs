@@ -33,7 +33,7 @@ impl crate::Repository {
                 .map(Id::detach)
                 .ok()
         });
-        match self.work_dir() {
+        match self.workdir() {
             None => {
                 blob_id = blob_id.or_else(|| {
                     self.head().ok().and_then(|mut head| {

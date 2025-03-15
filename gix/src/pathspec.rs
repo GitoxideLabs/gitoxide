@@ -60,7 +60,7 @@ impl<'repo> Pathspec<'repo> {
             patterns,
             prefix,
             &gix_path::realpath_opts(
-                repo.work_dir().unwrap_or_else(|| repo.git_dir()),
+                repo.workdir().unwrap_or_else(|| repo.git_dir()),
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
             )?,

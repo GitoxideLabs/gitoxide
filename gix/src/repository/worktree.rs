@@ -45,7 +45,7 @@ impl crate::Repository {
     /// registered worktree in the current working dir, even if no `.git` file or directory exists.
     /// It's merely based on configuration, see [Worktree::dot_git_exists()] for a way to perform more validation.
     pub fn worktree(&self) -> Option<Worktree<'_>> {
-        self.work_dir().map(|path| Worktree { parent: self, path })
+        self.workdir().map(|path| Worktree { parent: self, path })
     }
 
     /// Return true if this repository is bare, and has no main work tree.
@@ -53,7 +53,7 @@ impl crate::Repository {
     /// This is not to be confused with the [`worktree()`][crate::Repository::worktree()] worktree, which may exists if this instance
     /// was opened in a worktree that was created separately.
     pub fn is_bare(&self) -> bool {
-        self.config.is_bare && self.work_dir().is_none()
+        self.config.is_bare && self.workdir().is_none()
     }
 
     /// If `id` points to a tree, produce a stream that yields one worktree entry after the other. The index of the tree at `id`

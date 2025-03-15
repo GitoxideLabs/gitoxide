@@ -36,7 +36,7 @@ impl Repository {
         delegate: &mut dyn gix_dir::walk::Delegate,
     ) -> Result<dirwalk::Outcome<'_>, dirwalk::Error> {
         let _span = gix_trace::coarse!("gix::dirwalk");
-        let workdir = self.work_dir().ok_or(dirwalk::Error::MissingWorkDir)?;
+        let workdir = self.workdir().ok_or(dirwalk::Error::MissingWorkDir)?;
         let mut excludes = self.excludes(
             index,
             None,
@@ -56,7 +56,7 @@ impl Repository {
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;
-        if let Some(workdir) = self.work_dir().filter(|_| opts.for_deletion.is_some()) {
+        if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
             let linked_worktrees = self.worktrees()?;
             if !linked_worktrees.is_empty() {
                 let real_workdir = gix_path::realpath_opts(

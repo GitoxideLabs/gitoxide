@@ -228,7 +228,7 @@ impl Pipeline<'_> {
 
         let rela_path_as_path = gix_path::from_bstr(rela_path);
         let repo = self.repo;
-        let worktree_dir = repo.work_dir().ok_or(Error::MissingWorktree)?;
+        let worktree_dir = repo.workdir().ok_or(Error::MissingWorktree)?;
         let path = worktree_dir.join(&rela_path_as_path);
         let md = match std::fs::symlink_metadata(&path) {
             Ok(md) => md,

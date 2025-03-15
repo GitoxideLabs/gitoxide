@@ -1,7 +1,6 @@
 // TODO: tests
-use std::ops::Deref;
-
 use gix_features::threading::{get_mut, get_ref, MutableOnDemand, OwnShared};
+use std::ops::Deref;
 
 /// A structure holding enough information to reload a value if its on-disk representation changes as determined by its modified time.
 #[derive(Debug)]
@@ -35,6 +34,16 @@ impl<T: Clone + std::fmt::Debug> Clone for FileSnapshot<T> {
         Self {
             value: self.value.clone(),
             modified: self.modified,
+        }
+    }
+}
+
+impl<T: Clone + std::fmt::Debug> FileSnapshot<T> {
+    /// Return the contained instance if nobody else is holding it, or clone it otherwise.
+    pub fn into_owned_or_cloned(self: OwnShared<Self>) -> T {
+        match OwnShared::try_unwrap(self) {
+            Ok(this) => this.value,
+            Err(this) => this.value.clone(),
         }
     }
 }

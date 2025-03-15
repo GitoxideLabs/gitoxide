@@ -8,7 +8,7 @@ mod bare {
         let repo = gix::init_bare(&git_dir)?;
         assert_eq!(repo.kind(), gix::repository::Kind::Bare);
         assert!(
-            repo.work_dir().is_none(),
+            repo.workdir().is_none(),
             "a worktree isn't present in bare repositories"
         );
         assert_eq!(
@@ -26,7 +26,7 @@ mod bare {
         let repo = gix::init_bare(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::Bare);
         assert!(
-            repo.work_dir().is_none(),
+            repo.workdir().is_none(),
             "a worktree isn't present in bare repositories"
         );
         assert_eq!(
@@ -79,14 +79,14 @@ mod non_bare {
         let tmp = tempfile::tempdir()?;
         let repo = gix::init(tmp.path())?;
         assert_eq!(repo.kind(), gix::repository::Kind::WorkTree { is_linked: false });
-        assert_eq!(repo.work_dir(), Some(tmp.path()), "there is a work tree by default");
+        assert_eq!(repo.workdir(), Some(tmp.path()), "there is a work tree by default");
         assert_eq!(
             repo.git_dir(),
             tmp.path().join(".git"),
             "there is a work tree by default"
         );
         assert_eq!(gix::open(repo.git_dir())?, repo);
-        assert_eq!(gix::open(repo.work_dir().as_ref().expect("non-bare repo"))?, repo);
+        assert_eq!(gix::open(repo.workdir().as_ref().expect("non-bare repo"))?, repo);
         Ok(())
     }
 
@@ -117,7 +117,7 @@ mod non_bare {
         std::fs::write(tmp.path().join("existing.txt"), b"I was here before you")?;
 
         let repo = gix::init(tmp.path())?;
-        assert_eq!(repo.work_dir().expect("present"), tmp.path());
+        assert_eq!(repo.workdir().expect("present"), tmp.path());
         assert_eq!(
             repo.git_dir(),
             tmp.path().join(".git"),

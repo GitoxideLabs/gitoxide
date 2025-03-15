@@ -334,7 +334,7 @@ impl delegate::Navigate for Delegate<'_> {
                         .find_map(|stage| index.entry_index_by_path_and_stage(path, *stage).map(|_| *stage));
                     let exists = self
                         .repo
-                        .work_dir()
+                        .workdir()
                         .is_some_and(|root| root.join(gix_path::from_bstr(path)).exists());
                     self.err.push(Error::IndexLookup {
                         desired_path: path.into(),

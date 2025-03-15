@@ -12,6 +12,7 @@ mod peel {
             let commit = repo.head_commit()?;
             assert_eq!(commit.id, expected_commit);
             assert_eq!(repo.head_tree_id()?, commit.tree_id()?);
+            assert_eq!(repo.head_tree_id_or_empty()?, commit.tree_id()?);
             assert_eq!(repo.head()?.try_into_peeled_id()?.expect("born"), expected_commit);
             assert_eq!(repo.head()?.peel_to_object_in_place()?.id, expected_commit);
             assert_eq!(repo.head()?.try_peel_to_id_in_place()?.expect("born"), expected_commit);

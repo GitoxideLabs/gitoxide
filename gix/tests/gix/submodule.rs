@@ -83,7 +83,7 @@ mod open {
                         gix::repository::Kind::Submodule,
                         "Submodules are properly detected"
                     );
-                    assert!(sm_repo.work_dir().is_some(), "the workdir is always configured");
+                    assert!(sm_repo.workdir().is_some(), "the workdir is always configured");
                     let worktree = sm_repo
                         .worktree()
                         .expect("worktrees are always returned even if there seems to not be a checkout");
@@ -349,7 +349,7 @@ mod open {
             "worktree-of-submodule",
             gix::open::Options::isolated(),
         )?;
-        let wd = sm_repo.work_dir().expect("workdir is present");
+        let wd = sm_repo.workdir().expect("workdir is present");
         assert!(
             sm_repo.rev_parse_single(":this").is_ok(),
             "the file is in the submodule"
@@ -371,7 +371,7 @@ mod open {
             "submodule-with-extra-worktree-host/m1",
             gix::open::Options::isolated(),
         )?;
-        let wd = sm_repo.work_dir().expect("workdir is present");
+        let wd = sm_repo.workdir().expect("workdir is present");
         assert!(
             sm_repo.rev_parse_single(":this").is_ok(),
             "the file is in the submodule"

@@ -172,7 +172,7 @@ fn compare_with_baseline(
     let actual = res.as_deref().ok().copied();
     let spec: BString = spec.into();
     let expected = *BASELINE
-        .get(repo.work_dir().unwrap_or_else(|| repo.git_dir()))
+        .get(repo.workdir().unwrap_or_else(|| repo.git_dir()))
         .unwrap_or_else(|| panic!("No baseline for {repo:?}"))
         .get(&spec)
         .unwrap_or_else(|| panic!("'{spec}' revspec not found in git baseline"));

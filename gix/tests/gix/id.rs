@@ -14,7 +14,7 @@ fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
 #[test]
 fn prefix() -> crate::Result {
     let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
-    let work_dir = repo.work_dir().expect("non-bare");
+    let work_dir = repo.workdir().expect("non-bare");
     let id = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170").attach(&repo);
     let prefix = id.shorten()?;
     assert_eq!(prefix.cmp_oid(&id), Ordering::Equal);

@@ -49,13 +49,13 @@ mod with_core_worktree_config {
 
             if is_relative {
                 assert_eq!(
-                    repo.work_dir().unwrap(),
+                    repo.workdir().unwrap(),
                     repo.git_dir().parent().unwrap().parent().unwrap().join("worktree"),
                     "{name}|{is_relative}: work_dir is set to core.worktree config value, relative paths are appended to `git_dir() and made absolute`"
                 );
             } else {
                 assert_eq!(
-                    repo.work_dir().unwrap(),
+                    repo.workdir().unwrap(),
                     gix_path::realpath(repo.git_dir().parent().unwrap().parent().unwrap().join("worktree"))?,
                     "absolute workdirs are left untouched"
                 );
@@ -63,7 +63,7 @@ mod with_core_worktree_config {
 
             assert_eq!(
                 repo.worktree().expect("present").base(),
-                repo.work_dir().unwrap(),
+                repo.workdir().unwrap(),
                 "current worktree is based on work-tree dir"
             );
 
@@ -99,7 +99,7 @@ mod with_core_worktree_config {
         );
 
         assert!(
-            !repo.work_dir().expect("configured").exists(),
+            !repo.workdir().expect("configured").exists(),
             "non-existing or invalid worktrees (this one is a file) are taken verbatim and \
             may lead to errors later - just like in `git` and we explicitly do not try to be smart about it"
         );
@@ -111,7 +111,7 @@ mod with_core_worktree_config {
         assert_eq!(count_deleted(repo.git_dir()), 0, "git can't chdir into a file");
 
         assert!(
-            repo.work_dir().expect("configured").is_file(),
+            repo.workdir().expect("configured").is_file(),
             "non-existing or invalid worktrees (this one is a file) are taken verbatim and \
             may lead to errors later - just like in `git` and we explicitly do not try to be smart about it"
         );
@@ -128,7 +128,7 @@ mod with_core_worktree_config {
             "git refuses to mix bare with core.worktree"
         );
         assert!(
-            repo.work_dir().is_none(),
+            repo.workdir().is_none(),
             "we simply don't load core.worktree in bare repos either to match this behaviour"
         );
         assert!(repo.try_index()?.is_none());
@@ -258,7 +258,7 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
     assert_eq!(main_repo.is_bare(), should_be_bare);
     let mut baseline = Baseline::collect(
         main_repo
-            .work_dir()
+            .workdir()
             .map_or_else(|| main_repo.git_dir().parent(), std::path::Path::parent)
             .expect("a temp dir as parent"),
     )
@@ -270,7 +270,7 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
         assert!(main_repo.worktree().is_none());
     } else {
         assert_eq!(
-            main_repo.work_dir().expect("non-bare").canonicalize().unwrap(),
+            main_repo.workdir().expect("non-bare").canonicalize().unwrap(),
             expected_main.root.canonicalize().unwrap()
         );
         assert_eq!(main_repo.head_id().unwrap(), expected_main.peeled);

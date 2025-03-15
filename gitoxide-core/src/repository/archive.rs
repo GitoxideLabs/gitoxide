@@ -30,7 +30,7 @@ pub fn stream(
     let (mut stream, index) = repo.worktree_stream(tree)?;
     if !add_paths.is_empty() {
         let root = gix::path::realpath(
-            repo.work_dir()
+            repo.workdir()
                 .ok_or_else(|| anyhow!("Adding files requires a worktree directory that contains them"))?,
         )?;
         for path in add_paths {

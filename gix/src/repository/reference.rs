@@ -227,6 +227,22 @@ impl crate::Repository {
         Ok(self.head_commit()?.tree_id()?)
     }
 
+    /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
+    pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
+        self.head_tree_id().or_else(|err| {
+            if let reference::head_tree_id::Error::HeadCommit(reference::head_commit::Error::PeelToCommit(
+                crate::head::peel::to_commit::Error::PeelToObject(crate::head::peel::to_object::Error::Unborn {
+                    ..
+                }),
+            )) = err
+            {
+                Ok(self.empty_tree().id())
+            } else {
+                Err(err)
+            }
+        })
+    }
+
     /// Return the tree object the `HEAD^{tree}` reference currently points to after peeling it fully,
     /// following symbolic references and tags until a tree is found.
     ///

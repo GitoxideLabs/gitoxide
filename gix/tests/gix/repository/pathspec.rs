@@ -16,7 +16,7 @@ fn defaults_are_taken_from_repo_config() -> crate::Result {
             "hi",
             ":!hip",
             gix::path::to_unix_separators_on_windows(gix::path::into_bstr(
-                repo.work_dir().expect("present").join("for-normalization"),
+                repo.workdir().expect("present").join("for-normalization"),
             ))
             .to_str_lossy()
             .as_ref(),

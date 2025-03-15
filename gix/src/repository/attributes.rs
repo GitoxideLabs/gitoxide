@@ -50,7 +50,7 @@ impl Repository {
         Ok(AttributeStack::new(
             gix_worktree::Stack::new(
                 // this is alright as we don't cause mutation of that directory, it's virtual.
-                self.work_dir().unwrap_or(self.git_dir()),
+                self.workdir().unwrap_or(self.git_dir()),
                 state,
                 case,
                 buf,
@@ -82,7 +82,7 @@ impl Repository {
         Ok(AttributeStack::new(
             gix_worktree::Stack::new(
                 // this is alright as we don't cause mutation of that directory, it's virtual.
-                self.work_dir().unwrap_or(self.git_dir()),
+                self.workdir().unwrap_or(self.git_dir()),
                 state,
                 case,
                 buf,
@@ -127,7 +127,7 @@ impl Repository {
         Ok(AttributeStack::new(
             gix_worktree::Stack::new(
                 // this is alright as we don't cause mutation of that directory, it's virtual.
-                self.work_dir().unwrap_or(self.git_dir()),
+                self.workdir().unwrap_or(self.git_dir()),
                 state,
                 case,
                 buf,

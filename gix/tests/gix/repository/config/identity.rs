@@ -28,7 +28,7 @@ fn author_included_by_hasconfig() -> crate::Result {
 fn author_and_committer_and_fallback() -> crate::Result {
     for trust in [gix_sec::Trust::Full, gix_sec::Trust::Reduced] {
         let repo = named_repo("make_config_repo.sh")?;
-        let work_dir = repo.work_dir().expect("present").canonicalize()?;
+        let work_dir = repo.workdir().expect("present").canonicalize()?;
         let _env = Env::new()
             .set(
                 "GIT_CONFIG_SYSTEM",
@@ -143,7 +143,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
 #[serial]
 fn author_from_different_config_sections() -> crate::Result {
     let repo = named_repo("make_signatures_repo.sh")?;
-    let work_dir = repo.work_dir().unwrap().canonicalize()?;
+    let work_dir = repo.workdir().unwrap().canonicalize()?;
 
     let _env = Env::new()
         .set("GIT_CONFIG_GLOBAL", work_dir.join("global.config").to_str().unwrap())

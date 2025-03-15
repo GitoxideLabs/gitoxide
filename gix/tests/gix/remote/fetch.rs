@@ -243,7 +243,7 @@ mod blocking_and_async_io {
             ] {
                 let (mut client_repo, _tmp) = {
                     let client_repo = remote::repo("multi_round/client");
-                    let daemon = spawn_git_daemon_if_async(client_repo.work_dir().expect("non-bare"))?;
+                    let daemon = spawn_git_daemon_if_async(client_repo.workdir().expect("non-bare"))?;
                     let tmp = TempDir::new()?;
                     let repo = gix::prepare_clone_bare(
                         daemon.as_ref().map_or_else(
@@ -270,9 +270,9 @@ mod blocking_and_async_io {
                     )?;
                 }
                 let server_repo = remote::repo("multi_round/server");
-                let daemon = spawn_git_daemon_if_async(server_repo.work_dir().expect("non-bare"))?;
+                let daemon = spawn_git_daemon_if_async(server_repo.workdir().expect("non-bare"))?;
                 let remote = into_daemon_remote_if_async(
-                    client_repo.remote_at(server_repo.work_dir().expect("non-bare"))?,
+                    client_repo.remote_at(server_repo.workdir().expect("non-bare"))?,
                     daemon.as_ref(),
                     None,
                 );
@@ -433,7 +433,7 @@ mod blocking_and_async_io {
                         },
                     )?;
                     let daemon = spawn_git_daemon_if_async(
-                        repo.work_dir()
+                        repo.workdir()
                             .expect("non-bare")
                             .ancestors()
                             .nth(1)

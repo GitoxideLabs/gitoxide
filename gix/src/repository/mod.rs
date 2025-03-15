@@ -20,7 +20,10 @@ pub enum Kind {
 #[cfg(any(feature = "attributes", feature = "excludes"))]
 pub mod attributes;
 mod cache;
+#[cfg(feature = "worktree-mutation")]
+mod checkout;
 mod config;
+
 ///
 #[cfg(feature = "blob-diff")]
 mod diff;

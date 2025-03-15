@@ -53,7 +53,7 @@ pub(crate) mod function {
         if format != OutputFormat::Human {
             bail!("JSON output isn't implemented yet");
         }
-        let Some(workdir) = repo.work_dir() else {
+        let Some(workdir) = repo.workdir() else {
             bail!("Need a worktree to clean, this is a bare repository");
         };
 

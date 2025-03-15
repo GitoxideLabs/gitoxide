@@ -503,7 +503,7 @@ mod blocking_io {
         let index = repo.index()?;
         assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
 
-        assure_index_entries_on_disk(&index, repo.work_dir().expect("non-bare"));
+        assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"));
         Ok(())
     }
     #[test]
@@ -550,7 +550,7 @@ mod blocking_io {
         let index = repo.index()?;
         assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
 
-        assure_index_entries_on_disk(&index, repo.work_dir().expect("non-bare"));
+        assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"));
         Ok(())
     }
 
@@ -667,6 +667,7 @@ mod blocking_io {
             assert!(!repo.index_path().is_file(), "newly initialized repos have no index");
             let head = repo.head()?;
             assert!(head.is_unborn());
+            assert_eq!(repo.head_tree_id_or_empty()?, repo.empty_tree().id());
 
             assert!(
                 head.log_iter().all()?.is_none(),

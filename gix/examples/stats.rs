@@ -4,7 +4,7 @@ use gix::{prelude::ObjectIdExt, Reference};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut repo = gix::discover(".")?;
-    println!("Repo: {}", repo.work_dir().unwrap_or_else(|| repo.git_dir()).display());
+    println!("Repo: {}", repo.workdir().unwrap_or_else(|| repo.git_dir()).display());
     let mut max_parents = 0;
     let mut avg_parents = 0;
     repo.object_cache_size(32 * 1024);

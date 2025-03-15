@@ -47,7 +47,8 @@ pub use index_as_worktree_with_renames::function::index_as_worktree_with_renames
 /// It can efficiently validate paths when these are queried in sort-order, which leads to each component
 /// to only be checked once.
 pub struct SymlinkCheck {
-    inner: gix_fs::Stack,
+    /// Supports querying additional information, like the stack root.
+    pub inner: gix_fs::Stack,
 }
 
 mod stack;

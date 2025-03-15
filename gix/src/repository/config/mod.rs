@@ -107,7 +107,7 @@ impl crate::Repository {
                     .into()
             },
             git_dir: self.git_dir().to_owned().into(),
-            worktree_dir: self.work_dir().map(ToOwned::to_owned),
+            worktree_dir: self.workdir().map(ToOwned::to_owned),
             no_replace_objects: config::shared::is_replace_refs_enabled(
                 &self.config.resolved,
                 self.config.lenient_config,

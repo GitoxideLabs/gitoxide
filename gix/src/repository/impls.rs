@@ -31,7 +31,7 @@ impl std::fmt::Debug for crate::Repository {
         f.debug_struct("Repository")
             .field("kind", &self.kind())
             .field("git_dir", &self.git_dir())
-            .field("work_dir", &self.work_dir())
+            .field("workdir", &self.workdir())
             .finish()
     }
 }

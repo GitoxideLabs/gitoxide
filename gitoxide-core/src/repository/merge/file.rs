@@ -40,7 +40,7 @@ pub fn file(
     let base_id = repo.rev_parse_single(base.as_bstr()).ok();
     let ours_id = repo.rev_parse_single(ours.as_bstr()).ok();
     let theirs_id = repo.rev_parse_single(theirs.as_bstr()).ok();
-    let roots = worktree_roots(base_id, ours_id, theirs_id, repo.work_dir())?;
+    let roots = worktree_roots(base_id, ours_id, theirs_id, repo.workdir())?;
 
     let mut cache = repo.merge_resource_cache(roots)?;
     let null = repo.object_hash().null();

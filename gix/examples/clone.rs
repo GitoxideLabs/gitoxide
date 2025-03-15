@@ -27,11 +27,11 @@ fn main() -> anyhow::Result<()> {
 
     println!(
         "Checking out into {:?} ...",
-        prepare_checkout.repo().work_dir().expect("should be there")
+        prepare_checkout.repo().workdir().expect("should be there")
     );
 
     let (repo, _) = prepare_checkout.main_worktree(gix::progress::Discard, &gix::interrupt::IS_INTERRUPTED)?;
-    println!("Repo cloned into {:?}", repo.work_dir().expect("directory pre-created"));
+    println!("Repo cloned into {:?}", repo.workdir().expect("directory pre-created"));
 
     let remote = repo
         .find_default_remote(gix::remote::Direction::Fetch)

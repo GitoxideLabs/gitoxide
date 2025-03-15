@@ -60,7 +60,7 @@ pub fn query(
             let mut pathspec = repo.pathspec(
                 true,
                 patterns.iter(),
-                repo.work_dir().is_some(),
+                repo.workdir().is_some(),
                 &index,
                 gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping.adjust_for_bare(repo.is_bare()),
             )?;
@@ -82,12 +82,12 @@ pub fn query(
                 let pathspec = repo.pathspec(
                     true,
                     patterns.iter(),
-                    repo.work_dir().is_some(),
+                    repo.workdir().is_some(),
                     &index,
                     gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                         .adjust_for_bare(repo.is_bare()),
                 )?;
-                let workdir = repo.work_dir();
+                let workdir = repo.workdir();
                 for pattern in pathspec.search().patterns() {
                     let path = pattern.path();
                     let entry = cache.at_entry(

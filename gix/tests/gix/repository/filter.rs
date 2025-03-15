@@ -35,7 +35,7 @@ fn pipeline_in_repo_without_special_options() -> crate::Result {
 #[cfg(unix)]
 fn pipeline_worktree_file_to_object() -> crate::Result {
     let repo = named_repo("repo_with_untracked_files.sh")?;
-    let work_dir = repo.work_dir().expect("non-bare");
+    let work_dir = repo.workdir().expect("non-bare");
     let (mut pipe, index) = repo.filter_pipeline(None)?;
     fn take_two<A, B, C>(t: Option<(A, B, C)>) -> Option<(A, B)> {
         t.map(|t| (t.0, t.1))

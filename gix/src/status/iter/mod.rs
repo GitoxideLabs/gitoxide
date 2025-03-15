@@ -45,17 +45,7 @@ where
 
         let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::status::into_iter::Error> {
             Ok(match self.head_tree {
-                Some(None) => match self.repo.head_tree_id() {
-                    Ok(id) => Some(id.into()),
-                    Err(crate::reference::head_tree_id::Error::HeadCommit(
-                        crate::reference::head_commit::Error::PeelToCommit(
-                            crate::head::peel::to_commit::Error::PeelToObject(
-                                crate::head::peel::to_object::Error::Unborn { .. },
-                            ),
-                        ),
-                    )) => Some(gix_hash::ObjectId::empty_tree(self.repo.object_hash())),
-                    Err(err) => return Err(err.into()),
-                },
+                Some(None) => Some(self.repo.head_tree_id_or_empty()?.into()),
                 Some(Some(tree_id)) => Some(tree_id),
                 None => None,
             })

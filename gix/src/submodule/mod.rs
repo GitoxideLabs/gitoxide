@@ -209,7 +209,7 @@ impl Submodule<'_> {
     /// doesn't have a working dir set.
     pub fn work_dir(&self) -> Result<PathBuf, config::path::Error> {
         let worktree_git = gix_path::from_bstr(self.path()?);
-        Ok(match self.state.repo.work_dir() {
+        Ok(match self.state.repo.workdir() {
             None => worktree_git.into_owned(),
             Some(prefix) => prefix.join(worktree_git),
         })

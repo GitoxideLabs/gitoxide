@@ -103,7 +103,7 @@ impl Repository {
         E: std::error::Error + Send + Sync + 'static,
     {
         let _span = gix_trace::coarse!("gix::index_worktree_status");
-        let workdir = self.work_dir().ok_or(Error::MissingWorkDir)?;
+        let workdir = self.workdir().ok_or(Error::MissingWorkDir)?;
         let attrs_and_excludes = self.attributes(
             index,
             crate::worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
