@@ -252,9 +252,9 @@ pack-cache-lru-static = ["gix-pack/pack-cache-lru-static"]
 ## Provide a hash-map based LRU cache whose eviction is based a memory cap calculated from object data.
 pack-cache-lru-dynamic = ["gix-pack/pack-cache-lru-dynamic"]
 
-## Activate other features that maximize performance, like usage of threads, `zlib-ng` and access to caching in object databases.
+## Activate other features that maximize performance, like usage of threads, `zlib-rs` and access to caching in object databases.
 ## Note that some platforms might suffer from compile failures, which is when `max-performance-safe` should be used.
-max-performance = ["max-performance-safe", "zlib-ng", "fast-sha1"]
+max-performance = ["max-performance-safe", "zlib-rs", "fast-sha1"]
 
 ## If enabled, use assembly versions of sha1 on supported platforms.
 ## This might cause compile failures as well which is why it can be turned off separately.
@@ -263,6 +263,9 @@ fast-sha1 = ["gix-features/fast-sha1"]
 ## Use the C-based zlib-ng backend, which can compress and decompress significantly faster.
 ## Note that this will cause duplicate symbol errors if the application also depends on `zlib` - use `zlib-ng-compat` in that case.
 zlib-ng = ["gix-features/zlib-ng"]
+
+## Use the rust-based zlib backend, which can compress and decompress significantly faster and is on par with zlib-ng or even faster.
+zlib-rs = ["gix-features/zlib-rs"]
 
 ## Use zlib-ng via its zlib-compat API. Useful if you already need zlib for C
 ## code elsewhere in your dependencies. Otherwise, use `zlib-ng`.

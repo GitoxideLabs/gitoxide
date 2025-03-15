@@ -46,8 +46,7 @@ tracing-detail = ["gix-trace/tracing-detail"]
 ## As caches are likely to be used and instantiated per thread, more memory will be used on top of the costs for threads.
 ## The `threading` module will contain thread-safe primitives for shared ownership and mutation, otherwise these will be their single threaded counterparts.
 ## This way, single-threaded applications don't have to pay for threaded primitives.
-parallel = ["dep:crossbeam-channel",
-    "dep:parking_lot"]
+parallel = ["dep:crossbeam-channel", "dep:parking_lot"]
 ## If enabled, OnceCell will be made available for interior mutability either in sync or unsync forms.
 once_cell = ["dep:once_cell"]
 ## Makes facilities of the `walkdir` crate partially available.
@@ -67,6 +66,8 @@ crc32 = ["dep:crc32fast"]
 zlib = ["dep:flate2", "flate2?/rust_backend", "dep:thiserror"]
 ## Use the C-based zlib-ng backend, which can compress and decompress significantly faster.
 zlib-ng = ["zlib", "flate2?/zlib-ng"]
+## Use the rust-based zlib backend, which can compress and decompress significantly faster and is on par with zlib-ng or even faster.
+zlib-rs = ["zlib", "flate2?/zlib-rs"]
 ## Use zlib-ng via its zlib-compat API. Useful if you already need zlib for C
 ## code elsewhere in your dependencies. Otherwise, use zlib-ng.
 zlib-ng-compat = ["zlib", "flate2?/zlib-ng-compat"]
@@ -145,7 +146,7 @@ bytesize = { version = "1.0.1", optional = true }
 bytes = { version = "1.0.0", optional = true }
 
 # zlib module
-flate2 = { version = "1.0.33", optional = true, default-features = false }
+flate2 = { version = "1.1.0", optional = true, default-features = false }
 thiserror = { version = "2.0.0", optional = true }
 
 once_cell = { version = "1.13.0", optional = true }
