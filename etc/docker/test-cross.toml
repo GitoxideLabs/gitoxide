@@ -15,6 +15,8 @@ passthrough = [
     "GIX_TEST_IGNORE_ARCHIVES",
     "GIX_VERSION",
     "NO_PRELOAD_CXX",
+    "RUST_BACKTRACE",
+    "RUST_LIB_BACKTRACE",
 ]
 
 [target.armv7-linux-androideabi]
