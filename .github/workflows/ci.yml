@@ -307,30 +307,34 @@ jobs:
           GIX_TEST_IGNORE_ARCHIVES: '1'
         run: cargo nextest run --workspace --no-fail-fast
 
-  # TODO: If this is kept, then remove `fail-fast: false`; run only a subset of the tests, unless
-  # building and running the whole test suite is fast; install the cross target early via
-  # `dtolnay/rust-toolchain`, listing it as an additional target; and add a `Swatinem/rust-cache`
-  # step to cache dependencies.
+  # FIXME: *If* this is kept, then remove `fail-fast: false`, run only a subset of the tests unless
+  #        building and running the whole test suite is fast, and add a `Swatinem/rust-cache` step.
   test-cross:
     runs-on: ubuntu-latest
 
     strategy:
       matrix:
-        moniker: [ android, s390x ]
+        target: [ armv7-linux-androideabi, s390x-unknown-linux-gnu ]
       fail-fast: false
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
       - uses: extractions/setup-just@v3
       - name: Install cross
         uses: taiki-e/install-action@v2
         with:
           tool: cross
+      - name: Build cross image
+        run: just cross-image ${{ matrix.target }}
       - name: Test (unit)
         env:
           RUST_BACKTRACE: '1'
-        run: just cross-test-${{ moniker }}
+        run: just cross-test ${{ matrix.target }}
 
   lint:
     runs-on: ubuntu-latest
