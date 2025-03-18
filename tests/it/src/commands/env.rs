@@ -9,7 +9,6 @@ pub(super) mod function {
     fn repr(text: &std::ffi::OsStr) -> String {
         text.to_str()
             .filter(|s| !s.chars().any(|c| c == '"' || c == '\n'))
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| format!("{text:?}"))
+            .map_or_else(|| format!("{text:?}"), ToOwned::to_owned)
     }
 }
