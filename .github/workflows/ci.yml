@@ -314,7 +314,12 @@ jobs:
 
     strategy:
       matrix:
-        target: [ armv7-linux-androideabi, s390x-unknown-linux-gnu ]
+        nickname: [ android, s390x ]
+        include:
+          - nickname: android
+            target: armv7-linux-androideabi
+          - nickname: s390x
+            target: s390x-unknown-linux-gnu
       fail-fast: false
 
     steps:
@@ -336,7 +341,7 @@ jobs:
       - name: Test (unit)
         env:
           RUST_BACKTRACE: '1'
-        run: just cross-test ${{ matrix.target }}
+        run: just cross-test-${{ matrix.nickname }}
 
   lint:
     runs-on: ubuntu-latest
