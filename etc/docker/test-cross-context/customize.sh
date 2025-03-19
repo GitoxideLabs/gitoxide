@@ -76,29 +76,37 @@ gix_test_deps=(
     pkgconf
 )
 
-# Install everything we need except `git` (and what we already have). We can't
-# necessarily install `git` this way, because it insists on `perl` and
-# `liberror-perl` dependencies of the same architecture as it. These may not be
-# possible to install in a mixed environment, where most packages are a
-# different architecture, and where `perl` is a dependency of other important
-# packages. So we will install everything else first (then manually add `git`).
-apt-get install --no-install-recommends -y \
-    "${git_deps[@]}" "${gix_test_deps[@]}" file
+if test -n "$apt_suffix"; then
+    # Install everything we need except `git` (and what we already have). We
+    # can't necessarily install `git` this way, because it insists on `perl`
+    # and `liberror-perl` dependencies of the same architecture as it. These
+    # may not be possible to install in a mixed environment, where most
+    # packages are a different architecture, and where `perl` is a dependency
+    # of other important packages. So we will install everything else first
+    # (then manually add `git`).
+    apt-get install --no-install-recommends -y \
+        "${git_deps[@]}" "${gix_test_deps[@]}" file
 
-# Add `git` by manually downloading it and installing it with `dpkg`, forcing
-# installation to proceed even if its `perl` and `liberror-perl` dependencies,
-# as declared by `git`, are absent. (We have already installed them, but in a
-# possibly different architecture. `git` can still use them, because its use is
-# to run scripts, rather than to link to a shared library they provide.) It is
-# preferred to let `apt-get download` drop privileges to the `_apt` user during
-# download, so we download it inside `/tmp`. But we create a subdirectory so it
-# is safe to make assumptions about what files globs can expand to, even if
-# `/tmp` is mounted to an outside share temp dir on a multi-user system.
-mkdir /tmp/dl  # Don't use `-p`; if it exists already, we cannot trust it.
-chown _apt /tmp/dl  # Use owner, as the container may not have an `_apt` group.
-(cd /tmp/dl && apt-get download "git$apt_suffix")
-dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" \
-    -i /tmp/dl/git[-_]*.deb
+    # Add `git` by manually downloading it and installing it with `dpkg`,
+    # forcing installation to proceed even if its `perl` and `liberror-perl`
+    # dependencies, as declared by `git`, are absent. (We have already
+    # installed them, but in a possibly different architecture. `git` can still
+    # use them, because its use is to run scripts, rather than to link to a
+    # shared library they provide.) It is preferred to let `apt-get download`
+    # drop privileges to the `_apt` user during download, so we download it
+    # inside `/tmp`. But we create a subdirectory so it is safe to make
+    # assumptions about what files globs can expand to, even if `/tmp` is
+    # mounted to an outside share temp dir on a multi-user system.
+    mkdir /tmp/dl  # Don't use `-p`; if it exists already, we cannot trust it.
+    chown _apt /tmp/dl  # Use owner, as the container may have no `_apt` group.
+    (cd /tmp/dl && apt-get download "git$apt_suffix")
+    dpkg --ignore-depends="perl$apt_suffix,liberror-perl$apt_suffix" \
+        -i /tmp/dl/git[-_]*.deb
+    rm -r /tmp/dl
+else
+    # Install everything we need, including `git`.
+    apt-get install --no-install-recommends -y git "${gix_test_deps[@]}" file
+fi
 
 # Show information about the newly installed `git` (and ensure it can run).
 git version --build-options
@@ -107,7 +115,7 @@ file -- "$git"
 
 # Clean up files related to package management that we won't need anymore.
 apt-get clean
-rm -rf /tmp/dl /var/lib/apt/lists/*
+rm -rf /var/lib/apt/lists/*
 
 # If this image has a runner script `cross` uses for Android, patch the script
 # to add the ability to suppress its customization of `LD_PRELOAD`. The runner
