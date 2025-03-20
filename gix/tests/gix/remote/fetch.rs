@@ -14,12 +14,15 @@ mod shallow {
 mod blocking_and_async_io {
     use std::sync::atomic::AtomicBool;
 
+    use gix::interrupt::IS_INTERRUPTED;
     use gix::{
         config::tree::Protocol,
         remote::{fetch, fetch::Status, Direction::Fetch},
     };
     use gix_features::progress;
+    use gix_odb::store::init::Slots;
     use gix_protocol::maybe_async;
+    use gix_testtools::tempfile;
     use gix_testtools::tempfile::TempDir;
 
     use crate::{
@@ -83,6 +86,66 @@ mod blocking_and_async_io {
 
     pub(crate) fn repo_rw(name: &str) -> (gix::Repository, gix_testtools::tempfile::TempDir) {
         try_repo_rw(name).unwrap()
+    }
+
+    #[test]
+    fn fetch_more_packs_than_can_be_handled() -> gix_testtools::Result {
+        fn create_empty_commit(repo: &gix::Repository) -> anyhow::Result<()> {
+            let name = repo.head_name()?.expect("no detached head");
+            repo.commit(
+                name.as_bstr(),
+                "empty",
+                gix::hash::ObjectId::empty_tree(repo.object_hash()),
+                repo.try_find_reference(name.as_ref())?.map(|r| r.id()),
+            )?;
+            Ok(())
+        }
+        for max_packs in 1..=2 {
+            let remote_dir = tempfile::tempdir()?;
+            let remote_repo = gix::init_bare(remote_dir.path())?;
+            create_empty_commit(&remote_repo)?;
+
+            let local_dir = tempfile::tempdir()?;
+            dbg!(max_packs);
+            let (local_repo, _) = gix::clone::PrepareFetch::new(
+                remote_repo.path(),
+                local_dir.path(),
+                gix::create::Kind::Bare,
+                Default::default(),
+                gix::open::Options::isolated().object_store_slots(Slots::Given(max_packs)),
+            )?
+            .fetch_only(gix::progress::Discard, &IS_INTERRUPTED)?;
+
+            let remote = local_repo
+                .branch_remote(
+                    local_repo.head_ref()?.expect("branch available").name().shorten(),
+                    Fetch,
+                )
+                .expect("remote is configured after clone")?;
+            for round in 1.. {
+                dbg!(round);
+                create_empty_commit(&remote_repo)?;
+                match remote
+                    .connect(Fetch)?
+                    .prepare_fetch(gix::progress::Discard, Default::default())?
+                    .receive(gix::progress::Discard, &IS_INTERRUPTED)
+                {
+                    Ok(out) => {
+                        for local_tracking_branch_name in out.ref_map.mappings.into_iter().filter_map(|m| m.local) {
+                            let r = local_repo.find_reference(&local_tracking_branch_name)?;
+                            r.id()
+                                .object()
+                                .expect("object should be present after fetching, triggering pack refreshes works");
+                        }
+                    }
+                    Err(err) => assert_eq!(
+                        err.to_string(),
+                        "It should indicate that the ODB is exhausted for now - we can't grow"
+                    ),
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
