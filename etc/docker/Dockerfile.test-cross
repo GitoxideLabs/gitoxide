@@ -1,0 +1,7 @@
+ARG TARGET
+FROM ghcr.io/cross-rs/${TARGET}:latest
+
+ARG TARGET
+COPY customize.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/customize.sh && \
+    /usr/local/bin/customize.sh "$TARGET"
