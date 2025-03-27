@@ -1,0 +1,26 @@
+# `cross` configuration for running tests. Treated like `Cross.toml` if enabled
+# with `CROSS_CONFIG=etc/docker/test-cross.toml`. This avoids affecting other
+# `cross` usage, e.g. in `release.yml`. See `cross-test` recipes in `justfile`.
+
+[build.env]
+passthrough = [
+    "CI",
+    "GITHUB_ACTIONS",
+    "GIX_CREDENTIALS_HELPER_STDERR",
+    "GIX_EXTERNAL_COMMAND_STDERR",
+    "GIX_OBJECT_CACHE_MEMORY",
+    "GIX_PACK_CACHE_MEMORY",
+    "GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI",
+    "GIX_TEST_EXPECT_REDUCED_TRUST",
+    "GIX_TEST_IGNORE_ARCHIVES",
+    "GIX_VERSION",
+    "NO_PRELOAD_CXX",
+    "RUST_BACKTRACE",
+    "RUST_LIB_BACKTRACE",
+]
+
+[target.armv7-linux-androideabi]
+image = "cross-rs-gitoxide:armv7-linux-androideabi"
+
+[target.s390x-unknown-linux-gnu]
+image = "cross-rs-gitoxide:s390x-unknown-linux-gnu"

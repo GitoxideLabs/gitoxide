@@ -73,6 +73,22 @@ pub enum Subcommands {
     /// current repository. Its main use is checking that fixture scripts are have correct modes.
     #[clap(visible_alias = "cm")]
     CheckMode {},
+    /// Print environment variables as `NAME=value` lines.
+    ///
+    /// It is useful to be able to observe environment variables that are set when running code
+    /// with tools such as `cargo` or `cross`. Commands like `cargo run -p internal-tools -- env`
+    /// include environment changes from `cargo` itself. With `cross`, changes are more extensive,
+    /// due to effects of `build.env.passthrough`, container customization, and preexisting special
+    /// cases in wrapper scripts shipped in default `cross` containers (such as to `LD_PRELOAD`).
+    ///
+    /// Since one use for checking environment variables is to investigate the effects of
+    /// environments that contain variable names or values that are not valid Unicode, this avoids
+    /// requiring that environment variables all be Unicode. Any name or value that is not Unicode
+    /// is shown in its Rust debug representation. This is always quoted. To decrease ambiguity,
+    /// any name or value containing a literal double quote or newline is also shown in its debug
+    /// representation. Names and values without such content are shown literally and not quoted.
+    #[clap(visible_alias = "e")]
+    Env {},
 }
 
 #[derive(Clone)]
