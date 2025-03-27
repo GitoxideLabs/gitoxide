@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 description = "A crate providing file system specific utilities to `gitoxide`"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.75"
 include = ["src/**/*", "LICENSE-*"]
 
 [lib]
@@ -21,6 +21,7 @@ serde = ["dep:serde"]
 [dependencies]
 gix-features = { version = "^0.40.0", path = "../gix-features", features = ["fs-read-dir"] }
 gix-utils = { version = "^0.1.14", path = "../gix-utils" }
+thiserror = "2.0.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
 
 # For `Capabilities` to assure parallel operation works.

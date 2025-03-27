@@ -9,7 +9,7 @@ version = "0.70.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 edition = "2021"
 include = ["src/**/*", "LICENSE-*"]
-rust-version = "1.70"
+rust-version = "1.75"
 
 [lib]
 doctest = false

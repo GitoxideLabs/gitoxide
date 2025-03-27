@@ -1,6 +1,37 @@
+use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use crate::Stack;
+
+///
+pub mod to_normal_path_components {
+    use std::ffi::OsString;
+
+    /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error("Input path \"{path}\" contains relative or absolute components", path = std::path::Path::new(.0.as_os_str()).display())]
+        NotANormalComponent(OsString),
+    }
+}
+
+/// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
+pub trait ToNormalPathComponents {
+    /// Return an iterator over the normal components of a path, without the separator.
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>>;
+}
+
+impl ToNormalPathComponents for &Path {
+    fn to_normal_path_components(&self) -> impl Iterator<Item = Result<&OsStr, to_normal_path_components::Error>> {
+        self.components().map(|component| match component {
+            Component::Normal(os_str) => Ok(os_str),
+            _ => Err(to_normal_path_components::Error::NotANormalComponent(
+                self.as_os_str().to_owned(),
+            )),
+        })
+    }
+}
 
 /// Access
 impl Stack {
@@ -62,8 +93,13 @@ impl Stack {
     /// `relative` paths are terminal, so point to their designated file or directory.
     /// The path is also expected to be normalized, and should not contain extra separators, and must not contain `..`
     /// or have leading or trailing slashes (or additionally backslashes on Windows).
-    pub fn make_relative_path_current(&mut self, relative: &Path, delegate: &mut dyn Delegate) -> std::io::Result<()> {
-        if self.valid_components != 0 && relative.as_os_str().is_empty() {
+    pub fn make_relative_path_current(
+        &mut self,
+        relative: impl ToNormalPathComponents,
+        delegate: &mut dyn Delegate,
+    ) -> std::io::Result<()> {
+        let mut components = relative.to_normal_path_components().peekable();
+        if self.valid_components != 0 && components.peek().is_none() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "empty inputs are not allowed",
@@ -73,15 +109,19 @@ impl Stack {
             delegate.push_directory(self)?;
         }
 
-        let mut components = relative.components().peekable();
         let mut existing_components = self.current_relative.components();
         let mut matching_components = 0;
         while let (Some(existing_comp), Some(new_comp)) = (existing_components.next(), components.peek()) {
-            if existing_comp == *new_comp {
-                components.next();
-                matching_components += 1;
-            } else {
-                break;
+            match new_comp {
+                Ok(new_comp) => {
+                    if existing_comp.as_os_str() == *new_comp {
+                        components.next();
+                        matching_components += 1;
+                    } else {
+                        break;
+                    }
+                }
+                Err(err) => return Err(std::io::Error::other(format!("{err}"))),
             }
         }
 
@@ -100,15 +140,7 @@ impl Stack {
         }
 
         while let Some(comp) = components.next() {
-            if !matches!(comp, Component::Normal(_)) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "Input path \"{}\" contains relative or absolute components",
-                        relative.display()
-                    ),
-                ));
-            }
+            let comp = comp.map_err(std::io::Error::other)?;
             let is_last_component = components.peek().is_none();
             self.current_is_directory = !is_last_component;
             self.current.push(comp);

@@ -29,7 +29,7 @@ pub(super) mod function {
         {
             let rela_path = gix::path::from_bstr(rela_path);
             let src = worktree_dir.join(&rela_path);
-            stack.make_relative_path_current(&rela_path, &mut create_dir)?;
+            stack.make_relative_path_current(&*rela_path, &mut create_dir)?;
             let dst = stack.current();
 
             eprintln!(

@@ -31,7 +31,7 @@ jobs:
     env:
       # dictated by `firefox` to support the `helix` editor, but now probably effectively be controlled by `jiff`, which also aligns with `regex`.
       # IMPORTANT: adjust etc/msrv-badge.svg as well
-      rust_version: 1.74.0
+      rust_version: 1.75.0
 
     steps:
       - uses: actions/checkout@v4
