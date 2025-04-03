@@ -130,3 +130,11 @@ fn split_worktree_using_configuration() -> crate::Result {
     }
     Ok(())
 }
+
+#[test]
+fn reftable() -> crate::Result {
+    let repo = gix_testtools::scripted_fixture_read_only("make_reftable_repo.sh")?.join("reftable-clone");
+    let kind = gix_discover::is_git(&repo)?;
+    assert_eq!(kind, gix_discover::repository::Kind::WorkTree { linked_git_dir: None });
+    Ok(())
+}
