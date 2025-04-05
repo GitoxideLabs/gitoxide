@@ -193,35 +193,6 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Upgrade Git for Windows to latest stable release
-        # This upgrades Git to work around https://github.com/GitoxideLabs/gitoxide/issues/1849.
-        # TODO: Remove this step once the runner image has Git 2.49.0 or higher.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $workingDir = '~/git-dl'
-          $repo = 'git-for-windows/git'
-          $pattern = 'Git-*-64-bit.exe'
-          $log = 'setup-log.txt'
-          # Inno Setup args reference: https://jrsoftware.org/ishelp/index.php?topic=setupcmdline
-          $arguments = @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/ALLUSERS',
-            "/LOG=$log",
-            '/NORESTART',
-            '/CLOSEAPPLICATIONS',
-            '/FORCECLOSEAPPLICATIONS'
-          )
-
-          mkdir $workingDir | Out-Null
-          cd $workingDir
-          gh release download --repo $repo --pattern $pattern
-          $installer = Get-Item $pattern
-          Start-Process -FilePath $installer -ArgumentList $arguments -NoNewWindow -Wait
-
-          Get-Content -Path $log -Tail 50
-          git version
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
