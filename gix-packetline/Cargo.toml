@@ -24,7 +24,8 @@ default = []
 ## If set, all IO will become blocking. The same types will be used preventing side-by-side usage of blocking and non-blocking IO.
 blocking-io = []
 ## Implement IO traits from `futures-io`.
-async-io = ["dep:futures-io", "dep:futures-lite", "dep:pin-project-lite"]
+# no `dep:` for futures-lite (https://github.com/rust-secure-code/cargo-auditable/issues/124)
+async-io = ["dep:futures-io", "futures-lite", "dep:pin-project-lite"]
 
 #! ### Other
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
