@@ -1,6 +1,9 @@
 #[test]
 #[cfg(unix)]
-#[cfg_attr(not(target_os = "linux"), ignore = "The test itself uses /proc")]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android")),
+    ignore = "The test itself uses /proc"
+)]
 fn umask() {
     use std::fs::File;
     use std::io::{BufRead, BufReader};

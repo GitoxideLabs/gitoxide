@@ -224,6 +224,25 @@ journey-tests-async: dbg
     cargo build -p gix-testtools
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" async
 
+# Build a customized `cross` container image for testing
+cross-image target:
+    docker build --build-arg "TARGET={{ target }}" \
+        -t "cross-rs-gitoxide:{{ target }}" \
+        -f etc/docker/Dockerfile.test-cross etc/docker/test-cross-context
+
+# Test another platform with `cross`
+cross-test target options test-options: (cross-image target)
+    CROSS_CONFIG=etc/docker/test-cross.toml NO_PRELOAD_CXX=1 \
+        cross test --workspace --no-fail-fast --target {{ target }} \
+        {{ options }} -- --skip realpath::fuzzed_timeout {{ test-options }}
+
+# Test s390x with `cross`
+cross-test-s390x: (cross-test 's390x-unknown-linux-gnu' '' '')
+
+# Test Android with `cross` (max-pure)
+cross-test-android: (cross-test 'armv7-linux-androideabi'
+                     '--no-default-features --features max-pure' '')
+
 # Run `cargo diet` on all crates to see that they are still in bounds
 check-size:
     etc/check-package-size.sh

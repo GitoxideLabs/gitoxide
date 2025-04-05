@@ -89,16 +89,16 @@ mod interpolate {
         Ok(())
     }
 
-    #[cfg(windows)]
+    #[cfg(any(target_os = "windows", target_os = "android"))]
     #[test]
-    fn tilde_with_given_user_is_unsupported_on_windows() {
+    fn tilde_with_given_user_is_unsupported_on_windows_and_android() {
         assert!(matches!(
             interpolate_without_context("~baz/foo/bar"),
             Err(gix_config_value::path::interpolate::Error::UserInterpolationUnsupported)
         ));
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     #[test]
     fn tilde_with_given_user() -> crate::Result {
         let home = std::env::current_dir()?;
