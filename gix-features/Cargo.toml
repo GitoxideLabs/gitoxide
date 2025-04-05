@@ -48,7 +48,7 @@ parallel = ["dep:crossbeam-channel", "dep:parking_lot"]
 once_cell = ["dep:once_cell"]
 ## Makes facilities of the `walkdir` crate partially available.
 ## In conjunction with the **parallel** feature, directory walking will be parallel instead behind a compatible interface.
-walkdir = ["dep:walkdir", "dep:gix-utils"]
+walkdir = ["dep:walkdir", "dep:gix-path", "dep:gix-utils"]
 #* an in-memory unidirectional pipe using `bytes` as efficient transfer mechanism.
 io-pipe = ["dep:bytes"]
 ## provide a proven and fast `crc32` implementation.
@@ -106,6 +106,7 @@ required-features = ["io-pipe"]
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
 
 # for walkdir
+gix-path = { version = "^0.10.15", path = "../gix-path", optional = true }
 gix-utils = { version = "^0.2.0", path = "../gix-utils", optional = true }
 
 # 'parallel' feature

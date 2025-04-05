@@ -24,10 +24,10 @@ fn common_values_and_names_by_path() -> crate::Result {
             "recursive-clone/submodule/.gitmodules",
             "relative-clone/.gitmodules",
             "relative-clone/submodule/.gitmodules",
-            "super/.gitmodules",
-            "super/submodule/.gitmodules",
             "super-clone/.gitmodules",
             "super-clone/submodule/.gitmodules",
+            "super/.gitmodules",
+            "super/submodule/.gitmodules",
             "top-only-clone/.gitmodules"
         ]
         .into_iter()

@@ -31,8 +31,8 @@ mod with_namespace {
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
         let expected_namespaced_refs = vec![
-            "refs/namespaces/bar/refs/multi-link",
             "refs/namespaces/bar/refs/heads/multi-link-target1",
+            "refs/namespaces/bar/refs/multi-link",
             "refs/namespaces/bar/refs/remotes/origin/multi-link-target3",
             "refs/namespaces/bar/refs/tags/multi-link-target2",
         ];
@@ -50,8 +50,8 @@ mod with_namespace {
                 .map(|r| r.name.into_inner())
                 .collect::<Vec<_>>(),
             [
-                "refs/namespaces/bar/refs/multi-link",
                 "refs/namespaces/bar/refs/heads/multi-link-target1",
+                "refs/namespaces/bar/refs/multi-link",
                 "refs/namespaces/bar/refs/tags/multi-link-target2"
             ]
         );
@@ -149,8 +149,8 @@ mod with_namespace {
         let packed = ns_store.open_packed_buffer()?;
 
         let expected_refs = vec![
-            "refs/multi-link",
             "refs/heads/multi-link-target1",
+            "refs/multi-link",
             "refs/remotes/origin/multi-link-target3",
             "refs/tags/multi-link-target2",
         ];
@@ -198,8 +198,8 @@ mod with_namespace {
                 .map(|r| r.name.into_inner())
                 .collect::<Vec<_>>(),
             [
-                "refs/multi-link",
                 "refs/heads/multi-link-target1",
+                "refs/multi-link",
                 "refs/tags/multi-link-target2",
             ],
             "loose iterators have namespace support as well"
@@ -214,8 +214,8 @@ mod with_namespace {
                     .map(|r| r.name.into_inner())
                     .collect::<Vec<_>>(),
                 [
-                    "refs/namespaces/bar/refs/multi-link",
                     "refs/namespaces/bar/refs/heads/multi-link-target1",
+                    "refs/namespaces/bar/refs/multi-link",
                     "refs/namespaces/bar/refs/tags/multi-link-target2",
                     "refs/namespaces/foo/refs/remotes/origin/HEAD"
                 ],
@@ -291,14 +291,14 @@ fn loose_iter_with_broken_refs() -> crate::Result {
         ref_paths,
         vec![
             "d1",
-            "loop-a",
-            "loop-b",
-            "multi-link",
             "heads/A",
             "heads/d1",
             "heads/dt1",
             "heads/main",
             "heads/multi-link-target1",
+            "loop-a",
+            "loop-b",
+            "multi-link",
             "remotes/origin/HEAD",
             "remotes/origin/main",
             "remotes/origin/multi-link-target3",
@@ -483,19 +483,13 @@ fn overlay_iter_reproduce_1928() -> crate::Result {
         (
             "refs/heads/a/b",
             Object(
-                Sha1(2222222222222222222222222222222222222222),
+                Sha1(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
             ),
         ),
         (
             "refs/heads/a0",
             Object(
                 Sha1(cccccccccccccccccccccccccccccccccccccccc),
-            ),
-        ),
-        (
-            "refs/heads/a/b",
-            Object(
-                Sha1(bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb),
             ),
         ),
     ]
