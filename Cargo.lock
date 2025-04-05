@@ -1845,6 +1845,7 @@ dependencies = [
  "crossbeam-channel",
  "document-features",
  "flate2",
+ "gix-path 0.10.15",
  "gix-trace 0.1.12",
  "gix-utils 0.2.0",
  "libc",

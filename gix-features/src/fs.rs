@@ -217,19 +217,19 @@ pub mod walkdir {
     ///
     /// Use `precompose_unicode` to represent the `core.precomposeUnicode` configuration option.
     pub fn walkdir_sorted_new(root: &Path, _: Parallelism, precompose_unicode: bool) -> WalkDir {
-        fn ft_to_number(ft: std::fs::FileType) -> usize {
-            if ft.is_file() {
-                1
-            } else {
-                2
-            }
-        }
         WalkDir {
             inner: WalkDirImpl::new(root)
                 .sort_by(|a, b| {
-                    ft_to_number(a.file_type())
-                        .cmp(&ft_to_number(b.file_type()))
-                        .then_with(|| a.file_name().cmp(b.file_name()))
+                    // Ignore non-utf8 file name on Windows, which would probably be rejected by caller.
+                    let a_name = gix_path::os_str_into_bstr(a.file_name()).unwrap_or("".as_ref());
+                    let b_name = gix_path::os_str_into_bstr(b.file_name()).unwrap_or("".as_ref());
+                    // "common." < "common/" < "common0"
+                    let common = a_name.len().min(b_name.len());
+                    a_name[..common].cmp(&b_name[..common]).then_with(|| {
+                        let a = a_name.get(common).or_else(|| a.file_type().is_dir().then_some(&b'/'));
+                        let b = b_name.get(common).or_else(|| b.file_type().is_dir().then_some(&b'/'));
+                        a.cmp(&b)
+                    })
                 })
                 .into(),
             precompose_unicode,
