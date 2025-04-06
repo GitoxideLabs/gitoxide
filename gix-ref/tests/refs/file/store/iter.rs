@@ -262,7 +262,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
     let store = store()?;
 
     let mut actual: Vec<_> = store.loose_iter()?.collect();
-    assert_eq!(actual.len(), 16);
+    assert_eq!(actual.len(), 18);
     actual.sort_by_key(Result::is_err);
     let first_error = actual
         .iter()
@@ -271,7 +271,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
         .expect("there is an error");
 
     assert_eq!(
-        first_error, 15,
+        first_error, 17,
         "there is exactly one invalid item, and it didn't abort the iterator most importantly"
     );
     #[cfg(not(windows))]
@@ -296,10 +296,12 @@ fn loose_iter_with_broken_refs() -> crate::Result {
             "heads/dt1",
             "heads/main",
             "heads/multi-link-target1",
+            "heads/sub-dir/d2",
             "loop-a",
             "loop-b",
             "multi-link",
             "remotes/origin/HEAD",
+            "remotes/origin/heads",
             "remotes/origin/main",
             "remotes/origin/multi-link-target3",
             "tags/dt1",
@@ -349,6 +351,7 @@ fn loose_iter_with_prefix() -> crate::Result {
             "refs/heads/dt1",
             "refs/heads/main",
             "refs/heads/multi-link-target1",
+            "refs/heads/sub-dir/d2",
         ]
         .into_iter()
         .map(String::from)

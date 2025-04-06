@@ -14,17 +14,22 @@ pub(in crate::store_impl::file) struct SortedLoosePaths {
 
 impl SortedLoosePaths {
     pub fn at(path: &Path, base: PathBuf, filename_prefix: Option<BString>, precompose_unicode: bool) -> Self {
+        let has_filename_prefix = filename_prefix.is_some();
         SortedLoosePaths {
             base,
             filename_prefix,
             file_walk: path.is_dir().then(|| {
                 // serial iteration as we expect most refs in packed-refs anyway.
-                gix_features::fs::walkdir_sorted_new(
+                let mut walkdir = gix_features::fs::walkdir_sorted_new(
                     path,
                     gix_features::fs::walkdir::Parallelism::Serial,
                     precompose_unicode,
-                )
-                .into_iter()
+                );
+                // With a filename prefix, only files within the base are of interest.
+                if has_filename_prefix {
+                    walkdir = walkdir.max_depth(1);
+                }
+                walkdir.into_iter()
             }),
         }
     }

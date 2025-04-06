@@ -22,6 +22,11 @@ echo "ref: refs/tags/multi-link-target2" > .git/refs/heads/multi-link-target1
 echo "ref: refs/remotes/origin/multi-link-target3" > .git/refs/tags/multi-link-target2
 git rev-parse HEAD > .git/refs/remotes/origin/multi-link-target3
 
+# Regression test for issue #1934 where prefix refs/m matched refs/heads/main.
+# Testing both single subdirectory with 'sub-dir'.
+mkdir .git/refs/heads/sub-dir
+echo "ref: refs/remotes/origin/main" > .git/refs/heads/sub-dir/d2
+echo "ref: refs/remotes/origin/main" > .git/refs/remotes/origin/heads
 
 echo "ref: refs/loop-b" > .git/refs/loop-a
 echo "ref: refs/loop-a" > .git/refs/loop-b
