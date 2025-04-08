@@ -349,7 +349,7 @@ impl ThreadSafeRepository {
             .and_then(|prefix| {
                 let _span = gix_trace::detail!("find replacement objects");
                 let platform = refs.iter().ok()?;
-                let iter = platform.prefixed(*&prefix).ok()?;
+                let iter = platform.prefixed(prefix.clone()).ok()?;
                 let replacements = iter
                     .filter_map(Result::ok)
                     .filter_map(|r: gix_ref::Reference| {
