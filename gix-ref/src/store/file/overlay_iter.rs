@@ -284,7 +284,11 @@ impl<'a> IterInfo<'a> {
         .peekable()
     }
 
-    fn from_prefix(base: &'a Path, prefix: impl Into<Cow<'a, BStr>>, precompose_unicode: bool) -> std::io::Result<Self> {
+    fn from_prefix(
+        base: &'a Path,
+        prefix: impl Into<Cow<'a, BStr>>,
+        precompose_unicode: bool,
+    ) -> std::io::Result<Self> {
         let prefix = prefix.into();
         let prefix_path = gix_path::from_bstring(prefix.clone().into_owned());
         if prefix_path.is_absolute() {
