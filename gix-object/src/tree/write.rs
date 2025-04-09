@@ -40,11 +40,9 @@ impl crate::WriteTo for Tree {
             out.write_all(mode.as_bytes(&mut buf))?;
             out.write_all(SPACE)?;
 
-            let name: &BString = filename;
-
             if filename.find_byte(0).is_some() {
                 return Err(Error::NullbyteInFilename {
-                    name: (*name).to_owned(),
+                    name: filename.to_bstring(),
                 }
                 .into());
             }
