@@ -250,7 +250,11 @@ impl Ord for EntryRef<'_> {
 }
 
 /// TODO
-/// Keep in mind that the path separator always is `/`, independent of the platform.
+/// Keep the following constraints in mind:
+///
+/// - The path separator always is `/`, independent of the platform.
+/// - Only normal components are allowed.
+/// - This is always represented as a bunch of bytes.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RepositoryPathPuf {
