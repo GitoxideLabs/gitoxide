@@ -1,9 +1,11 @@
+use bstr::ByteSlice;
+
 use crate::{
     bstr::{BStr, BString},
     tree, Tree, TreeRef,
 };
-use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::{cell::RefCell, u8};
 
 ///
 pub mod editor;
@@ -336,10 +338,40 @@ pub struct RepositoryPathPuf {
     inner: BString,
 }
 
+impl RepositoryPathPuf {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn get(&self, index: usize) -> std::option::Option<&u8> {
+        self.inner.get(index)
+    }
+
+    fn find_byte(&self, byte: u8) -> std::option::Option<usize> {
+        self.inner.find_byte(byte)
+    }
+
+    /// TODO
+    pub fn to_bstring(&self) -> BString {
+        self.inner.clone()
+    }
+}
+
 impl std::fmt::Display for RepositoryPathPuf {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.fmt(f)
+    }
+}
+
+impl std::ops::Index<std::ops::RangeTo<usize>> for RepositoryPathPuf {
+    type Output = BStr;
+
+    #[inline]
+    fn index(&self, r: std::ops::RangeTo<usize>) -> &BStr {
+        use bstr::ByteSlice;
+
+        BStr::new(&self.inner.as_bytes()[..r.end])
     }
 }
 
@@ -362,10 +394,10 @@ impl From<BString> for RepositoryPathPuf {
 }
 
 impl std::ops::Deref for RepositoryPathPuf {
-    type Target = BString;
+    type Target = [u8];
 
     #[inline]
-    fn deref(&self) -> &BString {
+    fn deref(&self) -> &[u8] {
         &self.inner
     }
 }
