@@ -5,6 +5,7 @@ use std::{borrow::Cow, path::PathBuf};
 
 use super::{Error, Options};
 use crate::{
+    bstr::BString,
     config,
     config::{
         cache::interpolate_context,
@@ -348,14 +349,13 @@ impl ThreadSafeRepository {
             .and_then(|prefix| {
                 let _span = gix_trace::detail!("find replacement objects");
                 let platform = refs.iter().ok()?;
-                let iter = platform.prefixed(&prefix).ok()?;
-                let prefix = prefix.to_str()?;
+                let iter = platform.prefixed(prefix.clone()).ok()?;
                 let replacements = iter
                     .filter_map(Result::ok)
                     .filter_map(|r: gix_ref::Reference| {
                         let target = r.target.try_id()?.to_owned();
                         let source =
-                            gix_hash::ObjectId::from_hex(r.name.as_bstr().strip_prefix(prefix.as_bytes())?).ok()?;
+                            gix_hash::ObjectId::from_hex(r.name.as_bstr().strip_prefix(prefix.as_slice())?).ok()?;
                         Some((source, target))
                     })
                     .collect::<Vec<_>>();
@@ -394,7 +394,7 @@ fn replacement_objects_refs_prefix(
     config: &gix_config::File<'static>,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
-) -> Result<Option<PathBuf>, Error> {
+) -> Result<Option<BString>, Error> {
     let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)
         .map_err(config::Error::ConfigBoolean)?
         .unwrap_or(true);
@@ -403,15 +403,15 @@ fn replacement_objects_refs_prefix(
         return Ok(None);
     }
 
-    let ref_base = gix_path::from_bstr({
+    let ref_base = {
         let key = "gitoxide.objects.replaceRefBase";
         debug_assert_eq!(gitoxide::Objects::REPLACE_REF_BASE.logical_name(), key);
         config
             .string_filter(key, &mut filter_config_section)
             .unwrap_or_else(|| Cow::Borrowed("refs/replace/".into()))
-    })
+    }
     .into_owned();
-    Ok(ref_base.into())
+    Ok(Some(ref_base))
 }
 
 fn check_safe_directories(

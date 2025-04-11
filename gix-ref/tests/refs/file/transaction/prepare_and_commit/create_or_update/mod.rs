@@ -791,7 +791,7 @@ fn packed_refs_creation_with_packed_refs_mode_prune_removes_original_loose_refs(
 
     assert_eq!(
         edits.len(),
-        9,
+        11,
         "there are a certain amount of loose refs that are packed"
     );
 

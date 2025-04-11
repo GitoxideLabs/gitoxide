@@ -191,6 +191,7 @@ mod read_only {
 mod writable {
     use gix_lock::acquire::Fail;
     use gix_ref::{
+        bstr::ByteSlice,
         file::{transaction::PackedRefs, Store},
         transaction::{Change, LogChange, PreviousValue, RefEdit},
         FullName, FullNameRef, Target,
@@ -290,7 +291,7 @@ mod writable {
             assert_eq!(
                 store
                     .iter()?
-                    .prefixed("refs/stacks/".as_ref())?
+                    .prefixed(b"refs/stacks/".as_bstr())?
                     .map(Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
@@ -571,7 +572,7 @@ mod writable {
             assert_eq!(
                 store
                     .iter()?
-                    .prefixed("refs/stacks/".as_ref())?
+                    .prefixed(b"refs/stacks/".as_bstr())?
                     .map(Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),

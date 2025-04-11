@@ -1,12 +1,16 @@
-use std::path::Path;
-
 #[test]
 fn into_namespaced_prefix() {
     assert_eq!(
         gix_ref::namespace::expand("foo")
             .unwrap()
             .into_namespaced_prefix("prefix".as_ref()),
-        Path::new("refs").join("namespaces").join("foo").join("prefix")
+        "refs/namespaces/foo/prefix".as_ref(),
+    );
+    assert_eq!(
+        gix_ref::namespace::expand("foo")
+            .unwrap()
+            .into_namespaced_prefix("prefix/".as_ref()),
+        "refs/namespaces/foo/prefix/".as_ref(),
     );
 }
 

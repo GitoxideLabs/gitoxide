@@ -10,8 +10,11 @@ git branch A
 git tag -m "tag object" tag-object
 
 mkdir -p .git/refs/remotes/origin
+mkdir -p .git/refs/prefix/feature/sub/dir
 
 cp .git/refs/heads/main .git/refs/remotes/origin/
+cp .git/refs/heads/main .git/refs/prefix/feature-suffix
+cp .git/refs/heads/main .git/refs/prefix/feature/sub/dir/algo
 
 echo "ref: refs/remotes/origin/main" > .git/refs/remotes/origin/HEAD
 

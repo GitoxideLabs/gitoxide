@@ -1,9 +1,6 @@
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
-use crate::{bstr::BStr, store::WriteReflog, Namespace};
+use crate::{store::WriteReflog, Namespace};
 
 /// A store for reference which uses plain files.
 ///
@@ -90,11 +87,6 @@ pub struct Transaction<'s, 'p> {
     packed_transaction: Option<crate::store_impl::packed::Transaction>,
     updates: Option<Vec<transaction::Edit>>,
     packed_refs: transaction::PackedRefs<'p>,
-}
-
-pub(in crate::store_impl::file) fn path_to_name<'a>(path: impl Into<Cow<'a, Path>>) -> Cow<'a, BStr> {
-    let path = gix_path::into_bstr(path.into());
-    gix_path::to_unix_separators_on_windows(path)
 }
 
 ///

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use gix_object::bstr::ByteSlice;
 
 use crate::{
@@ -26,7 +28,7 @@ mod with_namespace {
         let ns_two = gix_ref::namespace::expand("bar")?;
         let namespaced_refs = store
             .iter()?
-            .prefixed(ns_two.to_path())?
+            .prefixed(ns_two.as_bstr())?
             .map(Result::unwrap)
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
@@ -45,7 +47,7 @@ mod with_namespace {
         );
         assert_eq!(
             store
-                .loose_iter_prefixed(ns_two.to_path())?
+                .loose_iter_prefixed(ns_two.as_bstr())?
                 .map(Result::unwrap)
                 .map(|r| r.name.into_inner())
                 .collect::<Vec<_>>(),
@@ -59,7 +61,7 @@ mod with_namespace {
             packed
                 .as_ref()
                 .expect("present")
-                .iter_prefixed(ns_two.as_bstr().into())?
+                .iter_prefixed(ns_two.as_bstr().to_owned())?
                 .map(Result::unwrap)
                 .map(|r| r.name.to_owned().into_inner())
                 .collect::<Vec<_>>(),
@@ -90,7 +92,7 @@ mod with_namespace {
         assert_eq!(
             store
                 .iter()?
-                .prefixed(ns_one.to_path())?
+                .prefixed(ns_one.as_bstr())?
                 .map(Result::unwrap)
                 .map(|r: gix_ref::Reference| (
                     r.name.as_bstr().to_owned(),
@@ -253,7 +255,7 @@ fn no_packed_available_thus_no_iteration_possible() -> crate::Result {
 #[test]
 fn packed_file_iter() -> crate::Result {
     let store = store_with_packed_refs()?;
-    assert_eq!(store.open_packed_buffer()?.expect("pack available").iter()?.count(), 9);
+    assert_eq!(store.open_packed_buffer()?.expect("pack available").iter()?.count(), 11);
     Ok(())
 }
 
@@ -262,7 +264,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
     let store = store()?;
 
     let mut actual: Vec<_> = store.loose_iter()?.collect();
-    assert_eq!(actual.len(), 16);
+    assert_eq!(actual.len(), 18);
     actual.sort_by_key(Result::is_err);
     let first_error = actual
         .iter()
@@ -271,7 +273,7 @@ fn loose_iter_with_broken_refs() -> crate::Result {
         .expect("there is an error");
 
     assert_eq!(
-        first_error, 15,
+        first_error, 17,
         "there is exactly one invalid item, and it didn't abort the iterator most importantly"
     );
     #[cfg(not(windows))]
@@ -299,6 +301,8 @@ fn loose_iter_with_broken_refs() -> crate::Result {
             "loop-a",
             "loop-b",
             "multi-link",
+            "prefix/feature-suffix",
+            "prefix/feature/sub/dir/algo",
             "remotes/origin/HEAD",
             "remotes/origin/main",
             "remotes/origin/multi-link-target3",
@@ -322,19 +326,50 @@ fn loose_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
     #[cfg(windows)]
     let abs_path = r"c:\hello";
 
-    match store.loose_iter_prefixed(abs_path.as_ref()) {
+    match store.loose_iter_prefixed(Cow::Borrowed(abs_path.as_ref())) {
         Ok(_) => unreachable!("absolute paths aren't allowed"),
-        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads'"),
+        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
     }
     Ok(())
 }
 
 #[test]
 fn loose_iter_with_prefix() -> crate::Result {
+    // Test 'refs/heads/' with slash.
     let store = store()?;
 
     let actual = store
-        .loose_iter_prefixed("refs/heads/".as_ref())?
+        .loose_iter_prefixed(b"refs/heads/".as_bstr())?
+        .collect::<Result<Vec<_>, _>>()
+        .expect("no broken ref in this subset")
+        .into_iter()
+        .map(|e| e.name.into_inner())
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            "refs/heads/A",
+            "refs/heads/d1",
+            "refs/heads/dt1",
+            "refs/heads/main",
+            "refs/heads/multi-link-target1",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>(),
+        "all paths are as expected"
+    );
+    Ok(())
+}
+
+#[test]
+fn loose_iter_with_partial_prefix_dir() -> crate::Result {
+    // Test 'refs/heads/' without slash.
+    let store = store()?;
+
+    let actual = store
+        .loose_iter_prefixed(b"refs/heads".as_bstr())?
         .collect::<Result<Vec<_>, _>>()
         .expect("no broken ref in this subset")
         .into_iter()
@@ -363,7 +398,7 @@ fn loose_iter_with_partial_prefix() -> crate::Result {
     let store = store()?;
 
     let actual = store
-        .loose_iter_prefixed("refs/heads/d".as_ref())?
+        .loose_iter_prefixed(b"refs/heads/d".as_bstr())?
         .collect::<Result<Vec<_>, _>>()
         .expect("no broken ref in this subset")
         .into_iter()
@@ -399,6 +434,8 @@ fn overlay_iter() -> crate::Result {
             (b"refs/heads/A".as_bstr().to_owned(), Object(c1)),
             (b"refs/heads/main".into(), Object(c1)),
             ("refs/heads/newer-as-loose".into(), Object(c2)),
+            ("refs/prefix/feature-suffix".into(), Object(c1)),
+            ("refs/prefix/feature/sub/dir/algo".into(), Object(c1)),
             (
                 "refs/remotes/origin/HEAD".into(),
                 Symbolic("refs/remotes/origin/main".try_into()?),
@@ -505,9 +542,9 @@ fn overlay_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
     #[cfg(windows)]
     let abs_path = r"c:\hello";
 
-    match store.iter()?.prefixed(abs_path.as_ref()) {
+    match store.iter()?.prefixed(Cow::Borrowed(abs_path.as_ref())) {
         Ok(_) => unreachable!("absolute paths aren't allowed"),
-        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads'"),
+        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
     }
     Ok(())
 }
@@ -519,7 +556,7 @@ fn overlay_prefixed_iter() -> crate::Result {
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
     let ref_names = store
         .iter()?
-        .prefixed("refs/heads".as_ref())?
+        .prefixed(b"refs/heads/".as_bstr())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
@@ -542,10 +579,62 @@ fn overlay_partial_prefix_iter() -> crate::Result {
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
     let ref_names = store
         .iter()?
-        .prefixed("refs/heads/m".as_ref())? // 'm' is partial
+        .prefixed(b"refs/heads/m".as_bstr())? // 'm' is partial
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
     assert_eq!(ref_names, vec![(b"refs/heads/main".as_bstr().to_owned(), Object(c1)),]);
+    Ok(())
+}
+
+#[test]
+/// The prefix `refs/d` should match `refs/d1` but not `refs/heads/d1`.
+fn overlay_partial_prefix_iter_reproduce_1934() -> crate::Result {
+    use gix_ref::Target::*;
+
+    let store = store_at("make_ref_repository.sh")?;
+    let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
+
+    let ref_names = store
+        .iter()?
+        .prefixed(b"refs/d".as_bstr())?
+        .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Should not match `refs/heads/d1`.
+    assert_eq!(ref_names, vec![("refs/d1".into(), Object(c1)),]);
+    Ok(())
+}
+
+#[test]
+fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
+    // Test 'refs/prefix/' with and without trailing slash.
+    use gix_ref::Target::*;
+
+    let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
+    let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
+
+    let ref_names = store
+        .iter()?
+        .prefixed(b"refs/prefix/feature".as_bstr())?
+        .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        ref_names,
+        vec![
+            ("refs/prefix/feature-suffix".into(), Object(c1)),
+            ("refs/prefix/feature/sub/dir/algo".into(), Object(c1)),
+        ]
+    );
+
+    let ref_names = store
+        .iter()?
+        .prefixed(b"refs/prefix/feature/".as_bstr())?
+        .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        ref_names,
+        vec![("refs/prefix/feature/sub/dir/algo".into(), Object(c1)),]
+    );
+
     Ok(())
 }
