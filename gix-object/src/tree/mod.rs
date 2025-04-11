@@ -1,9 +1,11 @@
+use bstr::ByteSlice;
+
 use crate::{
     bstr::{BStr, BString},
     tree, Tree, TreeRef,
 };
-use std::cell::RefCell;
 use std::cmp::Ordering;
+use std::{cell::RefCell, u8};
 
 ///
 pub mod editor;
@@ -323,6 +325,83 @@ impl Ord for EntryRef<'_> {
     }
 }
 
+/// TODO
+/// Keep the following constraints in mind:
+///
+/// - The path separator always is `/`, independent of the platform.
+/// - Only normal components are allowed.
+/// - This is always represented as a bunch of bytes.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RepositoryPathPuf {
+    /// TODO
+    inner: BString,
+}
+
+impl RepositoryPathPuf {
+    fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    fn get(&self, index: usize) -> std::option::Option<&u8> {
+        self.inner.get(index)
+    }
+
+    fn find_byte(&self, byte: u8) -> std::option::Option<usize> {
+        self.inner.find_byte(byte)
+    }
+
+    /// TODO
+    pub fn to_bstring(&self) -> BString {
+        self.inner.clone()
+    }
+}
+
+impl std::fmt::Display for RepositoryPathPuf {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl std::ops::Index<std::ops::RangeTo<usize>> for RepositoryPathPuf {
+    type Output = BStr;
+
+    #[inline]
+    fn index(&self, r: std::ops::RangeTo<usize>) -> &BStr {
+        use bstr::ByteSlice;
+
+        BStr::new(&self.inner.as_bytes()[..r.end])
+    }
+}
+
+impl From<&str> for RepositoryPathPuf {
+    fn from(value: &str) -> Self {
+        Self { inner: value.into() }
+    }
+}
+
+impl From<&BStr> for RepositoryPathPuf {
+    fn from(value: &BStr) -> Self {
+        Self { inner: value.into() }
+    }
+}
+
+impl From<BString> for RepositoryPathPuf {
+    fn from(value: BString) -> Self {
+        Self { inner: value }
+    }
+}
+
+impl std::ops::Deref for RepositoryPathPuf {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        &self.inner
+    }
+}
+
 /// An entry in a [`Tree`], similar to an entry in a directory.
 #[derive(PartialEq, Eq, Debug, Hash, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -330,7 +409,7 @@ pub struct Entry {
     /// The kind of object to which `oid` is pointing to.
     pub mode: EntryMode,
     /// The name of the file in the parent tree.
-    pub filename: BString,
+    pub filename: RepositoryPathPuf,
     /// The id of the object representing the entry.
     pub oid: gix_hash::ObjectId,
 }
