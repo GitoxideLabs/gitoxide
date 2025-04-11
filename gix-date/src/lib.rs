@@ -15,7 +15,11 @@ pub mod time;
 
 ///
 pub mod parse;
+use bstr::{BStr, ByteSlice};
 pub use parse::function::parse;
+use parse::function::parse_raw;
+use parse::Error;
+use std::time::SystemTime;
 
 /// A timestamp with timezone.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
@@ -27,6 +31,19 @@ pub struct Time {
     pub offset: OffsetInSeconds,
     /// the sign of `offset`, used to encode `-0000` which would otherwise lose sign information.
     pub sign: time::Sign,
+}
+
+impl Time {
+    /// Parse date in config format into a Time
+    pub fn from_config(i: &BStr) -> Result<Self, Error> {
+        let s = i.as_bstr().to_str().expect("Input must be ascii");
+        parse(s, Some(SystemTime::now()))
+    }
+    /// Parse raw bytes into a Time
+    pub fn from_bytes(i: &BStr) -> Result<Self, Error> {
+        let s = i.as_bstr().to_str().expect("Input must be ascii");
+        parse_raw(s).ok_or(Error::InvalidDateString { input: s.into() })
+    }
 }
 
 /// The amount of seconds since unix epoch.

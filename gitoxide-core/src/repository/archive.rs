@@ -84,7 +84,7 @@ fn fetch_rev_info(
     Ok(match object.kind {
         gix::object::Kind::Commit => {
             let commit = object.into_commit();
-            (Some(commit.committer()?.time.seconds), commit.tree_id()?.detach())
+            (Some(commit.committer()?.seconds()), commit.tree_id()?.detach())
         }
         gix::object::Kind::Tree => (None, object.id),
         gix::object::Kind::Tag => fetch_rev_info(object.peel_to_kind(gix::object::Kind::Commit)?)?,

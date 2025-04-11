@@ -157,7 +157,7 @@ pub(crate) fn update(
                                                 .find_object(local_id)?
                                                 .try_into_commit()
                                                 .map_err(|_| ())
-                                                .and_then(|c| c.committer().map(|a| a.time.seconds).map_err(|_| ()))
+                                                .and_then(|c| c.committer().map(|a| a.seconds()).map_err(|_| ()))
                                                 .and_then(|local_commit_time| {
                                                     remote_id
                                                         .to_owned()

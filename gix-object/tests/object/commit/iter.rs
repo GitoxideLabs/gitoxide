@@ -33,10 +33,10 @@ fn signed_with_encoding() -> crate::Result {
                 id: hex_to_id("79c51cc86923e2b8ca0ee5c4eb75e48027133f9a")
             },
             Token::Author {
-                signature: signature(1592448995)
+                signature: signature(b"1592448995 +0800")
             },
             Token::Committer {
-                signature: signature(1592449083)
+                signature: signature(b"1592449083 +0800")
             },
             Token::Encoding(b"ISO-8859-1".as_bstr()),
             Token::ExtraHeader((b"gpgsig".as_bstr(), SIGNATURE.as_bytes().as_bstr().into())),
@@ -44,8 +44,8 @@ fn signed_with_encoding() -> crate::Result {
         ]
     );
 
-    assert_eq!(iter.author().ok(), Some(signature(1592448995)));
-    assert_eq!(iter.committer().ok(), Some(signature(1592449083)));
+    assert_eq!(iter.author().ok(), Some(signature(b"1592448995 +0800")));
+    assert_eq!(iter.committer().ok(), Some(signature(b"1592449083 +0800")));
     Ok(())
 }
 
@@ -61,10 +61,10 @@ fn whitespace() -> crate::Result {
                 id: hex_to_id("26b4df046d1776c123ac69d918f5aec247b58cc6")
             },
             Token::Author {
-                signature: signature(1592448450)
+                signature: signature(b"1592448450 +0800")
             },
             Token::Committer {
-                signature: signature(1592448450)
+                signature: signature(b"1592448450 +0800")
             },
             Token::Message(b" nl".as_bstr())
         ]
@@ -81,10 +81,10 @@ fn unsigned() -> crate::Result {
                 id: hex_to_id("1b2dfb4ac5e42080b682fc676e9738c94ce6d54d")
             },
             Token::Author {
-                signature: signature(1592437401)
+                signature: signature(b"1592437401 +0800")
             },
             Token::Committer {
-                signature: signature(1592437401)
+                signature: signature(b"1592437401 +0800")
             },
             Token::Message(b"without sig".as_bstr())
         ]
@@ -104,10 +104,10 @@ fn signed_singleline() -> crate::Result {
                 id: hex_to_id("09d8d3a12e161a7f6afb522dbe8900a9c09bce06")
             },
             Token::Author {
-                signature: signature(1592391367)
+                signature: signature(b"1592391367 +0800")
             },
             Token::Committer {
-                signature: signature(1592391367)
+                signature: signature(b"1592391367 +0800")
             },
             Token::ExtraHeader((b"gpgsig".as_bstr(), b"magic:signature".as_bstr().into())),
             Token::Message(b"update tasks\n".as_bstr()),
@@ -151,10 +151,10 @@ fn mergetag() -> crate::Result {
                 id: hex_to_id("8d485da0ddee79d0e6713405694253d401e41b93")
             },
             Token::Author {
-                signature: linus_signature(1591996221)
+                signature: linus_signature(b"1591996221 -0700")
             },
             Token::Committer {
-                signature: linus_signature(1591996221)
+                signature: linus_signature(b"1591996221 -0700")
             },
             Token::ExtraHeader((b"mergetag".as_bstr(), MERGE_TAG.as_bytes().as_bstr().into())),
             Token::Message(LONG_MESSAGE.into()),
@@ -186,7 +186,7 @@ mod method {
         );
         assert_eq!(
             iter.signatures().collect::<Vec<_>>(),
-            vec![signature(1592437401), signature(1592437401)]
+            vec![signature(b"1592437401 +0800"), signature(b"1592437401 +0800")]
         );
         assert_eq!(iter.parent_ids().count(), 0);
         Ok(())
@@ -198,11 +198,15 @@ mod method {
         let iter = CommitRefIter::from_bytes(&input);
         assert_eq!(
             iter.signatures().collect::<Vec<_>>(),
-            vec![signature(1592437401), signature(1592437401)]
+            vec![signature(b"1592437401 +0800"), signature(b"1592437401 +0800")]
         );
-        assert_eq!(iter.author().ok(), Some(signature(1592437401)));
-        assert_eq!(iter.committer().ok(), Some(signature(1592437401)));
-        assert_eq!(iter.author().ok(), Some(signature(1592437401)), "it's not consuming");
+        assert_eq!(iter.author().ok(), Some(signature(b"1592437401 +0800")));
+        assert_eq!(iter.committer().ok(), Some(signature(b"1592437401 +0800")));
+        assert_eq!(
+            iter.author().ok(),
+            Some(signature(b"1592437401 +0800")),
+            "it's not consuming"
+        );
         Ok(())
     }
 

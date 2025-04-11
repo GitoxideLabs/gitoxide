@@ -1,5 +1,4 @@
 pub(crate) mod prepare_and_commit {
-    use gix_date::{time::Sign, Time};
     use gix_hash::ObjectId;
     use gix_object::bstr::BString;
     use gix_ref::{
@@ -30,11 +29,7 @@ pub(crate) mod prepare_and_commit {
         gix_actor::Signature {
             name: "committer".into(),
             email: "committer@example.com".into(),
-            time: Time {
-                seconds: 1234,
-                offset: 1800,
-                sign: Sign::Plus,
-            },
+            time: "1234 +0800".into(),
         }
     }
 

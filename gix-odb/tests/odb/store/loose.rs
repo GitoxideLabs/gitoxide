@@ -1,6 +1,5 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_date::{time::Sign, SecondsSinceUnixEpoch, Time};
 use gix_features::progress;
 use gix_object::bstr::ByteSlice;
 use gix_odb::loose::Store;
@@ -285,7 +284,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
 "
                 .as_bstr(),
             ),
-            tagger: Some(signature(1528473343)),
+            tagger: Some(signature(b"1528473343 +0200")),
         };
         assert_eq!(o.decode()?.as_tag().expect("tag"), &expected);
         Ok(())
@@ -300,8 +299,8 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         let expected = CommitRef {
             tree: b"6ba2a0ded519f737fd5b8d5ccfb141125ef3176f".as_bstr(),
             parents: vec![].into(),
-            author: signature(1528473303),
-            committer: signature(1528473303),
+            author: signature(b"1528473303 +0200"),
+            committer: signature(b"1528473303 +0200"),
             encoding: None,
             message: b"initial commit\n".as_bstr(),
             extra_headers: vec![(b"gpgsig".as_bstr(), b"-----BEGIN PGP SIGNATURE-----\nComment: GPGTools - https://gpgtools.org\n\niQIzBAABCgAdFiEEw7xSvXbiwjusbsBqZl+Z+p2ZlmwFAlsaptwACgkQZl+Z+p2Z\nlmxXSQ//fj6t7aWoEKeMdFigfj6OXWPUyrRbS0N9kpJeOfA0BIOea/6Jbn8J5qh1\nYRfrySOzHPXR5Y+w4GwLiVas66qyhAbk4yeqZM0JxBjHDyPyRGhjUd3y7WjEa6bj\nP0ACAIkYZQ/Q/LDE3eubmhAwEobBH3nZbwE+/zDIG0i265bD5C0iDumVOiKkSelw\ncr6FZVw1HH+GcabFkeLRZLNGmPqGdbeBwYERqb0U1aRCzV1xLYteoKwyWcYaH8E3\n97z1rwhUO/L7o8WUEJtP3CLB0zuocslMxskf6bCeubBnRNJ0YrRmxGarxCP3vn4D\n3a/MwECnl6mnUU9t+OnfvrzLDN73rlq8iasUq6hGe7Sje7waX6b2UGpxHqwykmXg\nVimD6Ah7svJanHryfJn38DvJW/wOMqmAnSUAp+Y8W9EIe0xVntCmtMyoKuqBoY7T\nJlZ1kHJte6ELIM5JOY9Gx7D0ZCSKZJQqyjoqtl36dsomT0I78/+7QS1DP4S6XB7d\nc3BYH0JkW81p7AAFbE543ttN0Z4wKXErMFqUKnPZUIEuybtlNYV+krRdfDBWQysT\n3MBebjguVQ60oGs06PzeYBosKGQrHggAcwduLFuqXhLTJqN4UQ18RkE0vbtG3YA0\n+XtZQM13vURdfwFI5qitAGgw4EzPVrkWWzApzLCrRPEMbvP+b9A=\n=2qqN\n-----END PGP SIGNATURE-----\n".as_bstr().into())]
@@ -429,14 +428,10 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 }
 
-fn signature(seconds: SecondsSinceUnixEpoch) -> gix_actor::SignatureRef<'static> {
+fn signature(time: &[u8]) -> gix_actor::SignatureRef<'_> {
     gix_actor::SignatureRef {
         name: b"Sebastian Thiel".as_bstr(),
         email: b"byronimo@gmail.com".as_bstr(),
-        time: Time {
-            seconds,
-            offset: 7200,
-            sign: Sign::Plus,
-        },
+        time: time.as_bstr(),
     }
 }

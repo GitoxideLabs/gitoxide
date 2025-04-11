@@ -60,11 +60,11 @@ pub(crate) mod function {
         })
     }
 
-    fn parse_raw(input: &str) -> Option<Time> {
+    pub(crate) fn parse_raw(input: &str) -> Option<Time> {
         let mut split = input.split_whitespace();
         let seconds: SecondsSinceUnixEpoch = split.next()?.parse().ok()?;
         let offset = split.next()?;
-        if offset.len() != 5 || split.next().is_some() {
+        if (offset.len() != 5) && (offset.len() != 7) || split.next().is_some() {
             return None;
         }
         let sign = match offset.get(..1)? {
@@ -74,7 +74,12 @@ pub(crate) mod function {
         }?;
         let hours: i32 = offset.get(1..3)?.parse().ok()?;
         let minutes: i32 = offset.get(3..5)?.parse().ok()?;
-        let mut offset_in_seconds = hours * 3600 + minutes * 60;
+        let offset_seconds: i32 = if offset.len() == 7 {
+            offset.get(5..7)?.parse().ok()?
+        } else {
+            0
+        };
+        let mut offset_in_seconds = hours * 3600 + minutes * 60 + offset_seconds;
         if sign == Sign::Minus {
             offset_in_seconds *= -1;
         }

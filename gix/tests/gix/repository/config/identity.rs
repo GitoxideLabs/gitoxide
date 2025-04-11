@@ -54,11 +54,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
             gix_actor::SignatureRef {
                 name: "author".into(),
                 email: "author@email".into(),
-                time: gix_date::Time {
-                    seconds: 1659329106,
-                    offset: 28800,
-                    sign: gix_date::time::Sign::Plus
-                }
+                time: "1659329106 +0800".into(),
             }
         );
 
@@ -67,11 +63,7 @@ fn author_and_committer_and_fallback() -> crate::Result {
             gix_actor::SignatureRef {
                 name: "committer".into(),
                 email: "committer@email".into(),
-                time: gix_date::Time {
-                    seconds: 1659365106,
-                    offset: -7200,
-                    sign: gix_date::time::Sign::Minus
-                }
+                time: "1659365106 -0200".into(),
             }
         );
         let config = repo.config_snapshot();
@@ -169,11 +161,7 @@ fn author_from_different_config_sections() -> crate::Result {
         Some(gix_actor::SignatureRef {
             name: "global name".into(),
             email: "local@example.com".into(),
-            time: gix_date::Time {
-                seconds: 42,
-                offset: 1800,
-                sign: gix_date::time::Sign::Plus
-            }
+            time: "42 +0030".into()
         }),
         "author name comes from global config, \
          but email comes from repository-local config",
@@ -183,11 +171,7 @@ fn author_from_different_config_sections() -> crate::Result {
         Some(gix_actor::SignatureRef {
             name: "local committer".into(),
             email: "global-committer@example.com".into(),
-            time: gix_date::Time {
-                seconds: 320437800,
-                offset: 0,
-                sign: gix_date::time::Sign::Plus,
-            }
+            time: "320437800 +0000".into()
         }),
         "committer name comes from repository-local config, \
          but committer email comes from global config"

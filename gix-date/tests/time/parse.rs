@@ -76,6 +76,24 @@ fn raw() {
         },
     );
 
+    assert_eq!(
+        gix_date::parse("1313584730 +051800", None).unwrap(),
+        Time {
+            seconds: 1313584730,
+            offset: 19080,
+            sign: Sign::Plus,
+        },
+    );
+
+    assert_eq!(
+        gix_date::parse("1313584730 +051842", None).unwrap(),
+        Time {
+            seconds: 1313584730,
+            offset: 19122,
+            sign: Sign::Plus,
+        },
+    );
+
     let expected = Time {
         seconds: 1660874655,
         offset: -28800,
@@ -88,6 +106,7 @@ fn raw() {
         "  1660874655 -0800  ",
         "  1660874655  -0800  ",
         "1660874655\t-0800",
+        "1660874655\t-080000",
     ] {
         assert_eq!(gix_date::parse(date_str, None).unwrap(), expected);
     }

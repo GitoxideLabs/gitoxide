@@ -137,7 +137,7 @@ impl delegate::Revision for Delegate<'_> {
                                 d.previous_oid
                             });
                         })
-                        .find(|l| l.signature.time.seconds <= date.seconds)
+                        .find(|l| l.signature.seconds() <= date.seconds)
                     {
                         Some(closest_line) => closest_line.new_oid,
                         None => match last {

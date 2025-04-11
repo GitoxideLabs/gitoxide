@@ -550,12 +550,12 @@ mod commit_as {
         let committer = gix::actor::Signature {
             name: "c".into(),
             email: "c@example.com".into(),
-            time: gix::date::Time::new(1, 1800),
+            time: "1 +0030".into(),
         };
         let author = gix::actor::Signature {
             name: "a".into(),
             email: "a@example.com".into(),
-            time: gix::date::Time::new(3, 3600),
+            time: "3 +0100".into(),
         };
 
         let commit_id = repo.commit_as(

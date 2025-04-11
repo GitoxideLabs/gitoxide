@@ -82,22 +82,16 @@ where
                         };
                         let name = string_ref(author.name.as_ref());
                         let email = string_ref(author.email.as_ref());
+                        let time = string_ref(author.time.as_ref());
 
-                        out.push((
-                            commit_idx,
-                            actor::SignatureRef {
-                                name,
-                                email,
-                                time: author.time,
-                            },
-                        ));
+                        out.push((commit_idx, actor::SignatureRef { name, email, time }));
                     }
                 }
                 out.shrink_to_fit();
                 out.sort_by(|a, b| {
                     a.1.email
                         .cmp(b.1.email)
-                        .then(a.1.time.seconds.cmp(&b.1.time.seconds).reverse())
+                        .then(a.1.seconds().cmp(&b.1.seconds()).reverse())
                 });
                 Ok(out)
             });

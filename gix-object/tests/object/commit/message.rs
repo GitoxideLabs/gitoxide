@@ -224,7 +224,6 @@ mod summary {
     use std::borrow::Cow;
 
     use gix_actor::SignatureRef;
-    use gix_date::{time::Sign, Time};
     use gix_object::{
         bstr::{BStr, ByteSlice},
         commit::MessageRef,
@@ -236,11 +235,7 @@ mod summary {
         let actor = SignatureRef {
             name: "name".into(),
             email: "email".into(),
-            time: Time {
-                seconds: 0,
-                offset: 0,
-                sign: Sign::Plus,
-            },
+            time: "0 0000".into(),
         };
         assert_eq!(
             CommitRef {

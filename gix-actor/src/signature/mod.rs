@@ -18,7 +18,7 @@ mod _ref {
             Signature {
                 name: self.name.to_owned(),
                 email: self.email.to_owned(),
-                time: self.time,
+                time: self.time.to_owned(),
             }
         }
 
@@ -27,7 +27,7 @@ mod _ref {
             SignatureRef {
                 name: self.name.trim().as_bstr(),
                 email: self.email.trim().as_bstr(),
-                time: self.time,
+                time: self.time.trim().as_bstr(),
             }
         }
 
@@ -50,7 +50,7 @@ mod convert {
             SignatureRef {
                 name: self.name.as_ref(),
                 email: self.email.as_ref(),
-                time: self.time,
+                time: self.time.as_ref(),
             }
         }
     }
@@ -61,7 +61,7 @@ mod convert {
             Signature {
                 name: name.to_owned(),
                 email: email.to_owned(),
-                time,
+                time: time.to_owned(),
             }
         }
     }
@@ -112,11 +112,11 @@ pub(crate) mod write {
             out.write_all(b"<")?;
             out.write_all(validated_token(self.email)?)?;
             out.write_all(b"> ")?;
-            self.time.write_to(out)
+            out.write_all(validated_token(self.time)?)
         }
         /// Computes the number of bytes necessary to serialize this signature
         pub fn size(&self) -> usize {
-            self.name.len() + 2 /* space <*/ + self.email.len() +  2 /* > space */ + self.time.size()
+            self.name.len() + 2 /* space <*/ + self.email.len() +  2 /* > space */ + self.time.len()
         }
     }
 
