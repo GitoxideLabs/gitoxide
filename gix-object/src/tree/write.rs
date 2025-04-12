@@ -42,7 +42,7 @@ impl crate::WriteTo for Tree {
 
             if filename.find_byte(0).is_some() {
                 return Err(Error::NullbyteInFilename {
-                    name: filename.to_bstring(),
+                    name: filename.to_bstring_do_not_use(),
                 }
                 .into());
             }
