@@ -111,12 +111,12 @@ mod tree {
         let mut tree = gix_object::Tree::empty();
         tree.entries.push(tree::Entry {
             mode: EntryKind::Blob.into(),
-            filename: "".into(),
+            filename: "".try_into().expect("TODO"),
             oid: gix_hash::Kind::Sha1.null(),
         });
         tree.entries.push(tree::Entry {
             mode: EntryKind::Tree.into(),
-            filename: "something\nwith\newlines\n".into(),
+            filename: "something\nwith\newlines\n".try_into().expect("TODO"),
             oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
         });
         tree.write_to(&mut std::io::sink())
@@ -128,7 +128,7 @@ mod tree {
         let mut tree = gix_object::Tree::empty();
         tree.entries.push(tree::Entry {
             mode: EntryKind::Blob.into(),
-            filename: "hi\0ho".into(),
+            filename: "hi\0ho".try_into().expect("TODO"),
             oid: gix_hash::Kind::Sha1.null(),
         });
         let err = tree.write_to(&mut std::io::sink()).unwrap_err();

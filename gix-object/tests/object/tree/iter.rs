@@ -124,7 +124,7 @@ mod lookup_entry {
         pub(super) fn entry(filename: &str, mode: tree::EntryKind, oid: gix_hash::ObjectId) -> Option<tree::Entry> {
             Some(tree::Entry {
                 mode: mode.into(),
-                filename: filename.into(),
+                filename: filename.try_into().ok()?,
                 oid,
             })
         }

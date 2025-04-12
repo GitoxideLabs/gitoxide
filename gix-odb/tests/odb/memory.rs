@@ -19,7 +19,7 @@ fn without_memory() -> crate::Result {
     let mut tree = tree.to_owned();
     tree.entries.push(tree::Entry {
         mode: tree::EntryKind::Blob.into(),
-        filename: "z-for-sorting_another-file-with-same-content".into(),
+        filename: "z-for-sorting_another-file-with-same-content".try_into().expect("TODO"),
         oid: existing,
     });
     let new_tree_id = odb.write(&tree)?;
@@ -62,7 +62,7 @@ fn with_memory() -> crate::Result {
     let mut tree = tree.to_owned();
     tree.entries.push(tree::Entry {
         mode: tree::EntryKind::Blob.into(),
-        filename: "z-for-sorting_another-file-with-same-content".into(),
+        filename: "z-for-sorting_another-file-with-same-content".try_into().expect("TODO"),
         oid: existing,
     });
     let new_tree_id = odb.write(&tree)?;

@@ -378,21 +378,41 @@ impl std::ops::Index<std::ops::RangeTo<usize>> for RepositoryPathPuf {
     }
 }
 
-impl From<&str> for RepositoryPathPuf {
-    fn from(value: &str) -> Self {
-        Self { inner: value.into() }
+///
+pub mod repository_path_buf {
+    /// The error used in [`RepositoryPathPuf`](super::RepositoryPathPuf).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {}
+}
+
+impl TryFrom<&str> for RepositoryPathPuf {
+    type Error = repository_path_buf::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        // TODO
+        // Check whether the documented constraints are met, return `Err` if not.
+        Ok(Self { inner: value.into() })
     }
 }
 
-impl From<&BStr> for RepositoryPathPuf {
-    fn from(value: &BStr) -> Self {
-        Self { inner: value.into() }
+impl TryFrom<&BStr> for RepositoryPathPuf {
+    type Error = repository_path_buf::Error;
+
+    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
+        // TODO
+        // Check whether the documented constraints are met, return `Err` if not.
+        Ok(Self { inner: value.into() })
     }
 }
 
-impl From<BString> for RepositoryPathPuf {
-    fn from(value: BString) -> Self {
-        Self { inner: value }
+impl TryFrom<BString> for RepositoryPathPuf {
+    type Error = repository_path_buf::Error;
+
+    fn try_from(value: BString) -> Result<Self, Self::Error> {
+        // TODO
+        // Check whether the documented constraints are met, return `Err` if not.
+        Ok(Self { inner: value })
     }
 }
 
