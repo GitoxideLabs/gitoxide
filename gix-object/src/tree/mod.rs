@@ -326,16 +326,14 @@ impl Ord for EntryRef<'_> {
     }
 }
 
-/// TODO
-/// Keep the following constraints in mind:
+/// A wrapper for `BString`. It is used to enforce the following constraints:
 ///
 /// - The path separator always is `/`, independent of the platform.
 /// - Only normal components are allowed.
-/// - This is always represented as a bunch of bytes.
+/// - It is always represented as a bunch of bytes.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RepositoryPathPuf {
-    /// TODO
     inner: BString,
 }
 
