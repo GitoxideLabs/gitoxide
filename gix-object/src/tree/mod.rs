@@ -5,8 +5,8 @@ use crate::{
     bstr::{BStr, BString},
     tree, Tree, TreeRef,
 };
+use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::{cell::RefCell, u8};
 
 ///
 pub mod editor;
