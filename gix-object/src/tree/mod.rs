@@ -1,4 +1,5 @@
 use bstr::ByteSlice;
+use gix_fs::stack::ToNormalPathComponents;
 
 use crate::{
     bstr::{BStr, BString},
@@ -380,18 +381,29 @@ impl std::ops::Index<std::ops::RangeTo<usize>> for RepositoryPathPuf {
 
 ///
 pub mod repository_path_buf {
+    use gix_fs::stack::to_normal_path_components;
+
     /// The error used in [`RepositoryPathPuf`](super::RepositoryPathPuf).
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
-    pub enum Error {}
+    pub enum Error {
+        #[error(transparent)]
+        ContainsNonNormalComponents(#[from] to_normal_path_components::Error),
+        #[error(transparent)]
+        IllegalUtf8(#[from] gix_path::Utf8Error),
+    }
 }
 
 impl TryFrom<&str> for RepositoryPathPuf {
     type Error = repository_path_buf::Error;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        // TODO
-        // Check whether the documented constraints are met, return `Err` if not.
+        let path = std::path::Path::new(value);
+
+        for component in path.to_normal_path_components() {
+            component?;
+        }
+
         Ok(Self { inner: value.into() })
     }
 }
@@ -400,8 +412,12 @@ impl TryFrom<&BStr> for RepositoryPathPuf {
     type Error = repository_path_buf::Error;
 
     fn try_from(value: &BStr) -> Result<Self, Self::Error> {
-        // TODO
-        // Check whether the documented constraints are met, return `Err` if not.
+        let path: &std::path::Path = &gix_path::try_from_bstr(value)?;
+
+        for component in path.to_normal_path_components() {
+            component?;
+        }
+
         Ok(Self { inner: value.into() })
     }
 }
@@ -410,8 +426,12 @@ impl TryFrom<BString> for RepositoryPathPuf {
     type Error = repository_path_buf::Error;
 
     fn try_from(value: BString) -> Result<Self, Self::Error> {
-        // TODO
-        // Check whether the documented constraints are met, return `Err` if not.
+        let path: &std::path::Path = &gix_path::try_from_bstr(&value)?;
+
+        for component in path.to_normal_path_components() {
+            component?;
+        }
+
         Ok(Self { inner: value })
     }
 }
