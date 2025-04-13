@@ -354,8 +354,8 @@ impl RepositoryPathPuf {
     ///
     /// This method is intended to be used during the transition from `BString` to
     /// `RepositoryPathBuf` as long as there are APIs that expect the former instead of the latter.
-    pub fn to_bstring_do_not_use(&self) -> BString {
-        self.inner.clone()
+    pub fn into_bstring_do_not_use(self) -> BString {
+        self.inner
     }
 }
 
