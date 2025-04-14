@@ -11,6 +11,7 @@ use crate::{
     ThreadSafeRepository,
 };
 use gix_features::threading::OwnShared;
+use gix_object::bstr::ByteSlice;
 use std::ffi::OsStr;
 use std::{borrow::Cow, path::PathBuf};
 
@@ -348,7 +349,7 @@ impl ThreadSafeRepository {
             .and_then(|prefix| {
                 let _span = gix_trace::detail!("find replacement objects");
                 let platform = refs.iter().ok()?;
-                let iter = platform.prefixed(prefix.clone().try_into().expect("TODO")).ok()?;
+                let iter = platform.prefixed(prefix.as_bstr().try_into().ok()?).ok()?;
                 let replacements = iter
                     .filter_map(Result::ok)
                     .filter_map(|r: gix_ref::Reference| {

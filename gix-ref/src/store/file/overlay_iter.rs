@@ -12,6 +12,7 @@ use crate::{
     BStr, FullName, Namespace, Reference,
 };
 
+use gix_object::bstr::ByteSlice;
 use gix_path::relative_path::RelativePath;
 
 /// An iterator stepping through sorted input of loose references and packed references, preferring loose refs over otherwise
@@ -391,11 +392,8 @@ impl file::Store {
                 self.iter_from_info(git_dir_info, common_dir_info, packed)
             }
             Some(namespace) => {
-                let prefix = namespace
-                    .to_owned()
-                    .into_namespaced_prefix(prefix)
-                    .try_into()
-                    .expect("TODO");
+                let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
+                let prefix = prefix.as_bstr().try_into().map_err(|err| std::io::Error::other(err))?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()
