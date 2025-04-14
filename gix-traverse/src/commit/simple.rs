@@ -150,7 +150,7 @@ mod init {
                     let state = &mut self.state;
                     for commit_id in state.next.drain(..) {
                         let commit_iter = self.objects.find_commit_iter(&commit_id, &mut state.buf)?;
-                        let time = commit_iter.committer()?.time.seconds;
+                        let time = commit_iter.committer()?.seconds();
                         let key = to_queue_key(time, order);
                         match (cutoff_time, order) {
                             (Some(cutoff_time), _) if time >= cutoff_time => {
@@ -351,7 +351,7 @@ mod init {
 
                                 let parent = self.objects.find_commit_iter(id.as_ref(), &mut state.parents_buf).ok();
                                 let parent_commit_time = parent
-                                    .and_then(|parent| parent.committer().ok().map(|committer| committer.time.seconds))
+                                    .and_then(|parent| parent.committer().ok().map(|committer| committer.seconds()))
                                     .unwrap_or_default();
 
                                 let time = to_queue_key(parent_commit_time, order);

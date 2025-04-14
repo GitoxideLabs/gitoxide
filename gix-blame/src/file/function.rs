@@ -672,7 +672,7 @@ type CommitTime = i64;
 fn commit_time(commit: gix_traverse::commit::Either<'_, '_>) -> Result<CommitTime, gix_object::decode::Error> {
     match commit {
         gix_traverse::commit::Either::CommitRefIter(commit_ref_iter) => {
-            commit_ref_iter.committer().map(|c| c.time.seconds)
+            commit_ref_iter.committer().map(|c| c.seconds())
         }
         gix_traverse::commit::Either::CachedCommit(commit) => Ok(commit.committer_timestamp() as i64),
     }
@@ -701,7 +701,7 @@ fn collect_parents(
             for id in commit_ref_iter.parent_ids() {
                 let parent = odb.find_commit_iter(id.as_ref(), buf).ok();
                 let parent_commit_time = parent
-                    .and_then(|parent| parent.committer().ok().map(|committer| committer.time.seconds))
+                    .and_then(|parent| parent.committer().ok().map(|committer| committer.seconds()))
                     .unwrap_or_default();
                 parent_ids.push((id, parent_commit_time));
             }

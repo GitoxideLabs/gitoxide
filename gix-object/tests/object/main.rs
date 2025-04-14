@@ -81,8 +81,8 @@ fn fixture_name(kind: &str, path: &str) -> Vec<u8> {
 fn size_in_memory() {
     let actual = std::mem::size_of::<gix_object::Object>();
     assert!(
-        actual <= 264,
-        "{actual} <= 264: Prevent unexpected growth of what should be lightweight objects"
+        actual <= 272,
+        "{actual} <= 272: Prevent unexpected growth of what should be lightweight objects"
     );
 }
 
@@ -90,30 +90,20 @@ fn hex_to_id(hex: &str) -> ObjectId {
     ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
 }
 
-use gix_date::{time::Sign, SecondsSinceUnixEpoch, Time};
-
-fn signature(seconds: SecondsSinceUnixEpoch) -> gix_actor::SignatureRef<'static> {
+fn signature(time: &[u8]) -> gix_actor::SignatureRef<'_> {
     use gix_object::bstr::ByteSlice;
     gix_actor::SignatureRef {
         name: b"Sebastian Thiel".as_bstr(),
         email: b"sebastian.thiel@icloud.com".as_bstr(),
-        time: Time {
-            seconds,
-            offset: 28800,
-            sign: Sign::Plus,
-        },
+        time: time.as_bstr(),
     }
 }
 
-fn linus_signature(seconds: SecondsSinceUnixEpoch) -> gix_actor::SignatureRef<'static> {
+fn linus_signature(time: &[u8]) -> gix_actor::SignatureRef<'_> {
     use gix_object::bstr::ByteSlice;
     gix_actor::SignatureRef {
         name: b"Linus Torvalds".as_bstr(),
         email: b"torvalds@linux-foundation.org".as_bstr(),
-        time: Time {
-            seconds,
-            offset: -25200,
-            sign: Sign::Minus,
-        },
+        time: time.as_bstr(),
     }
 }

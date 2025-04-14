@@ -1,14 +1,13 @@
 mod write_to {
     mod invalid {
         use gix_actor::Signature;
-        use gix_date::{time::Sign, Time};
 
         #[test]
         fn name() {
             let signature = Signature {
                 name: "invalid < middlename".into(),
                 email: "ok".into(),
-                time: default_time(),
+                time: "0 0000".into(),
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
@@ -21,7 +20,7 @@ mod write_to {
             let signature = Signature {
                 name: "ok".into(),
                 email: "server>.example.com".into(),
-                time: default_time(),
+                time: "0 0000".into(),
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
@@ -34,20 +33,12 @@ mod write_to {
             let signature = Signature {
                 name: "hello\nnewline".into(),
                 email: "name@example.com".into(),
-                time: default_time(),
+                time: "0 0000".into(),
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
                 "Err(Custom { kind: Other, error: IllegalCharacter })"
             );
-        }
-
-        fn default_time() -> Time {
-            Time {
-                seconds: 0,
-                offset: 0,
-                sign: Sign::Plus,
-            }
         }
     }
 }
@@ -68,6 +59,7 @@ fn round_trip() -> Result<(), Box<dyn std::error::Error>> {
     static DEFAULTS: &[&[u8]] =     &[
         b"Sebastian Thiel <byronimo@gmail.com> 1 -0030",
         b"Sebastian Thiel <byronimo@gmail.com> -1500 -0030",
+        b"Sebastian Thiel <byronimo@gmail.com> 1313584730 +051800", // Seen in the wild
         ".. ☺️Sebastian 王知明 Thiel🙌 .. <byronimo@gmail.com> 1528473343 +0230".as_bytes(),
         b".. whitespace  \t  is explicitly allowed    - unicode aware trimming must be done elsewhere  <byronimo@gmail.com> 1528473343 +0230"
     ];
@@ -90,7 +82,7 @@ fn parse_timestamp_with_trailing_digits() {
         SignatureRef {
             name: "first last".into(),
             email: "name@example.com".into(),
-            time: gix_actor::date::Time::new(1312735823, 0),
+            time: "1312735823 +051800".into(),
         }
     );
 
@@ -101,7 +93,7 @@ fn parse_timestamp_with_trailing_digits() {
         SignatureRef {
             name: "first last".into(),
             email: "name@example.com".into(),
-            time: gix_actor::date::Time::new(1312735823, 19080),
+            time: "1312735823 +0518".into(),
         }
     );
 }
@@ -115,7 +107,7 @@ fn parse_missing_timestamp() {
         SignatureRef {
             name: "first last".into(),
             email: "name@example.com".into(),
-            time: gix_actor::date::Time::new(0, 0),
+            time: "".into(),
         }
     );
 }

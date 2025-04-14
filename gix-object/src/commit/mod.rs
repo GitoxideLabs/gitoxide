@@ -112,7 +112,7 @@ impl<'a> CommitRef<'a> {
 
     /// Returns the time at which this commit was created.
     pub fn time(&self) -> gix_date::Time {
-        self.committer.time
+        gix_date::Time::from_bytes(self.committer.time).expect("Time from Git should be valid")
     }
 }
 

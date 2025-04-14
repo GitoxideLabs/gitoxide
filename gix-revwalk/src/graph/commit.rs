@@ -20,7 +20,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
     /// Note that this can only fail if the commit is backed by the object database *and* parsing fails.
     pub fn committer_timestamp(&self) -> Result<SecondsSinceUnixEpoch, gix_object::decode::Error> {
         Ok(match &self.backing {
-            Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf).committer()?.time.seconds,
+            Either::Left(buf) => gix_object::CommitRefIter::from_bytes(buf).committer()?.seconds(),
             Either::Right((cache, pos)) => cache.commit_at(*pos).committer_timestamp() as SecondsSinceUnixEpoch, // a cast as we cannot represent the error and trying seems overkill
         })
     }
@@ -38,10 +38,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
         &self,
     ) -> Result<(Option<Generation>, SecondsSinceUnixEpoch), gix_object::decode::Error> {
         Ok(match &self.backing {
-            Either::Left(buf) => (
-                None,
-                gix_object::CommitRefIter::from_bytes(buf).committer()?.time.seconds,
-            ),
+            Either::Left(buf) => (None, gix_object::CommitRefIter::from_bytes(buf).committer()?.seconds()),
             Either::Right((cache, pos)) => {
                 let commit = cache.commit_at(*pos);
                 (
@@ -69,7 +66,7 @@ impl<'graph, 'cache> LazyCommit<'graph, 'cache> {
                         Token::Parent { id } => parents.push(id),
                         Token::Author { .. } => {}
                         Token::Committer { signature } => {
-                            timestamp = Some(signature.time.seconds);
+                            timestamp = Some(signature.seconds());
                             break;
                         }
                         _ => {

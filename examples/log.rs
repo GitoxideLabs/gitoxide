@@ -150,7 +150,7 @@ fn run(args: Args) -> anyhow::Result<()> {
                         commit_ref.author.actor().write_to(&mut buf)?;
                         buf.into()
                     },
-                    time: commit_ref.author.time.format(format::DEFAULT),
+                    time: gix_date::Time::from_bytes(commit_ref.author.time)?.format(format::DEFAULT),
                     message: commit_ref.message.to_owned(),
                 })
             }),

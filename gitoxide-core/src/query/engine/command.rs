@@ -76,7 +76,9 @@ impl query::Engine {
                             usize,
                         ) = row?;
                         let id = gix::ObjectId::from(hash);
-                        let commit_time = id.attach(&self.repo).object()?.into_commit().committer()?.time;
+                        let commit_time = gix_date::Time::from_bytes(
+                            id.attach(&self.repo).object()?.into_commit().committer()?.time,
+                        )?;
                         let mode = FileMode::from_usize(mode).context("invalid file mode")?;
                         info.push(trace_path::Info {
                             id,

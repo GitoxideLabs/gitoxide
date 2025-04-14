@@ -304,7 +304,7 @@ pub(super) fn gen_and_commit_time(c: Either<'_, '_>) -> Result<GenAndCommitTime,
                     Ok(T::Parent { .. }) => continue,
                     Ok(T::Author { .. }) => continue,
                     Ok(T::Committer { signature }) => {
-                        commit_time = signature.time.seconds;
+                        commit_time = signature.seconds();
                         break;
                     }
                     Ok(_unused_token) => break,

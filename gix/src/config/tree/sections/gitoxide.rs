@@ -511,11 +511,11 @@ mod subsections {
 
     impl Commit {
         /// The `gitoxide.commit.authorDate` key.
-        pub const AUTHOR_DATE: keys::Time =
-            keys::Time::new_time("authorDate", &Gitoxide::COMMIT).with_environment_override("GIT_AUTHOR_DATE");
+        pub const AUTHOR_DATE: keys::Any =
+            keys::Any::new("authorDate", &Gitoxide::COMMIT).with_environment_override("GIT_AUTHOR_DATE");
         /// The `gitoxide.commit.committerDate` key.
-        pub const COMMITTER_DATE: keys::Time =
-            keys::Time::new_time("committerDate", &Gitoxide::COMMIT).with_environment_override("GIT_COMMITTER_DATE");
+        pub const COMMITTER_DATE: keys::Any =
+            keys::Any::new("committerDate", &Gitoxide::COMMIT).with_environment_override("GIT_COMMITTER_DATE");
     }
 
     impl Section for Commit {

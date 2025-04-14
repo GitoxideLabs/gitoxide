@@ -1,5 +1,4 @@
 use gix_actor::Signature;
-use gix_date::{time::Sign, Time};
 use gix_object::bstr::ByteSlice;
 use gix_testtools::tempfile::TempDir;
 
@@ -57,11 +56,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
         let committer = Signature {
             name: "committer".into(),
             email: "committer@example.com".into(),
-            time: Time {
-                seconds: 1234,
-                offset: 1800,
-                sign: Sign::Plus,
-            },
+            time: "1234 +0800".into(),
         };
         store.reflog_create_or_append(
             full_name,

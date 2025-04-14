@@ -31,7 +31,7 @@ pub fn estimate_hours(
         let mut cur = commits.next().expect("at least one commit if we are here");
 
         for next in commits {
-            let change_in_minutes = (next.time.seconds.saturating_sub(cur.time.seconds)) as f32 / MINUTES_PER_HOUR;
+            let change_in_minutes = (next.seconds().saturating_sub(cur.seconds())) as f32 / MINUTES_PER_HOUR;
             if change_in_minutes < MAX_COMMIT_DIFFERENCE_IN_MINUTES {
                 hours += change_in_minutes / MINUTES_PER_HOUR;
             } else {
