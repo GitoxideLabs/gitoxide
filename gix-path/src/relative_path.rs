@@ -7,6 +7,7 @@ use std::u8;
 
 use crate::os_str_into_bstr;
 use crate::try_from_bstr;
+use crate::try_from_byte_slice;
 
 /// A wrapper for `BStr`. It is used to enforce the following constraints:
 ///
@@ -19,6 +20,14 @@ pub struct RelativePath {
 }
 
 impl RelativePath {
+    fn new_unchecked(value: &BStr) -> Result<&RelativePath, Error> {
+        // SAFETY: `RelativePath` is transparent and equivalent to a `&BStr` if provided as reference.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::mem::transmute(value)
+        }
+    }
+
     /// TODO
     /// Needs docs.
     pub fn ends_with(&self, needle: &[u8]) -> bool {
@@ -49,7 +58,7 @@ impl<'a> TryFrom<&'a BStr> for &'a RelativePath {
             gix_validate::path::component(component, None, options)?;
         }
 
-        todo!()
+        RelativePath::new_unchecked(value)
     }
 }
 
@@ -57,16 +66,36 @@ impl<'a, const N: usize> TryFrom<&'a [u8; N]> for &'a RelativePath {
     type Error = Error;
 
     #[inline]
-    fn try_from(_value: &'a [u8; N]) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
+        let path: &std::path::Path = &try_from_byte_slice(value)?;
+
+        let options: Options = Default::default();
+
+        for component in path.components() {
+            let component = os_str_into_bstr(component.as_os_str())?;
+
+            gix_validate::path::component(component, None, options)?;
+        }
+
+        RelativePath::new_unchecked(value.into())
     }
 }
 
-impl TryFrom<BString> for &RelativePath {
+impl<'a> TryFrom<&'a BString> for &'a RelativePath {
     type Error = Error;
 
-    fn try_from(_value: BString) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(value: &'a BString) -> Result<Self, Self::Error> {
+        let path: &std::path::Path = &try_from_bstr(value.as_bstr())?;
+
+        let options: Options = Default::default();
+
+        for component in path.components() {
+            let component = os_str_into_bstr(component.as_os_str())?;
+
+            gix_validate::path::component(component, None, options)?;
+        }
+
+        RelativePath::new_unchecked(value.as_bstr())
     }
 }
 
