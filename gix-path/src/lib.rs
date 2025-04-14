@@ -62,3 +62,6 @@ pub use realpath::function::{realpath, realpath_opts};
 
 /// Information about the environment in terms of locations of resources.
 pub mod env;
+
+///
+pub mod relative_path;

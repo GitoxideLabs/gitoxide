@@ -1,7 +1,6 @@
 #![allow(clippy::result_large_err)]
 use super::{Error, Options};
 use crate::{
-    bstr,
     bstr::BString,
     config,
     config::{
@@ -347,10 +346,9 @@ impl ThreadSafeRepository {
         refs.namespace.clone_from(&config.refs_namespace);
         let replacements = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?
             .and_then(|prefix| {
-                use bstr::ByteSlice;
                 let _span = gix_trace::detail!("find replacement objects");
                 let platform = refs.iter().ok()?;
-                let iter = platform.prefixed(prefix.as_bstr()).ok()?;
+                let iter = platform.prefixed(prefix.clone().try_into().expect("TODO")).ok()?;
                 let replacements = iter
                     .filter_map(Result::ok)
                     .filter_map(|r: gix_ref::Reference| {

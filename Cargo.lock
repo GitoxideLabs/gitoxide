@@ -2386,6 +2386,7 @@ dependencies = [
  "bstr",
  "gix-testtools",
  "gix-trace 0.1.12",
+ "gix-validate 0.9.4",
  "home",
  "known-folders",
  "once_cell",
