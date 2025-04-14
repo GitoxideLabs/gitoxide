@@ -3,7 +3,6 @@ use bstr::BString;
 use bstr::ByteSlice;
 use gix_validate::path::component::Options;
 use std::borrow::Cow;
-use std::u8;
 
 use crate::os_str_into_bstr;
 use crate::try_from_bstr;
@@ -67,7 +66,7 @@ impl<'a, const N: usize> TryFrom<&'a [u8; N]> for &'a RelativePath {
 
     #[inline]
     fn try_from(value: &'a [u8; N]) -> Result<Self, Self::Error> {
-        let path: &std::path::Path = &try_from_byte_slice(value)?;
+        let path: &std::path::Path = try_from_byte_slice(value)?;
 
         let options: Options = Default::default();
 

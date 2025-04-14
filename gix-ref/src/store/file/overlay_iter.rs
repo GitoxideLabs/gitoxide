@@ -207,7 +207,7 @@ impl Platform<'_> {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn prefixed<'a>(&self, prefix: &'a RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
+    pub fn prefixed(&self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
         self.store
             .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
     }
@@ -376,12 +376,11 @@ impl file::Store {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn iter_prefixed_packed<'a, 's, 'p>(
+    pub fn iter_prefixed_packed<'s, 'p>(
         &'s self,
-        prefix: &'a RelativePath,
+        prefix: &RelativePath,
         packed: Option<&'p packed::Buffer>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
-        let prefix = prefix.into();
         match self.namespace.as_ref() {
             None => {
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
@@ -393,7 +392,7 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let prefix = prefix.as_bstr().try_into().map_err(|err| std::io::Error::other(err))?;
+                let prefix = prefix.as_bstr().try_into().map_err(std::io::Error::other)?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()

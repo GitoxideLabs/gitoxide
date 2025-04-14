@@ -22,7 +22,7 @@ impl Namespace {
     ///
     /// The prefix is a relative path with slash-separated path components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn into_namespaced_prefix<'a>(mut self, prefix: &'a RelativePath) -> BString {
+    pub fn into_namespaced_prefix(mut self, prefix: &RelativePath) -> BString {
         self.0.push_str(prefix);
         gix_path::to_unix_separators_on_windows(self.0).into_owned()
     }

@@ -90,7 +90,7 @@ impl file::Store {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn loose_iter_prefixed<'a>(&self, prefix: &'a RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
+    pub fn loose_iter_prefixed(&self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
         self.iter_prefixed_packed(prefix, None)
     }
 }
