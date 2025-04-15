@@ -56,6 +56,8 @@ pub enum Error {
     UnsafeGitDir { path: PathBuf },
     #[error(transparent)]
     EnvironmentAccessDenied(#[from] gix_sec::permission::Error<std::path::PathBuf>),
+    #[error(transparent)]
+    PrefixNotRelative(#[from] gix_path::relative_path::Error),
 }
 
 mod options;
