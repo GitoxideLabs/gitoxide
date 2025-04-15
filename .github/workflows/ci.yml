@@ -208,6 +208,7 @@ jobs:
       matrix:
         os:
           - windows-latest
+          - windows-11-arm
           - macos-latest
           - ubuntu-latest
           - ubuntu-24.04-arm
@@ -232,7 +233,11 @@ jobs:
         run: git diff --exit-code  # If this fails, the fix is usually to commit a regenerated archive.
 
   test-fixtures-windows:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [ windows-latest, windows-11-arm ]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
