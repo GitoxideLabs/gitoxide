@@ -290,7 +290,7 @@ mod writable {
             assert_eq!(
                 store
                     .iter()?
-                    .prefixed(b"refs/stacks/")?
+                    .prefixed(b"refs/stacks/".try_into().unwrap())?
                     .map(Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),
@@ -571,7 +571,7 @@ mod writable {
             assert_eq!(
                 store
                     .iter()?
-                    .prefixed(b"refs/stacks/")?
+                    .prefixed(b"refs/stacks/".try_into().unwrap())?
                     .map(Result::unwrap)
                     .map(|r| (r.name.to_string(), r.target.to_string()))
                     .collect::<Vec<_>>(),

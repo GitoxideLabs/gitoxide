@@ -26,7 +26,7 @@ mod with_namespace {
         let ns_two = gix_ref::namespace::expand("bar")?;
         let namespaced_refs = store
             .iter()?
-            .prefixed(ns_two.as_bstr())?
+            .prefixed(ns_two.as_bstr().try_into().unwrap())?
             .map(Result::unwrap)
             .map(|r: gix_ref::Reference| r.name)
             .collect::<Vec<_>>();
@@ -45,7 +45,7 @@ mod with_namespace {
         );
         assert_eq!(
             store
-                .loose_iter_prefixed(ns_two.as_bstr())?
+                .loose_iter_prefixed(ns_two.as_bstr().try_into().unwrap())?
                 .map(Result::unwrap)
                 .map(|r| r.name.into_inner())
                 .collect::<Vec<_>>(),
@@ -90,7 +90,7 @@ mod with_namespace {
         assert_eq!(
             store
                 .iter()?
-                .prefixed(ns_one.as_bstr())?
+                .prefixed(ns_one.as_bstr().try_into().unwrap())?
                 .map(Result::unwrap)
                 .map(|r: gix_ref::Reference| (
                     r.name.as_bstr().to_owned(),
@@ -324,7 +324,7 @@ fn loose_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
     #[cfg(windows)]
     let abs_path = r"c:\hello";
 
-    match store.loose_iter_prefixed(abs_path) {
+    match store.loose_iter_prefixed(abs_path.try_into().unwrap()) {
         Ok(_) => unreachable!("absolute paths aren't allowed"),
         Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
     }
@@ -335,7 +335,7 @@ fn loose_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
 fn loose_iter_with_prefix() -> crate::Result {
     let prefix_with_slash = b"refs/heads/";
     let actual = store()?
-        .loose_iter_prefixed(prefix_with_slash)?
+        .loose_iter_prefixed(prefix_with_slash.try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
         .expect("no broken ref in this subset")
         .into_iter()
@@ -363,7 +363,7 @@ fn loose_iter_with_prefix() -> crate::Result {
 fn loose_iter_with_partial_prefix_dir() -> crate::Result {
     let prefix_without_slash = b"refs/heads";
     let actual = store()?
-        .loose_iter_prefixed(prefix_without_slash)?
+        .loose_iter_prefixed(prefix_without_slash.try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
         .expect("no broken ref in this subset")
         .into_iter()
@@ -390,7 +390,7 @@ fn loose_iter_with_partial_prefix_dir() -> crate::Result {
 #[test]
 fn loose_iter_with_partial_prefix() -> crate::Result {
     let actual = store()?
-        .loose_iter_prefixed(b"refs/heads/d".as_bstr())?
+        .loose_iter_prefixed(b"refs/heads/d".as_bstr().try_into().unwrap())?
         .collect::<Result<Vec<_>, _>>()
         .expect("no broken ref in this subset")
         .into_iter()
@@ -534,7 +534,7 @@ fn overlay_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
     #[cfg(windows)]
     let abs_path = r"c:\hello";
 
-    match store.iter()?.prefixed(abs_path) {
+    match store.iter()?.prefixed(abs_path.try_into().unwrap()) {
         Ok(_) => unreachable!("absolute paths aren't allowed"),
         Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
     }
@@ -548,7 +548,7 @@ fn overlay_prefixed_iter() -> crate::Result {
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
     let ref_names = store
         .iter()?
-        .prefixed(b"refs/heads/")?
+        .prefixed(b"refs/heads/".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
@@ -571,7 +571,7 @@ fn overlay_partial_prefix_iter() -> crate::Result {
     let store = store_at("make_packed_ref_repository_for_overlay.sh")?;
     let ref_names = store
         .iter()?
-        .prefixed(b"refs/heads/m")? // 'm' is partial
+        .prefixed(b"refs/heads/m".try_into().unwrap())? // 'm' is partial
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     let c1 = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
@@ -589,7 +589,7 @@ fn overlay_partial_prefix_iter_reproduce_1934() -> crate::Result {
 
     let ref_names = store
         .iter()?
-        .prefixed(b"refs/d")?
+        .prefixed(b"refs/d".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(
@@ -610,7 +610,7 @@ fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
 
     let ref_names = store
         .iter()?
-        .prefixed(b"refs/prefix/feature")?
+        .prefixed(b"refs/prefix/feature".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(
@@ -623,7 +623,7 @@ fn overlay_partial_prefix_iter_when_prefix_is_dir() -> crate::Result {
 
     let ref_names = store
         .iter()?
-        .prefixed(b"refs/prefix/feature/")?
+        .prefixed(b"refs/prefix/feature/".try_into().unwrap())?
         .map(|r| r.map(|r| (r.name.as_bstr().to_owned(), r.target)))
         .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(

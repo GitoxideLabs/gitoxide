@@ -3,13 +3,13 @@ fn into_namespaced_prefix() {
     assert_eq!(
         gix_ref::namespace::expand("foo")
             .unwrap()
-            .into_namespaced_prefix("prefix"),
+            .into_namespaced_prefix("prefix".try_into().unwrap()),
         "refs/namespaces/foo/prefix",
     );
     assert_eq!(
         gix_ref::namespace::expand("foo")
             .unwrap()
-            .into_namespaced_prefix("prefix/"),
+            .into_namespaced_prefix("prefix/".try_into().unwrap()),
         "refs/namespaces/foo/prefix/",
     );
 }

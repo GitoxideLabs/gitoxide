@@ -44,6 +44,25 @@ pub enum Error {
     IllegalUtf8(#[from] crate::Utf8Error),
 }
 
+impl<'a> TryFrom<&'a str> for &'a RelativePath {
+    type Error = Error;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        use std::path::Path;
+
+        let path: &std::path::Path = Path::new(value);
+        let options: Options = Default::default();
+
+        for component in path.components() {
+            let component = os_str_into_bstr(component.as_os_str())?;
+
+            gix_validate::path::component(component, None, options)?;
+        }
+
+        RelativePath::new_unchecked(BStr::new(value.as_bytes()))
+    }
+}
+
 impl<'a> TryFrom<&'a BStr> for &'a RelativePath {
     type Error = Error;
 
