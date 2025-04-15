@@ -228,7 +228,7 @@ jobs:
               https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
             .\rustup-init.exe --default-toolchain none -y
             Remove-Item rustup-init.exe
-            Add-Content -Value "PATH=$Env:USERPROFILE\.cargo\bin;$Env:PATH" -Path $Env:GITHUB_ENV
+            Add-Content -Value "$Env:USERPROFILE\.cargo\bin" -Path $Env:GITHUB_PATH
           }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -265,7 +265,7 @@ jobs:
               https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
             .\rustup-init.exe --default-toolchain none -y
             Remove-Item rustup-init.exe
-            Add-Content -Value "PATH=$Env:USERPROFILE\.cargo\bin;$Env:PATH" -Path $Env:GITHUB_ENV
+            Add-Content -Value "$Env:USERPROFILE\.cargo\bin" -Path $Env:GITHUB_PATH
           }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
