@@ -217,6 +217,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install rustup
+        if: matrix.os == 'windows-11-arm'
+        run: |
+          if (Get-Command rustup -ErrorAction SilentlyContinue) {
+            Write-Output '::warning:: The runner has rustup. Consider removing this step.'
+          } else {
+            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL `
+              --output rustup-init.exe `
+              https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            .\rustup-init.exe --default-toolchain none -y
+            Remove-Item rustup-init.exe
+            Add-Content -Value "PATH=$Env:USERPROFILE\.cargo\bin;$Env:PATH" -Path $Env:GITHUB_ENV
+          }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo check default features
@@ -241,6 +254,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Install rustup
+        if: matrix.os == 'windows-11-arm'
+        run: |
+          if (Get-Command rustup -ErrorAction SilentlyContinue) {
+            Write-Output '::warning:: The runner has rustup. Consider removing this step.'
+          } else {
+            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL `
+              --output rustup-init.exe `
+              https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe
+            .\rustup-init.exe --default-toolchain none -y
+            Remove-Item rustup-init.exe
+            Add-Content -Value "PATH=$Env:USERPROFILE\.cargo\bin;$Env:PATH" -Path $Env:GITHUB_ENV
+          }
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
@@ -344,7 +370,7 @@ jobs:
         with:
           tool: nextest
       - name: Test data structure sizes (nextest)
-        run: cargo nextest run --target $env:TARGET --workspace --no-fail-fast size
+        run: cargo nextest run --target $Env:TARGET --workspace --no-fail-fast size
       - name: Doctest
         run: cargo test --workspace --doc --no-fail-fast
 
