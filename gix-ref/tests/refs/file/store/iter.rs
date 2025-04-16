@@ -317,21 +317,6 @@ fn loose_iter_with_broken_refs() -> crate::Result {
 }
 
 #[test]
-fn loose_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
-    let store = store()?;
-    #[cfg(not(windows))]
-    let abs_path = "/hello";
-    #[cfg(windows)]
-    let abs_path = r"c:\hello";
-
-    match store.loose_iter_prefixed(abs_path.try_into().unwrap()) {
-        Ok(_) => unreachable!("absolute paths aren't allowed"),
-        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
-    }
-    Ok(())
-}
-
-#[test]
 fn loose_iter_with_prefix() -> crate::Result {
     let prefix_with_slash = b"refs/heads/";
     let actual = store()?
@@ -523,21 +508,6 @@ fn overlay_iter_reproduce_1928() -> crate::Result {
         ),
     ]
     "#);
-    Ok(())
-}
-
-#[test]
-fn overlay_iter_with_prefix_wont_allow_absolute_paths() -> crate::Result {
-    let store = store_with_packed_refs()?;
-    #[cfg(not(windows))]
-    let abs_path = "/hello";
-    #[cfg(windows)]
-    let abs_path = r"c:\hello";
-
-    match store.iter()?.prefixed(abs_path.try_into().unwrap()) {
-        Ok(_) => unreachable!("absolute paths aren't allowed"),
-        Err(err) => assert_eq!(err.to_string(), "prefix must be a relative path, like 'refs/heads/'"),
-    }
     Ok(())
 }
 

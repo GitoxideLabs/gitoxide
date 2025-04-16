@@ -296,12 +296,6 @@ impl<'a> IterInfo<'a> {
 
     fn from_prefix(base: &'a Path, prefix: &'a RelativePath, precompose_unicode: bool) -> std::io::Result<Self> {
         let prefix_path = gix_path::from_bstr(prefix);
-        if prefix_path.is_absolute() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "prefix must be a relative path, like 'refs/heads/'",
-            ));
-        }
         let iter_root = base.join(&prefix_path);
         if prefix.ends_with(b"/") {
             Ok(IterInfo::BaseAndIterRoot {
