@@ -187,7 +187,7 @@ mod tests {
     fn absolute_paths_return_err() {
         let path_str: &str = r"c:\refs\heads";
         let path_bstr: &BStr = path_str.into();
-        let path_u8: &[u8; 11] = r"c:\refs\heads";
+        let path_u8: &[u8; 13] = b"c:\\refs\\heads";
         let path_bstring: BString = r"c:\refs\heads".into();
 
         assert!(matches!(
