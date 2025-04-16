@@ -34,7 +34,7 @@ impl RelativePath {
     }
 }
 
-/// The error used in [`RelativePath`](RelativePath).
+/// The error used in [`RelativePath`].
 #[derive(Debug, thiserror::Error)]
 #[allow(missing_docs)]
 pub enum Error {
