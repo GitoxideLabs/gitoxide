@@ -302,13 +302,6 @@ impl<'a> IterInfo<'a> {
                 "prefix must be a relative path, like 'refs/heads/'",
             ));
         }
-        use std::path::Component::*;
-        if prefix_path.components().any(|c| matches!(c, CurDir | ParentDir)) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Refusing to handle prefixes with relative path components",
-            ));
-        }
         let iter_root = base.join(&prefix_path);
         if prefix.ends_with(b"/") {
             Ok(IterInfo::BaseAndIterRoot {
