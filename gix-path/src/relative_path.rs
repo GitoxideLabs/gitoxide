@@ -207,4 +207,108 @@ mod tests {
             Err(Error::IsAbsolute)
         ));
     }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn dots_in_paths_return_err() {
+        let path_str: &str = "./heads";
+        let path_bstr: &BStr = path_str.into();
+        let path_u8: &[u8; 7] = b"./heads";
+        let path_bstring: BString = "./heads".into();
+
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_str),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_bstr),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_u8),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(&path_bstring),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dots_in_paths_return_err() {
+        let path_str: &str = r".\heads";
+        let path_bstr: &BStr = path_str.into();
+        let path_u8: &[u8; 7] = b".\\heads";
+        let path_bstring: BString = r".\heads".into();
+
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_str),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_bstr),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_u8),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(&path_bstring),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn double_dots_in_paths_return_err() {
+        let path_str: &str = "../heads";
+        let path_bstr: &BStr = path_str.into();
+        let path_u8: &[u8; 8] = b"../heads";
+        let path_bstring: BString = "../heads".into();
+
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_str),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_bstr),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_u8),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(&path_bstring),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn double_dots_in_paths_return_err() {
+        let path_str: &str = r"..\heads";
+        let path_bstr: &BStr = path_str.into();
+        let path_u8: &[u8; 8] = b"..\\heads";
+        let path_bstring: BString = r"..\heads".into();
+
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_str),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_bstr),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(path_u8),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+        assert!(matches!(
+            TryInto::<&RelativePath>::try_into(&path_bstring),
+            Err(Error::ContainsInvalidComponent(_))
+        ));
+    }
 }
