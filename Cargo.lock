@@ -2238,7 +2238,6 @@ dependencies = [
  "gix-actor 0.34.0",
  "gix-date 0.9.4",
  "gix-features 0.42.0",
- "gix-fs 0.14.0",
  "gix-hash 0.17.0",
  "gix-hashtable 0.8.0",
  "gix-odb",

@@ -32,7 +32,7 @@ fn main() -> anyhow::Result<()> {
         let entry = tree::Entry {
             mode: tree::EntryKind::Blob.into(),
             oid: blob_id,
-            filename: "hello.txt".try_into()?,
+            filename: "hello.txt".into(),
         };
 
         tree.entries.push(entry);

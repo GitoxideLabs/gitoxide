@@ -72,7 +72,7 @@ impl From<tree::EntryRef<'_>> for tree::Entry {
         let tree::EntryRef { mode, filename, oid } = other;
         tree::Entry {
             mode,
-            filename: filename.to_owned().try_into().expect("TODO"),
+            filename: filename.to_owned(),
             oid: oid.into(),
         }
     }

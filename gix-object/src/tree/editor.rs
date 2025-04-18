@@ -33,8 +33,6 @@ pub enum Error {
     EmptyPathComponent,
     #[error(transparent)]
     FindExistingObject(#[from] crate::find::existing_object::Error),
-    #[error(transparent)]
-    RepositoryPathBuf(#[from] crate::tree::repository_path_buf::Error),
 }
 
 /// Lifecycle
@@ -326,7 +324,7 @@ impl Editor<'_> {
                         cursor.entries.insert(
                             insertion_idx,
                             tree::Entry {
-                                filename: name.try_into()?,
+                                filename: name.into(),
                                 mode: if is_last { kind.into() } else { EntryKind::Tree.into() },
                                 oid: if is_last { id } else { id.kind().null() },
                             },

@@ -1,6 +1,3 @@
-use bstr::ByteSlice;
-use gix_fs::stack::ToNormalPathComponents;
-
 use crate::{
     bstr::{BStr, BString},
     tree, Tree, TreeRef,
@@ -326,123 +323,6 @@ impl Ord for EntryRef<'_> {
     }
 }
 
-/// A wrapper for `BString`. It is used to enforce the following constraints:
-///
-/// - The path separator always is `/`, independent of the platform.
-/// - Only normal components are allowed.
-/// - It is always represented as a bunch of bytes.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RepositoryPathPuf {
-    inner: BString,
-}
-
-impl RepositoryPathPuf {
-    fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    fn get(&self, index: usize) -> std::option::Option<&u8> {
-        self.inner.get(index)
-    }
-
-    fn find_byte(&self, byte: u8) -> std::option::Option<usize> {
-        self.inner.find_byte(byte)
-    }
-
-    /// Do not use this method.
-    ///
-    /// This method is intended to be used during the transition from `BString` to
-    /// `RepositoryPathBuf` as long as there are APIs that expect the former instead of the latter.
-    pub fn into_bstring_do_not_use(self) -> BString {
-        self.inner
-    }
-}
-
-impl std::fmt::Display for RepositoryPathPuf {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-impl std::ops::Index<std::ops::RangeTo<usize>> for RepositoryPathPuf {
-    type Output = BStr;
-
-    #[inline]
-    fn index(&self, r: std::ops::RangeTo<usize>) -> &BStr {
-        use bstr::ByteSlice;
-
-        BStr::new(&self.inner.as_bytes()[..r.end])
-    }
-}
-
-///
-pub mod repository_path_buf {
-    use gix_fs::stack::to_normal_path_components;
-
-    /// The error used in [`RepositoryPathPuf`](super::RepositoryPathPuf).
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ContainsNonNormalComponents(#[from] to_normal_path_components::Error),
-        #[error(transparent)]
-        IllegalUtf8(#[from] gix_path::Utf8Error),
-    }
-}
-
-impl TryFrom<&str> for RepositoryPathPuf {
-    type Error = repository_path_buf::Error;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let path = std::path::Path::new(value);
-
-        for component in path.to_normal_path_components() {
-            component?;
-        }
-
-        Ok(Self { inner: value.into() })
-    }
-}
-
-impl TryFrom<&BStr> for RepositoryPathPuf {
-    type Error = repository_path_buf::Error;
-
-    fn try_from(value: &BStr) -> Result<Self, Self::Error> {
-        let path: &std::path::Path = &gix_path::try_from_bstr(value)?;
-
-        for component in path.to_normal_path_components() {
-            component?;
-        }
-
-        Ok(Self { inner: value.into() })
-    }
-}
-
-impl TryFrom<BString> for RepositoryPathPuf {
-    type Error = repository_path_buf::Error;
-
-    fn try_from(value: BString) -> Result<Self, Self::Error> {
-        let path: &std::path::Path = &gix_path::try_from_bstr(&value)?;
-
-        for component in path.to_normal_path_components() {
-            component?;
-        }
-
-        Ok(Self { inner: value })
-    }
-}
-
-impl std::ops::Deref for RepositoryPathPuf {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        &self.inner
-    }
-}
-
 /// An entry in a [`Tree`], similar to an entry in a directory.
 #[derive(PartialEq, Eq, Debug, Hash, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -450,7 +330,7 @@ pub struct Entry {
     /// The kind of object to which `oid` is pointing to.
     pub mode: EntryMode,
     /// The name of the file in the parent tree.
-    pub filename: RepositoryPathPuf,
+    pub filename: BString,
     /// The id of the object representing the entry.
     pub oid: gix_hash::ObjectId,
 }

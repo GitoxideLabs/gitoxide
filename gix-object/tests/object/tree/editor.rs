@@ -41,7 +41,7 @@ fn from_empty_cursor() -> crate::Result {
         cursor.get(Some("empty-dir-via-cursor")),
         Some(&Entry {
             mode: EntryKind::Tree.into(),
-            filename: "empty-dir-via-cursor".try_into().expect("TODO"),
+            filename: "empty-dir-via-cursor".into(),
             oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
         }),
     );
@@ -69,7 +69,7 @@ fn from_empty_cursor() -> crate::Result {
         edit.get(["some", "deeply", "nested", "path"]),
         Some(&Entry {
             mode: EntryKind::Tree.into(),
-            filename: "path".try_into().expect("TODO"),
+            filename: "path".into(),
             oid: gix_hash::Kind::Sha1.null(),
         }),
         "the directory leading to the removed one is still present"
@@ -470,7 +470,7 @@ fn from_empty_add() -> crate::Result {
         edit.get(["a", "b"]),
         Some(&Entry {
             mode: EntryKind::Tree.into(),
-            filename: "b".try_into().expect("TODO"),
+            filename: "b".into(),
             oid: hex_to_id("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
         }),
         "before writing, entries are still present, just like they were written"
@@ -479,7 +479,7 @@ fn from_empty_add() -> crate::Result {
         edit.get(["a", "b", "c"]),
         Some(&Entry {
             mode: EntryKind::Tree.into(),
-            filename: "c".try_into().expect("TODO"),
+            filename: "c".into(),
             oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
         }),
     );
@@ -503,7 +503,7 @@ fn from_empty_add() -> crate::Result {
         edit.get(Some("a")),
         Some(&Entry {
             mode: EntryKind::Tree.into(),
-            filename: "a".try_into().expect("TODO"),
+            filename: "a".into(),
             oid: hex_to_id("850bf83c26003cb0541318718bc9217c4a5bde6d"),
         }),
         "but the top-level tree is still available and can yield its entries, as written with proper ids"

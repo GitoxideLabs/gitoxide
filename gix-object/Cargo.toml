@@ -49,7 +49,6 @@ gix-hashtable = { version = "^0.8.0", path = "../gix-hashtable" }
 gix-validate = { version = "^0.9.4", path = "../gix-validate" }
 gix-actor = { version = "^0.34.0", path = "../gix-actor" }
 gix-date = { version = "^0.9.4", path = "../gix-date" }
-gix-fs = { version = "^0.14.0", path = "../gix-fs" }
 gix-path = { version = "^0.10.15", path = "../gix-path" }
 gix-utils = { version = "^0.2.0", path = "../gix-utils" }
 
