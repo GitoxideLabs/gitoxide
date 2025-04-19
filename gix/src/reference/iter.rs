@@ -1,8 +1,8 @@
 //!
 #![allow(clippy::empty_docs)]
-use std::borrow::Cow;
 
-use gix_ref::{bstr::BStr, file::ReferenceExt};
+use gix_path::relative_path::RelativePath;
+use gix_ref::file::ReferenceExt;
 
 /// A platform to create iterators over references.
 #[must_use = "Iterators should be obtained from this iterator platform"]
@@ -45,8 +45,11 @@ impl Platform<'_> {
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
     // TODO: Create a custom `Path` type that enforces the requirements of git naturally, this type is surprising possibly on windows
     //       and when not using a trailing '/' to signal directories.
-    pub fn prefixed<'a>(&self, prefix: impl Into<Cow<'a, BStr>>) -> Result<Iter<'_>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix.into().as_ref())?))
+    pub fn prefixed<'a>(
+        &self,
+        prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,
+    ) -> Result<Iter<'_>, init::Error> {
+        Ok(Iter::new(self.repo, self.platform.prefixed(prefix.try_into()?)?))
     }
 
     // TODO: tests
@@ -54,7 +57,7 @@ impl Platform<'_> {
     ///
     /// They are all prefixed with `refs/tags`.
     pub fn tags(&self) -> Result<Iter<'_>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/tags/")?))
+        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/tags/".try_into()?)?))
     }
 
     // TODO: tests
@@ -62,7 +65,10 @@ impl Platform<'_> {
     ///
     /// They are all prefixed with `refs/heads`.
     pub fn local_branches(&self) -> Result<Iter<'_>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/heads/")?))
+        Ok(Iter::new(
+            self.repo,
+            self.platform.prefixed(b"refs/heads/".try_into()?)?,
+        ))
     }
 
     // TODO: tests
@@ -70,7 +76,10 @@ impl Platform<'_> {
     ///
     /// They are all prefixed with `refs/remotes`.
     pub fn remote_branches(&self) -> Result<Iter<'_>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/remotes/")?))
+        Ok(Iter::new(
+            self.repo,
+            self.platform.prefixed(b"refs/remotes/".try_into()?)?,
+        ))
     }
 }
 
@@ -123,6 +132,8 @@ pub mod init {
     pub enum Error {
         #[error(transparent)]
         Io(#[from] std::io::Error),
+        #[error(transparent)]
+        RelativePath(#[from] gix_path::relative_path::Error),
     }
 }
 

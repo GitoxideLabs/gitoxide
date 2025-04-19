@@ -47,7 +47,7 @@
 //! ever get into a code-path which does panic though.
 //! </details>
 #![deny(missing_docs, rust_2018_idioms)]
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(not(test), deny(unsafe_code))]
 
 /// A dummy type to represent path specs and help finding all spots that take path specs once it is implemented.
 mod convert;
@@ -62,3 +62,6 @@ pub use realpath::function::{realpath, realpath_opts};
 
 /// Information about the environment in terms of locations of resources.
 pub mod env;
+
+///
+pub mod relative_path;

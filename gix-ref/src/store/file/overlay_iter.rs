@@ -12,6 +12,9 @@ use crate::{
     BStr, FullName, Namespace, Reference,
 };
 
+use gix_object::bstr::ByteSlice;
+use gix_path::relative_path::RelativePath;
+
 /// An iterator stepping through sorted input of loose references and packed references, preferring loose refs over otherwise
 /// equivalent packed references.
 ///
@@ -204,9 +207,9 @@ impl Platform<'_> {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn prefixed<'a>(&self, prefix: impl Into<&'a BStr>) -> std::io::Result<LooseThenPacked<'_, '_>> {
+    pub fn prefixed(&self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
         self.store
-            .iter_prefixed_packed(prefix.into(), self.packed.as_ref().map(|b| &***b))
+            .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
     }
 }
 
@@ -291,26 +294,8 @@ impl<'a> IterInfo<'a> {
         .peekable()
     }
 
-    fn from_prefix(
-        base: &'a Path,
-        prefix: impl Into<Cow<'a, BStr>>,
-        precompose_unicode: bool,
-    ) -> std::io::Result<Self> {
-        let prefix = prefix.into();
-        let prefix_path = gix_path::from_bstr(prefix.as_ref());
-        if prefix_path.is_absolute() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "prefix must be a relative path, like 'refs/heads/'",
-            ));
-        }
-        use std::path::Component::*;
-        if prefix_path.components().any(|c| matches!(c, CurDir | ParentDir)) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Refusing to handle prefixes with relative path components",
-            ));
-        }
+    fn from_prefix(base: &'a Path, prefix: &'a RelativePath, precompose_unicode: bool) -> std::io::Result<Self> {
+        let prefix_path = gix_path::from_bstr(prefix);
         let iter_root = base.join(&prefix_path);
         if prefix.ends_with(b"/") {
             Ok(IterInfo::BaseAndIterRoot {
@@ -326,7 +311,7 @@ impl<'a> IterInfo<'a> {
                 .to_owned();
             Ok(IterInfo::ComputedIterationRoot {
                 base,
-                prefix,
+                prefix: prefix.into(),
                 iter_root,
                 precompose_unicode,
             })
@@ -378,12 +363,11 @@ impl file::Store {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn iter_prefixed_packed<'a, 's, 'p>(
+    pub fn iter_prefixed_packed<'s, 'p>(
         &'s self,
-        prefix: impl Into<&'a BStr>,
+        prefix: &RelativePath,
         packed: Option<&'p packed::Buffer>,
     ) -> std::io::Result<LooseThenPacked<'p, 's>> {
-        let prefix = prefix.into();
         match self.namespace.as_ref() {
             None => {
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
@@ -395,7 +379,8 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix.clone(), self.precompose_unicode)?;
+                let prefix = prefix.as_bstr().try_into().map_err(std::io::Error::other)?;
+                let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()
                     .map(|base| IterInfo::from_prefix(base, prefix, self.precompose_unicode))

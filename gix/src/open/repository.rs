@@ -1,7 +1,6 @@
 #![allow(clippy::result_large_err)]
 use super::{Error, Options};
 use crate::{
-    bstr,
     bstr::BString,
     config,
     config::{
@@ -12,6 +11,8 @@ use crate::{
     ThreadSafeRepository,
 };
 use gix_features::threading::OwnShared;
+use gix_object::bstr::ByteSlice;
+use gix_path::relative_path::RelativePath;
 use std::ffi::OsStr;
 use std::{borrow::Cow, path::PathBuf};
 
@@ -345,24 +346,30 @@ impl ThreadSafeRepository {
 
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
         refs.namespace.clone_from(&config.refs_namespace);
-        let replacements = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?
-            .and_then(|prefix| {
-                use bstr::ByteSlice;
-                let _span = gix_trace::detail!("find replacement objects");
-                let platform = refs.iter().ok()?;
-                let iter = platform.prefixed(prefix.as_bstr()).ok()?;
-                let replacements = iter
-                    .filter_map(Result::ok)
-                    .filter_map(|r: gix_ref::Reference| {
-                        let target = r.target.try_id()?.to_owned();
-                        let source =
-                            gix_hash::ObjectId::from_hex(r.name.as_bstr().strip_prefix(prefix.as_slice())?).ok()?;
-                        Some((source, target))
-                    })
-                    .collect::<Vec<_>>();
-                Some(replacements)
-            })
-            .unwrap_or_default();
+        let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
+        let replacements = match prefix {
+            Some(prefix) => {
+                let prefix: &RelativePath = prefix.as_bstr().try_into()?;
+
+                Some(prefix).and_then(|prefix| {
+                    let _span = gix_trace::detail!("find replacement objects");
+                    let platform = refs.iter().ok()?;
+                    let iter = platform.prefixed(prefix).ok()?;
+                    let replacements = iter
+                        .filter_map(Result::ok)
+                        .filter_map(|r: gix_ref::Reference| {
+                            let target = r.target.try_id()?.to_owned();
+                            let source =
+                                gix_hash::ObjectId::from_hex(r.name.as_bstr().strip_prefix(prefix.as_ref())?).ok()?;
+                            Some((source, target))
+                        })
+                        .collect::<Vec<_>>();
+                    Some(replacements)
+                })
+            }
+            None => None,
+        };
+        let replacements = replacements.unwrap_or_default();
 
         Ok(ThreadSafeRepository {
             objects: OwnShared::new(gix_odb::Store::at_opts(

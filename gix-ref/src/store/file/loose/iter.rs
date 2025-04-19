@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 
 use gix_features::fs::walkdir::DirEntryIter;
 use gix_object::bstr::ByteSlice;
+use gix_path::relative_path::RelativePath;
 
-use crate::{file::iter::LooseThenPacked, store_impl::file, BStr, BString, FullName};
+use crate::{file::iter::LooseThenPacked, store_impl::file, BString, FullName};
 
 /// An iterator over all valid loose reference paths as seen from a particular base directory.
 pub(in crate::store_impl::file) struct SortedLoosePaths {
@@ -89,7 +90,7 @@ impl file::Store {
     ///
     /// Prefixes are relative paths with slash-separated components.
     // TODO: use `RelativePath` type instead (see #1921), or a trait that helps convert into it.
-    pub fn loose_iter_prefixed<'a>(&self, prefix: impl Into<&'a BStr>) -> std::io::Result<LooseThenPacked<'_, '_>> {
-        self.iter_prefixed_packed(prefix.into(), None)
+    pub fn loose_iter_prefixed(&self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
+        self.iter_prefixed_packed(prefix, None)
     }
 }
