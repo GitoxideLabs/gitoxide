@@ -6,6 +6,7 @@ use gix_hash::ObjectId;
 
 use crate::types::{BlameEntry, Change, Either, LineRange, Offset, UnblamedHunk};
 
+pub(crate) mod checkpoint;
 pub(super) mod function;
 
 /// Compare a section from the *Blamed File* (`hunk`) with a change from a diff and see if there

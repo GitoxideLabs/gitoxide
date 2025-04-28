@@ -17,6 +17,8 @@ pub enum Error {
         /// The commit whose tree didn't contain `file_path`.
         commit_id: gix_hash::ObjectId,
     },
+    #[error("No `BlameState` found, so no state to start blaming from")]
+    BlameStateNotSet,
     #[error("Couldn't find commit or tree in the object database")]
     FindObject(#[from] gix_object::find::Error),
     #[error("Could not find existing blob or commit")]

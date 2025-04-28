@@ -312,6 +312,23 @@ impl BlameEntry {
     }
 }
 
+/// A checkpoint for resuming blame operations.
+///
+/// Contains previously computed blame entries that can be used with `file_checkpoint()` to:
+/// - Resume processing from a previous point
+/// - Enable incremental updates when history changes
+/// - Speed up subsequent operations through caching
+///
+/// When used, entries are validated against changes since checkpoint creation
+/// and serve as the starting point for remaining blame computation.
+#[derive(Debug, PartialEq)]
+pub struct BlameCheckpoint {
+    /// The entries of the cache.
+    pub entries: Vec<BlameEntry>,
+    /// The commit that was blamed to produce these entries.
+    pub checkpoint_commit_id: ObjectId,
+}
+
 pub(crate) trait LineRange {
     fn shift_by(&self, offset: Offset) -> Self;
 }

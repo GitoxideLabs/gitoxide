@@ -6,6 +6,10 @@ git config --local diff.algorithm histogram
 
 git config merge.ff false
 
+# Set up committer info with explicit dates
+export GIT_COMMITTER_DATE="2024-01-01 12:00:00 +0000"
+export GIT_AUTHOR_DATE="2024-01-01 12:00:00 +0000"
+
 git checkout -q -b main
 
 echo "line 1" >> simple.txt
@@ -53,6 +57,7 @@ echo -e "line 1\nline in between\nline 2" > coalesce-adjacent-hunks.txt
 git add same-line-changed-twice.txt
 git add coalesce-adjacent-hunks.txt
 git commit -q -m c2.4
+git tag c2.4  # Add tag for the commit
 
 echo "line 3" >> simple.txt
 git add simple.txt
@@ -128,9 +133,24 @@ cp empty-lines-histogram.txt empty-lines-myers.txt
 git add empty-lines-histogram.txt empty-lines-myers.txt
 git commit -q -m c5.4
 
+# Add test case for checkpoint functionality
+echo -e "line 1\nline 2\nline 3" > checkpoint-test.txt
+git add checkpoint-test.txt
+git commit -q -m c5.5
+git tag checkpoint-commit # Tag this commit for easy reference
+
+echo -e "line 1\nline 2 modified\nline 3" > checkpoint-test.txt
+git add checkpoint-test.txt
+git commit -q -m c5.6
+
+# Generate baseline for both states
+git blame --porcelain checkpoint-test.txt > .git/checkpoint-test.baseline
+git checkout checkpoint-commit
+git blame --porcelain checkpoint-test.txt > .git/checkpoint-test-initial.baseline
+
 # The commit history created by the commits above this line is linear, it only
 # contains commits that have exactly one parent.
-# Below this line, there’s also commits that have more than one parent.
+# Below this line, there's also commits that have more than one parent.
 
 echo -e "line 1 original\nline 2\n line 3" > resolved-conflict.txt
 git add resolved-conflict.txt
@@ -200,7 +220,7 @@ git merge branch-that-has-one-of-the-changes || true
 
 # This is to verify that, even though commits `c15`, `c15.1` and `merge` are
 # not chronologically ordered (`c15.1` has a `CommitDate` that is before
-# `c15`’s `CommitDate`), the resulting blame is still correct.
+# `c15`'s `CommitDate`), the resulting blame is still correct.
 #
 # ---c15------c15.2
 #     \        \
@@ -253,3 +273,5 @@ git blame --porcelain empty-lines-histogram.txt > .git/empty-lines-histogram.bas
 git config --local diff.algorithm myers
 
 git blame --porcelain empty-lines-myers.txt > .git/empty-lines-myers.baseline
+
+

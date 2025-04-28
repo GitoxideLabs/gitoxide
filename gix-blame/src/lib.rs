@@ -17,7 +17,7 @@
 mod error;
 pub use error::Error;
 mod types;
-pub use types::{BlameEntry, BlameRanges, Options, Outcome, Statistics};
+pub use types::{BlameCheckpoint, BlameEntry, BlameRanges, Options, Outcome, Statistics};
 
 mod file;
-pub use file::function::file;
+pub use file::function::{file, file_checkpoint};

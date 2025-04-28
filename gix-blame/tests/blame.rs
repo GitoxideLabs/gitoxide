@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use gix_blame::BlameRanges;
+use gix_blame::{BlameCheckpoint, BlameRanges};
+use gix_ref::file::ReferenceExt;
 use gix_hash::ObjectId;
 use gix_object::bstr;
 
@@ -415,6 +416,77 @@ mod blame_ranges {
 
         assert_eq!(lines_blamed, baseline);
     }
+}
+
+#[test]
+fn blame_with_checkpoint() -> gix_testtools::Result<()> {
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::new()?;
+
+    // Find the checkpoint commit using the tag
+    let store = gix_ref::file::Store::at(
+        fixture_path().join(".git"),
+        gix_ref::store::init::Options {
+            write_reflog: gix_ref::store::WriteReflog::Disable,
+            ..Default::default()
+        },
+    );
+    let mut checkpoint_ref = gix_ref::file::Store::find(&store, "refs/tags/checkpoint-commit")?;
+    let checkpoint_commit = checkpoint_ref.peel_to_id_in_place(&store, &odb)?;
+    assert_ne!(
+        checkpoint_commit,
+        suspect,
+        "should not be the same commit as the suspect");
+
+    // First run blame on the checkpoint commit
+    let checkpoint_blame = gix_blame::file(
+        &odb,
+        checkpoint_commit,
+        None,
+        &mut resource_cache,
+        "checkpoint-test.txt".into(),
+        gix_blame::Options {
+            diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+            range: BlameRanges::default(),
+            since: None,
+        },
+    )?;
+
+    // Create checkpoint
+    let checkpoint = BlameCheckpoint {
+        entries: checkpoint_blame.entries.clone(),
+        checkpoint_commit_id: checkpoint_commit,
+    };
+
+    // Run blame from checkpoint up to suspect commit
+    let blame_from_checkpoint = gix_blame::file_checkpoint(
+        &odb,
+        suspect,
+        None,
+        checkpoint,
+        &mut resource_cache,
+        "checkpoint-test.txt".into(),
+        gix_blame::Options {
+            diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+            range: BlameRanges::default(),
+            since: None,
+        },
+    )?;
+
+    // Compare with git's blame output
+    let git_dir = fixture_path().join(".git");
+    let baseline = Baseline::collect(git_dir.join("checkpoint-test.baseline"))?;
+    assert_eq!(blame_from_checkpoint.entries, baseline);
+
+    // Also verify the checkpoint state matches git's blame at that commit
+    let checkpoint_baseline = Baseline::collect(git_dir.join("checkpoint-test-initial.baseline"))?;
+    assert_eq!(checkpoint_blame.entries, checkpoint_baseline);
+    assert_ne!(blame_from_checkpoint.entries, checkpoint_blame.entries);
+
+    Ok(())
 }
 
 fn fixture_path() -> PathBuf {
