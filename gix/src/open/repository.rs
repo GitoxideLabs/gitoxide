@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use gix_config::file::Metadata;
 use gix_features::threading::OwnShared;
+use gix_macros::momo;
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
 use std::path::Path;
@@ -67,6 +68,7 @@ impl ThreadSafeRepository {
     ///
     /// Note that opening a repository for implementing custom hooks is also handle specifically in
     /// [`open_with_environment_overrides()`][Self::open_with_environment_overrides()].
+    #[momo]
     pub fn open_opts(path: impl Into<PathBuf>, mut options: Options) -> Result<Self, Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open()");
         let (path, kind) = {
@@ -120,6 +122,7 @@ impl ThreadSafeRepository {
     //       GIT_PROXY_SSL_CERT, GIT_PROXY_SSL_KEY, GIT_PROXY_SSL_CERT_PASSWORD_PROTECTED.
     //       GIT_PROXY_SSL_CAINFO, GIT_SSL_CIPHER_LIST, GIT_HTTP_MAX_REQUESTS, GIT_CURL_FTP_NO_EPSV,
     #[doc(alias = "open_from_env", alias = "git2")]
+    #[momo]
     pub fn open_with_environment_overrides(
         fallback_directory: impl Into<PathBuf>,
         trust_map: gix_sec::trust::Mapping<Options>,

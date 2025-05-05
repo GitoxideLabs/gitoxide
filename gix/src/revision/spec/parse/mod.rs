@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use gix_hash::ObjectId;
+use gix_macros::momo;
 use gix_revision::spec::parse;
 
 use crate::{bstr::BStr, revision::Spec, Repository};
@@ -32,6 +33,7 @@ impl<'repo> Spec<'repo> {
     /// Parse `spec` and use information from `repo` to resolve it, using `opts` to learn how to deal with ambiguity.
     ///
     /// Note that it's easier and to use [`repo.rev_parse()`][Repository::rev_parse()] instead.
+    #[momo]
     pub fn from_bstr<'a>(spec: impl Into<&'a BStr>, repo: &'repo Repository, opts: Options) -> Result<Self, Error> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {

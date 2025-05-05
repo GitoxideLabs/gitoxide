@@ -1,5 +1,6 @@
 ///
 pub mod set_target_id {
+    use gix_macros::momo;
     use gix_ref::{transaction::PreviousValue, Target};
 
     use crate::{bstr::BString, Reference};
@@ -28,6 +29,7 @@ pub mod set_target_id {
         /// If multiple reference should be changed, use [`Repository::edit_references()`][crate::Repository::edit_references()]
         /// or the lower level reference database instead.
         #[allow(clippy::result_large_err)]
+        #[momo]
         pub fn set_target_id(
             &mut self,
             id: impl Into<gix_hash::ObjectId>,

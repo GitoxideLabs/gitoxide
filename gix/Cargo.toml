@@ -304,6 +304,7 @@ cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 
 
 [dependencies]
+gix-macros = { version = "^0.1.5", path = "../gix-macros" }
 gix-utils = { version = "^0.3.0", path = "../gix-utils" }
 gix-fs = { version = "^0.15.0", path = "../gix-fs" }
 gix-ref = { version = "^0.52.1", path = "../gix-ref" }

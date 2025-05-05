@@ -6,6 +6,7 @@ use std::{
 
 use gix_config::parse::section;
 use gix_discover::DOT_GIT_DIR;
+use gix_macros::momo;
 
 /// The error used in [`into()`].
 #[derive(Debug, thiserror::Error)]
@@ -124,6 +125,7 @@ pub struct Options {
 /// Note that this is a simple template-based initialization routine which should be accompanied with additional corrections
 /// to respect git configuration, which is accomplished by [its callers][crate::ThreadSafeRepository::init_opts()]
 /// that return a [Repository][crate::Repository].
+#[momo]
 pub fn into(
     directory: impl Into<PathBuf>,
     kind: Kind,

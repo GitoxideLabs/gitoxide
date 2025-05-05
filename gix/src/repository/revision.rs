@@ -1,3 +1,5 @@
+use gix_macros::momo;
+
 use crate::revision;
 #[cfg(feature = "revision")]
 use crate::{bstr::BStr, Id};
@@ -12,6 +14,7 @@ impl crate::Repository {
     ///   `HEAD` ref available for lookups.
     #[doc(alias = "revparse", alias = "git2")]
     #[cfg(feature = "revision")]
+    #[momo]
     pub fn rev_parse<'a>(&self, spec: impl Into<&'a BStr>) -> Result<revision::Spec<'_>, revision::spec::parse::Error> {
         revision::Spec::from_bstr(
             spec,

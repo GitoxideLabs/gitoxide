@@ -2,6 +2,7 @@
 use std::ops::DerefMut;
 
 use gix_hash::ObjectId;
+use gix_macros::momo;
 use gix_object::{Exists, Find, FindExt, Write};
 use gix_odb::{Header, HeaderExt};
 use gix_ref::{
@@ -39,6 +40,7 @@ impl crate::Repository {
     ///
     /// In order to get the kind of the object, is must be fully decoded from storage if it is packed with deltas.
     /// Loose object could be partially decoded, even though that's not implemented.
+    #[momo]
     pub fn find_object(&self, id: impl Into<ObjectId>) -> Result<Object<'_>, object::find::existing::Error> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -87,6 +89,7 @@ impl crate::Repository {
     ///
     /// Note that despite being cheaper than [`Self::find_object()`], there is still some effort traversing delta-chains.
     #[doc(alias = "read_header", alias = "git2")]
+    #[momo]
     pub fn find_header(&self, id: impl Into<ObjectId>) -> Result<gix_odb::find::Header, object::find::existing::Error> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -107,6 +110,7 @@ impl crate::Repository {
     /// Use [`repo.objects.refresh_never()`](gix_odb::store::Handle::refresh_never) to avoid expensive
     /// IO-bound refreshes if an object wasn't found.
     #[doc(alias = "exists", alias = "git2")]
+    #[momo]
     pub fn has_object(&self, id: impl AsRef<gix_hash::oid>) -> bool {
         let id = id.as_ref();
         if id.to_owned().is_empty_tree() {
@@ -119,6 +123,7 @@ impl crate::Repository {
     /// Obtain information about an object without fully decoding it, or `None` if the object doesn't exist.
     ///
     /// Note that despite being cheaper than [`Self::try_find_object()`], there is still some effort traversing delta-chains.
+    #[momo]
     pub fn try_find_header(
         &self,
         id: impl Into<ObjectId>,
@@ -134,6 +139,7 @@ impl crate::Repository {
     }
 
     /// Try to find the object with `id` or return `None` if it wasn't found.
+    #[momo]
     pub fn try_find_object(&self, id: impl Into<ObjectId>) -> Result<Option<Object<'_>>, object::find::Error> {
         let id = id.into();
         if id == ObjectId::empty_tree(self.object_hash()) {
@@ -188,6 +194,7 @@ impl crate::Repository {
     ///
     /// We avoid writing duplicate objects to slow disks that will eventually have to be garbage collected by
     /// pre-hashing the data, and checking if the object is already present.
+    #[momo]
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>, object::write::Error> {
         let bytes = bytes.as_ref();
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)
@@ -236,6 +243,7 @@ impl crate::Repository {
     ///
     /// It will be created with `constraint` which is most commonly to [only create it][PreviousValue::MustNotExist]
     /// or to [force overwriting a possibly existing tag](PreviousValue::Any).
+    #[momo]
     pub fn tag(
         &self,
         name: impl AsRef<str>,
