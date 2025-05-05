@@ -1,7 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
 
-use gix_macros::momo;
 use gix_path::RelativePath;
 use gix_ref::file::ReferenceExt;
 
@@ -44,7 +43,6 @@ impl Platform<'_> {
     /// Return an iterator over all references that match the given `prefix`.
     ///
     /// These are of the form `refs/heads/` or `refs/remotes/origin`, and must not contain relative paths components like `.` or `..`.
-    #[momo]
     pub fn prefixed<'a>(
         &self,
         prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,

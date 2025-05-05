@@ -26,7 +26,6 @@ impl<'repo> Snapshot<'repo> {
     }
 
     /// Like [`boolean()`][Self::boolean()], but it will report an error if the value couldn't be interpreted as boolean.
-    #[momo]
     pub fn try_boolean(&self, key: impl gix_config::AsKey) -> Option<Result<bool, gix_config::value::Error>> {
         self.repo.config.resolved.boolean(key)
     }
@@ -42,7 +41,6 @@ impl<'repo> Snapshot<'repo> {
     }
 
     /// Like [`integer()`][Self::integer()], but it will report an error if the value couldn't be interpreted as boolean.
-    #[momo]
     pub fn try_integer(&self, key: impl gix_config::AsKey) -> Option<Result<i64, gix_config::value::Error>> {
         self.repo.config.resolved.integer(key)
     }
@@ -50,7 +48,6 @@ impl<'repo> Snapshot<'repo> {
     /// Return the string at `key`, or `None` if there is no such value.
     ///
     /// Note that this method takes the most recent value at `key` even if it is from a file with reduced trust.
-    #[momo]
     pub fn string(&self, key: impl gix_config::AsKey) -> Option<Cow<'repo, BStr>> {
         self.repo.config.resolved.string(key)
     }
@@ -58,7 +55,6 @@ impl<'repo> Snapshot<'repo> {
     /// Return the trusted and fully interpolated path at `key`, or `None` if there is no such value
     /// or if no value was found in a trusted file.
     /// An error occurs if the path could not be interpolated to its final value.
-    #[momo]
     pub fn trusted_path(
         &self,
         key: impl gix_config::AsKey,
@@ -68,7 +64,6 @@ impl<'repo> Snapshot<'repo> {
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),
     /// or `None` if there is no such value or if no value was found in a trusted file.
-    #[momo]
     pub fn trusted_program(&self, key: impl gix_config::AsKey) -> Option<Cow<'repo, OsStr>> {
         let value = self
             .repo
