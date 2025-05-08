@@ -88,30 +88,51 @@ impl Cascade {
             match helper::invoke::raw(program, &action) {
                 Ok(None) => {}
                 Ok(Some(stdout)) => {
-                    let ctx = Context::from_bytes(&stdout)?;
+                    let Context {
+                        protocol,
+                        host,
+                        path,
+                        username,
+                        password,
+                        oauth_refresh_token,
+                        password_expiry_utc,
+                        url: ctx_url,
+                        quit,
+                    } = Context::from_bytes(&stdout)?;
                     if let Some(dst_ctx) = action.context_mut() {
-                        if let Some(src) = ctx.path {
+                        if let Some(src) = path {
                             dst_ctx.path = Some(src);
                         }
+                        if let Some(src) = password_expiry_utc {
+                            dst_ctx.password_expiry_utc = Some(src);
+                        }
                         for (src, dst) in [
-                            (ctx.protocol, &mut dst_ctx.protocol),
-                            (ctx.host, &mut dst_ctx.host),
-                            (ctx.username, &mut dst_ctx.username),
-                            (ctx.password, &mut dst_ctx.password),
+                            (protocol, &mut dst_ctx.protocol),
+                            (host, &mut dst_ctx.host),
+                            (username, &mut dst_ctx.username),
+                            (password, &mut dst_ctx.password),
+                            (oauth_refresh_token, &mut dst_ctx.oauth_refresh_token),
                         ] {
                             if let Some(src) = src {
                                 *dst = Some(src);
                             }
                         }
-                        if let Some(src) = ctx.url {
+                        if let Some(src) = ctx_url {
                             dst_ctx.url = Some(src);
                             url = dst_ctx.destructure_url_in_place(self.use_http_path)?.url.take();
+                        }
+                        if dst_ctx
+                            .password_expiry_utc
+                            .is_some_and(|expiry_date| expiry_date < gix_date::Time::now_utc().seconds)
+                        {
+                            dst_ctx.password_expiry_utc = None;
+                            dst_ctx.clear_secrets();
                         }
                         if dst_ctx.username.is_some() && dst_ctx.password.is_some() {
                             break;
                         }
-                        if ctx.quit.unwrap_or_default() {
-                            dst_ctx.quit = ctx.quit;
+                        if quit.unwrap_or_default() {
+                            dst_ctx.quit = quit;
                             break;
                         }
                     }

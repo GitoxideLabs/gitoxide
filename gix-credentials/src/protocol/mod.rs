@@ -48,6 +48,10 @@ pub struct Context {
     pub username: Option<String>,
     /// The credential’s password, if we are asking it to be stored.
     pub password: Option<String>,
+    /// An OAuth refresh token that may accompany a password. It is to be treated confidentially, just like the password.
+    pub oauth_refresh_token: Option<String>,
+    /// The expiry date of OAuth tokens as seconds from Unix epoch.
+    pub password_expiry_utc: Option<gix_date::SecondsSinceUnixEpoch>,
     /// When this special attribute is read by git credential, the value is parsed as a URL and treated as if its constituent
     /// parts were read (e.g., url=<https://example.com> would behave as if
     /// protocol=https and host=example.com had been provided). This can help callers avoid parsing URLs themselves.

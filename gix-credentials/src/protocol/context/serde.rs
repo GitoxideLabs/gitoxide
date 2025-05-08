@@ -17,7 +17,20 @@ mod write {
                 out.write_all(value)?;
                 out.write_all(b"\n")
             }
-            for (key, value) in [("url", &self.url), ("path", &self.path)] {
+            let Context {
+                protocol,
+                host,
+                path,
+                username,
+                password,
+                oauth_refresh_token,
+                password_expiry_utc,
+                url,
+                // We only decode quit and interpret it, but won't get to pass it on as it means to stop the
+                // credential helper invocation chain.
+                quit: _,
+            } = self;
+            for (key, value) in [("url", url), ("path", path)] {
                 if let Some(value) = value {
                     validate(key, value.as_slice().into())
                         .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
@@ -25,16 +38,24 @@ mod write {
                 }
             }
             for (key, value) in [
-                ("protocol", &self.protocol),
-                ("host", &self.host),
-                ("username", &self.username),
-                ("password", &self.password),
+                ("protocol", protocol),
+                ("host", host),
+                ("username", username),
+                ("password", password),
+                ("oauth_refresh_token", oauth_refresh_token),
             ] {
                 if let Some(value) = value {
                     validate(key, value.as_str().into())
                         .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
                     write_key(&mut out, key, value.as_bytes().as_bstr()).ok();
                 }
+            }
+            if let Some(value) = password_expiry_utc {
+                let key = "password_expiry_utc";
+                let value = value.to_string();
+                validate(key, value.as_str().into())
+                    .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+                write_key(&mut out, key, value.as_bytes().as_bstr()).ok();
             }
             Ok(())
         }
@@ -70,6 +91,17 @@ pub mod decode {
         /// Decode ourselves from `input` which is the format written by [`write_to()`][Self::write_to()].
         pub fn from_bytes(input: &[u8]) -> Result<Self, Error> {
             let mut ctx = Context::default();
+            let Context {
+                protocol,
+                host,
+                path,
+                username,
+                password,
+                oauth_refresh_token,
+                password_expiry_utc,
+                url,
+                quit,
+            } = &mut ctx;
             for res in input.lines().take_while(|line| !line.is_empty()).map(|line| {
                 let mut it = line.splitn(2, |b| *b == b'=');
                 match (
@@ -84,23 +116,27 @@ pub mod decode {
             }) {
                 let (key, value) = res?;
                 match key {
-                    "protocol" | "host" | "username" | "password" => {
+                    "protocol" | "host" | "username" | "password" | "oauth_refresh_token" => {
                         if !value.is_utf8() {
                             return Err(Error::IllformedUtf8InValue { key: key.into(), value });
                         }
                         let value = value.to_string();
                         *match key {
-                            "protocol" => &mut ctx.protocol,
-                            "host" => &mut ctx.host,
-                            "username" => &mut ctx.username,
-                            "password" => &mut ctx.password,
+                            "protocol" => &mut *protocol,
+                            "host" => host,
+                            "username" => username,
+                            "password" => password,
+                            "oauth_refresh_token" => oauth_refresh_token,
                             _ => unreachable!("checked field names in match above"),
                         } = Some(value);
                     }
-                    "url" => ctx.url = Some(value),
-                    "path" => ctx.path = Some(value),
+                    "password_expiry_utc" => {
+                        *password_expiry_utc = value.to_str().ok().and_then(|value| value.parse().ok());
+                    }
+                    "url" => *url = Some(value),
+                    "path" => *path = Some(value),
                     "quit" => {
-                        ctx.quit = gix_config_value::Boolean::try_from(value.as_ref()).ok().map(Into::into);
+                        *quit = gix_config_value::Boolean::try_from(value.as_ref()).ok().map(Into::into);
                     }
                     _ => {}
                 }
