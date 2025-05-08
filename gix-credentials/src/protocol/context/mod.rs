@@ -14,6 +14,44 @@ mod access {
     use crate::protocol::Context;
 
     impl Context {
+        /// Clear all fields that are considered secret.
+        pub fn clear_secrets(&mut self) {
+            let Context {
+                protocol: _,
+                host: _,
+                path: _,
+                username: _,
+                password,
+                oauth_refresh_token,
+                password_expiry_utc: _,
+                url: _,
+                quit: _,
+            } = self;
+
+            *password = None;
+            *oauth_refresh_token = None;
+        }
+        /// Replace existing secrets with the word `<redacted>`.
+        pub fn redacted(mut self) -> Self {
+            let Context {
+                protocol: _,
+                host: _,
+                path: _,
+                username: _,
+                password,
+                oauth_refresh_token,
+                password_expiry_utc: _,
+                url: _,
+                quit: _,
+            } = &mut self;
+            for secret_field in [password, oauth_refresh_token] {
+                if let Some(secret) = secret_field {
+                    *secret = "<redacted>".into();
+                }
+            }
+            self
+        }
+
         /// Convert all relevant fields into a URL for consumption.
         pub fn to_url(&self) -> Option<BString> {
             use bstr::{ByteSlice, ByteVec};

@@ -1625,6 +1625,7 @@ dependencies = [
  "document-features",
  "gix-command",
  "gix-config-value",
+ "gix-date",
  "gix-path",
  "gix-prompt",
  "gix-sec",

@@ -48,6 +48,10 @@ pub struct Context {
     pub username: Option<String>,
     /// The credential’s password, if we are asking it to be stored.
     pub password: Option<String>,
+    /// An OAuth refresh token that may accompany a password. It is to be treated confidentially, just like the password.
+    pub oauth_refresh_token: Option<String>,
+    /// The expiry date of OAuth tokens as seconds from Unix epoch.
+    pub password_expiry_utc: Option<gix_date::SecondsSinceUnixEpoch>,
     /// When this special attribute is read by git credential, the value is parsed as a URL and treated as if its constituent
     /// parts were read (e.g., url=<https://example.com> would behave as if
     /// protocol=https and host=example.com had been provided). This can help callers avoid parsing URLs themselves.
@@ -59,14 +63,10 @@ pub struct Context {
 /// Convert the outcome of a helper invocation to a helper result, assuring that the identity is complete in the process.
 #[allow(clippy::result_large_err)]
 pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper::Action) -> Result {
-    fn redact(mut ctx: Context) -> Context {
-        if let Some(pw) = ctx.password.as_mut() {
-            *pw = "<redacted>".into();
-        }
-        ctx
-    }
     match (action, outcome) {
-        (helper::Action::Get(ctx), None) => Err(Error::IdentityMissing { context: redact(ctx) }),
+        (helper::Action::Get(ctx), None) => Err(Error::IdentityMissing {
+            context: ctx.redacted(),
+        }),
         (helper::Action::Get(ctx), Some(mut outcome)) => match outcome.consume_identity() {
             Some(identity) => Ok(Some(Outcome {
                 identity,
@@ -75,7 +75,9 @@ pub fn helper_outcome_to_result(outcome: Option<helper::Outcome>, action: helper
             None => Err(if outcome.quit {
                 Error::Quit
             } else {
-                Error::IdentityMissing { context: redact(ctx) }
+                Error::IdentityMissing {
+                    context: ctx.redacted(),
+                }
             }),
         },
         (helper::Action::Store(_) | helper::Action::Erase(_), _ignore) => Ok(None),
