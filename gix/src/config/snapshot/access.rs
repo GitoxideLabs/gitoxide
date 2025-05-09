@@ -2,6 +2,7 @@
 use std::{borrow::Cow, ffi::OsStr};
 
 use gix_features::threading::OwnShared;
+use gix_macros::momo;
 
 use crate::{
     bstr::{BStr, BString, ByteSlice},
@@ -112,6 +113,7 @@ impl<'repo> SnapshotMut<'repo> {
 
     /// Set the value at `key` to `new_value`, possibly creating the section if it doesn't exist yet, or overriding the most recent existing
     /// value, which will be returned.
+    #[momo]
     pub fn set_value<'b>(
         &mut self,
         key: &'static dyn crate::config::tree::Key,
@@ -135,6 +137,7 @@ impl<'repo> SnapshotMut<'repo> {
 
     /// Set the value at `key` to `new_value` in the given `subsection`, possibly creating the section and sub-section if it doesn't exist yet,
     /// or overriding the most recent existing value, which will be returned.
+    #[momo]
     pub fn set_subsection_value<'a, 'b>(
         &mut self,
         key: &'static dyn crate::config::tree::Key,

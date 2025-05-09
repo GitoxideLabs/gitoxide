@@ -1,4 +1,5 @@
 use gix_hash::ObjectId;
+use gix_macros::momo;
 pub use gix_object::tree::{EntryKind, EntryMode};
 use gix_object::{bstr::BStr, FindExt, TreeRefIter};
 
@@ -142,6 +143,7 @@ impl<'repo> Tree<'repo> {
     ///
     /// If any path component contains illformed UTF-8 and thus can't be converted to bytes on platforms which can't do so natively,
     /// the returned component will be empty which makes the lookup fail.
+    #[momo]
     pub fn lookup_entry_by_path(
         &self,
         relative_path: impl AsRef<std::path::Path>,
@@ -160,6 +162,7 @@ impl<'repo> Tree<'repo> {
     ///
     /// If any path component contains illformed UTF-8 and thus can't be converted to bytes on platforms which can't do so natively,
     /// the returned component will be empty which makes the lookup fail.
+    #[momo]
     pub fn peel_to_entry_by_path(
         &mut self,
         relative_path: impl AsRef<std::path::Path>,
