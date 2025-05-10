@@ -24,9 +24,11 @@ use crate::Error;
 /// let range = BlameRanges::from_range(20..=40);
 ///
 /// // Blame multiple ranges
-/// let mut ranges = BlameRanges::new();
-/// ranges.add_range(1..=4);   // Lines 1-4
-/// ranges.add_range(10..=14); // Lines 10-14
+/// let mut ranges = BlameRanges::from_ranges(vec![
+///     1..=4, // Lines 1-4
+///    10..=14, // Lines 10-14
+/// ]
+/// );
 /// ```
 ///
 /// # Line Number Representation
@@ -40,26 +42,23 @@ use crate::Error;
 /// An empty `BlameRanges` (created via `BlameRanges::new()` or `BlameRanges::default()`) means
 /// to blame the entire file, similar to running `git blame` without line number arguments.
 #[derive(Debug, Clone, Default)]
-pub struct BlameRanges {
-    /// The ranges to blame, stored as 1-based inclusive ranges
-    /// An empty Vec means blame the entire file
-    ranges: Vec<RangeInclusive<u32>>,
+pub enum BlameRanges {
+    /// Blame the entire file.
+    #[default]
+    FullFile,
+    /// Blame ranges in 1-based inclusive format.
+    OneBasedInclusive(Vec<RangeInclusive<u32>>),
+    /// Blame ranges in 0-based exclusive format.
+    ZeroBasedExclusive(Vec<Range<u32>>),
 }
 
 /// Lifecycle
 impl BlameRanges {
-    /// Create a new empty BlameRanges instance.
-    ///
-    /// An empty instance means to blame the entire file.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Create from a single range.
     ///
     /// The range is 1-based, similar to git's line number format.
     pub fn from_range(range: RangeInclusive<u32>) -> Self {
-        Self { ranges: vec![range] }
+        Self::OneBasedInclusive(vec![range])
     }
 
     /// Create from multiple ranges.
@@ -67,9 +66,9 @@ impl BlameRanges {
     /// All ranges are 1-based.
     /// Overlapping or adjacent ranges will be merged.
     pub fn from_ranges(ranges: Vec<RangeInclusive<u32>>) -> Self {
-        let mut result = Self::new();
+        let mut result = Self::OneBasedInclusive(vec![]);
         for range in ranges {
-            result.merge_range(range);
+            let _ = result.merge_range(range);
         }
         result
     }
@@ -81,23 +80,32 @@ impl BlameRanges {
     /// The range should be 1-based inclusive.
     /// If the new range overlaps with or is adjacent to an existing range,
     /// they will be merged into a single range.
-    pub fn add_range(&mut self, new_range: RangeInclusive<u32>) {
-        self.merge_range(new_range);
+    pub fn add_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), Error> {
+        match self {
+            Self::OneBasedInclusive(_) => self.merge_range(new_range),
+            _ => Err(Error::InvalidOneBasedLineRange),
+        }
     }
 
     /// Attempts to merge the new range with any existing ranges.
     /// If no merge is possible, add it as a new range.
-    fn merge_range(&mut self, new_range: RangeInclusive<u32>) {
-        // Check if this range can be merged with any existing range
-        for range in &mut self.ranges {
-            // Check if ranges overlap or are adjacent
-            if new_range.start() <= range.end() && range.start() <= new_range.end() {
-                *range = *range.start().min(new_range.start())..=*range.end().max(new_range.end());
-                return;
+    fn merge_range(&mut self, new_range: RangeInclusive<u32>) -> Result<(), Error> {
+        match self {
+            Self::OneBasedInclusive(ref mut ranges) => {
+                // Check if this range can be merged with any existing range
+                for range in &mut *ranges {
+                    // Check if ranges overlap or are adjacent
+                    if new_range.start() <= &(range.end() + 1) && range.start() <= &(new_range.end() + 1) {
+                        *range = *range.start().min(new_range.start())..=*range.end().max(new_range.end());
+                        return Ok(());
+                    }
+                }
+                // If no overlap found, add it as a new range
+                ranges.push(new_range);
+                Ok(())
             }
+            _ => Err(Error::InvalidOneBasedLineRange),
         }
-        // If no overlap found, add it as a new range
-        self.ranges.push(new_range);
     }
 
     /// Convert the 1-based inclusive ranges to 0-based exclusive ranges.
@@ -111,30 +119,26 @@ impl BlameRanges {
     /// - Any range starts at 0 (must be 1-based)
     /// - Any range extends beyond the file's length
     /// - Any range has the same start and end
-    pub fn to_zero_based_exclusive(&self, max_lines: u32) -> Result<Vec<Range<u32>>, Error> {
-        if self.ranges.is_empty() {
-            let range = 0..max_lines;
-            return Ok(vec![range]);
-        }
-
-        let mut result = Vec::with_capacity(self.ranges.len());
-        for range in &self.ranges {
-            if *range.start() == 0 {
-                return Err(Error::InvalidLineRange);
+    pub fn to_zero_based_exclusive(&self, max_lines: u32) -> Result<BlameRanges, Error> {
+        match self {
+            Self::FullFile => {
+                let range = 0..max_lines;
+                Ok(BlameRanges::ZeroBasedExclusive(vec![range]))
             }
-            let start = range.start() - 1;
-            let end = *range.end();
-            if start >= max_lines || end > max_lines || start == end {
-                return Err(Error::InvalidLineRange);
+            Self::OneBasedInclusive(ranges) => {
+                let mut result = Vec::with_capacity(ranges.len());
+                for range in ranges {
+                    let start = range.start() - 1;
+                    let end = *range.end();
+                    if start >= max_lines || end > max_lines || start == end {
+                        return Err(Error::InvalidOneBasedLineRange);
+                    }
+                    result.push(start..end);
+                }
+                Ok(BlameRanges::ZeroBasedExclusive(result))
             }
-            result.push(start..end);
+            Self::ZeroBasedExclusive(_) => Ok(self.clone()),
         }
-        Ok(result)
-    }
-
-    /// Returns true if no specific ranges are set (meaning blame entire file)
-    pub fn is_empty(&self) -> bool {
-        self.ranges.is_empty()
     }
 }
 
@@ -144,7 +148,7 @@ pub struct Options {
     /// The algorithm to use for diffing.
     pub diff_algorithm: gix_diff::blob::Algorithm,
     /// The ranges to blame in the file.
-    pub range: BlameRanges,
+    pub ranges: BlameRanges,
     /// Don't consider commits before the given date.
     pub since: Option<gix_date::Time>,
 }
@@ -334,6 +338,17 @@ pub struct UnblamedHunk {
 }
 
 impl UnblamedHunk {
+    /// Create a new instance
+    pub fn new(range: Range<u32>, suspect: ObjectId) -> Self {
+        let range_start = range.start;
+        let range_end = range.end;
+
+        UnblamedHunk {
+            range_in_blamed_file: range_start..range_end,
+            suspects: [(suspect, range_start..range_end)].into(),
+        }
+    }
+
     pub(crate) fn has_suspect(&self, suspect: &ObjectId) -> bool {
         self.suspects.iter().any(|entry| entry.0 == *suspect)
     }

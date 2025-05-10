@@ -1578,7 +1578,7 @@ pub fn main() -> Result<()> {
                     &file,
                     gix::blame::Options {
                         diff_algorithm,
-                        range: gix::blame::BlameRanges::from_ranges(ranges),
+                        ranges: gix::blame::BlameRanges::from_ranges(ranges),
                         since,
                     },
                     out,

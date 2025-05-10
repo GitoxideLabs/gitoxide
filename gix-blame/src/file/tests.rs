@@ -1374,3 +1374,132 @@ mod process_changes {
         );
     }
 }
+
+mod blame_ranges {
+    use crate::BlameRanges;
+
+    #[test]
+    fn create_from_single_range() {
+        let range = BlameRanges::from_range(20..=40);
+        match range {
+            BlameRanges::OneBasedInclusive(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(ranges[0], 20..=40);
+            }
+            _ => panic!("Expected OneBasedInclusive variant"),
+        }
+    }
+
+    #[test]
+    fn create_from_multiple_ranges() {
+        let ranges = BlameRanges::from_ranges(vec![1..=4, 10..=14]);
+        match ranges {
+            BlameRanges::OneBasedInclusive(ranges) => {
+                assert_eq!(ranges.len(), 2);
+                assert_eq!(ranges[0], 1..=4);
+                assert_eq!(ranges[1], 10..=14);
+            }
+            _ => panic!("Expected OneBasedInclusive variant"),
+        }
+    }
+
+    #[test]
+    fn add_range_merges_overlapping() {
+        let mut ranges = BlameRanges::from_range(1..=5);
+        ranges.add_range(3..=7).unwrap();
+
+        match ranges {
+            BlameRanges::OneBasedInclusive(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(ranges[0], 1..=7);
+            }
+            _ => panic!("Expected OneBasedInclusive variant"),
+        }
+    }
+
+    #[test]
+    fn add_range_merges_adjacent() {
+        let mut ranges = BlameRanges::from_range(1..=5);
+        ranges.add_range(6..=10).unwrap();
+
+        match ranges {
+            BlameRanges::OneBasedInclusive(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(ranges[0], 1..=10);
+            }
+            _ => panic!("Expected OneBasedInclusive variant"),
+        }
+    }
+
+    #[test]
+    fn add_range_keeps_separate() {
+        let mut ranges = BlameRanges::from_range(1..=5);
+        ranges.add_range(7..=10).unwrap();
+
+        match ranges {
+            BlameRanges::OneBasedInclusive(ranges) => {
+                assert_eq!(ranges.len(), 2);
+                assert_eq!(ranges[0], 1..=5);
+                assert_eq!(ranges[1], 7..=10);
+            }
+            _ => panic!("Expected OneBasedInclusive variant"),
+        }
+    }
+
+    #[test]
+    fn convert_to_zero_based_exclusive() {
+        let ranges = BlameRanges::from_ranges(vec![1..=5, 10..=15]);
+        let result = ranges.to_zero_based_exclusive(20).unwrap();
+        match result {
+            BlameRanges::ZeroBasedExclusive(ranges) => {
+                assert_eq!(ranges.len(), 2);
+                assert_eq!(ranges[0], 0..5);
+                assert_eq!(ranges[1], 9..15);
+            }
+            _ => panic!("Expected ZeroBasedExclusive variant"),
+        }
+    }
+
+    #[test]
+    fn convert_full_file_to_zero_based() {
+        let ranges = BlameRanges::FullFile;
+        let result = ranges.to_zero_based_exclusive(100).unwrap();
+        match result {
+            BlameRanges::ZeroBasedExclusive(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(ranges[0], 0..100);
+            }
+            _ => panic!("Expected ZeroBasedExclusive variant"),
+        }
+    }
+
+    #[test]
+    fn convert_zero_based_to_zero_based() {
+        let ranges = BlameRanges::ZeroBasedExclusive(vec![0..5, 10..15]);
+        let result = ranges.to_zero_based_exclusive(20).unwrap();
+        match result {
+            BlameRanges::ZeroBasedExclusive(ranges) => {
+                assert_eq!(ranges.len(), 2);
+                assert_eq!(ranges[0], 0..5);
+                assert_eq!(ranges[1], 10..15);
+            }
+            _ => panic!("Expected ZeroBasedExclusive variant"),
+        }
+    }
+
+    #[test]
+    fn error_on_range_beyond_max_lines() {
+        let ranges = BlameRanges::from_range(1..=15);
+        let result = ranges.to_zero_based_exclusive(10);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_is_full_file() {
+        let ranges = BlameRanges::default();
+        match ranges {
+            BlameRanges::FullFile => (),
+            _ => panic!("Expected FullFile variant"),
+        }
+    }
+}

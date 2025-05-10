@@ -10,7 +10,7 @@ use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
 
 use super::{process_changes, Change, UnblamedHunk};
-use crate::{BlameEntry, Error, Options, Outcome, Statistics};
+use crate::{BlameEntry, BlameRanges, Error, Options, Outcome, Statistics};
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
@@ -95,15 +95,14 @@ pub fn file(
         return Ok(Outcome::default());
     }
 
-    let ranges = options.range.to_zero_based_exclusive(num_lines_in_blamed)?;
-    let mut hunks_to_blame = Vec::with_capacity(ranges.len());
-
-    for range in ranges {
-        hunks_to_blame.push(UnblamedHunk {
-            range_in_blamed_file: range.clone(),
-            suspects: [(suspect, range)].into(),
-        });
-    }
+    let zero_based_ranges = options.ranges.to_zero_based_exclusive(num_lines_in_blamed)?;
+    let mut hunks_to_blame = match zero_based_ranges {
+        BlameRanges::ZeroBasedExclusive(ranges) => ranges
+            .into_iter()
+            .map(|range| UnblamedHunk::new(range, suspect))
+            .collect::<Vec<_>>(),
+        _ => return Err(Error::InvalidZeroBasedLineRange),
+    };
 
     let (mut buf, mut buf2) = (Vec::new(), Vec::new());
     let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
