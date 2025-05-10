@@ -35,14 +35,14 @@ wasm = ["gix-diff?/wasm"]
 
 [dependencies]
 gix-features = { version = "^0.42.1", path = "../gix-features", features = ["crc32", "progress", "zlib"] }
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-chunk = { version = "^0.4.11", path = "../gix-chunk" }
 gix-object = { version = "^0.49.1", path = "../gix-object" }
 gix-hashtable = { version = "^0.8.1", path = "../gix-hashtable", optional = true }
 
 # for streaming of packs (input, output)
-gix-traverse = { version = "^0.46.1", path = "../gix-traverse", optional = true }
+gix-traverse = { version = "^0.46.2", path = "../gix-traverse", optional = true }
 gix-diff = { version = "^0.52.1", path = "../gix-diff", default-features = false, optional = true }
 
 memmap2 = "0.9.0"

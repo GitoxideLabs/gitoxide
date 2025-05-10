@@ -24,7 +24,7 @@ gix-object = { version = "^0.49.1", path = "../gix-object" }
 gix-filter = { version = "^0.19.1", path = "../gix-filter" }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-command = { version = "^0.6.0", path = "../gix-command" }
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-fs = { version = "^0.15.0", path = "../gix-fs" }
 gix-tempfile = { version = "^17.1.0", path = "../gix-tempfile" }
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
@@ -32,7 +32,7 @@ gix-quote = { version = "^0.6.0", path = "../gix-quote" }
 gix-revision = { version = "^0.34.1", path = "../gix-revision", default-features = false, features = ["merge_base"] }
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 gix-diff = { version = "^0.52.1", path = "../gix-diff", default-features = false, features = ["blob"] }
-gix-index = { version = "^0.40.0", path = "../gix-index" }
+gix-index = { version = "^0.40.1", path = "../gix-index" }
 
 thiserror = "2.0.0"
 imara-diff = { version = "0.1.7" }

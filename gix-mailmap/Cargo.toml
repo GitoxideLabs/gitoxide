@@ -20,7 +20,7 @@ serde = ["dep:serde", "bstr/serde", "gix-actor/serde"]
 
 [dependencies]
 gix-actor = { version = "^0.35.1", path = "../gix-actor" }
-gix-date = { version = "^0.10.1", path = "../gix-date" }
+gix-date = { version = "^0.10.2", path = "../gix-date" }
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
 thiserror = "2.0.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

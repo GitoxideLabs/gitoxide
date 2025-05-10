@@ -23,12 +23,12 @@ attributes = ["dep:gix-attributes", "dep:gix-validate"]
 serde = ["dep:serde", "bstr/serde", "gix-index/serde", "gix-hash/serde", "gix-object/serde", "gix-attributes?/serde", "gix-ignore/serde"]
 
 [dependencies]
-gix-index = { version = "^0.40.0", path = "../gix-index" }
+gix-index = { version = "^0.40.1", path = "../gix-index" }
 gix-fs = { version = "^0.15.0", path = "../gix-fs" }
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-object = { version = "^0.49.1", path = "../gix-object" }
 gix-glob = { version = "^0.20.0", path = "../gix-glob" }
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-attributes = { version = "^0.26.0", path = "../gix-attributes", optional = true }
 gix-validate = { version = "^0.10.0", path = "../gix-validate", optional = true }
 gix-ignore = { version = "^0.15.0", path = "../gix-ignore" }

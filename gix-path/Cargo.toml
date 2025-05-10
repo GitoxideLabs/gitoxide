@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-path"
-version = "0.10.17"
+version = "0.10.18"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing paths and their conversions"

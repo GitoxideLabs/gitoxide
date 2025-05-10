@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-date"
-version = "0.10.1"
+version = "0.10.2"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project parsing dates the way git does"

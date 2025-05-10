@@ -16,10 +16,10 @@ test = false
 
 [dependencies]
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
-gix-index = { version = "^0.40.0", path = "../gix-index" }
+gix-index = { version = "^0.40.1", path = "../gix-index" }
 gix-discover = { version = "^0.40.1", path = "../gix-discover" }
 gix-fs = { version = "^0.15.0", path = "../gix-fs" }
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-pathspec = { version = "^0.11.0", path = "../gix-pathspec" }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false }
 gix-object = { version = "^0.49.1", path = "../gix-object" }

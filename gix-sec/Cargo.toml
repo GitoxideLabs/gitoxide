@@ -31,7 +31,7 @@ document-features = { version = "0.2.1", optional = true }
 libc = "0.2.172"
 
 [target.'cfg(windows)'.dependencies]
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 windows-sys = { version = "0.59.0", features = [
     "Win32_Foundation",
     "Win32_Security_Authorization",

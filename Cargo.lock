@@ -1638,7 +1638,7 @@ dependencies = [
 
 [[package]]
 name = "gix-date"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "bstr",
  "document-features",
@@ -1864,7 +1864,7 @@ dependencies = [
 
 [[package]]
 name = "gix-index"
-version = "0.40.0"
+version = "0.40.1"
 dependencies = [
  "bitflags 2.9.0",
  "bstr",
@@ -2132,7 +2132,7 @@ dependencies = [
 
 [[package]]
 name = "gix-path"
-version = "0.10.17"
+version = "0.10.18"
 dependencies = [
  "bstr",
  "gix-testtools",
@@ -2482,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "gix-traverse"
-version = "0.46.1"
+version = "0.46.2"
 dependencies = [
  "bitflags 2.9.0",
  "gix-commitgraph",

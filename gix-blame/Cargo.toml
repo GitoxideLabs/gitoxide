@@ -14,12 +14,12 @@ rust-version = "1.70"
 gix-commitgraph = { version = "^0.28.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
-gix-date = { version = "^0.10.1", path = "../gix-date" }
+gix-date = { version = "^0.10.2", path = "../gix-date" }
 gix-diff = { version = "^0.52.1", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-object = { version = "^0.49.1", path = "../gix-object" }
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-traverse = { version = "^0.46.1", path = "../gix-traverse" }
+gix-traverse = { version = "^0.46.2", path = "../gix-traverse" }
 
 smallvec = "1.15.0"
 thiserror = "2.0.0"

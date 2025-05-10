@@ -20,11 +20,11 @@ doctest = false
 worktree-rewrites = ["dep:gix-dir", "dep:gix-diff"]
 
 [dependencies]
-gix-index = { version = "^0.40.0", path = "../gix-index" }
+gix-index = { version = "^0.40.1", path = "../gix-index" }
 gix-fs = { version = "^0.15.0", path = "../gix-fs" }
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-object = { version = "^0.49.1", path = "../gix-object" }
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-features = { version = "^0.42.1", path = "../gix-features", features = ["progress"] }
 gix-filter = { version = "^0.19.1", path = "../gix-filter" }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }

@@ -27,7 +27,7 @@ wasm = ["dep:getrandom"]
 doctest = false
 
 [dependencies]
-gix-index = { version = "^0.40.0", path = "../gix-index", optional = true }
+gix-index = { version = "^0.40.1", path = "../gix-index", optional = true }
 gix-pathspec = { version = "^0.11.0", path = "../gix-pathspec", optional = true }
 gix-attributes = { version = "^0.26.0", path = "../gix-attributes", optional = true }
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
@@ -35,11 +35,11 @@ gix-object = { version = "^0.49.1", path = "../gix-object" }
 gix-filter = { version = "^0.19.1", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
 gix-command = { version = "^0.6.0", path = "../gix-command", optional = true }
-gix-path = { version = "^0.10.17", path = "../gix-path", optional = true }
+gix-path = { version = "^0.10.18", path = "../gix-path", optional = true }
 gix-fs = { version = "^0.15.0", path = "../gix-fs", optional = true }
 gix-tempfile = { version = "^17.1.0", path = "../gix-tempfile", optional = true }
 gix-trace = { version = "^0.1.12", path = "../gix-trace", optional = true }
-gix-traverse = { version = "^0.46.1", path = "../gix-traverse", optional = true }
+gix-traverse = { version = "^0.46.2", path = "../gix-traverse", optional = true }
 
 thiserror = "2.0.0"
 imara-diff = { version = "0.1.7", optional = true }

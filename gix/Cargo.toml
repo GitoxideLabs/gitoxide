@@ -312,7 +312,7 @@ gix-tempfile = { version = "^17.1.0", path = "../gix-tempfile", default-features
 gix-lock = { version = "^17.1.0", path = "../gix-lock" }
 gix-validate = { version = "^0.10.0", path = "../gix-validate" }
 gix-sec = { version = "^0.11.0", path = "../gix-sec" }
-gix-date = { version = "^0.10.1", path = "../gix-date" }
+gix-date = { version = "^0.10.2", path = "../gix-date" }
 gix-refspec = { version = "^0.30.1", path = "../gix-refspec" }
 gix-filter = { version = "^0.19.1", path = "../gix-filter", optional = true }
 gix-dir = { version = "^0.14.1", path = "../gix-dir", optional = true }
@@ -330,9 +330,9 @@ gix-revision = { version = "^0.34.1", path = "../gix-revision", default-features
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 gix-negotiate = { version = "^0.20.1", path = "../gix-negotiate", optional = true }
 
-gix-path = { version = "^0.10.17", path = "../gix-path" }
+gix-path = { version = "^0.10.18", path = "../gix-path" }
 gix-url = { version = "^0.31.0", path = "../gix-url" }
-gix-traverse = { version = "^0.46.1", path = "../gix-traverse" }
+gix-traverse = { version = "^0.46.2", path = "../gix-traverse" }
 gix-diff = { version = "^0.52.1", path = "../gix-diff", default-features = false }
 gix-merge = { version = "^0.5.1", path = "../gix-merge", default-features = false, optional = true }
 gix-mailmap = { version = "^0.27.1", path = "../gix-mailmap", optional = true }
@@ -345,7 +345,7 @@ gix-trace = { version = "^0.1.12", path = "../gix-trace" }
 gix-glob = { version = "^0.20.0", path = "../gix-glob" }
 gix-credentials = { version = "^0.29.0", path = "../gix-credentials", optional = true }
 gix-prompt = { version = "^0.11.0", path = "../gix-prompt", optional = true }
-gix-index = { version = "^0.40.0", path = "../gix-index", optional = true }
+gix-index = { version = "^0.40.1", path = "../gix-index", optional = true }
 gix-attributes = { version = "^0.26.0", path = "../gix-attributes", optional = true }
 gix-ignore = { version = "^0.15.0", path = "../gix-ignore", optional = true }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", optional = true, default-features = false }

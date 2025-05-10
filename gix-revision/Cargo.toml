@@ -29,7 +29,7 @@ serde = ["dep:serde", "gix-hash/serde", "gix-object/serde"]
 [dependencies]
 gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-object = { version = "^0.49.1", path = "../gix-object" }
-gix-date = { version = "^0.10.1", path = "../gix-date" }
+gix-date = { version = "^0.10.2", path = "../gix-date" }
 gix-hashtable = { version = "^0.8.1", path = "../gix-hashtable", optional = true }
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 gix-commitgraph = { version = "^0.28.0", path = "../gix-commitgraph" }
