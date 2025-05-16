@@ -194,7 +194,7 @@ macro_rules! mktest {
                 format!("{}.txt", $case).as_str().into(),
                 gix_blame::Options {
                     diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-                    range: BlameRanges::default(),
+                    ranges: BlameRanges::default(),
                     since: None,
                 },
             )?
@@ -265,7 +265,7 @@ fn diff_disparity() {
             format!("{case}.txt").as_str().into(),
             gix_blame::Options {
                 diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-                range: BlameRanges::default(),
+                ranges: BlameRanges::default(),
                 since: None,
             },
         )
@@ -297,7 +297,7 @@ fn since() {
         "simple.txt".into(),
         gix_blame::Options {
             diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-            range: BlameRanges::default(),
+            ranges: BlameRanges::default(),
             since: Some(gix_date::parse("2025-01-31", None).unwrap()),
         },
     )
@@ -332,7 +332,7 @@ mod blame_ranges {
             "simple.txt".into(),
             gix_blame::Options {
                 diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-                range: BlameRanges::from_range(1..=2),
+                ranges: BlameRanges::from_one_based_inclusive_range(1..=2),
                 since: None,
             },
         )
@@ -355,10 +355,11 @@ mod blame_ranges {
             suspect,
         } = Fixture::new().unwrap();
 
-        let mut ranges = BlameRanges::new();
-        ranges.add_range(1..=2); // Lines 1-2
-        ranges.add_range(1..=1); // Duplicate range, should be ignored
-        ranges.add_range(4..=4); // Line 4
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![
+            1..=2, // Lines 1-2
+            1..=1, // Duplicate range, should be ignored
+            4..=4, // Line 4
+        ]);
 
         let lines_blamed = gix_blame::file(
             &odb,
@@ -368,7 +369,7 @@ mod blame_ranges {
             "simple.txt".into(),
             gix_blame::Options {
                 diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-                range: ranges,
+                ranges,
                 since: None,
             },
         )
@@ -384,14 +385,14 @@ mod blame_ranges {
     }
 
     #[test]
-    fn multiple_ranges_usingfrom_ranges() {
+    fn multiple_ranges_using_from_ranges() {
         let Fixture {
             odb,
             mut resource_cache,
             suspect,
         } = Fixture::new().unwrap();
 
-        let ranges = BlameRanges::from_ranges(vec![1..=2, 1..=1, 4..=4]);
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![1..=2, 1..=1, 4..=4]);
 
         let lines_blamed = gix_blame::file(
             &odb,
@@ -401,7 +402,7 @@ mod blame_ranges {
             "simple.txt".into(),
             gix_blame::Options {
                 diff_algorithm: gix_diff::blob::Algorithm::Histogram,
-                range: ranges,
+                ranges,
                 since: None,
             },
         )
