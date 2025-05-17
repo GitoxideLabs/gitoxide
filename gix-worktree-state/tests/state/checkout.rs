@@ -12,6 +12,7 @@ use gix_object::{bstr::ByteSlice, Data};
 use gix_testtools::tempfile::TempDir;
 use gix_worktree_state::checkout::Collision;
 use once_cell::sync::Lazy;
+use test_case::test_matrix;
 
 use crate::fixture_path;
 
@@ -103,8 +104,8 @@ fn accidental_writes_through_symlinks_are_prevented_if_overwriting_is_forbidden(
     }
 }
 
-#[test]
-fn writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed() {
+#[test_matrix(0..=999)]
+fn writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed(_i: i32) {
     let mut opts = opts_from_probe();
     // with overwrite mode
     opts.overwrite_existing = true;
