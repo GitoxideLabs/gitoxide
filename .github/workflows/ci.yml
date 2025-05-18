@@ -185,6 +185,74 @@ jobs:
       - name: Check that tracked archives are up to date
         run: git diff --exit-code  # If this fails, the fix is usually to commit a regenerated archive.
 
+  # TODO(integration): Remove all or at least most test-ext4-casefold jobs prior to merging #2008.
+  test-ext4-casefold:
+    strategy:
+      matrix:
+        # `--test-threads` operand
+        parallel-tests:
+          - 1  # Never fails.
+          - 2  # Usually fails.
+          - 3  # Almost never fails, somehow!
+          - 4  # Usually fails.
+        # Duplicate jobs
+        rep: [A, B, C, D, E, F, G]
+      fail-fast: false
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Warn if we could use tmpfs mounted with `-o casefold` instead
+        run: |
+          case "$(cat </sys/fs/tmpfs/features/casefold || :)" in
+          supported)
+            echo '::warning:: The runner OS supports case-folding tmpfs, which may be preferable.'
+            ;;
+          esac
+      - name: Set up casefold directory
+        run: |
+          set -ux
+          dd if=/dev/zero of=~/ext4-casefold.img bs=100M count=150
+          mkfs.ext4 -O casefold -- ~/ext4-casefold.img
+          mkdir -- ~/ext4-casefold
+          sudo mount -- ~/ext4-casefold.img ~/ext4-casefold
+          sudo chown -- "$USER" ~/ext4-casefold
+          mkdir -- ~/ext4-casefold/icase
+          chattr +F -- ~/ext4-casefold/icase
+      - name: Arrange to map workspace and TMPDIR in all subsequent steps
+        run: |
+          set -ux
+          mkdir -- ~/ext4-casefold/icase/{workspace,tmp}
+          sudo mount --rbind -- ~/ext4-casefold/icase/workspace .
+          printf 'TMPDIR=%s\n' ~/ext4-casefold/icase/tmp >> "$GITHUB_ENV"
+      - name: Verify case folding in workspace and TMPDIR
+        run: |
+          set -ux
+          shopt -s nullglob
+          verify() {
+            touch a A
+            files=(?)
+            test "${#files[@]}" -eq 1
+            rm a
+          }
+          verify
+          (cd -- "$TMPDIR"; verify)
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: More writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed reps
+        run: |
+          # Prepend leading digits "24" to the upper bound of the label range.
+          sed -Ei 's/^(#\[test_matrix\(0\.\.=)([[:digit:]]+\)])$/\124\2/' \
+            gix-worktree-state/tests/state/checkout.rs
+      - name: Test writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed (nextest)
+        run: |
+          cargo nextest run -p gix-worktree-state-tests \
+            writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed \
+            --status-level=fail --test-threads=${{ matrix.parallel-tests }}
+
   test-fixtures-windows:
     runs-on: windows-latest
 
@@ -497,6 +565,7 @@ jobs:
       - test
       - test-journey
       - test-fast
+      - test-ext4-casefold
       - test-fixtures-windows
       - test-32bit
       - test-32bit-windows-size-doc
