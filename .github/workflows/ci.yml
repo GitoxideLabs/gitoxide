@@ -242,14 +242,16 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - name: More writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed reps
+      - name: Increase writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed reps
         run: |
           # Prepend leading digits "24" to the upper bound of the label range.
           sed -Ei 's/^(#\[test_matrix\(0\.\.=)([[:digit:]]+\)])$/\124\2/' \
             gix-worktree-state/tests/state/checkout.rs
+      - name: Display the changes made for this test
+        run: git diff
       - name: Test writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed (nextest)
         run: |
-          cargo nextest run -p gix-worktree-state-tests \
+          cargo nextest run -p gix-worktree-state-tests --no-default-features \
             writes_through_symlinks_are_prevented_even_if_overwriting_is_allowed \
             --status-level=fail --test-threads=${{ matrix.parallel-tests }}
 

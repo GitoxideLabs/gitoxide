@@ -689,10 +689,11 @@ fn probe_gitoxide_dir() -> crate::Result<gix_fs::Capabilities> {
 fn opts_from_probe() -> gix_worktree_state::checkout::Options {
     static CAPABILITIES: Lazy<gix_fs::Capabilities> = Lazy::new(|| probe_gitoxide_dir().unwrap());
 
+    // FIXME(integration): Restore multithreaded `thread_limit` prior to merging #2008.
     gix_worktree_state::checkout::Options {
         fs: *CAPABILITIES,
         destination_is_initially_empty: true,
-        thread_limit: gix_features::parallel::num_threads(None).into(),
+        thread_limit: Some(1), // gix_features::parallel::num_threads(None).into(),
         ..Default::default()
     }
 }
