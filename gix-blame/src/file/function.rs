@@ -95,15 +95,11 @@ pub fn file(
         return Ok(Outcome::default());
     }
 
-    let ranges = options.range.to_zero_based_exclusive(num_lines_in_blamed)?;
-    let mut hunks_to_blame = Vec::with_capacity(ranges.len());
-
-    for range in ranges {
-        hunks_to_blame.push(UnblamedHunk {
-            range_in_blamed_file: range.clone(),
-            suspects: [(suspect, range)].into(),
-        });
-    }
+    let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
+    let mut hunks_to_blame = ranges_to_blame
+        .into_iter()
+        .map(|range| UnblamedHunk::new(range, suspect))
+        .collect::<Vec<_>>();
 
     let (mut buf, mut buf2) = (Vec::new(), Vec::new());
     let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;

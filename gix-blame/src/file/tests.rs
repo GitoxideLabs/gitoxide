@@ -1374,3 +1374,92 @@ mod process_changes {
         );
     }
 }
+
+mod blame_ranges {
+    use crate::{BlameRanges, Error};
+
+    #[test]
+    fn create_with_invalid_ranges() {
+        let range = BlameRanges::from_one_based_inclusive_range(0..=10);
+
+        assert!(matches!(range, Err(Error::InvalidOneBasedLineRange)));
+    }
+
+    #[test]
+    fn create_from_single_range() {
+        let range = BlameRanges::from_one_based_inclusive_range(20..=40).unwrap();
+        if let BlameRanges::PartialFile(ranges) = range {
+            assert_eq!(ranges, vec![19..40]);
+        }
+    }
+
+    #[test]
+    fn create_from_multiple_ranges() {
+        let range = BlameRanges::from_one_based_inclusive_ranges(vec![1..=4, 10..=14]).unwrap();
+        if let BlameRanges::PartialFile(ranges) = range {
+            assert_eq!(ranges, vec![0..4, 9..14]);
+        }
+    }
+
+    #[test]
+    fn add_range_merges_overlapping() {
+        let mut range = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
+        range.add_one_based_inclusive_range(3..=7).unwrap();
+        if let BlameRanges::PartialFile(ranges) = range {
+            assert_eq!(ranges, vec![0..7]);
+        }
+    }
+
+    #[test]
+    fn add_range_merges_overlapping_both() {
+        let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=3).unwrap();
+        ranges.add_one_based_inclusive_range(5..=7).unwrap();
+        ranges.add_one_based_inclusive_range(2..=6).unwrap();
+
+        if let BlameRanges::PartialFile(ranges) = ranges {
+            assert_eq!(ranges, vec![0..7]);
+        }
+    }
+    #[test]
+    fn add_range_merges_adjacent() {
+        let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
+        ranges.add_one_based_inclusive_range(6..=10).unwrap();
+
+        if let BlameRanges::PartialFile(ranges) = ranges {
+            assert_eq!(ranges, vec![0..10]);
+        }
+    }
+
+    #[test]
+    fn add_range_keeps_separate() {
+        let mut ranges = BlameRanges::from_one_based_inclusive_range(1..=5).unwrap();
+        ranges.add_one_based_inclusive_range(6..=10).unwrap();
+
+        if let BlameRanges::PartialFile(ranges) = ranges {
+            assert_eq!(ranges, vec![0..10]);
+        }
+    }
+
+    #[test]
+    fn convert_to_zero_based_exclusive() {
+        let ranges = BlameRanges::from_one_based_inclusive_ranges(vec![1..=5, 10..=15]).unwrap();
+        let ranges = ranges.to_zero_based_exclusive_ranges(20);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 0..5);
+        assert_eq!(ranges[1], 9..15);
+    }
+
+    #[test]
+    fn convert_full_file_to_zero_based() {
+        let ranges = BlameRanges::WholeFile;
+        let ranges = ranges.to_zero_based_exclusive_ranges(100);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0], 0..100);
+    }
+
+    #[test]
+    fn default_is_full_file() {
+        let ranges = BlameRanges::default();
+        assert!(matches!(ranges, BlameRanges::WholeFile));
+    }
+}
