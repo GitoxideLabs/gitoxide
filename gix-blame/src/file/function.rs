@@ -128,8 +128,6 @@ pub fn file(
             continue 'outer;
         };
 
-        // We know `first_hunk_for_suspect` can’t be `None` here because we check `is_some()`
-        // above.
         let current_file_path = first_hunk_for_suspect
             .source_file_name
             .clone()

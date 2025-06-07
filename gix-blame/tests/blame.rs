@@ -487,6 +487,48 @@ mod blame_ranges {
     }
 }
 
+mod rename_tracking {
+    use gix_blame::BlameRanges;
+
+    use crate::{Baseline, Fixture};
+
+    #[test]
+    fn source_file_name_is_tracked_per_hunk() {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_rename_tracking_repo.sh").unwrap();
+
+        let Fixture {
+            odb,
+            mut resource_cache,
+            suspect,
+        } = Fixture::for_worktree_path(worktree_path.to_path_buf()).unwrap();
+
+        let source_file_name: gix_object::bstr::BString = "after-rename.txt".into();
+
+        let lines_blamed = gix_blame::file(
+            &odb,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            gix_blame::Options {
+                diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+                range: BlameRanges::default(),
+                since: None,
+                rewrites: Some(gix_diff::Rewrites::default()),
+            },
+        )
+        .unwrap()
+        .entries;
+
+        assert_eq!(lines_blamed.len(), 3);
+
+        let git_dir = worktree_path.join(".git");
+        let baseline = Baseline::collect(git_dir.join("after-rename.baseline"), source_file_name).unwrap();
+
+        pretty_assertions::assert_eq!(lines_blamed, baseline);
+    }
+}
+
 fn fixture_path() -> PathBuf {
     gix_testtools::scripted_fixture_read_only("make_blame_repo.sh").unwrap()
 }
