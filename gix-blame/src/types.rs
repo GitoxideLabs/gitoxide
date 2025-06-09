@@ -149,6 +149,25 @@ pub struct Options {
     pub since: Option<gix_date::Time>,
     /// Determine if rename tracking should be performed, and how.
     pub rewrites: Option<gix_diff::Rewrites>,
+    /// TODO
+    pub debug_track_path: bool,
+}
+
+/// TODO
+#[derive(Clone, Debug)]
+pub struct BlamePathEntry {
+    /// TODO
+    pub source_file_path: BString,
+    /// TODO
+    pub previous_source_file_path: Option<BString>,
+    /// TODO
+    pub commit_id: ObjectId,
+    /// TODO
+    pub previous_commit_id: ObjectId,
+    /// TODO
+    pub blob_id: ObjectId,
+    /// TODO
+    pub previous_blob_id: ObjectId,
 }
 
 /// The outcome of [`file()`](crate::file()).
@@ -161,6 +180,8 @@ pub struct Outcome {
     pub blob: Vec<u8>,
     /// Additional information about the amount of work performed to produce the blame.
     pub statistics: Statistics,
+    /// TODO
+    pub blame_path: Option<Vec<BlamePathEntry>>,
 }
 
 /// Additional information about the performed operations.
