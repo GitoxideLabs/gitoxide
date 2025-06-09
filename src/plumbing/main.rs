@@ -1591,6 +1591,7 @@ pub fn main() -> Result<()> {
                         range: gix::blame::BlameRanges::from_ranges(ranges),
                         since,
                         rewrites: Some(gix::diff::Rewrites::default()),
+                        debug_track_path: false,
                     },
                     out,
                     statistics.then_some(err),
