@@ -118,7 +118,7 @@ pub(super) mod function {
             }
         }
 
-        let mut blame_script = BlameScript::new(blame_path);
+        let mut blame_script = BlameScript::new(blame_path, Options { verbatim });
 
         blame_script.generate()?;
 
@@ -141,10 +141,11 @@ pub(super) mod function {
         queue: VecDeque<(ObjectId, BString)>,
         seen: BTreeSet<(ObjectId, BString)>,
         script: String,
+        options: Options,
     }
 
     impl BlameScript {
-        fn new(blame_path: Vec<BlamePathEntry>) -> Self {
+        fn new(blame_path: Vec<BlamePathEntry>, options: Options) -> Self {
             let mut script = String::new();
 
             script.push_str(
@@ -165,6 +166,7 @@ echo create-history.sh >> .gitignore
                 queue: VecDeque::default(),
                 seen: BTreeSet::default(),
                 script,
+                options,
             }
         }
 
@@ -200,17 +202,37 @@ echo create-history.sh >> .gitignore
             let parents = self.parents_of(blob_id, source_file_path.clone());
             let children = self.children_of(blob_id, source_file_path.clone());
 
-            let src = source_file_path.clone();
+            let src = if self.options.verbatim {
+                source_file_path.clone()
+            } else {
+                let source_file_path = std::str::from_utf8(source_file_path.as_slice()).with_context(|| {
+                    format!("Source file path '{source_file_path}' was not valid UTF8 and can't be remapped",)
+                })?;
+
+                crate::commands::copy_royal::remapped(source_file_path).into()
+            };
             let commit_id = blame_path_entry.commit_id;
 
             let delete_previous_file_script = if Some(source_file_path) != blame_path_entry.previous_source_file_path
                 && blame_path_entry.previous_source_file_path.is_some()
             {
+                let previous_source_file_path = blame_path_entry.previous_source_file_path.expect("TODO");
+
+                let src = if self.options.verbatim {
+                    previous_source_file_path
+                } else {
+                    let source_file_path =
+                        std::str::from_utf8(previous_source_file_path.as_slice()).with_context(|| {
+                            format!("Source file path '{previous_source_file_path}' was not valid UTF8 and can't be remapped",)
+                        })?;
+
+                    crate::commands::copy_royal::remapped(source_file_path).into()
+                };
+
                 format!(
                     r"# delete previous version of file
-git rm {}
-",
-                    blame_path_entry.previous_source_file_path.expect("TODO")
+git rm {src}
+"
                 )
             } else {
                 String::new()
