@@ -30,9 +30,13 @@ pub enum Subcommands {
         destination_dir: PathBuf,
         /// The file to extract the history for.
         file: std::ffi::OsString,
-        // TODO
-        // as a way to get the original source files
-        // dont_remap: bool
+        /// Do not use `copy-royal` to obfuscate the content of blobs, but copy it verbatim.
+        ///
+        /// Note that this should only be done if the source repository only contains information
+        /// you’re willing to share. Also note that the obfuscation leaves the structure of the
+        /// source intact, so a few of its properties can still be inferred.
+        #[clap(long)]
+        verbatim: bool,
     },
     /// Copy a tree so that it diffs the same but can't be traced back uniquely to its source.
     ///

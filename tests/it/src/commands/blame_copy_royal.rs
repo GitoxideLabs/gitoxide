@@ -1,4 +1,9 @@
+pub struct Options {
+    pub verbatim: bool,
+}
+
 pub(super) mod function {
+    use anyhow::Context;
     use gix::{
         blame::BlamePathEntry,
         bstr::{BStr, BString, ByteSlice},
@@ -11,14 +16,14 @@ pub(super) mod function {
         path::{Path, PathBuf},
     };
 
+    use super::Options;
+
     pub fn blame_copy_royal(
         dry_run: bool,
         worktree_dir: &Path,
         destination_dir: PathBuf,
         file: &OsStr,
-        // TODO
-        // Take `Options`, in particular `no_remap`. `git_to_sh` has `verbatim` which seems to
-        // serve the same purpose.
+        Options { verbatim }: Options,
     ) -> anyhow::Result<()> {
         let prefix = if dry_run { "WOULD" } else { "Will" };
         let repo = gix::open(worktree_dir)?;
@@ -109,7 +114,20 @@ echo $ASSETS >> .gitignore
             if !dry_run {
                 let blob = repo.objects.find_blob(&blame_path_entry.blob_id, &mut buf)?.data;
 
-                std::fs::write(dst, blob)?;
+                if verbatim {
+                    std::fs::write(dst, blob)?;
+                } else {
+                    let blob = std::str::from_utf8(blob).with_context(|| {
+                        format!(
+                            "Entry in blob '{blob_id}' was not valid UTF8 and can't be remapped",
+                            blob_id = blame_path_entry.blob_id
+                        )
+                    })?;
+
+                    let blob = crate::commands::copy_royal::remapped(blob);
+
+                    std::fs::write(dst, blob)?;
+                };
             }
         }
 
