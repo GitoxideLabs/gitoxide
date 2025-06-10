@@ -198,7 +198,10 @@ echo create-history.sh >> .gitignore
         }
 
         fn process_entry(&mut self, blob_id: ObjectId, source_file_path: BString) -> anyhow::Result<()> {
-            let blame_path_entry = self.blame_path_entry(blob_id, source_file_path.clone());
+            let blame_path_entry = match self.blame_path_entry(blob_id, source_file_path.clone()) {
+                Some(blame_path_entry) => blame_path_entry,
+                None => bail!("Expected to find a blame path entry for blob id {blob_id} and path {source_file_path}"),
+            };
             let parents = self.parents_of(blob_id, source_file_path.clone());
             let children = self.children_of(blob_id, source_file_path.clone());
 
@@ -333,14 +336,13 @@ git commit -m {commit_id}
                 .collect()
         }
 
-        fn blame_path_entry(&self, blob_id: ObjectId, source_file_path: BString) -> BlamePathEntry {
+        fn blame_path_entry(&self, blob_id: ObjectId, source_file_path: BString) -> Option<BlamePathEntry> {
             self.blame_path
                 .iter()
                 .find(|blame_path_entry| {
                     blame_path_entry.blob_id == blob_id && blame_path_entry.source_file_path == source_file_path
                 })
-                .expect("TODO")
-                .clone()
+                .cloned()
         }
 
         fn blame_path_entries(&self, blob_id: ObjectId, source_file_path: BString) -> Vec<BlamePathEntry> {
