@@ -85,19 +85,6 @@ pub(super) mod function {
             std::fs::create_dir_all(&assets)?;
         }
 
-        let mut script = String::new();
-        script.push_str(
-            r"#!/bin/sh
-
-ASSETS=./assets
-
-set -e
-
-git init
-echo $ASSETS >> .gitignore
-",
-        );
-
         let mut buf = Vec::new();
 
         for blame_path_entry in &blame_path {
@@ -160,18 +147,14 @@ echo $ASSETS >> .gitignore
         fn new(blame_path: Vec<BlamePathEntry>) -> Self {
             let mut script = String::new();
 
-            // TODO
-            // - Do we need `ASSETS` as a variable?
             script.push_str(
                 r"#!/bin/sh
 
 set -e
 
-ASSETS=./assets
-
 git init
 echo .gitignore >> .gitignore
-echo $ASSETS >> .gitignore
+echo assets/ >> .gitignore
 echo create-history.sh >> .gitignore
 
 ",
@@ -231,7 +214,7 @@ git rm {}
             let script = format!(
                 r"# make file {src} contain content at commit {commit_id}
 mkdir -p $(dirname {src})
-cp $ASSETS/{commit_id}.commit ./{src}
+cp ./assets/{commit_id}.commit ./{src}
 # create commit
 git add {src}
 git commit -m {commit_id}
@@ -272,7 +255,7 @@ git commit -m {commit_id}
                     let script = format!(
                         r"# make file {src} contain content at commit {commit_id}
 mkdir -p $(dirname {src})
-cp $ASSETS/{commit_id}.commit ./{src}
+cp ./assets/{commit_id}.commit ./{src}
 # create merge commit
 git add {src}
 git commit -m {commit_id}
