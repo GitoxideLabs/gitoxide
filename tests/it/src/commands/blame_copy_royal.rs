@@ -3,7 +3,7 @@ pub struct Options {
 }
 
 pub(super) mod function {
-    use anyhow::Context;
+    use anyhow::{bail, Context};
     use gix::{
         blame::BlamePathEntry,
         bstr::{BStr, BString, ByteSlice},
@@ -169,13 +169,18 @@ echo create-history.sh >> .gitignore
         }
 
         fn generate(&mut self) -> anyhow::Result<()> {
-            // TODO
-            // Do we want to add an assertion that there is only one root?
-            let root = self
+            let roots = self
                 .blame_path
                 .iter()
-                .find(|blame_path_entry| blame_path_entry.previous_blob_id.is_null())
-                .expect("TODO");
+                .filter(|blame_path_entry| blame_path_entry.previous_blob_id.is_null())
+                .collect::<Vec<_>>();
+
+            let [root] = roots[..] else {
+                bail!(
+                    "Expected to find one single root in blame path, but found {}",
+                    roots.len()
+                );
+            };
 
             self.queue.push_back((root.blob_id, root.source_file_path.clone()));
 
