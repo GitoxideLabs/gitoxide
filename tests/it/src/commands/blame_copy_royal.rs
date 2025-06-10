@@ -213,29 +213,26 @@ echo create-history.sh >> .gitignore
             };
             let commit_id = blame_path_entry.commit_id;
 
-            let delete_previous_file_script = if Some(source_file_path) != blame_path_entry.previous_source_file_path
-                && blame_path_entry.previous_source_file_path.is_some()
-            {
-                let previous_source_file_path = blame_path_entry.previous_source_file_path.expect("TODO");
-
-                let src = if self.options.verbatim {
-                    previous_source_file_path
-                } else {
-                    let source_file_path =
+            let delete_previous_file_script = match blame_path_entry.previous_source_file_path {
+                Some(previous_source_file_path) if source_file_path != previous_source_file_path => {
+                    let src = if self.options.verbatim {
+                        previous_source_file_path
+                    } else {
+                        let source_file_path =
                         std::str::from_utf8(previous_source_file_path.as_slice()).with_context(|| {
                             format!("Source file path '{previous_source_file_path}' was not valid UTF8 and can't be remapped",)
                         })?;
 
-                    crate::commands::copy_royal::remapped(source_file_path).into()
-                };
+                        crate::commands::copy_royal::remapped(source_file_path).into()
+                    };
 
-                format!(
-                    r"# delete previous version of file
+                    format!(
+                        r"# delete previous version of file
 git rm {src}
 "
-                )
-            } else {
-                String::new()
+                    )
+                }
+                _ => String::new(),
             };
 
             let script = format!(
