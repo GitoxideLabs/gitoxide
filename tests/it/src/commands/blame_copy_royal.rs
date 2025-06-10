@@ -272,20 +272,6 @@ git commit -m {commit_id}
                     );
 
                     self.script.push_str(delete_previous_file_script.as_str());
-
-                    // TODO
-                    // If `git merge {}` is the only difference to `script` above, we can
-                    // potentially simplify.
-                    let script = format!(
-                        r"# make file {src} contain content at commit {commit_id}
-mkdir -p $(dirname {src})
-cp ./assets/{commit_id}.commit ./{src}
-# create merge commit
-git add {src}
-git commit -m {commit_id}
-",
-                    );
-
                     self.script.push_str(script.as_str());
                 }
             }
