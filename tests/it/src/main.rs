@@ -25,6 +25,19 @@ fn main() -> anyhow::Result<()> {
                 max_count: count,
             },
         ),
+        Subcommands::BlameCopyRoyal {
+            dry_run,
+            worktree_dir: worktree_root,
+            destination_dir,
+            file,
+            verbatim,
+        } => commands::blame_copy_royal(
+            dry_run,
+            &worktree_root,
+            destination_dir,
+            &file,
+            commands::blame_copy_royal::Options { verbatim },
+        ),
         Subcommands::CopyRoyal {
             dry_run,
             worktree_dir: worktree_root,
