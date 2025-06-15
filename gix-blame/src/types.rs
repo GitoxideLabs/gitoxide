@@ -149,6 +149,30 @@ pub struct Options {
     pub since: Option<gix_date::Time>,
     /// Determine if rename tracking should be performed, and how.
     pub rewrites: Option<gix_diff::Rewrites>,
+    /// Collect debug information whenever there's a diff or rename that affects the outcome of a
+    /// blame.
+    pub debug_track_path: bool,
+}
+
+/// Represents a change during history traversal for blame. It is supposed to capture enough
+/// information to allow reconstruction of the way a blame was performed, i. e. the path the
+/// history traversal, combined with repeated diffing of two subsequent states in this history, has
+/// taken.
+///
+/// This is intended for debugging purposes.
+#[derive(Clone, Debug)]
+pub struct BlamePathEntry {
+    /// The path to the *Source File* in the blob after the change.
+    pub source_file_path: BString,
+    /// The path to the *Source File* in the blob before the change. Allows
+    /// detection of renames. `None` for root commits.
+    pub previous_source_file_path: Option<BString>,
+    /// The commit id associated with the state after the change.
+    pub commit_id: ObjectId,
+    /// The blob id associated with the state after the change.
+    pub blob_id: ObjectId,
+    /// The blob id associated with the state before the change.
+    pub previous_blob_id: ObjectId,
 }
 
 /// The outcome of [`file()`](crate::file()).
@@ -161,6 +185,8 @@ pub struct Outcome {
     pub blob: Vec<u8>,
     /// Additional information about the amount of work performed to produce the blame.
     pub statistics: Statistics,
+    /// Contains a log of all changes that affected the outcome of this blame.
+    pub blame_path: Option<Vec<BlamePathEntry>>,
 }
 
 /// Additional information about the performed operations.

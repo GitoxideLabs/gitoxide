@@ -10,7 +10,7 @@ use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
 
 use super::{process_changes, Change, UnblamedHunk};
-use crate::{BlameEntry, Error, Options, Outcome, Statistics};
+use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statistics};
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
@@ -115,6 +115,12 @@ pub fn file(
     let mut out = Vec::new();
     let mut diff_state = gix_diff::tree::State::default();
     let mut previous_entry: Option<(ObjectId, ObjectId)> = None;
+    let mut blame_path = if options.debug_track_path {
+        Some(Vec::new())
+    } else {
+        None
+    };
+
     'outer: while let Some(suspect) = queue.pop_value() {
         stats.commits_traversed += 1;
         if hunks_to_blame.is_empty() {
@@ -156,6 +162,22 @@ pub fn file(
                 // true here. We could perhaps use diff-tree-to-tree to compare `suspect` against
                 // an empty tree to validate this assumption.
                 if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                    if let Some(ref mut blame_path) = blame_path {
+                        let entry = previous_entry
+                            .take()
+                            .filter(|(id, _)| *id == suspect)
+                            .map(|(_, entry)| entry);
+
+                        let blame_path_entry = BlamePathEntry {
+                            source_file_path: current_file_path.clone(),
+                            previous_source_file_path: None,
+                            commit_id: suspect,
+                            blob_id: entry.unwrap_or(ObjectId::null(gix_hash::Kind::Sha1)),
+                            previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                        };
+                        blame_path.push(blame_path_entry);
+                    }
+
                     break 'outer;
                 }
             }
@@ -271,12 +293,23 @@ pub fn file(
             };
 
             match modification {
-                TreeDiffChange::Addition => {
+                TreeDiffChange::Addition { id } => {
                     if more_than_one_parent {
                         // Do nothing under the assumption that this always (or almost always)
                         // implies that the file comes from a different parent, compared to which
                         // it was modified, not added.
                     } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                        if let Some(ref mut blame_path) = blame_path {
+                            let blame_path_entry = BlamePathEntry {
+                                source_file_path: current_file_path.clone(),
+                                previous_source_file_path: None,
+                                commit_id: suspect,
+                                blob_id: id,
+                                previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                            };
+                            blame_path.push(blame_path_entry);
+                        }
+
                         break 'outer;
                     }
                 }
@@ -295,6 +328,16 @@ pub fn file(
                         &mut stats,
                     )?;
                     hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent_id);
+                    if let Some(ref mut blame_path) = blame_path {
+                        let blame_path_entry = BlamePathEntry {
+                            source_file_path: current_file_path.clone(),
+                            previous_source_file_path: Some(current_file_path.clone()),
+                            commit_id: suspect,
+                            blob_id: id,
+                            previous_blob_id: previous_id,
+                        };
+                        blame_path.push(blame_path_entry);
+                    }
                 }
                 TreeDiffChange::Rewrite {
                     source_location,
@@ -313,9 +356,26 @@ pub fn file(
                     )?;
                     hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent_id);
 
+                    let mut has_blame_been_passed = false;
+
                     for hunk in hunks_to_blame.iter_mut() {
                         if hunk.has_suspect(&parent_id) {
                             hunk.source_file_name = Some(source_location.clone());
+
+                            has_blame_been_passed = true;
+                        }
+                    }
+
+                    if has_blame_been_passed {
+                        if let Some(ref mut blame_path) = blame_path {
+                            let blame_path_entry = BlamePathEntry {
+                                source_file_path: current_file_path.clone(),
+                                previous_source_file_path: Some(source_location.clone()),
+                                commit_id: suspect,
+                                blob_id: id,
+                                previous_blob_id: source_id,
+                            };
+                            blame_path.push(blame_path_entry);
                         }
                     }
                 }
@@ -351,6 +411,7 @@ pub fn file(
         entries: coalesce_blame_entries(out),
         blob: blamed_file_blob,
         statistics: stats,
+        blame_path,
     })
 }
 
@@ -435,7 +496,9 @@ fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
 /// The union of [`gix_diff::tree::recorder::Change`] and [`gix_diff::tree_with_rewrites::Change`],
 /// keeping only the blame-relevant information.
 enum TreeDiffChange {
-    Addition,
+    Addition {
+        id: ObjectId,
+    },
     Deletion,
     Modification {
         previous_id: ObjectId,
@@ -453,7 +516,7 @@ impl From<gix_diff::tree::recorder::Change> for TreeDiffChange {
         use gix_diff::tree::recorder::Change;
 
         match value {
-            Change::Addition { .. } => Self::Addition,
+            Change::Addition { oid, .. } => Self::Addition { id: oid },
             Change::Deletion { .. } => Self::Deletion,
             Change::Modification { previous_oid, oid, .. } => Self::Modification {
                 previous_id: previous_oid,
@@ -468,7 +531,7 @@ impl From<gix_diff::tree_with_rewrites::Change> for TreeDiffChange {
         use gix_diff::tree_with_rewrites::Change;
 
         match value {
-            Change::Addition { .. } => Self::Addition,
+            Change::Addition { id, .. } => Self::Addition { id },
             Change::Deletion { .. } => Self::Deletion,
             Change::Modification { previous_id, id, .. } => Self::Modification { previous_id, id },
             Change::Rewrite {

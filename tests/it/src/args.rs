@@ -14,6 +14,30 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommands {
+    /// Extract a file’s history so that its blame shows the same characteristics, in particular
+    /// bugs, as the original, but in a way that can't be traced back uniquely to its source.
+    ///
+    /// The idea is that we don't want to deal with licensing, it's more about patterns in order to
+    /// reproduce cases for tests.
+    #[clap(visible_alias = "bcr")]
+    BlameCopyRoyal {
+        /// Don't really copy anything.
+        #[clap(long, short = 'n')]
+        dry_run: bool,
+        /// The git root whose history to extract the blame-relevant parts from.
+        worktree_dir: PathBuf,
+        /// The directory into which to copy the files.
+        destination_dir: PathBuf,
+        /// The file to extract the history for.
+        file: std::ffi::OsString,
+        /// Do not use `copy-royal` to obfuscate the content of blobs, but copy it verbatim.
+        ///
+        /// Note that this should only be done if the source repository only contains information
+        /// you’re willing to share. Also note that the obfuscation leaves the structure of the
+        /// source intact, so a few of its properties can still be inferred.
+        #[clap(long)]
+        verbatim: bool,
+    },
     /// Copy a tree so that it diffs the same but can't be traced back uniquely to its source.
     ///
     /// The idea is that we don't want to deal with licensing, it's more about patterns in order to
