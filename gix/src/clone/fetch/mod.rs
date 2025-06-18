@@ -1,6 +1,7 @@
 use crate::{
     bstr::{BString, ByteSlice},
     clone::PrepareFetch,
+    config::tree::gitoxide,
 };
 
 /// The error returned by [`PrepareFetch::fetch_only()`].
@@ -79,6 +80,19 @@ impl PrepareFetch {
             .repo
             .as_mut()
             .expect("user error: multiple calls are allowed only until it succeeds");
+
+        if repo.committer().is_none() {
+            let mut config = gix_config::File::new(gix_config::file::Metadata::api());
+            config
+                .set_raw_value(&gitoxide::Committer::NAME_FALLBACK, "no name configured during fetch")
+                .expect("works - statically known");
+            config
+                .set_raw_value(&gitoxide::Committer::EMAIL_FALLBACK, "noEmailAvailable@example.com")
+                .expect("works - statically known");
+            let mut repo_config = repo.config_snapshot_mut();
+            repo_config.append(config);
+            repo_config.commit().expect("configuration is still valid");
+        }
 
         if !self.config_overrides.is_empty() {
             let mut snapshot = repo.config_snapshot_mut();
