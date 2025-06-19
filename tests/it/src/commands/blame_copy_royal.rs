@@ -13,6 +13,7 @@ pub(super) mod function {
     use std::{
         collections::BTreeSet,
         ffi::OsStr,
+        fmt::Display,
         path::{Path, PathBuf},
     };
 
@@ -133,7 +134,7 @@ pub(super) mod function {
             let blocks: Vec<_> = blame_script
                 .script
                 .iter()
-                .map(|operation| operation.to_string())
+                .map(std::string::ToString::to_string)
                 .collect();
 
             std::fs::write(script_file, blocks.join(""))?;
@@ -151,10 +152,12 @@ pub(super) mod function {
         CreateTag(ObjectId),
     }
 
-    impl BlameScriptOperation {
-        fn to_string(&self) -> String {
+    impl Display for BlameScriptOperation {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                BlameScriptOperation::InitRepository => r"#!/bin/sh
+                BlameScriptOperation::InitRepository => write!(
+                    f,
+                    r"#!/bin/sh
 
 set -e
 
@@ -164,13 +167,15 @@ echo assets/ >> .gitignore
 echo create-history.sh >> .gitignore
 
 "
-                .into(),
-                BlameScriptOperation::RemoveFile(src) => format!(
+                ),
+                BlameScriptOperation::RemoveFile(src) => write!(
+                    f,
                     r"# delete previous version of file
 git rm {src}
 "
                 ),
-                BlameScriptOperation::CommitFile(src, commit_id) => format!(
+                BlameScriptOperation::CommitFile(src, commit_id) => write!(
+                    f,
                     r"# make file {src} contain content at commit {commit_id}
 mkdir -p $(dirname {src})
 cp ./assets/{commit_id}.commit ./{src}
@@ -179,16 +184,17 @@ git add {src}
 git commit -m {commit_id}
 "
                 ),
-                BlameScriptOperation::CheckoutTag(commit_id) => format!("git checkout tag-{}\n", commit_id),
-                BlameScriptOperation::PrepareMerge(commit_ids) => format!(
-                    "git merge --no-commit {} || true\n",
+                BlameScriptOperation::CheckoutTag(commit_id) => writeln!(f, "git checkout tag-{commit_id}"),
+                BlameScriptOperation::PrepareMerge(commit_ids) => writeln!(
+                    f,
+                    "git merge --no-commit {} || true",
                     commit_ids
                         .iter()
                         .map(|commit_id| format!("tag-{commit_id}"))
                         .collect::<Vec<_>>()
                         .join(" ")
                 ),
-                BlameScriptOperation::CreateTag(commit_id) => format!("git tag tag-{commit_id}\n\n"),
+                BlameScriptOperation::CreateTag(commit_id) => write!(f, "git tag tag-{commit_id}\n\n"),
             }
         }
     }
