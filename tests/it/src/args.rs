@@ -14,6 +14,52 @@ pub struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum Subcommands {
+    /// Generate a shell script that creates a git repository containing all commits that are
+    /// traversed when a blame is generated.
+    ///
+    /// This command extracts the file’s history so that blame, when run on the repository created
+    /// by the script, shows the same characteristics, in particular bugs, as the original, but in
+    /// a way that the original source file's content cannot be reconstructed.
+    ///
+    /// The idea is that by obfuscating the file's content we make it easier for people to share
+    /// the subset of data that's required for debugging purposes from repositories that are not
+    /// public.
+    ///
+    /// Note that the obfuscation leaves certain properties of the source intact, so they can still
+    /// be inferred from the extracted history. Among these properties are directory structure
+    /// (though not the directories' names), renames, number of lines, and whitespace.
+    ///
+    /// This command can also be helpful in debugging the blame algorithm itself.
+    ///
+    /// ### Terminology
+    ///
+    /// A **blame history** is the set of commits that the blame algorithm, at some point, treated
+    /// as potential suspects for any line in a file. It is a subset of all commits that ever
+    /// changed a file in its history.
+    ///
+    /// With respect to branches and merge commits, the **blame history** will not necessarily be
+    /// identical to the file's history in the source repository. This is because the blame
+    /// algorithm will stop following a file's history for branches that only touch lines for which
+    /// the source has already been found. The **blame history**, thus, looks likely "cleaner" and
+    /// "simpler" than the source history.
+    #[clap(visible_alias = "bcr")]
+    BlameCopyRoyal {
+        /// Don't really copy anything.
+        #[clap(long, short = 'n')]
+        dry_run: bool,
+        /// The git root whose history to extract the blame-relevant parts from.
+        worktree_dir: PathBuf,
+        /// The directory into which to copy the files.
+        destination_dir: PathBuf,
+        /// The file to extract the history for.
+        file: std::ffi::OsString,
+        /// Do not use `copy-royal` to obfuscate the content of blobs, but copy it verbatim.
+        ///
+        /// Note that this should only be done if the source history does not contain information
+        /// you're not willing to share.
+        #[clap(long)]
+        verbatim: bool,
+    },
     /// Copy a tree so that it diffs the same but can't be traced back uniquely to its source.
     ///
     /// The idea is that we don't want to deal with licensing, it's more about patterns in order to

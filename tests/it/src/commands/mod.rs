@@ -1,3 +1,6 @@
+pub mod blame_copy_royal;
+pub use blame_copy_royal::function::blame_copy_royal;
+
 pub mod copy_royal;
 pub use copy_royal::function::copy_royal;
 

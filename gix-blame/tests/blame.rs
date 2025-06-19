@@ -232,6 +232,7 @@ macro_rules! mktest {
                     range: BlameRanges::default(),
                     since: None,
                     rewrites: Some(gix_diff::Rewrites::default()),
+                    debug_track_path: false,
                 },
             )?
             .entries;
@@ -317,6 +318,7 @@ fn diff_disparity() {
                 range: BlameRanges::default(),
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
+                debug_track_path: false,
             },
         )
         .unwrap()
@@ -352,6 +354,7 @@ fn since() -> gix_testtools::Result {
             range: BlameRanges::default(),
             since: Some(gix_date::parse("2025-01-31", None)?),
             rewrites: Some(gix_diff::Rewrites::default()),
+            debug_track_path: false,
         },
     )?
     .entries;
@@ -391,6 +394,7 @@ mod blame_ranges {
                 range: BlameRanges::from_range(1..=2),
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
+                debug_track_path: false,
             },
         )?
         .entries;
@@ -431,6 +435,7 @@ mod blame_ranges {
                 range: ranges,
                 since: None,
                 rewrites: None,
+                debug_track_path: false,
             },
         )?
         .entries;
@@ -471,6 +476,7 @@ mod blame_ranges {
                 range: ranges,
                 since: None,
                 rewrites: None,
+                debug_track_path: false,
             },
         )?
         .entries;
@@ -516,6 +522,7 @@ mod rename_tracking {
                 range: BlameRanges::default(),
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
+                debug_track_path: false,
             },
         )?
         .entries;
