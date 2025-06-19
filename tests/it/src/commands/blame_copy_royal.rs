@@ -6,7 +6,7 @@ pub(super) mod function {
     use anyhow::Context;
     use gix::{
         blame::BlamePathEntry,
-        bstr::{BStr, ByteSlice},
+        bstr::{BStr, BString, ByteSlice},
         objs::FindExt,
         ObjectId,
     };
@@ -130,25 +130,31 @@ pub(super) mod function {
         );
 
         if !dry_run {
-            std::fs::write(script_file, blame_script.script)?;
+            let blocks: Vec<_> = blame_script
+                .script
+                .iter()
+                .map(|operation| operation.to_string())
+                .collect();
+
+            std::fs::write(script_file, blocks.join(""))?;
         }
 
         Ok(())
     }
 
-    struct BlameScript {
-        blame_path: Vec<BlamePathEntry>,
-        seen: BTreeSet<ObjectId>,
-        script: String,
-        options: Options,
+    enum BlameScriptOperation {
+        InitRepository,
+        RemoveFile(String),
+        CommitFile(BString, ObjectId),
+        CheckoutTag(ObjectId),
+        PrepareMerge(Vec<ObjectId>),
+        CreateTag(ObjectId),
     }
 
-    impl BlameScript {
-        fn new(blame_path: Vec<BlamePathEntry>, options: Options) -> Self {
-            let mut script = String::new();
-
-            script.push_str(
-                r"#!/bin/sh
+    impl BlameScriptOperation {
+        fn to_string(&self) -> String {
+            match self {
+                BlameScriptOperation::InitRepository => r"#!/bin/sh
 
 set -e
 
@@ -157,8 +163,46 @@ echo .gitignore >> .gitignore
 echo assets/ >> .gitignore
 echo create-history.sh >> .gitignore
 
-",
-            );
+"
+                .into(),
+                BlameScriptOperation::RemoveFile(src) => format!(
+                    r"# delete previous version of file
+git rm {src}
+"
+                ),
+                BlameScriptOperation::CommitFile(src, commit_id) => format!(
+                    r"# make file {src} contain content at commit {commit_id}
+mkdir -p $(dirname {src})
+cp ./assets/{commit_id}.commit ./{src}
+# create commit
+git add {src}
+git commit -m {commit_id}
+"
+                ),
+                BlameScriptOperation::CheckoutTag(commit_id) => format!("git checkout tag-{}\n", commit_id),
+                BlameScriptOperation::PrepareMerge(commit_ids) => format!(
+                    "git merge --no-commit {} || true\n",
+                    commit_ids
+                        .iter()
+                        .map(|commit_id| format!("tag-{commit_id}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ),
+                BlameScriptOperation::CreateTag(commit_id) => format!("git tag tag-{commit_id}\n\n"),
+            }
+        }
+    }
+
+    struct BlameScript {
+        blame_path: Vec<BlamePathEntry>,
+        seen: BTreeSet<ObjectId>,
+        script: Vec<BlameScriptOperation>,
+        options: Options,
+    }
+
+    impl BlameScript {
+        fn new(blame_path: Vec<BlamePathEntry>, options: Options) -> Self {
+            let script = vec![BlameScriptOperation::InitRepository];
 
             Self {
                 blame_path,
@@ -202,7 +246,7 @@ echo create-history.sh >> .gitignore
             };
             let commit_id = blame_path_entry.commit_id;
 
-            let delete_previous_file_script = match &blame_path_entry.previous_source_file_path {
+            let delete_previous_file_operation = match &blame_path_entry.previous_source_file_path {
                 Some(previous_source_file_path) if source_file_path != *previous_source_file_path => {
                     let src = if self.options.verbatim {
                         previous_source_file_path.to_string()
@@ -215,57 +259,41 @@ echo create-history.sh >> .gitignore
                         crate::commands::copy_royal::remapped(source_file_path)
                     };
 
-                    format!(
-                        r"# delete previous version of file
-git rm {src}
-"
-                    )
+                    Some(BlameScriptOperation::RemoveFile(src))
                 }
-                _ => String::new(),
+                _ => None,
             };
 
-            let script = format!(
-                r"# make file {src} contain content at commit {commit_id}
-mkdir -p $(dirname {src})
-cp ./assets/{commit_id}.commit ./{src}
-# create commit
-git add {src}
-git commit -m {commit_id}
-"
-            );
-
             if parents.is_empty() {
-                self.script.push_str(delete_previous_file_script.as_str());
-                self.script.push_str(script.as_str());
+                if let Some(delete_previous_file_operation) = delete_previous_file_operation {
+                    self.script.push(delete_previous_file_operation);
+                }
+                self.script.push(BlameScriptOperation::CommitFile(src, commit_id));
             } else {
                 let ([first], rest) = parents.split_at(1) else {
                     unreachable!();
                 };
 
-                self.script
-                    .push_str(format!("git checkout tag-{}\n", first.commit_id).as_str());
+                self.script.push(BlameScriptOperation::CheckoutTag(first.commit_id));
 
                 if rest.is_empty() {
-                    self.script.push_str(delete_previous_file_script.as_str());
-                    self.script.push_str(script.as_str());
+                    if let Some(delete_previous_file_operation) = delete_previous_file_operation {
+                        self.script.push(delete_previous_file_operation);
+                    }
+                    self.script.push(BlameScriptOperation::CommitFile(src, commit_id));
                 } else {
-                    self.script.push_str(
-                        format!(
-                            "git merge --no-commit {} || true\n",
-                            rest.iter()
-                                .map(|blame_path_entry| format!("tag-{}", blame_path_entry.commit_id))
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        )
-                        .as_str(),
-                    );
+                    self.script.push(BlameScriptOperation::PrepareMerge(
+                        rest.iter().map(|blame_path_entry| blame_path_entry.commit_id).collect(),
+                    ));
 
-                    self.script.push_str(delete_previous_file_script.as_str());
-                    self.script.push_str(script.as_str());
+                    if let Some(delete_previous_file_operation) = delete_previous_file_operation {
+                        self.script.push(delete_previous_file_operation);
+                    }
+                    self.script.push(BlameScriptOperation::CommitFile(src, commit_id));
                 }
             }
 
-            self.script.push_str(format!("git tag tag-{commit_id}\n\n").as_str());
+            self.script.push(BlameScriptOperation::CreateTag(commit_id));
 
             Ok(())
         }
