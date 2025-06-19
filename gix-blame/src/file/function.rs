@@ -366,7 +366,7 @@ pub fn file(
                     let mut has_blame_been_passed = false;
 
                     for hunk in hunks_to_blame.iter_mut() {
-                        if hunk.has_suspect(&parent_id) {
+                        if hunk.has_suspect(parent_id) {
                             hunk.source_file_name = Some(source_location.clone());
 
                             has_blame_been_passed = true;
