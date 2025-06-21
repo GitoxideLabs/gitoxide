@@ -619,7 +619,7 @@ fn scripted_fixture_read_only_with_args_inner(
 }
 
 #[cfg(windows)]
-const NULL_DEVICE: &str = "NUL";
+const NULL_DEVICE: &str = "nul"; // See `gix_path::env::git::NULL_DEVICE` on why this form is used.
 #[cfg(not(windows))]
 const NULL_DEVICE: &str = "/dev/null";
 
@@ -1027,7 +1027,7 @@ mod tests {
         const CONFIG_DATA: &[u8] = b"[foo]\n\tbar = baz\n";
 
         let paths: &[PathBuf] = if cfg!(windows) {
-            let unc_literal_nul = dir.canonicalize().expect("directory exists").join("NUL");
+            let unc_literal_nul = dir.canonicalize().expect("directory exists").join("nul");
             &[dir.join(SCOPE_ENV_VALUE), dir.join("-"), unc_literal_nul]
         } else {
             &[dir.join(SCOPE_ENV_VALUE), dir.join("-"), dir.join(":")]
@@ -1036,7 +1036,7 @@ mod tests {
         for path in paths {
             std::fs::write(path, CONFIG_DATA).expect("can write contents");
         }
-        // Verify the files. This is mostly to show we really made a `\\?\...\NUL` on Windows.
+        // Verify the files. This is mostly to show we really made a `\\?\...\nul` on Windows.
         for path in paths {
             let buf = std::fs::read(path).expect("the file really exists");
             assert_eq!(buf, CONFIG_DATA, "{path:?} should be a config file");
