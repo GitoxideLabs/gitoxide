@@ -121,10 +121,12 @@ pub struct Transaction<'s, 'p> {
 ///
 pub mod loose;
 mod overlay_iter;
+mod pseudo_ref_iter;
 
 ///
 pub mod iter {
     pub use super::overlay_iter::{LooseThenPacked, Platform};
+    pub use super::pseudo_ref_iter::SortedPseudoRefIterator;
 
     ///
     pub mod loose_then_packed {
