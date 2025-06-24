@@ -193,3 +193,40 @@ fn strange_scp_like_with_host_named_file() -> crate::Result {
     assert_eq!(url.to_bstring(), "file:..");
     Ok(())
 }
+
+#[test]
+fn scp_like_with_underscore_in_username() -> crate::Result {
+    let url = assert_url(
+        "_git@source.example.tld:org/repo.git",
+        url_alternate(Scheme::Ssh, "_git", "source.example.tld", None, b"org/repo.git"),
+    )?;
+
+    let serialized = url.to_bstring();
+    assert_eq!(
+        serialized, "_git@source.example.tld:org/repo.git",
+        "SCP-like URLs should not percent-encode underscores in usernames"
+    );
+    Ok(())
+}
+
+#[test]
+fn ssh_url_with_underscore_in_username_still_works() -> crate::Result {
+    assert_url_roundtrip(
+        "ssh://_git@source.example.tld/org/repo.git",
+        url(Scheme::Ssh, "_git", "source.example.tld", None, b"/org/repo.git"),
+    )
+}
+
+#[test]
+fn scp_like_with_special_characters_in_username() -> crate::Result {
+    let input = "user@with@problem@host.com:repo.git";
+    let parsed = gix_url::parse(input.as_ref())?;
+
+    // The @ in username should be encoded when serialized
+    let serialized = parsed.to_bstring();
+    assert!(
+        serialized.to_string().contains("user%40with%40problem"),
+        "@ characters in username should be percent-encoded, got: {serialized}"
+    );
+    Ok(())
+}

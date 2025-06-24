@@ -312,6 +312,16 @@ fn percent_encode(s: &str) -> Cow<'_, str> {
     percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).into()
 }
 
+fn percent_encode_for_scp_user(s: &str) -> Cow<'_, str> {
+    // For SCP-like URLs, we should be more conservative about what we encode
+    use percent_encoding::{AsciiSet, CONTROLS};
+
+    // Define characters that MUST be encoded in SCP user portion
+    const SCP_USER_ENCODE_SET: &AsciiSet = &CONTROLS.add(b' ').add(b'@').add(b':').add(b'\t').add(b'\n').add(b'\r');
+
+    percent_encoding::utf8_percent_encode(s, SCP_USER_ENCODE_SET).into()
+}
+
 /// Serialization
 impl Url {
     /// Write this URL losslessly to `out`, ready to be parsed again.
@@ -322,7 +332,13 @@ impl Url {
         }
         match (&self.user, &self.host) {
             (Some(user), Some(host)) => {
-                out.write_all(percent_encode(user).as_bytes())?;
+                // For SCP-like SSH URLs, don't percent-encode underscores in usernames
+                // For regular SSH URLs, use standard encoding but allow underscores
+                let encoded_user = match self.scheme {
+                    Scheme::Ssh => percent_encode_for_scp_user(user),
+                    _ => percent_encode(user),
+                };
+                out.write_all(encoded_user.as_bytes())?;
                 if let Some(password) = &self.password {
                     out.write_all(b":")?;
                     out.write_all(percent_encode(password).as_bytes())?;
