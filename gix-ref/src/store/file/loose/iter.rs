@@ -11,19 +11,31 @@ pub(in crate::store_impl::file) struct SortedLoosePaths {
     pub(crate) base: PathBuf,
     /// An prefix like `refs/heads/foo/` or `refs/heads/prefix` that a returned reference must match against..
     prefix: Option<BString>,
+    /// A suffix like `HEAD` that a returned reference must match against..
+    suffix: Option<BString>,
     file_walk: Option<DirEntryIter>,
 }
 
 impl SortedLoosePaths {
-    pub fn at(path: &Path, base: PathBuf, prefix: Option<BString>, precompose_unicode: bool) -> Self {
+    pub fn at(
+        path: &Path,
+        base: PathBuf,
+        prefix: Option<BString>,
+        suffix: Option<BString>,
+        root_only: bool,
+        precompose_unicode: bool,
+    ) -> Self {
+        let depth = if root_only { 1 } else { usize::MAX };
         SortedLoosePaths {
             base,
             prefix,
+            suffix,
             file_walk: path.is_dir().then(|| {
                 // serial iteration as we expect most refs in packed-refs anyway.
                 gix_features::fs::walkdir_sorted_new(
                     path,
                     gix_features::fs::walkdir::Parallelism::Serial,
+                    depth,
                     precompose_unicode,
                 )
                 .into_iter()
@@ -53,6 +65,11 @@ impl Iterator for SortedLoosePaths {
                     };
                     if let Some(prefix) = &self.prefix {
                         if !full_name.starts_with(prefix) {
+                            continue;
+                        }
+                    }
+                    if let Some(suffix) = &self.suffix {
+                        if !full_name.ends_with(suffix) {
                             continue;
                         }
                     }

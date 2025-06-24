@@ -210,6 +210,11 @@ impl Platform<'_> {
         self.store
             .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
     }
+
+    /// Return an iterator over the pseudo references
+    pub fn psuedo_refs(&self) -> std::io::Result<LooseThenPacked<'_, '_>> {
+        self.store.iter_pseudo_refs()
+    }
 }
 
 impl file::Store {
@@ -254,6 +259,10 @@ pub(crate) enum IterInfo<'a> {
         /// If `true`, we will convert decomposed into precomposed unicode.
         precompose_unicode: bool,
     },
+    PseudoRefs {
+        base: &'a Path,
+        precompose_unicode: bool,
+    },
 }
 
 impl<'a> IterInfo<'a> {
@@ -263,6 +272,7 @@ impl<'a> IterInfo<'a> {
             IterInfo::PrefixAndBase { prefix, .. } => Some(gix_path::into_bstr(*prefix)),
             IterInfo::BaseAndIterRoot { prefix, .. } => Some(gix_path::into_bstr(prefix.clone())),
             IterInfo::ComputedIterationRoot { prefix, .. } => Some(prefix.clone()),
+            IterInfo::PseudoRefs { .. } => None,
         }
     }
 
@@ -271,24 +281,35 @@ impl<'a> IterInfo<'a> {
             IterInfo::Base {
                 base,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join("refs"), base.into(), None, precompose_unicode),
+            } => SortedLoosePaths::at(&base.join("refs"), base.into(), None, None, false, precompose_unicode),
             IterInfo::BaseAndIterRoot {
                 base,
                 iter_root,
                 prefix: _,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&iter_root, base.into(), None, precompose_unicode),
+            } => SortedLoosePaths::at(&iter_root, base.into(), None, None, false, precompose_unicode),
             IterInfo::PrefixAndBase {
                 base,
                 prefix,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&base.join(prefix), base.into(), None, precompose_unicode),
+            } => SortedLoosePaths::at(&base.join(prefix), base.into(), None, None, false, precompose_unicode),
             IterInfo::ComputedIterationRoot {
                 iter_root,
                 base,
                 prefix,
                 precompose_unicode,
-            } => SortedLoosePaths::at(&iter_root, base.into(), Some(prefix.into_owned()), precompose_unicode),
+            } => SortedLoosePaths::at(
+                &iter_root,
+                base.into(),
+                Some(prefix.into_owned()),
+                None,
+                false,
+                precompose_unicode,
+            ),
+            IterInfo::PseudoRefs {
+                base,
+                precompose_unicode,
+            } => SortedLoosePaths::at(base, base.into(), None, Some("HEAD".into()), true, precompose_unicode),
         }
         .peekable()
     }
@@ -352,6 +373,18 @@ impl file::Store {
                 packed,
             ),
         }
+    }
+
+    /// Return an iterator over all pseudo references.
+    pub fn iter_pseudo_refs<'p>(&self) -> std::io::Result<LooseThenPacked<'p, '_>> {
+        self.iter_from_info(
+            IterInfo::PseudoRefs {
+                base: self.git_dir(),
+                precompose_unicode: self.precompose_unicode,
+            },
+            None,
+            None,
+        )
     }
 
     /// As [`iter(…)`](file::Store::iter()), but filters by `prefix`, i.e. `refs/heads/` or

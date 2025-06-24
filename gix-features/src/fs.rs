@@ -207,9 +207,10 @@ pub mod walkdir {
     /// Instantiate a new directory iterator which will not skip hidden files and is sorted, with the given level of `parallelism`.
     ///
     /// Use `precompose_unicode` to represent the `core.precomposeUnicode` configuration option.
-    pub fn walkdir_sorted_new(root: &Path, _: Parallelism, precompose_unicode: bool) -> WalkDir {
+    pub fn walkdir_sorted_new(root: &Path, _: Parallelism, max_depth: usize, precompose_unicode: bool) -> WalkDir {
         WalkDir {
             inner: WalkDirImpl::new(root)
+                .max_depth(max_depth)
                 .sort_by(|a, b| {
                     let storage_a;
                     let storage_b;

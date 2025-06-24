@@ -32,7 +32,8 @@ impl<'r> Iter<'r> {
 }
 
 impl Platform<'_> {
-    /// Return an iterator over all references in the repository.
+    /// Return an iterator over all references in the repository, excluding
+    /// pseudo references.
     ///
     /// Even broken or otherwise unparsable or inaccessible references are returned and have to be handled by the caller on a
     /// case by case basis.
@@ -67,6 +68,12 @@ impl Platform<'_> {
             self.repo,
             self.platform.prefixed(b"refs/heads/".try_into()?)?,
         ))
+    }
+
+    // TODO: tests
+    /// Return an iterator over all local pseudo references.
+    pub fn pseudo_refs(&self) -> Result<Iter<'_>, init::Error> {
+        Ok(Iter::new(self.repo, self.platform.psuedo_refs()?))
     }
 
     // TODO: tests
