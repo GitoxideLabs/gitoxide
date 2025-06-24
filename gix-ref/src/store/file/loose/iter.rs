@@ -24,6 +24,7 @@ impl SortedLoosePaths {
                 gix_features::fs::walkdir_sorted_new(
                     path,
                     gix_features::fs::walkdir::Parallelism::Serial,
+                    usize::MAX,
                     precompose_unicode,
                 )
                 .into_iter()
