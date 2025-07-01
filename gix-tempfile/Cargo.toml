@@ -51,7 +51,7 @@ signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 hp-hashmap = ["dep:dashmap"]
 
 [target.'cfg(not(windows))'.dependencies]
-libc = { version = "0.2.172", default-features = false }
+libc = { version = "0.2.174", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true

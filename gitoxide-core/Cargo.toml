@@ -74,16 +74,16 @@ gix-url = { version = "^0.31.0", path = "../gix-url", optional = true }
 jwalk = { version = "0.8.0", optional = true }
 
 # for 'hours'
-fs-err = { version = "3.1.0", optional = true }
+fs-err = { version = "3.1.1", optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
-smallvec = { version = "1.15.0", optional = true }
+smallvec = { version = "1.15.1", optional = true }
 
 # for 'query' and 'corpus'
 rusqlite = { version = "0.36.0", optional = true, features = ["bundled"] }
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }
-sysinfo = { version = "0.35.1", optional = true, default-features = false, features = ["system"] }
+sysinfo = { version = "0.35.2", optional = true, default-features = false, features = ["system"] }
 serde_json = { version = "1.0.65", optional = true }
 tracing-forest = { version = "0.1.5", features = ["serde"], optional = true }
 tracing-subscriber = { version = "0.3.17", optional = true }

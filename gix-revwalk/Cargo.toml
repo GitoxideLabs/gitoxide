@@ -22,7 +22,7 @@ gix-hashtable = { version = "^0.8.1", path = "../gix-hashtable" }
 gix-commitgraph = { version = "^0.28.0", path = "../gix-commitgraph" }
 
 thiserror = "2.0.0"
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

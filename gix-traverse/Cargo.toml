@@ -22,6 +22,6 @@ gix-date = { version = "^0.10.2", path = "../gix-date" }
 gix-hashtable = { version = "^0.8.1", path = "../gix-hashtable" }
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 gix-commitgraph = { version = "^0.28.0", path = "../gix-commitgraph" }
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 thiserror = "2.0.0"
 bitflags = "2"

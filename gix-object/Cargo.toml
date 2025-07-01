@@ -59,7 +59,7 @@ bstr = { version = "1.12.0", default-features = false, features = [
     "unicode",
 ] }
 winnow = { version = "0.7.10", features = ["simd"] }
-smallvec = { version = "1.15.0", features = ["write"] }
+smallvec = { version = "1.15.1", features = ["write"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",
 ] }

@@ -22,11 +22,11 @@ serde = ["dep:serde", "bstr/serde"]
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 itoa = "1.0.1"
-jiff = "0.2.14"
+jiff = "0.2.15"
 thiserror = "2.0.0"
 # TODO: used for quick and easy `TimeBacking: std::io::Write` implementation, but could make that `Copy`
 #       and remove this dep with custom impl
-smallvec = { version = "1.15.0", features = ["write"] }
+smallvec = { version = "1.15.1", features = ["write"] }
 
 document-features = { version = "0.2.0", optional = true }
 

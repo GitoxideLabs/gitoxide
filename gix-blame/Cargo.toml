@@ -21,7 +21,7 @@ gix-hash = { version = "^0.18.0", path = "../gix-hash" }
 gix-worktree = { version = "^0.41.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-traverse = { version = "^0.46.2", path = "../gix-traverse" }
 
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 thiserror = "2.0.0"
 
 [dev-dependencies]

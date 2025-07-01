@@ -30,5 +30,5 @@ serial_test = { version = "3.1.0", default-features = false }
 
 [target.'cfg(windows)'.dev-dependencies]
 known-folders = "1.1.0"
-windows = { version = "0.61.1", features = ["Win32_System_Threading"] }
+windows = { version = "0.61.3", features = ["Win32_System_Threading"] }
 winreg = "0.55.0"

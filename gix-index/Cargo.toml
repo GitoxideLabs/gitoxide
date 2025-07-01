@@ -44,7 +44,7 @@ bstr = { version = "1.12.0", default-features = false }
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",
 ] }
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 itoa = "1.0.3"
 bitflags = "2"
 
@@ -55,7 +55,7 @@ rustix = { version = "1.0.7", default-features = false, features = [
     "std",
     "fs",
 ] }
-libc = { version = "0.2.172" }
+libc = { version = "0.2.174" }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

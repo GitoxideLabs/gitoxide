@@ -22,7 +22,7 @@ gix-date = { version = "^0.10.2", path = "../gix-date" }
 gix-commitgraph = { version = "^0.28.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.20.1", path = "../gix-revwalk" }
 thiserror = "2.0.0"
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 bitflags = "2"
 
 [dev-dependencies]

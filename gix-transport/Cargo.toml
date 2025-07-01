@@ -113,7 +113,7 @@ curl = { version = "0.4", optional = true }
 
 # for http-client-reqwest
 # all but the 'default-tls' feature
-reqwest = { version = "0.12.18", optional = true, default-features = false, features = ["blocking", "charset", "http2", "macos-system-configuration"] }
+reqwest = { version = "0.12.21", optional = true, default-features = false, features = ["blocking", "charset", "http2", "macos-system-configuration"] }
 
 ## If used in conjunction with `async-client`, the `connect()` method will become available along with supporting the git protocol over TCP,
 ## where the TCP stream is created using this crate.

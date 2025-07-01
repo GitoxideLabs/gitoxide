@@ -46,7 +46,7 @@ gix-traverse = { version = "^0.46.2", path = "../gix-traverse", optional = true 
 gix-diff = { version = "^0.52.1", path = "../gix-diff", default-features = false, optional = true }
 
 memmap2 = "0.9.0"
-smallvec = "1.15.0"
+smallvec = "1.15.1"
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
 thiserror = "2.0.0"
 
