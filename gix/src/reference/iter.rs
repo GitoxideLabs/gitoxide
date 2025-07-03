@@ -32,7 +32,8 @@ impl<'r> Iter<'r> {
 }
 
 impl Platform<'_> {
-    /// Return an iterator over all references in the repository.
+    /// Return an iterator over all references in the repository, excluding
+    /// pseudo references.
     ///
     /// Even broken or otherwise unparsable or inaccessible references are returned and have to be handled by the caller on a
     /// case by case basis.
@@ -67,6 +68,12 @@ impl Platform<'_> {
             self.repo,
             self.platform.prefixed(b"refs/heads/".try_into()?)?,
         ))
+    }
+
+    // TODO: tests
+    /// Return an iterator over all local pseudo references.
+    pub fn pseudo_refs(&self) -> Result<PseudoRefIter<'_>, init::Error> {
+        Ok(PseudoRefIter::new(self.repo, self.platform.psuedo_refs()?))
     }
 
     // TODO: tests
@@ -117,6 +124,29 @@ impl<'r> Iterator for Iter<'r> {
                         Ok(r)
                     }
                 })
+                .map(|r| crate::Reference::from_ref(r, self.repo))
+        })
+    }
+}
+
+/// An iterator over pseudo references.
+pub struct PseudoRefIter<'r> {
+    inner: gix_ref::file::iter::SortedPseudoRefIterator,
+    repo: &'r crate::Repository,
+}
+
+impl<'r> PseudoRefIter<'r> {
+    fn new(repo: &'r crate::Repository, platform: gix_ref::file::iter::SortedPseudoRefIterator) -> Self {
+        PseudoRefIter { inner: platform, repo }
+    }
+}
+
+impl<'r> Iterator for PseudoRefIter<'r> {
+    type Item = Result<crate::Reference<'r>, Box<dyn std::error::Error + Send + Sync + 'static>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|res| {
+            res.map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)
                 .map(|r| crate::Reference::from_ref(r, self.repo))
         })
     }

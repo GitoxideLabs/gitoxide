@@ -39,6 +39,7 @@ mod partialname {
 }
 mod namespace;
 mod packed;
+mod pseudo_refs;
 mod reference;
 mod store;
 mod transaction;

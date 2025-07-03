@@ -10,7 +10,10 @@ use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
 
 use crate::{
-    file::{loose, loose::iter::SortedLoosePaths},
+    file::{
+        iter::SortedPseudoRefIterator,
+        loose::{self, iter::SortedLoosePaths},
+    },
     store_impl::{file, packed},
     BStr, FullName, Namespace, Reference,
 };
@@ -85,34 +88,46 @@ impl<'p> LooseThenPacked<'p, '_> {
     }
 
     fn convert_loose(&mut self, res: std::io::Result<(PathBuf, FullName)>) -> Result<Reference, Error> {
-        let (refpath, name) = res.map_err(Error::Traversal)?;
-        std::fs::File::open(&refpath)
-            .and_then(|mut f| {
-                self.buf.clear();
-                f.read_to_end(&mut self.buf)
-            })
-            .map_err(|err| Error::ReadFileContents {
-                source: err,
-                path: refpath.to_owned(),
-            })?;
-        loose::Reference::try_from_path(name, &self.buf)
-            .map_err(|err| {
-                let relative_path = refpath
-                    .strip_prefix(self.git_dir)
-                    .ok()
-                    .or_else(|| {
-                        self.common_dir
-                            .and_then(|common_dir| refpath.strip_prefix(common_dir).ok())
-                    })
-                    .expect("one of our bases contains the path");
-                Error::ReferenceCreation {
-                    source: err,
-                    relative_path: relative_path.into(),
-                }
-            })
-            .map(Into::into)
-            .map(|r| self.strip_namespace(r))
+        convert_loose(&mut self.buf, self.git_dir, self.common_dir, self.namespace, res)
     }
+}
+
+pub(crate) fn convert_loose(
+    buf: &mut Vec<u8>,
+    git_dir: &Path,
+    common_dir: Option<&Path>,
+    namespace: Option<&Namespace>,
+    res: std::io::Result<(PathBuf, FullName)>,
+) -> Result<Reference, Error> {
+    let (refpath, name) = res.map_err(Error::Traversal)?;
+    std::fs::File::open(&refpath)
+        .and_then(|mut f| {
+            buf.clear();
+            f.read_to_end(buf)
+        })
+        .map_err(|err| Error::ReadFileContents {
+            source: err,
+            path: refpath.to_owned(),
+        })?;
+    loose::Reference::try_from_path(name, buf)
+        .map_err(|err| {
+            let relative_path = refpath
+                .strip_prefix(git_dir)
+                .ok()
+                .or_else(|| common_dir.and_then(|common_dir| refpath.strip_prefix(common_dir).ok()))
+                .expect("one of our bases contains the path");
+            Error::ReferenceCreation {
+                source: err,
+                relative_path: relative_path.into(),
+            }
+        })
+        .map(Into::into)
+        .map(|mut r: Reference| {
+            if let Some(namespace) = namespace {
+                r.strip_namespace(namespace);
+            }
+            r
+        })
 }
 
 impl Iterator for LooseThenPacked<'_, '_> {
@@ -209,6 +224,11 @@ impl Platform<'_> {
     pub fn prefixed(&self, prefix: &RelativePath) -> std::io::Result<LooseThenPacked<'_, '_>> {
         self.store
             .iter_prefixed_packed(prefix, self.packed.as_ref().map(|b| &***b))
+    }
+
+    /// Return an iterator over the pseudo references
+    pub fn psuedo_refs(&self) -> std::io::Result<SortedPseudoRefIterator> {
+        self.store.iter_pseudo_refs()
     }
 }
 
@@ -352,6 +372,11 @@ impl file::Store {
                 packed,
             ),
         }
+    }
+
+    /// Return an iterator over all pseudo references.
+    pub fn iter_pseudo_refs(&self) -> std::io::Result<SortedPseudoRefIterator> {
+        Ok(SortedPseudoRefIterator::at(&self.git_dir, self.precompose_unicode))
     }
 
     /// As [`iter(…)`](file::Store::iter()), but filters by `prefix`, i.e. `refs/heads/` or
