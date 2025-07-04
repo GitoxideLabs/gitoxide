@@ -44,6 +44,7 @@ pub mod remote;
 pub mod revision;
 pub mod status;
 pub mod submodule;
+pub mod tag;
 pub mod tree;
 pub mod verify;
 pub mod worktree;

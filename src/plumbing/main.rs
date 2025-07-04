@@ -17,7 +17,7 @@ use crate::{
     plumbing::{
         options::{
             attributes, commit, commitgraph, config, credential, exclude, free, fsck, index, mailmap, merge, odb,
-            revision, tree, Args, Subcommands,
+            revision, tag, tree, Args, Subcommands,
         },
         show_progress,
     },
@@ -1302,6 +1302,17 @@ pub fn main() -> Result<()> {
                         },
                     )
                 },
+            ),
+        },
+        Subcommands::Tag(cmd) => match cmd {
+            tag::Subcommands::List => prepare_and_run(
+                "tag-list",
+                trace,
+                auto_verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| core::repository::tag::list(repository(Mode::Lenient)?, out),
             ),
         },
         Subcommands::Tree(cmd) => match cmd {
