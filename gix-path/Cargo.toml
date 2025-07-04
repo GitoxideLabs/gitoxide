@@ -12,7 +12,7 @@ include = ["src/**/*", "LICENSE-*"]
 rust-version = "1.70"
 
 [lib]
-doctest = false
+doctest = true
 
 [dependencies]
 gix-trace = { version = "^0.1.12", path = "../gix-trace" }
