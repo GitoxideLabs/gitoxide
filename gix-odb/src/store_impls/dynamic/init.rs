@@ -99,17 +99,24 @@ impl Store {
                 let mut db_paths = crate::alternate::resolve(objects_dir.clone(), &current_dir)
                     .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
                 db_paths.insert(0, objects_dir.clone());
-                let num_slots = super::Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None)
+                let num_slots = Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None)
                     .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?
                     .len();
 
-                ((num_slots as f32 * multiplier) as usize).max(minimum)
+                let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);
+                if candidate > crate::store::types::PackId::max_indices() {
+                    // A chance for this to work without 10% extra allocation - this already
+                    // is an insane amount of packs.
+                    num_slots
+                } else {
+                    candidate
+                }
             }
         };
         if slot_count > crate::store::types::PackId::max_indices() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                "Cannot use more than 1^15 slots",
+                format!("Cannot use more than 2^15-1 slots, got {slot_count}"),
             ));
         }
         let mut replacements: Vec<_> = replacements.collect();
