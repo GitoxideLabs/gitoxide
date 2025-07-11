@@ -31,7 +31,7 @@ fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::i
     }
     writeln!(
         out,
-        " {is_active} {path} {config} head:{head_id} index:{index_id} ({worktree}) [{url}]",
+        " {is_active} {path:?} {config} head:{head_id} index:{index_id} ({worktree}) [{url}]",
         is_active = if !sm.is_active()? || !state.repository_exists {
             "ⅹ"
         } else {
@@ -48,8 +48,8 @@ fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::i
         worktree = match sm_repo {
             Some(repo) => {
                 // TODO(name-revision): this is the simple version, `git` gives it
-                // multiple tries https://github.com/git/git/blob/fac96dfbb1c24369ba7d37a5affd8adfe6c650fd/builtin/submodule--helper.c#L161
-                // and even uses `git name-rev`/`git describe --contains` which we can't do yet.
+                //                      multiple tries https://github.com/git/git/blob/fac96dfbb1c24369ba7d37a5affd8adfe6c650fd/builtin/submodule--helper.c#L161
+                //                      and even uses `git name-rev`/`git describe --contains` which we can't do yet.
                 repo.head_commit()?
                     .describe()
                     .names(SelectRef::AllRefs)
@@ -60,7 +60,7 @@ fn print_sm(sm: Submodule<'_>, dirty_suffix: Option<&str>, out: &mut impl std::i
                     .to_string()
             }
             None => {
-                "no worktree".to_string()
+                "no worktree".into()
             }
         },
         url = sm.url()?.to_bstring()

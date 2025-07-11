@@ -247,16 +247,34 @@ pub fn to_windows_separators<'a>(path: impl Into<Cow<'a, BStr>>) -> Cow<'a, BStr
 ///
 /// For example, this turns `a/./b/c/.././..` into `a`, and turns `/a/../b/..` into `/`.
 ///
-/// If the input path was relative and ends up being the `current_dir`, `.` is returned instead of
-/// the full path to `current_dir`.
+/// ```
+/// # fn main() {
+/// # use std::path::Path;
+/// # use gix_path::normalize;
+/// for (input, expected) in [
+///     ("a/./b/c/.././..", "a"),
+///     ("/a/../b/..", "/"),
+///     ("/base/a/..", "/base"),
+///     ("./a/..", "."),
+///     ("./a/../..", "/"),
+///     (".///", ".///"),
+///     ("a//b", "a//b"),
+///     ("/base/../base", "/base"),
+/// ] {
+///     let input = Path::new(input);
+///     let expected = Path::new(expected);
+///     assert_eq!(normalize(input.into(), Path::new("/cwd")), Some(expected.into()));
+/// }
+/// # }
+/// ```
 ///
-/// Single `.` components as well as duplicate separators are left untouched.
+/// Leading `.` components as well as duplicate separators are left untouched.
 ///
 /// This is particularly useful when manipulating paths that are based on user input, and not
 /// resolving intermediate symlinks keeps the path similar to what the user provided. If that's not
-/// desirable, use `[realpath()][crate::realpath()` instead.
+/// desirable, use [`realpath()`](crate::realpath()) instead.
 ///
-/// Note that we might access the `current_dir` if we run out of path components to pop off, which
+/// Note that we will use the `current_dir` if we run out of path components to pop off, which
 /// is expected to be absolute as typical return value of `std::env::current_dir()` or
 /// `gix_fs::current_dir(…)` when `core.precomposeUnicode` is known. As a `current_dir` like `/c`
 /// can be exhausted by paths like `../../r`, `None` will be returned to indicate the inability to
