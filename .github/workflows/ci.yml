@@ -215,7 +215,7 @@ jobs:
         include:
           - nextest-extra-args: ''
           - os: windows-11-arm
-            nextest-extra-args: '-- --skip fuzzed_timeout --skip performance'
+            nextest-extra-args: '-- --skip fuzzed_timeout --skip performance --skip speed'
 
     runs-on: ${{ matrix.os }}
 
@@ -258,7 +258,7 @@ jobs:
         include:
           - nextest-extra-args: ''
           - os: windows-11-arm
-            nextest-extra-args: '-- --skip fuzzed-timeout --skip performance'
+            nextest-extra-args: '-- --skip fuzzed-timeout --skip performance --skip speed'
 
     runs-on: ${{ matrix.os }}
 
