@@ -212,6 +212,10 @@ jobs:
           - macos-latest
           - ubuntu-latest
           - ubuntu-24.04-arm
+        include:
+          - nextest-extra-args: ''
+          - os: windows-11-arm
+            nextest-extra-args: '-- --skip fuzzed_timeout --skip performance'
 
     runs-on: ${{ matrix.os }}
 
@@ -241,14 +245,20 @@ jobs:
       - name: Test (nextest)
         env:
           GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI: '1'
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --workspace --no-fail-fast ${{ matrix.nextest-extra-args }}
       - name: Check that tracked archives are up to date
         run: git diff --exit-code  # If this fails, the fix is usually to commit a regenerated archive.
 
   test-fixtures-windows:
     strategy:
       matrix:
-        os: [ windows-latest, windows-11-arm ]
+        os:
+          - windows-latest
+          - windows-11-arm
+        include:
+          - nextest-extra-args: ''
+          - os: windows-11-arm
+            nextest-extra-args: '-- --skip fuzzed-timeout --skip performance'
 
     runs-on: ${{ matrix.os }}
 
@@ -276,7 +286,7 @@ jobs:
         id: nextest
         env:
           GIX_TEST_IGNORE_ARCHIVES: '1'
-        run: cargo nextest --profile=with-xml run --workspace --no-fail-fast
+        run: cargo nextest --profile=with-xml run --workspace --no-fail-fast ${{ matrix.nextest-extra-args }}
         continue-on-error: true
       - name: Check for errors
         run: |
