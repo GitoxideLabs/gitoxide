@@ -305,7 +305,8 @@ jobs:
       - name: Compare expected and actual failures
         run: |
           # Fail on any differences, even unexpectedly passing tests, so they can be investigated.
-          git --no-pager diff --no-index --exit-code --unified=1000000 --color=always -- `
+          git --no-pager -c diff.color.old='magenta bold' -c diff.color.new='blue bold' `
+            diff --no-index --exit-code --unified=1000000 --color=always -- `
             etc/test-fixtures-windows-expected-failures-see-issue-1358.txt actual-failures.txt
 
   test-32bit:
