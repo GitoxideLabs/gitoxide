@@ -223,17 +223,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install rustup
         if: matrix.os == 'windows-11-arm'
-        run: |
-          if (Get-Command rustup -ErrorAction SilentlyContinue) {
-            Write-Output '::warning:: The runner has rustup. Consider removing this step.'
-          } else {
-            $file = 'rustup-init.exe'
-            $url = "https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/$file"
-            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL --output $file $url
-            & ".\$file" --default-toolchain none -y
-            Remove-Item $file
-            Add-Content -Value "$Env:USERPROFILE\.cargo\bin" -Path $Env:GITHUB_PATH
-          }
+        uses: ./.github/actions/setup-windows-arm-rustup
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo check default features
@@ -300,17 +290,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install rustup
         if: matrix.os == 'windows-11-arm'
-        run: |
-          if (Get-Command rustup -ErrorAction SilentlyContinue) {
-            Write-Output '::warning:: The runner has rustup. Consider removing this step.'
-          } else {
-            $file = 'rustup-init.exe'
-            $url = "https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/$file"
-            curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL --output $file $url
-            & ".\$file" --default-toolchain none -y
-            Remove-Item $file
-            Add-Content -Value "$Env:USERPROFILE\.cargo\bin" -Path $Env:GITHUB_PATH
-          }
+        uses: ./.github/actions/setup-windows-arm-rustup
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
