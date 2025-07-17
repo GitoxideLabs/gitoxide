@@ -20,6 +20,18 @@ pub enum Error {
     RemoteConfiguration(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("Custom configuration of connection to use when cloning failed")]
     RemoteConnection(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("Remote name {remote_name:?} is not valid UTF-8")]
+    RemoteNameNotUtf8 {
+        source: crate::bstr::Utf8Error,
+        remote_name: crate::bstr::BString,
+    },
+    #[error("Configuration value name {name:?} is invalid")]
+    ConfigValueName {
+        name: &'static str,
+        source: gix_config::parse::section::value_name::Error,
+    },
+    #[error(transparent)]
+    ConfigSectionHeader(#[from] gix_config::parse::section::header::Error),
     #[error(transparent)]
     RemoteName(#[from] crate::config::remote::symbolic_name::Error),
     #[error(transparent)]
@@ -247,12 +259,17 @@ impl PrepareFetch {
             clone_fetch_tags = remote::fetch::Tags::All.into();
         }
 
+        let filter_spec_to_save = self
+            .filter
+            .as_ref()
+            .map(crate::remote::fetch::ObjectFilter::to_argument_string);
         // The remote section just written to `.git/config`, kept around so we can
         // mirror it into the repository's in-memory config once we know which
         // repo handle survives.
         let mut config = Some(util::append_remote_to_local_config_file(
             &mut remote,
             remote_name.clone(),
+            filter_spec_to_save.as_deref(),
         )?);
 
         // Now we are free to apply remote configuration we don't want to be written to disk.
@@ -363,6 +380,7 @@ impl PrepareFetch {
             b
         };
         let outcome = pending_pack
+            .with_filter(self.filter.clone())
             .with_write_packed_refs_only(true)
             .with_reflog_message(RefLogMessage::Override {
                 message: reflog_message.clone(),
@@ -412,3 +430,5 @@ impl PrepareFetch {
 }
 
 mod util;
+
+pub use util::append_remote_to_local_config_file as write_remote_to_local_config_file;
