@@ -16,13 +16,49 @@ enum WriteMode {
     Append,
 }
 
+/// Persist the provided remote into the repository's local config, optionally adding partial clone settings.
 #[allow(clippy::result_large_err)]
 pub fn write_remote_to_local_config_file(
     remote: &mut crate::Remote<'_>,
     remote_name: BString,
+    filter: Option<&str>,
 ) -> Result<gix_config::File<'static>, Error> {
+    use gix_config::parse::section::ValueName;
+
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
-    remote.save_as_to(remote_name, &mut config)?;
+    remote.save_as_to(remote_name.clone(), &mut config)?;
+
+    if let Some(filter_spec) = filter {
+        let subsection = remote_name.to_str().map_err(|err| Error::RemoteNameNotUtf8 {
+            remote_name: remote_name.clone(),
+            source: err,
+        })?;
+        let mut remote_section = config.section_mut_or_create_new("remote", Some(subsection.into()))?;
+
+        while remote_section.remove("partialclonefilter").is_some() {}
+        while remote_section.remove("promisor").is_some() {}
+
+        let partial_clone_filter = ValueName::try_from("partialclonefilter").map_err(|err| Error::ConfigValueName {
+            name: "partialclonefilter",
+            source: err,
+        })?;
+        remote_section.push(partial_clone_filter, Some(BStr::new(filter_spec)));
+
+        let promisor = ValueName::try_from("promisor").map_err(|err| Error::ConfigValueName {
+            name: "promisor",
+            source: err,
+        })?;
+        remote_section.push(promisor, Some(BStr::new("true")));
+
+        let mut extensions_section = config.section_mut_or_create_new("extensions", None)?;
+        while extensions_section.remove("partialclone").is_some() {}
+
+        let partial_clone = ValueName::try_from("partialclone").map_err(|err| Error::ConfigValueName {
+            name: "partialclone",
+            source: err,
+        })?;
+        extensions_section.push(partial_clone, Some(remote_name.as_ref()));
+    }
 
     write_to_local_config(&config, WriteMode::Append)?;
     Ok(config)

@@ -1,4 +1,6 @@
 use crate::{remote, util::restricted};
+#[cfg(any(feature = "async-network-client-async-std", feature = "blocking-network-client"))]
+use gix_testtools::tempfile;
 
 #[cfg(all(feature = "worktree-mutation", feature = "blocking-network-client"))]
 mod blocking_io {
@@ -756,6 +758,53 @@ mod blocking_io {
         }
         Ok(())
     }
+}
+
+#[cfg(any(feature = "async-network-client-async-std", feature = "blocking-network-client"))]
+#[test]
+fn write_remote_to_local_config_file_persists_partial_clone_settings() -> crate::Result {
+    let tmp = tempfile::tempdir()?;
+    let repo: gix::Repository = gix::ThreadSafeRepository::init_opts(
+        tmp.path(),
+        gix::create::Kind::Bare,
+        gix::create::Options::default(),
+        restricted(),
+    )?
+    .to_thread_local();
+
+    let mut remote = repo.remote_at("https://example.com/upstream")?;
+    let config = gix::clone::fetch::write_remote_to_local_config_file(&mut remote, "origin".into(), Some("blob:none"))?;
+
+    assert_eq!(
+        config.raw_value("remote.origin.partialclonefilter")?.as_ref(),
+        "blob:none"
+    );
+    assert_eq!(config.raw_value("remote.origin.promisor")?.as_ref(), "true");
+    assert_eq!(config.raw_value("extensions.partialclone")?.as_ref(), "origin");
+
+    Ok(())
+}
+
+#[cfg(any(feature = "async-network-client-async-std", feature = "blocking-network-client"))]
+#[test]
+fn write_remote_to_local_config_file_skips_partial_clone_settings_without_filter() -> crate::Result {
+    let tmp = tempfile::tempdir()?;
+    let repo: gix::Repository = gix::ThreadSafeRepository::init_opts(
+        tmp.path(),
+        gix::create::Kind::Bare,
+        gix::create::Options::default(),
+        restricted(),
+    )?
+    .to_thread_local();
+
+    let mut remote = repo.remote_at("https://example.com/upstream")?;
+    let config = gix::clone::fetch::write_remote_to_local_config_file(&mut remote, "origin".into(), None)?;
+
+    assert!(config.raw_value("remote.origin.partialclonefilter").is_err());
+    assert!(config.raw_value("remote.origin.promisor").is_err());
+    assert!(config.raw_value("extensions.partialclone").is_err());
+
+    Ok(())
 }
 
 #[test]

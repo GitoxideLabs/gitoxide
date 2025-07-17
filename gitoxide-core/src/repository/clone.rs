@@ -7,6 +7,7 @@ pub struct Options {
     pub no_tags: bool,
     pub shallow: gix::remote::fetch::Shallow,
     pub ref_name: Option<gix::refs::PartialName>,
+    pub filter: Option<gix::remote::fetch::ObjectFilter>,
 }
 
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
@@ -34,6 +35,7 @@ pub(crate) mod function {
             no_tags,
             ref_name,
             shallow,
+            filter,
         }: Options,
     ) -> anyhow::Result<()>
     where
@@ -76,6 +78,7 @@ pub(crate) mod function {
             prepare = prepare.configure_remote(|r| Ok(r.with_fetch_tags(gix::remote::fetch::Tags::None)));
         }
         let (mut checkout, fetch_outcome) = prepare
+            .with_filter(filter)
             .with_shallow(shallow)
             .with_ref_name(ref_name.as_ref())?
             .fetch_then_checkout(&mut progress, &gix::interrupt::IS_INTERRUPTED)?;
