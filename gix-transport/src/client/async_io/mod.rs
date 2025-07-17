@@ -11,3 +11,6 @@ pub use traits::{SetServiceResponse, Transport, TransportV2Ext};
 pub mod connect;
 #[cfg(feature = "async-std")]
 pub use connect::function::connect;
+
+#[cfg(feature = "russh")]
+pub mod ssh;

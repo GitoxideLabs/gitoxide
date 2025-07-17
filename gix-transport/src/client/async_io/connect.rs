@@ -40,6 +40,11 @@ pub(crate) mod function {
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
                 )
             }
+            gix_url::Scheme::Ssh => Box::new(
+                crate::client::async_io::ssh::connect(url, options.version, options.trace)
+                    .await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?,
+            ),
             scheme => return Err(Error::UnsupportedScheme(scheme)),
         })
     }
