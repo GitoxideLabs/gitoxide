@@ -1,13 +1,30 @@
-use async_trait::async_trait;
-
 use crate::{
     client::{SetServiceResponse, Transport, TransportWithoutIO},
     Protocol, Service,
 };
+use async_trait::async_trait;
 
-pub struct NativeSsh;
+mod client;
+mod error;
+
+pub use error::Error;
+
+pub struct NativeSsh {
+    url: gix_url::Url,
+    desired_version: Protocol,
+    trace: bool,
+
+    identity: Option<gix_sec::identity::Account>,
+    client: Option<client::Client>,
+    connection: Option<crate::client::git::Connection<&'static [u8], Vec<u8>>>,
+}
 
 impl TransportWithoutIO for NativeSsh {
+    fn set_identity(&mut self, identity: gix_sec::identity::Account) -> Result<(), crate::client::Error> {
+        self.identity = Some(identity);
+        Ok(())
+    }
+
     fn request(
         &mut self,
         write_mode: crate::client::WriteMode,
@@ -18,18 +35,18 @@ impl TransportWithoutIO for NativeSsh {
     }
 
     fn to_url(&self) -> std::borrow::Cow<'_, bstr::BStr> {
-        todo!()
+        self.url.to_bstring().into()
     }
 
     fn connection_persists_across_multiple_requests(&self) -> bool {
-        todo!()
+        true
     }
 
     fn configure(
         &mut self,
         config: &dyn std::any::Any,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-        todo!()
+        Ok(())
     }
 }
 
@@ -40,14 +57,59 @@ impl Transport for NativeSsh {
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
     ) -> Result<SetServiceResponse<'_>, crate::client::Error> {
-        todo!()
+        let host = self.url.host().expect("url has host");
+        let port = self.url.port_or_default().expect("ssh has a default port");
+
+        let auth_mode = match self.identity.as_ref() {
+            Some(crate::client::Account {
+                username,
+                password,
+                oauth_refresh_token: _,
+            }) => client::AuthMode::UsernamePassword {
+                username: username.clone(),
+                password: password.clone(),
+            },
+            None => return Err(crate::client::Error::AuthenticationUnsupported),
+        };
+
+        let client = client::Client::connect(host, port, auth_mode).await?;
+
+        let connection = crate::client::git::Connection::new(
+            [0u8].as_slice(), // TODO
+            vec![],           // TODO
+            self.desired_version,
+            self.url.path.clone(),
+            None::<(String, _)>,
+            crate::client::git::ConnectMode::Process,
+            self.trace,
+        );
+
+        self.client = Some(client);
+        self.connection = Some(connection);
+
+        self.connection
+            .as_mut()
+            .expect("connection to be there right after setting it")
+            .handshake(service, extra_parameters)
+            .await
     }
 }
 
+#[allow(clippy::unused_async)]
 pub async fn connect(
     url: gix_url::Url,
     desired_version: Protocol,
     trace: bool,
-) -> Result<NativeSsh, crate::client::Error> {
-    todo!()
+) -> Result<NativeSsh, crate::client::connect::Error> {
+    if url.scheme != gix_url::Scheme::Ssh {
+        return Err(crate::client::connect::Error::UnsupportedScheme(url.scheme));
+    }
+    Ok(NativeSsh {
+        url,
+        desired_version,
+        trace,
+        identity: None,
+        client: None,
+        connection: None,
+    })
 }

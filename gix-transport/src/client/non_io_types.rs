@@ -93,6 +93,8 @@ mod error {
 
     use bstr::BString;
 
+    #[cfg(feature = "russh")]
+    use crate::client::async_io;
     use crate::client::capabilities;
     #[cfg(feature = "http-client")]
     use crate::client::http;
@@ -103,10 +105,14 @@ mod error {
     type HttpError = http::Error;
     #[cfg(feature = "blocking-client")]
     type SshInvocationError = ssh::invocation::Error;
+    #[cfg(feature = "russh")]
+    type NativeSshError = async_io::ssh::Error;
     #[cfg(not(feature = "http-client"))]
     type HttpError = std::convert::Infallible;
     #[cfg(not(feature = "blocking-client"))]
     type SshInvocationError = std::convert::Infallible;
+    #[cfg(not(feature = "russh"))]
+    type NativeSshError = std::convert::Infallible;
 
     /// The error used in most methods of the [`client`][crate::client] module
     #[derive(thiserror::Error, Debug)]
@@ -142,6 +148,8 @@ mod error {
         Http(#[from] HttpError),
         #[error(transparent)]
         SshInvocation(SshInvocationError),
+        #[error(transparent)]
+        NativeSshError(#[from] NativeSshError),
         #[error("The repository path '{path}' could be mistaken for a command-line argument")]
         AmbiguousPath { path: BString },
     }
