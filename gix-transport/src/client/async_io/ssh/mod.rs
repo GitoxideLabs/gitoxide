@@ -73,11 +73,26 @@ impl Transport for NativeSsh {
                 username: username.clone(),
                 password: password.clone(),
             },
-            None => return Err(crate::client::Error::AuthenticationUnsupported),
+            None => client::AuthMode::PublicKey {
+                username: self
+                    .url
+                    .user()
+                    .map(std::string::ToString::to_string)
+                    .unwrap_or_default(),
+            },
         };
 
         let mut client = client::Client::connect(host, port, auth_mode).await?;
-        let session = client.open_session().await?;
+
+        let session = client
+            .open_session(
+                format!("{} {}", service.as_str(), self.url.path),
+                vec![(
+                    "GIT_PROTOCOL".to_string(),
+                    format!("version={}", self.desired_version as usize),
+                )],
+            )
+            .await?;
 
         let connection = crate::client::git::Connection::new(
             session.clone(),

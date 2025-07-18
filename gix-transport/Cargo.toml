@@ -65,7 +65,7 @@ async-client = [
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde"]
 
-russh = ["dep:russh", "dep:tokio"]
+russh = ["dep:russh", "dep:tokio", "async-client", "async-std"]
 
 [[test]]
 name = "blocking-transport"

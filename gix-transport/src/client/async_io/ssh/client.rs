@@ -1,12 +1,13 @@
 use std::{ops::DerefMut, sync::Arc, task::ready};
 
 use russh::{
-    client::Handle,
-    client::{Config, Handler},
+    client::{Config, Handle, Handler},
+    MethodSet,
 };
 
 pub enum AuthMode {
     UsernamePassword { username: String, password: String },
+    PublicKey { username: String },
 }
 
 #[derive(Clone)]
@@ -36,11 +37,40 @@ impl Client {
                     } => Err(super::Error::AuthenticationFailed(remaining_methods)),
                 }
             }
+            AuthMode::PublicKey { username } => {
+                let mut agent = russh::keys::agent::client::AgentClient::connect_env().await?;
+                let rsa_hash = handle.best_supported_rsa_hash().await?.flatten();
+                let mut methods = MethodSet::empty();
+                for key in agent.request_identities().await? {
+                    match handle
+                        .authenticate_publickey_with(&username, key, rsa_hash, &mut agent)
+                        .await?
+                    {
+                        russh::client::AuthResult::Success => return Ok(()),
+                        russh::client::AuthResult::Failure {
+                            remaining_methods,
+                            partial_success: _,
+                        } => methods = remaining_methods,
+                    }
+                }
+                Err(super::Error::AuthenticationFailed(methods))
+            }
         }
     }
 
-    pub async fn open_session(&mut self) -> Result<Session, super::Error> {
+    pub async fn open_session(
+        &mut self,
+        cmd: impl Into<String>,
+        env: Vec<(String, String)>,
+    ) -> Result<Session, super::Error> {
         let channel = self.handle.channel_open_session().await?;
+
+        for (key, value) in env {
+            channel.set_env(false, key, value).await?;
+        }
+
+        channel.exec(false, cmd.into().bytes().collect::<Vec<_>>()).await?;
+
         let stream = channel.into_stream();
         Ok(Session {
             stream: Arc::new(std::sync::Mutex::new(stream)),

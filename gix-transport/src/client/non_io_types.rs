@@ -149,7 +149,7 @@ mod error {
         #[error(transparent)]
         SshInvocation(SshInvocationError),
         #[error(transparent)]
-        NativeSshError(#[from] NativeSshError),
+        NativeSshError(NativeSshError),
         #[error("The repository path '{path}' could be mistaken for a command-line argument")]
         AmbiguousPath { path: BString },
     }
