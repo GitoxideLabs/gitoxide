@@ -16,7 +16,7 @@ pub struct NativeSsh {
 
     identity: Option<gix_sec::identity::Account>,
     client: Option<client::Client>,
-    connection: Option<crate::client::git::Connection<&'static [u8], Vec<u8>>>,
+    connection: Option<crate::client::git::Connection<client::Session, client::Session>>,
 }
 
 impl TransportWithoutIO for NativeSsh {
@@ -31,7 +31,11 @@ impl TransportWithoutIO for NativeSsh {
         on_into_read: crate::client::MessageKind,
         trace: bool,
     ) -> Result<super::RequestWriter<'_>, crate::client::Error> {
-        todo!()
+        if let Some(connection) = &mut self.connection {
+            connection.request(write_mode, on_into_read, trace)
+        } else {
+            Err(crate::client::Error::MissingHandshake)
+        }
     }
 
     fn to_url(&self) -> std::borrow::Cow<'_, bstr::BStr> {
@@ -44,7 +48,7 @@ impl TransportWithoutIO for NativeSsh {
 
     fn configure(
         &mut self,
-        config: &dyn std::any::Any,
+        _config: &dyn std::any::Any,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         Ok(())
     }
@@ -72,11 +76,12 @@ impl Transport for NativeSsh {
             None => return Err(crate::client::Error::AuthenticationUnsupported),
         };
 
-        let client = client::Client::connect(host, port, auth_mode).await?;
+        let mut client = client::Client::connect(host, port, auth_mode).await?;
+        let session = client.open_session().await?;
 
         let connection = crate::client::git::Connection::new(
-            [0u8].as_slice(), // TODO
-            vec![],           // TODO
+            session.clone(),
+            session,
             self.desired_version,
             self.url.path.clone(),
             None::<(String, _)>,

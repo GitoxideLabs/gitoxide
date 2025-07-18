@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::DerefMut, sync::Arc, task::ready};
 
 use russh::{
     client::Handle,
@@ -9,6 +9,7 @@ pub enum AuthMode {
     UsernamePassword { username: String, password: String },
 }
 
+#[derive(Clone)]
 pub struct Client {
     handle: Arc<Handle<ClientHandler>>,
 }
@@ -37,10 +38,90 @@ impl Client {
             }
         }
     }
+
+    pub async fn open_session(&mut self) -> Result<Session, super::Error> {
+        let channel = self.handle.channel_open_session().await?;
+        let stream = channel.into_stream();
+        Ok(Session {
+            stream: Arc::new(std::sync::Mutex::new(stream)),
+        })
+    }
+}
+
+#[derive(Clone)]
+pub struct Session {
+    stream: Arc<std::sync::Mutex<russh::ChannelStream<russh::client::Msg>>>,
+}
+
+impl Session {
+    fn poll_fn<F, R>(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>, poll_fn: F) -> std::task::Poll<R>
+    where
+        F: FnOnce(
+            std::pin::Pin<&mut russh::ChannelStream<russh::client::Msg>>,
+            &mut std::task::Context<'_>,
+        ) -> std::task::Poll<R>,
+    {
+        match self.stream.try_lock() {
+            Ok(mut inner) => {
+                let pinned = std::pin::Pin::new(inner.deref_mut());
+                (poll_fn)(pinned, cx)
+            }
+            Err(_) => {
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        }
+    }
+}
+
+impl futures_io::AsyncRead for Session {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        slice: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.poll_fn(cx, |pinned, cx| {
+            let mut buf = tokio::io::ReadBuf::new(slice);
+            ready!(tokio::io::AsyncRead::poll_read(pinned, cx, &mut buf))?;
+            std::task::Poll::Ready(Ok(buf.filled().len()))
+        })
+    }
+}
+
+impl futures_io::AsyncWrite for Session {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.poll_fn(cx, |pinned, cx| tokio::io::AsyncWrite::poll_write(pinned, cx, buf))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.poll_fn(cx, tokio::io::AsyncWrite::poll_flush)
+    }
+
+    fn poll_close(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.poll_fn(cx, tokio::io::AsyncWrite::poll_shutdown)
+    }
 }
 
 struct ClientHandler;
 
 impl Handler for ClientHandler {
     type Error = super::Error;
+
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &russh::keys::ssh_key::PublicKey,
+    ) -> Result<bool, Self::Error> {
+        // TODO: configurable
+        Ok(true)
+    }
 }
