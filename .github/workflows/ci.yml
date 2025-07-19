@@ -220,6 +220,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Show PATH
+        if: startsWith(matrix.os, 'windows')
+        run: $Env:PATH -split ';'
+      - name: Find git
+        if: startsWith(matrix.os, 'windows')
+        run: where.exe git
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -250,6 +256,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Show PATH
+        if: startsWith(matrix.os, 'windows')
+        run: $Env:PATH -split ';'
+      - name: Find git
+        if: startsWith(matrix.os, 'windows')
+        run: where.exe git
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
