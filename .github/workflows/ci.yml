@@ -246,6 +246,12 @@ jobs:
         run: |
           $git = Get-Command git -ErrorAction SilentlyContinue
           if ($null -eq $git) { exit 0 } else { exit 1 }
+      - name: Retest gix-path without `git` in `PATH` (nextest)
+        if: startsWith(matrix.os, 'windows')
+        run: cargo nextest run -p gix-path --no-fail-fast -- ${{ matrix.test-args }}
+      - name: Retest gix-testtools
+        if: startsWith(matrix.os, 'windows')
+        run: cargo nextest run -p gix-testtools --no-fail-fast -- ${{ matrix.test-args }}
 
   test-fixtures-windows:
     strategy:
