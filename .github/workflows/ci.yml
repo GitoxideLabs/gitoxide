@@ -220,12 +220,6 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Show PATH
-        if: startsWith(matrix.os, 'windows')
-        run: $Env:PATH -split ';'
-      - name: Find git
-        if: startsWith(matrix.os, 'windows')
-        run: where.exe git
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -241,6 +235,17 @@ jobs:
         run: cargo nextest run --workspace --no-fail-fast -- ${{ matrix.test-args }}
       - name: Check that tracked archives are up to date
         run: git diff --exit-code  # If this fails, the fix is usually to commit a regenerated archive.
+      - name: Remove Git for Windows directories from PATH
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          $prefix = 'C:\Program Files\Git'
+          $filtered = ($Env:PATH -split ';' | Where-Object { $_ -notlike "$prefix\*" }) -join ';'
+          Add-Content -Value "PATH=$filtered" -Path $Env:GITHUB_ENV
+      - name: Check that `git` is no longer found
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          $git = Get-Command git -ErrorAction SilentlyContinue
+          if ($null -eq $git) { exit 0 } else { exit 1 }
 
   test-fixtures-windows:
     strategy:
@@ -256,12 +261,6 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Show PATH
-        if: startsWith(matrix.os, 'windows')
-        run: $Env:PATH -split ';'
-      - name: Find git
-        if: startsWith(matrix.os, 'windows')
-        run: where.exe git
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
