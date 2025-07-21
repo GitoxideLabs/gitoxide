@@ -27,19 +27,21 @@ where
     let varname_x86 = "ProgramFiles(x86)";
 
     // Should give a 32-bit program files path on a 32-bit system. We also check this on a 64-bit
-    // system, even though it *should* equal the process's architecture specific variable, so that
+    // system, even though it *should* equal the process's architecture-specific variable, so that
     // we cover the case of a parent process that passes down an overly sanitized environment that
     // lacks the architecture-specific variable. On a 64-bit system, because parent and child
-    // processes' architectures can be different, Windows sets the child's ProgramFiles variable
-    // from the ProgramW6432 or ProgramFiles(x86) variable applicable to the child's architecture.
-    // Only if the parent does not pass that down is the passed-down ProgramFiles variable even
-    // used. But this behavior is not well known, so that situation does sometimes happen.
+    // processes' architectures can be different, Windows sets the child's `ProgramFiles` variable
+    // from whichever of the `ProgramW6432` or `ProgramFiles(x86)` variable corresponds to the
+    // child's architecture. Only if the parent does not pass down the architecture-specific
+    // variable corresponding to the child's architecture does the child receive its `ProgramFiles`
+    // variable from `ProgramFiles` as passed down by the parent. But this behavior is not well
+    // known. So the situation where a process only passes down `ProgramFiles` sometimes happens.
     let varname_current = "ProgramFiles";
 
-    // 64-bit relative bin dir. So far, this is always mingw64, not ucrt64, clang64, or clangarm64.
+    // 64-bit relative bin dir. So far, this is always `mingw64`, not `ucrt64`, `clang64`, or `clangarm64`.
     let suffix_64 = Path::new(r"Git\mingw64\bin");
 
-    // 32-bit relative bin dir. So far, this is always mingw32, not clang32.
+    // 32-bit relative bin dir. So far, this is always `mingw32`, not `clang32`.
     let suffix_32 = Path::new(r"Git\mingw32\bin");
 
     // Whichever of the 64-bit or 32-bit relative bin better matches this process's architecture.
@@ -81,7 +83,7 @@ pub(super) const EXE_NAME: &str = "git";
 
 /// Invoke the git executable to obtain the origin configuration, which is cached and returned.
 ///
-/// The git executable is the one found in PATH or an alternative location.
+/// The git executable is the one found in `PATH` or an alternative location.
 pub(super) static GIT_HIGHEST_SCOPE_CONFIG_PATH: Lazy<Option<BString>> = Lazy::new(exe_info);
 
 // There are a number of ways to refer to the null device on Windows, but they are not all equally
@@ -134,17 +136,17 @@ fn git_cmd(executable: PathBuf) -> Command {
     } else {
         "/".into()
     };
-    // Git 2.8.0 and higher support --show-origin. The -l, -z, and --name-only options were
-    // supported even before that. In contrast, --show-scope was introduced later, in Git 2.26.0.
+    // Git 2.8.0 and higher support `--show-origin`. The `-l`, `-z`, and `--name-only` options were
+    // supported even before that. In contrast, `--show-scope` was introduced later, in Git 2.26.0.
     // Low versions of Git are still sometimes used, and this is sometimes reasonable because
     // downstream distributions often backport security patches without adding most new features.
-    // So for now, we forgo the convenience of --show-scope for greater backward compatibility.
+    // So for now, we forgo the convenience of `--show-scope` for greater backward compatibility.
     //
-    // Separately from that, we can't use --system here, because scopes treated higher than the
+    // Separately from that, we can't use `--system` here, because scopes treated higher than the
     // system scope are possible. This commonly happens on macOS with Apple Git, where the config
     // file under `/Library` or `/Applications` is shown as an "unknown" scope but takes precedence
     // over the system scope. Although `GIT_CONFIG_NOSYSTEM` suppresses this scope along with the
-    // system scope, passing --system selects only the system scope and omit this "unknown" scope.
+    // system scope, passing `--system` selects only the system scope and not this "unknown" scope.
     cmd.args(["config", "-lz", "--show-origin", "--name-only"])
         .current_dir(cwd)
         .env_remove("GIT_CONFIG")
@@ -165,7 +167,7 @@ fn first_file_from_config_with_origin(source: &BStr) -> Option<&BStr> {
     file[..end_pos].as_bstr().into()
 }
 
-/// Try to find the file that contains git configuration coming with the git installation.
+/// Try to find the file that contains Git configuration coming with the Git installation.
 ///
 /// This returns the configuration associated with the `git` executable found in the current `PATH`
 /// or an alternative location, or `None` if no `git` executable was found or there were other
