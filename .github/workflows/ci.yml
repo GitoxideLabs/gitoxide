@@ -457,6 +457,9 @@ jobs:
           for feature in progress parallel io-pipe crc32 zlib cache-efficiency-debug; do
             cargo build -p gix-features --features "$feature" --target "$TARGET"
           done
+      - name: Enable wasm_js backend
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: echo RUSTFLAGS='--cfg getrandom_backend="wasm_js"' >> "$GITHUB_ENV"
       - name: crates with 'wasm' feature
         run: |
           set -x
