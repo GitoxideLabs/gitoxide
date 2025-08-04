@@ -402,12 +402,7 @@ fn removed_modified_added_with_newlines_in_tokens() -> crate::Result {
     let actual = gix_diff::blob::diff(
         Algorithm::Myers,
         &interner,
-        UnifiedDiffSink::new(
-            &interner,
-            TypedRecorder::default(),
-            NewlineSeparator::AfterHeaderAndWhenNeeded("\r\n"),
-            ContextSize::symmetrical(1),
-        ),
+        UnifiedDiffSink::new(&interner, TypedRecorder::default(), ContextSize::symmetrical(1)),
     )?;
     assert_eq!(
         actual,

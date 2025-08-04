@@ -166,15 +166,8 @@ pub(super) mod _impl {
 
         /// Symmetrical context before and after the changed hunk.
         ctx_size: u32,
-        // TODO:
-        // Is there a way to remove `newline` from `UnifiedDiffSink` as it is purely
-        // formatting-related?
-        // One option would be to introduce `HunkHeader` with a method `format_header` that could
-        // then be called outside `UnifiedDiffSink`, potentially taking `newline` as an argument.
-        newline: NewlineSeparator<'a>,
 
         buffer: Vec<(DiffLineType, Vec<u8>)>,
-        header_buf: String,
         delegate: D,
 
         err: Option<std::io::Error>,
@@ -191,12 +184,7 @@ pub(super) mod _impl {
         /// to the sink.
         ///
         /// The sink's `consume_hunk` method is called for each hunk with structured type information.
-        pub fn new(
-            input: &'a InternedInput<T>,
-            consume_hunk: D,
-            newline_separator: NewlineSeparator<'a>,
-            context_size: ContextSize,
-        ) -> Self {
+        pub fn new(input: &'a InternedInput<T>, consume_hunk: D, context_size: ContextSize) -> Self {
             Self {
                 interner: &input.interner,
                 before: &input.before,
@@ -209,10 +197,8 @@ pub(super) mod _impl {
                 ctx_pos: None,
 
                 ctx_size: context_size.symmetrical,
-                newline: newline_separator,
 
                 buffer: Vec::with_capacity(8),
-                header_buf: String::new(),
                 delegate: consume_hunk,
 
                 err: None,
@@ -237,23 +223,6 @@ pub(super) mod _impl {
 
             let hunk_start = self.before_hunk_start + 1;
             let hunk_end = self.after_hunk_start + 1;
-            self.header_buf.clear();
-            std::fmt::Write::write_fmt(
-                &mut self.header_buf,
-                format_args!(
-                    "@@ -{},{} +{},{} @@{nl}",
-                    hunk_start,
-                    self.before_hunk_len,
-                    hunk_end,
-                    self.after_hunk_len,
-                    nl = match self.newline {
-                        NewlineSeparator::AfterHeaderAndLine(nl) | NewlineSeparator::AfterHeaderAndWhenNeeded(nl) => {
-                            nl
-                        }
-                    }
-                ),
-            )
-            .map_err(|err| std::io::Error::new(ErrorKind::Other, err))?;
 
             // TODO:
             // Is this explicit conversion necessary?
@@ -394,7 +363,7 @@ pub(super) mod _impl {
             };
             // TODO:
             // Should this return a `UnifiedDiff` instead of a `UnifiedDiffSink`?
-            UnifiedDiffSink::new(input, formatter, newline_separator, context_size)
+            UnifiedDiffSink::new(input, formatter, context_size)
         }
 
         fn format_line(&mut self, line_type: DiffLineType, content: &[u8]) {
