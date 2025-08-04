@@ -1,6 +1,6 @@
 use gix_diff::blob::{
-    unified_diff::{ConsumeHunk, ContextSize, NewlineSeparator},
-    Algorithm, UnifiedDiff,
+    unified_diff::{ConsumeHunk, ConsumeTypedHunk, ContextSize, DiffLineType, NewlineSeparator},
+    Algorithm, UnifiedDiff, UnifiedDiffSink,
 };
 
 #[test]
@@ -399,6 +399,36 @@ fn removed_modified_added_with_newlines_in_tokens() -> crate::Result {
         ]
     );
 
+    let actual = gix_diff::blob::diff(
+        Algorithm::Myers,
+        &interner,
+        UnifiedDiffSink::new(
+            &interner,
+            TypedRecorder::default(),
+            NewlineSeparator::AfterHeaderAndWhenNeeded("\r\n"),
+            ContextSize::symmetrical(1),
+        ),
+    )?;
+    assert_eq!(
+        actual,
+        &[
+            vec![DiffLineType::Remove, DiffLineType::Context],
+            vec![
+                DiffLineType::Context,
+                DiffLineType::Remove,
+                DiffLineType::Add,
+                DiffLineType::Context
+            ],
+            vec![
+                DiffLineType::Context,
+                DiffLineType::Remove,
+                DiffLineType::Add,
+                DiffLineType::Add,
+                DiffLineType::Add
+            ]
+        ]
+    );
+
     Ok(())
 }
 
@@ -500,6 +530,32 @@ impl ConsumeHunk for Recorder {
             (after_hunk_start, after_hunk_len),
             header.to_string(),
         ));
+        Ok(())
+    }
+
+    fn finish(self) -> Self::Out {
+        self.hunks
+    }
+}
+
+#[derive(Default)]
+struct TypedRecorder {
+    hunks: Vec<Vec<DiffLineType>>,
+}
+
+impl ConsumeTypedHunk for TypedRecorder {
+    type Out = Vec<Vec<DiffLineType>>;
+
+    fn consume_hunk(
+        &mut self,
+        _before_hunk_start: u32,
+        _before_hunk_len: u32,
+        _after_hunk_start: u32,
+        _after_hunk_len: u32,
+        _header: &str,
+        hunk: &[(DiffLineType, &[u8])],
+    ) -> std::io::Result<()> {
+        self.hunks.push(hunk.iter().map(|(line_type, _)| *line_type).collect());
         Ok(())
     }
 
