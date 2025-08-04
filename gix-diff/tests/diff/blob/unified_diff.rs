@@ -1,5 +1,5 @@
 use gix_diff::blob::{
-    unified_diff::{ConsumeHunk, ConsumeTypedHunk, ContextSize, DiffLineType, NewlineSeparator},
+    unified_diff::{ConsumeHunk, ConsumeTypedHunk, ContextSize, DiffLineType, HunkHeader, NewlineSeparator},
     Algorithm, UnifiedDiff, UnifiedDiffSink,
 };
 
@@ -546,15 +546,7 @@ struct TypedRecorder {
 impl ConsumeTypedHunk for TypedRecorder {
     type Out = Vec<Vec<DiffLineType>>;
 
-    fn consume_hunk(
-        &mut self,
-        _before_hunk_start: u32,
-        _before_hunk_len: u32,
-        _after_hunk_start: u32,
-        _after_hunk_len: u32,
-        _header: &str,
-        hunk: &[(DiffLineType, &[u8])],
-    ) -> std::io::Result<()> {
+    fn consume_hunk(&mut self, _header: HunkHeader, hunk: &[(DiffLineType, &[u8])]) -> std::io::Result<()> {
         self.hunks.push(hunk.iter().map(|(line_type, _)| *line_type).collect());
         Ok(())
     }

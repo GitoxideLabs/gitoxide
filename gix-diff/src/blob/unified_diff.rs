@@ -68,6 +68,25 @@ pub enum NewlineSeparator<'a> {
     AfterHeaderAndWhenNeeded(&'a str),
 }
 
+/// TODO:
+/// Document.
+pub struct HunkHeader {
+    before_hunk_start: u32,
+    before_hunk_len: u32,
+    after_hunk_start: u32,
+    after_hunk_len: u32,
+}
+
+impl std::fmt::Display for HunkHeader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "@@ -{},{} +{},{} @@",
+            self.before_hunk_start, self.before_hunk_len, self.after_hunk_start, self.after_hunk_len
+        )
+    }
+}
+
 /// A utility trait for use in [`UnifiedDiffSink`](super::UnifiedDiffSink).
 pub trait ConsumeTypedHunk {
     /// TODO:
@@ -79,15 +98,7 @@ pub trait ConsumeTypedHunk {
     /// How do we want to pass the header to `consume_hunk`? We can add an additional parameter
     /// similar to `ConsumeHunk::consume_hunk` or add `DiffLineType::Header` in which case we
     /// didn’t have to add an additional parameter.
-    fn consume_hunk(
-        &mut self,
-        before_hunk_start: u32,
-        before_hunk_len: u32,
-        after_hunk_start: u32,
-        after_hunk_len: u32,
-        header: &str,
-        lines: &[(DiffLineType, &[u8])],
-    ) -> std::io::Result<()>;
+    fn consume_hunk(&mut self, header: HunkHeader, lines: &[(DiffLineType, &[u8])]) -> std::io::Result<()>;
 
     /// Called when processing is complete.
     fn finish(self) -> Self::Out;
@@ -129,7 +140,7 @@ pub(super) mod _impl {
     use imara_diff::{intern, Sink};
     use intern::{InternedInput, Interner, Token};
 
-    use super::{ConsumeHunk, ConsumeTypedHunk, ContextSize, DiffLineType, NewlineSeparator};
+    use super::{ConsumeHunk, ConsumeTypedHunk, ContextSize, DiffLineType, HunkHeader, NewlineSeparator};
 
     /// A [`Sink`] that creates a unified diff and processes it hunk-by-hunk with structured type information.
     pub struct UnifiedDiffSink<'a, T, D>
@@ -254,14 +265,14 @@ pub(super) mod _impl {
                 .map(|(line_type, content)| (*line_type, content.as_slice()))
                 .collect();
 
-            self.delegate.consume_hunk(
-                hunk_start,
-                self.before_hunk_len,
-                hunk_end,
-                self.after_hunk_len,
-                &self.header_buf,
-                &lines,
-            )?;
+            let header = HunkHeader {
+                before_hunk_start: hunk_start,
+                before_hunk_len: self.before_hunk_len,
+                after_hunk_start: hunk_end,
+                after_hunk_len: self.after_hunk_len,
+            };
+
+            self.delegate.consume_hunk(header, &lines)?;
 
             self.reset_hunks();
             Ok(())
@@ -405,27 +416,26 @@ pub(super) mod _impl {
     impl<D: ConsumeHunk> ConsumeTypedHunk for UnifiedDiff<'_, D> {
         type Out = D::Out;
 
-        fn consume_hunk(
-            &mut self,
-            before_hunk_start: u32,
-            before_hunk_len: u32,
-            after_hunk_start: u32,
-            after_hunk_len: u32,
-            header: &str,
-            lines: &[(DiffLineType, &[u8])],
-        ) -> std::io::Result<()> {
+        fn consume_hunk(&mut self, header: HunkHeader, lines: &[(DiffLineType, &[u8])]) -> std::io::Result<()> {
             self.buffer.clear();
+
+            // TODO:
+            // Can we find a better name?
+            let mut printed_header = header.to_string();
+            printed_header.push_str(match self.newline {
+                NewlineSeparator::AfterHeaderAndLine(nl) | NewlineSeparator::AfterHeaderAndWhenNeeded(nl) => nl,
+            });
 
             for &(line_type, content) in lines {
                 self.format_line(line_type, content);
             }
 
             self.delegate.consume_hunk(
-                before_hunk_start,
-                before_hunk_len,
-                after_hunk_start,
-                after_hunk_len,
-                &header,
+                header.before_hunk_start,
+                header.before_hunk_len,
+                header.after_hunk_start,
+                header.after_hunk_len,
+                &printed_header,
                 &self.buffer,
             )
         }
@@ -468,19 +478,15 @@ pub(super) mod _impl {
         }
     }
 
+    // TODO:
+    // This is not configurable with respect to how newlines are printed.
     impl ConsumeTypedHunk for String {
         type Out = Self;
 
-        fn consume_hunk(
-            &mut self,
-            _: u32,
-            _: u32,
-            _: u32,
-            _: u32,
-            header: &str,
-            lines: &[(DiffLineType, &[u8])],
-        ) -> std::io::Result<()> {
-            self.push_str(header);
+        fn consume_hunk(&mut self, header: HunkHeader, lines: &[(DiffLineType, &[u8])]) -> std::io::Result<()> {
+            self.push_str(&header.to_string());
+            self.push('\n');
+
             for &(line_type, content) in lines {
                 self.push(line_type.to_prefix());
                 // TODO:
@@ -496,19 +502,15 @@ pub(super) mod _impl {
         }
     }
 
+    // TODO:
+    // This is not configurable with respect to how newlines are printed.
     impl ConsumeTypedHunk for Vec<u8> {
         type Out = Self;
 
-        fn consume_hunk(
-            &mut self,
-            _: u32,
-            _: u32,
-            _: u32,
-            _: u32,
-            header: &str,
-            lines: &[(DiffLineType, &[u8])],
-        ) -> std::io::Result<()> {
-            self.push_str(header);
+        fn consume_hunk(&mut self, header: HunkHeader, lines: &[(DiffLineType, &[u8])]) -> std::io::Result<()> {
+            self.push_str(header.to_string());
+            self.push(b'\n');
+
             for &(line_type, content) in lines {
                 self.push(line_type.to_byte_prefix());
                 self.extend_from_slice(content);
