@@ -33,3 +33,4 @@ symlink = "0.1.0"
 once_cell = "1.21.3"
 
 walkdir = "2.3.2"
+test-case = "3.3.1"
