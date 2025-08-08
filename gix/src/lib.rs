@@ -222,6 +222,14 @@ pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository, di
     ThreadSafeRepository::discover(directory).map(Into::into)
 }
 
+/// See [`ThreadSafeRepository::discover_with_environment_overrides()`], but returns a [`Repository`] instead.
+#[allow(clippy::result_large_err)]
+pub fn discover_with_environment_overrides(
+    directory: impl AsRef<std::path::Path>,
+) -> Result<Repository, discover::Error> {
+    ThreadSafeRepository::discover_with_environment_overrides(directory).map(Into::into)
+}
+
 /// See [`ThreadSafeRepository::open_with_environment_overrides()`], but returns a [`Repository`] instead.
 #[allow(clippy::result_large_err)]
 pub fn open_with_environment_overrides(directory: impl Into<std::path::PathBuf>) -> Result<Repository, open::Error> {
