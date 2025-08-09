@@ -12,7 +12,7 @@ pub mod pipeline;
 pub mod platform;
 
 pub mod unified_diff;
-pub use unified_diff::_impl::UnifiedDiff;
+pub use unified_diff::_impl::{UnifiedDiff, UnifiedDiffSink};
 
 /// Information about the diff performed to detect similarity.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
