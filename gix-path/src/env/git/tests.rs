@@ -180,12 +180,12 @@ mod locations {
         ///
         /// This is present on x64 and also ARM64 systems. On an ARM64 system, ARM64 and AMD64
         /// programs use the same program files directory while 32-bit x86 and ARM programs use
-        /// two others. Only a 32-bit has no 64-bit program files directory.
+        /// two others. Only a 32-bit system has no 64-bit program files directory.
         maybe_64bit: Option<PathBuf>,
     }
 
     impl ProgramFilesPaths {
-        /// Gets the three common kinds of global program files paths without environment variables.
+        /// Get the three common kinds of global program files paths without environment variables.
         ///
         /// The idea here is to obtain this information, which the `alternative_locations()` unit
         /// test uses to learn the expected alternative locations, without duplicating *any* of the
@@ -227,7 +227,7 @@ mod locations {
             }
         }
 
-        /// Checks that the paths we got for testing are reasonable.
+        /// Check that the paths we got for testing are reasonable.
         ///
         /// This checks that `obtain_envlessly()` returned paths that are likely to be correct and
         /// that satisfy the most important properties based on the current system and process.

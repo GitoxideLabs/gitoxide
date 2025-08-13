@@ -208,9 +208,14 @@ jobs:
       matrix:
         os:
           - windows-latest
+          - windows-11-arm
           - macos-latest
           - ubuntu-latest
           - ubuntu-24.04-arm
+        include:
+          - test-args: ''
+          - os: windows-11-arm
+            test-args: '--skip fuzzed_timeout --skip performance --skip speed'
 
     runs-on: ${{ matrix.os }}
 
@@ -227,12 +232,36 @@ jobs:
       - name: Test (nextest)
         env:
           GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI: '1'
-        run: cargo nextest run --workspace --no-fail-fast
+        run: cargo nextest run --workspace --no-fail-fast -- ${{ matrix.test-args }}
       - name: Check that tracked archives are up to date
         run: git diff --exit-code  # If this fails, the fix is usually to commit a regenerated archive.
+      - name: Remove Git for Windows directories from PATH
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          $prefix = 'C:\Program Files\Git'
+          $filtered = ($Env:PATH -split ';' | Where-Object { $_ -notlike "$prefix\*" }) -join ';'
+          Add-Content -Value "PATH=$filtered" -Path $Env:GITHUB_ENV
+      - name: Check that `git` is no longer found
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          $git = Get-Command git -ErrorAction SilentlyContinue
+          if ($null -eq $git) { exit 0 } else { exit 1 }
+      - name: Retest gix-path without `git` in `PATH` (nextest)
+        if: startsWith(matrix.os, 'windows')
+        run: cargo nextest run -p gix-path --no-fail-fast -- ${{ matrix.test-args }}
 
   test-fixtures-windows:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - windows-11-arm
+        include:
+          - test-args: ''
+          - os: windows-11-arm
+            test-args: '--skip fuzzed-timeout --skip performance --skip speed'
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -245,7 +274,8 @@ jobs:
         id: nextest
         env:
           GIX_TEST_IGNORE_ARCHIVES: '1'
-        run: cargo nextest --profile=with-xml run --workspace --no-fail-fast
+        run: |
+          cargo nextest --profile=with-xml run --workspace --no-fail-fast -- ${{ matrix.test-args }}
         continue-on-error: true
       - name: Check for errors
         run: |
@@ -264,7 +294,8 @@ jobs:
       - name: Compare expected and actual failures
         run: |
           # Fail on any differences, even unexpectedly passing tests, so they can be investigated.
-          git --no-pager diff --no-index --exit-code --unified=1000000 --color=always -- `
+          git --no-pager -c diff.color.old='magenta bold' -c diff.color.new='blue bold' `
+            diff --no-index --exit-code --unified=1000000 --color=always -- `
             etc/test-fixtures-windows-expected-failures-see-issue-1358.txt actual-failures.txt
 
   test-32bit:
@@ -339,7 +370,7 @@ jobs:
         with:
           tool: nextest
       - name: Test data structure sizes (nextest)
-        run: cargo nextest run --target $env:TARGET --workspace --no-fail-fast size
+        run: cargo nextest run --target $Env:TARGET --workspace --no-fail-fast size
       - name: Doctest
         run: cargo test --workspace --doc --no-fail-fast
 
