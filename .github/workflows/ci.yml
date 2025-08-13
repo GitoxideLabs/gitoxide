@@ -221,9 +221,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Install rustup
-        if: matrix.os == 'windows-11-arm'
-        uses: ./.github/actions/setup-windows-arm-rustup
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: cargo check default features
@@ -253,44 +250,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Report version/build of Git in this runner image
-        run: git version --build-options
-      - name: Upgrade Git for Windows to latest stable release
-        # TODO(ci): Remove this and related steps once `windows-11-arm` ships a new enough Git.
-        # The Windows 11 ARM runner still ships Git 2.48.*, so it remains affected by #1849.
-        if: matrix.os == 'windows-11-arm'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $workingDir = '~/git-dl'
-          $repo = 'git-for-windows/git'
-          $pattern = 'Git-*-arm64.exe'
-          $log = 'setup-log.txt'
-          # Inno Setup args reference: https://jrsoftware.org/ishelp/index.php?topic=setupcmdline
-          $arguments = @(
-            '/VERYSILENT',
-            '/SUPPRESSMSGBOXES',
-            '/ALLUSERS',
-            "/LOG=$log",
-            '/NORESTART',
-            '/CLOSEAPPLICATIONS',
-            '/FORCECLOSEAPPLICATIONS'
-          )
-
-          mkdir $workingDir | Out-Null
-          cd $workingDir
-          gh release download --repo $repo --pattern $pattern
-          $installer = Get-Item $pattern
-          Start-Process -FilePath $installer -ArgumentList $arguments -NoNewWindow -Wait
-
-          Get-Content -Path $log -Tail 50
-      - name: Report version/build of Git after upgrade
-        if: matrix.os == 'windows-11-arm'
-        run: git version --build-options
       - uses: actions/checkout@v4
-      - name: Install rustup
-        if: matrix.os == 'windows-11-arm'
-        uses: ./.github/actions/setup-windows-arm-rustup
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
