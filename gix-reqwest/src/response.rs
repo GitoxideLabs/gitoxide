@@ -1,5 +1,7 @@
 use url::Url;
 
+use crate::Body;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ResponseUrl(pub Url);
 
@@ -12,9 +14,23 @@ pub trait ResponseBuilderExt {
     fn url(self, url: Url) -> Self;
 }
 
+/// Extension trait for http::Response objects
+///
+/// Provides methods to extract URL information from HTTP responses
+pub trait ResponseExt {
+    /// Extracts and removes the URL associated with this response
+    fn url(&mut self) -> Option<Url>;
+}
+
 impl ResponseBuilderExt for http::response::Builder {
     fn url(self, url: Url) -> Self {
         self.extension(ResponseUrl(url))
+    }
+}
+
+impl ResponseExt for http::Response<Body> {
+    fn url(&mut self) -> Option<Url> {
+        self.extensions_mut().remove::<ResponseUrl>().map(|r| r.0)
     }
 }
 

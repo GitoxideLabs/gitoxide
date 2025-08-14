@@ -303,7 +303,7 @@ mod response;
 
 pub use self::error::{Error, Result};
 pub use self::into_url::IntoUrl;
-pub use self::response::ResponseBuilderExt;
+pub use self::response::{ResponseBuilderExt, ResponseExt};
 
 /// Shortcut method to quickly make a `GET` request.
 ///

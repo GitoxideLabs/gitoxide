@@ -492,7 +492,7 @@ impl From<Response> for http::Response<Body> {
 #[cfg(test)]
 mod tests {
     use super::Response;
-    use crate::{response::ResponseUrl, ResponseBuilderExt};
+    use crate::{ResponseBuilderExt, ResponseExt};
     use http::response::Builder;
     use url::Url;
 
@@ -524,11 +524,8 @@ mod tests {
         assert_eq!(*response.url(), url);
 
         let mut http_response = http::Response::from(response);
-        let resp_url = http_response
-            .extensions_mut()
-            .remove::<ResponseUrl>()
-            .expect("ResponseUrl should be present");
+        let resp_url = http_response.url();
         assert_eq!(http_response.status(), 200);
-        assert_eq!(resp_url.0, url);
+        assert_eq!(resp_url, Some(url));
     }
 }
