@@ -523,9 +523,9 @@ mod tests {
         assert_eq!(response.status(), 200);
         assert_eq!(*response.url(), url);
 
-        let mut http_response = http::Response::from(response);
+        let http_response = http::Response::from(response);
         let resp_url = http_response.url();
         assert_eq!(http_response.status(), 200);
-        assert_eq!(resp_url, Some(url));
+        assert_eq!(resp_url, Some(&url));
     }
 }

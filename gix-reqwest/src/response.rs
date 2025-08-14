@@ -18,8 +18,8 @@ pub trait ResponseBuilderExt {
 ///
 /// Provides methods to extract URL information from HTTP responses
 pub trait ResponseExt {
-    /// Extracts and removes the URL associated with this response
-    fn url(&mut self) -> Option<Url>;
+    /// Returns a reference to the `Url` associated with this response, if available.
+    fn url(&self) -> Option<&Url>;
 }
 
 impl ResponseBuilderExt for http::response::Builder {
@@ -29,8 +29,8 @@ impl ResponseBuilderExt for http::response::Builder {
 }
 
 impl ResponseExt for http::Response<Body> {
-    fn url(&mut self) -> Option<Url> {
-        self.extensions_mut().remove::<ResponseUrl>().map(|r| r.0)
+    fn url(&self) -> Option<&Url> {
+        self.extensions().get::<ResponseUrl>().map(|r| &r.0)
     }
 }
 
@@ -53,5 +53,19 @@ mod tests {
             response.extensions().get::<ResponseUrl>(),
             Some(&ResponseUrl(url))
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_response_ext() {
+        use super::ResponseExt;
+        let url = Url::parse("http://example.com").unwrap();
+        let response = http::Response::builder()
+            .status(200)
+            .extension(ResponseUrl(url.clone()))
+            .body(crate::Body::empty())
+            .unwrap();
+
+        assert_eq!(response.url(), Some(&url));
     }
 }
