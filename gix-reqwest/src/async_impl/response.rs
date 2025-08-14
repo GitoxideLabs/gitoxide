@@ -479,16 +479,20 @@ impl<T: Into<Body>> From<http::Response<T>> for Response {
 // It's supposed to be the inverse of the conversion above.
 impl From<Response> for http::Response<Body> {
     fn from(r: Response) -> http::Response<Body> {
+        use crate::response::ResponseUrl;
+
         let (parts, body) = r.res.into_parts();
         let body = Body::wrap(body);
-        http::Response::from_parts(parts, body)
+        let mut response = http::Response::from_parts(parts, body);
+        response.extensions_mut().insert(ResponseUrl(*r.url));
+        response
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Response;
-    use crate::ResponseBuilderExt;
+    use crate::{response::ResponseUrl, ResponseBuilderExt};
     use http::response::Builder;
     use url::Url;
 
@@ -504,5 +508,27 @@ mod tests {
 
         assert_eq!(response.status(), 200);
         assert_eq!(*response.url(), url);
+    }
+
+    #[test]
+    fn test_from_http_response_with_url() {
+        let url = Url::parse("http://example.com").unwrap();
+        let response = Builder::new()
+            .status(200)
+            .url(url.clone())
+            .body("foo")
+            .unwrap();
+        let response = Response::from(response);
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(*response.url(), url);
+
+        let mut http_response = http::Response::from(response);
+        let resp_url = http_response
+            .extensions_mut()
+            .remove::<ResponseUrl>()
+            .expect("ResponseUrl should be present");
+        assert_eq!(http_response.status(), 200);
+        assert_eq!(resp_url.0, url);
     }
 }
