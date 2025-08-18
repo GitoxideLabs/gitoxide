@@ -227,12 +227,15 @@ macro_rules! mktest {
                 None,
                 &mut resource_cache,
                 source_file_name.as_ref(),
-                gix_blame::Options::default()
-                    .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                    .with_range(BlameRanges::default())
-                    .with_since(None)
-                    .with_rewrites(Some(gix_diff::Rewrites::default()))
-                    .with_debug_track_path(false),
+                {
+                    let mut opts = gix_blame::Options::default();
+                    opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                    opts.range = BlameRanges::default();
+                    opts.since = None;
+                    opts.rewrites = Some(gix_diff::Rewrites::default());
+                    opts.debug_track_path = false;
+                    opts
+                },
             )?
             .entries;
 
@@ -306,19 +309,15 @@ fn diff_disparity() {
 
         let source_file_name: gix_object::bstr::BString = format!("{case}.txt").into();
 
-        let lines_blamed = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.as_ref(),
-            gix_blame::Options::default()
-                .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                .with_range(BlameRanges::default())
-                .with_since(None)
-                .with_rewrites(Some(gix_diff::Rewrites::default()))
-                .with_debug_track_path(false),
-        )
+        let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.as_ref(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })
         .unwrap()
         .entries;
 
@@ -342,14 +341,15 @@ fn file_that_was_added_in_two_branches() -> gix_testtools::Result {
     } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
     let source_file_name = "file-with-two-roots.txt";
-    let lines_blamed = gix_blame::file(
-        &odb,
-        suspect,
-        None,
-        &mut resource_cache,
-        source_file_name.into(),
-        gix_blame::Options::default(),
-    )?
+    let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.into(), {
+        let mut opts = gix_blame::Options::default();
+        opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+        opts.range = BlameRanges::default();
+        opts.since = None;
+        opts.rewrites = Some(gix_diff::Rewrites::default());
+        opts.debug_track_path = false;
+        opts
+    })?
     .entries;
 
     assert_eq!(lines_blamed.len(), 4);
@@ -372,19 +372,15 @@ fn since() -> gix_testtools::Result {
 
     let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
-    let lines_blamed = gix_blame::file(
-        &odb,
-        suspect,
-        None,
-        &mut resource_cache,
-        source_file_name.as_ref(),
-        gix_blame::Options::default()
-            .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-            .with_range(BlameRanges::default())
-            .with_since(Some(gix_date::parse("2025-01-31", None)?))
-            .with_rewrites(Some(gix_diff::Rewrites::default()))
-            .with_debug_track_path(false),
-    )?
+    let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.as_ref(), {
+        let mut opts = gix_blame::Options::default();
+        opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+        opts.range = BlameRanges::default();
+        opts.since = Some(gix_date::parse("2025-01-31", None)?);
+        opts.rewrites = Some(gix_diff::Rewrites::default());
+        opts.debug_track_path = false;
+        opts
+    })?
     .entries;
 
     assert_eq!(lines_blamed.len(), 1);
@@ -411,19 +407,15 @@ mod blame_ranges {
 
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
-        let lines_blamed = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.as_ref(),
-            gix_blame::Options::default()
-                .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                .with_range(BlameRanges::from_range(1..=2))
-                .with_since(None)
-                .with_rewrites(Some(gix_diff::Rewrites::default()))
-                .with_debug_track_path(false),
-        )?
+        let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.as_ref(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::from_range(1..=2);
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?
         .entries;
 
         assert_eq!(lines_blamed.len(), 2);
@@ -451,19 +443,15 @@ mod blame_ranges {
 
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
-        let lines_blamed = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.as_ref(),
-            gix_blame::Options::default()
-                .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                .with_range(ranges)
-                .with_since(None)
-                .with_rewrites(None)
-                .with_debug_track_path(false),
-        )?
+        let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.as_ref(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = ranges;
+            opts.since = None;
+            opts.rewrites = None;
+            opts.debug_track_path = false;
+            opts
+        })?
         .entries;
 
         assert_eq!(lines_blamed.len(), 3); // Should have 3 lines total (2 from first range + 1 from second range)
@@ -491,19 +479,15 @@ mod blame_ranges {
 
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
-        let lines_blamed = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.as_ref(),
-            gix_blame::Options::default()
-                .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                .with_range(ranges)
-                .with_since(None)
-                .with_rewrites(None)
-                .with_debug_track_path(false),
-        )?
+        let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.as_ref(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = ranges;
+            opts.since = None;
+            opts.rewrites = None;
+            opts.debug_track_path = false;
+            opts
+        })?
         .entries;
 
         assert_eq!(lines_blamed.len(), 3); // Should have 3 lines total (2 from first range + 1 from second range)
@@ -536,19 +520,15 @@ mod rename_tracking {
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
         let source_file_name = "after-rename.txt";
-        let lines_blamed = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.into(),
-            gix_blame::Options::default()
-                .with_diff_algorithm(gix_diff::blob::Algorithm::Histogram)
-                .with_range(BlameRanges::default())
-                .with_since(None)
-                .with_rewrites(Some(gix_diff::Rewrites::default()))
-                .with_debug_track_path(false),
-        )?
+        let lines_blamed = gix_blame::file(&odb, suspect, None, &mut resource_cache, source_file_name.into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?
         .entries;
 
         assert_eq!(lines_blamed.len(), 3);
@@ -572,7 +552,7 @@ mod ignore_revisions {
 
     use gix_blame::BlameRanges;
     use gix_hash::ObjectId;
-    
+
     use crate::Fixture;
 
     #[test]
@@ -580,7 +560,7 @@ mod ignore_revisions {
         // This test validates that ignoring a formatting commit (B) between
         // commits A and C correctly re-attributes lines to A where appropriate
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
@@ -588,15 +568,16 @@ mod ignore_revisions {
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
         // First, get the baseline without ignoring any commits
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default(),
-        )?;
-        
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         // Find a commit to ignore (the second most recent commit that made changes)
         let mut commit_ids: Vec<ObjectId> = baseline_outcome
             .entries
@@ -606,14 +587,14 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         commit_ids.sort();
-        
+
         if commit_ids.len() < 2 {
             // If we don't have enough commits for this test, skip it
             return Ok(());
         }
-        
+
         let commit_to_ignore = commit_ids[1]; // Ignore the second commit
-        
+
         // Now run blame with the ignored commit
         let ignored_outcome = gix_blame::file(
             &odb,
@@ -621,25 +602,31 @@ mod ignore_revisions {
             None,
             &mut resource_cache,
             "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_ignored_revisions([commit_to_ignore]),
+            {
+                let mut opts = gix_blame::Options::default();
+                opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                opts.range = BlameRanges::default();
+                opts.since = None;
+                opts.rewrites = Some(gix_diff::Rewrites::default());
+                opts.debug_track_path = false;
+                opts
+            }
+            .with_ignored_revisions([commit_to_ignore]),
         )?;
-        
+
         // Validate that the ignored commit doesn't appear in the results
         for entry in &ignored_outcome.entries {
-            assert_ne!(entry.commit_id, commit_to_ignore, 
-                "Ignored commit {commit_to_ignore} should not appear in blame results");
+            assert_ne!(
+                entry.commit_id, commit_to_ignore,
+                "Ignored commit {commit_to_ignore} should not appear in blame results"
+            );
         }
-        
+
         // The total number of lines should remain the same
-        let baseline_lines: usize = baseline_outcome.entries.iter()
-            .map(|e| e.len.get() as usize)
-            .sum();
-        let ignored_lines: usize = ignored_outcome.entries.iter()
-            .map(|e| e.len.get() as usize)
-            .sum();
+        let baseline_lines: usize = baseline_outcome.entries.iter().map(|e| e.len.get() as usize).sum();
+        let ignored_lines: usize = ignored_outcome.entries.iter().map(|e| e.len.get() as usize).sum();
         assert_eq!(baseline_lines, ignored_lines);
-        
+
         Ok(())
     }
 
@@ -647,7 +634,7 @@ mod ignore_revisions {
     fn consecutive_ignored_commits_transparent_walk() -> gix_testtools::Result {
         // This test validates transparent traversal through multiple consecutive ignored commits
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
@@ -655,15 +642,16 @@ mod ignore_revisions {
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
         // Get baseline blame
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default(),
-        )?;
-        
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         // Collect all unique commit IDs
         let mut all_commits: Vec<ObjectId> = baseline_outcome
             .entries
@@ -673,63 +661,75 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         all_commits.sort(); // Sort for predictable ordering
-        
+
         if all_commits.len() < 3 {
             // Skip test if not enough commits
             return Ok(());
         }
-        
+
         // Ignore all but the first and last commits (creating a chain of ignored commits)
-        let commits_to_ignore: Vec<ObjectId> = all_commits.iter()
+        let commits_to_ignore: Vec<ObjectId> = all_commits
+            .iter()
             .skip(1)
             .take(all_commits.len().saturating_sub(2))
             .copied()
             .collect();
-            
+
         if commits_to_ignore.is_empty() {
             return Ok(());
         }
-        
+
         let ignored_outcome = gix_blame::file(
             &odb,
             suspect,
             None,
             &mut resource_cache,
             "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_ignored_revisions(commits_to_ignore.iter().copied()),
+            {
+                let mut opts = gix_blame::Options::default();
+                opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                opts.range = BlameRanges::default();
+                opts.since = None;
+                opts.rewrites = Some(gix_diff::Rewrites::default());
+                opts.debug_track_path = false;
+                opts
+            }
+            .with_ignored_revisions(commits_to_ignore.iter().copied()),
         )?;
-        
+
         // Validate that none of the ignored commits appear in results
         for entry in &ignored_outcome.entries {
-            assert!(!commits_to_ignore.contains(&entry.commit_id),
+            assert!(
+                !commits_to_ignore.contains(&entry.commit_id),
                 "Ignored commit {} should not appear in blame results",
-                entry.commit_id);
+                entry.commit_id
+            );
         }
-        
+
         Ok(())
     }
 
-    #[test] 
+    #[test]
     fn line_introduced_in_ignored_commit() -> gix_testtools::Result {
         // Test that lines introduced in ignored commits are attributed to nearest valid parent
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
             suspect,
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default(),
-        )?;
-        
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         // Find all unique commits in the blame results
         let mut all_commits: Vec<_> = baseline_outcome
             .entries
@@ -739,36 +739,48 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         all_commits.sort();
-        
+
         if all_commits.len() < 2 {
             // Skip test if not enough commits for this test
             return Ok(());
         }
-        
+
         // Choose the second commit (not the first, as it might be a root commit)
         // This gives us a better chance of having a commit with parents
         let commit_to_ignore = all_commits[1];
-        
-        
+
         let ignored_outcome = gix_blame::file(
             &odb,
             suspect,
             None,
             &mut resource_cache,
             "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_ignored_revisions([commit_to_ignore]),
+            {
+                let mut opts = gix_blame::Options::default();
+                opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                opts.range = BlameRanges::default();
+                opts.since = None;
+                opts.rewrites = Some(gix_diff::Rewrites::default());
+                opts.debug_track_path = false;
+                opts
+            }
+            .with_ignored_revisions([commit_to_ignore]),
         )?;
-        
+
         // Should still have blame entries (attributed to parents)
-        assert!(!ignored_outcome.entries.is_empty(), "Should have blame entries even with ignored commits");
-        
+        assert!(
+            !ignored_outcome.entries.is_empty(),
+            "Should have blame entries even with ignored commits"
+        );
+
         // Ignored commit should not appear in results
         for entry in &ignored_outcome.entries {
-            assert_ne!(entry.commit_id, commit_to_ignore,
-                "Ignored commit should not appear in results");
+            assert_ne!(
+                entry.commit_id, commit_to_ignore,
+                "Ignored commit should not appear in results"
+            );
         }
-        
+
         Ok(())
     }
 
@@ -776,7 +788,7 @@ mod ignore_revisions {
     fn merge_scenarios_with_ignored_parents() -> gix_testtools::Result {
         // Test merge commit handling when one or both parents are ignored
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
@@ -784,15 +796,16 @@ mod ignore_revisions {
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
         // Get all commits involved in blame
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default(),
-        )?;
-        
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         let mut all_commits: Vec<ObjectId> = baseline_outcome
             .entries
             .iter()
@@ -801,7 +814,7 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         all_commits.sort();
-            
+
         // Test with each commit ignored individually (skip first commit to avoid root commit)
         for &commit_to_ignore in &all_commits[1..] {
             let ignored_outcome = gix_blame::file(
@@ -810,21 +823,33 @@ mod ignore_revisions {
                 None,
                 &mut resource_cache,
                 "simple.txt".into(),
-                gix_blame::Options::default()
-                    .with_ignored_revisions([commit_to_ignore]),
+                {
+                    let mut opts = gix_blame::Options::default();
+                    opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                    opts.range = BlameRanges::default();
+                    opts.since = None;
+                    opts.rewrites = Some(gix_diff::Rewrites::default());
+                    opts.debug_track_path = false;
+                    opts
+                }
+                .with_ignored_revisions([commit_to_ignore]),
             )?;
-            
+
             // Should maintain structural integrity
-            assert!(!ignored_outcome.entries.is_empty(), 
-                "Should maintain blame structure when ignoring {commit_to_ignore}");
-            
+            assert!(
+                !ignored_outcome.entries.is_empty(),
+                "Should maintain blame structure when ignoring {commit_to_ignore}"
+            );
+
             // Ignored commit should not appear
             for entry in &ignored_outcome.entries {
-                assert_ne!(entry.commit_id, commit_to_ignore,
-                    "Ignored commit {commit_to_ignore} should not appear");
+                assert_ne!(
+                    entry.commit_id, commit_to_ignore,
+                    "Ignored commit {commit_to_ignore} should not appear"
+                );
             }
         }
-        
+
         Ok(())
     }
 
@@ -832,7 +857,7 @@ mod ignore_revisions {
     fn feature_interaction_with_range() -> gix_testtools::Result {
         // Test that ignore revisions work correctly with range blame
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
@@ -840,45 +865,48 @@ mod ignore_revisions {
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
         // First check the full file to see how many lines it has
-        let full_blame = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default(),
-        )?;
-        
+        let full_blame = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         if full_blame.entries.is_empty() {
             return Ok(());
         }
-        
+
         // Calculate total lines in the file
-        let total_lines = full_blame.entries.iter()
+        let total_lines = full_blame
+            .entries
+            .iter()
             .map(|e| e.start_in_blamed_file + e.len.get())
             .max()
             .unwrap_or(1);
-        
+
         // Use a smaller, valid range (at most 3 lines or half the file, whichever is smaller)
         let range_end = std::cmp::min(3, total_lines);
         if range_end < 1 {
             return Ok(());
         }
-        
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_range(BlameRanges::from_range(1..=range_end)),
-        )?;
-        
+
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::from_range(1..=range_end);
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         if baseline_outcome.entries.is_empty() {
             return Ok(());
         }
-        
+
         // Find all unique commits and choose non-root commit to ignore
         let mut all_commits: Vec<_> = baseline_outcome
             .entries
@@ -888,30 +916,37 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         all_commits.sort();
-        
+
         if all_commits.len() < 2 {
             return Ok(());
         }
-        
+
         let commit_to_ignore = all_commits[1];
-        
+
         let ignored_outcome = gix_blame::file(
             &odb,
             suspect,
             None,
             &mut resource_cache,
             "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_range(BlameRanges::from_range(1..=range_end))
-                .with_ignored_revisions([commit_to_ignore]),
+            {
+                let mut opts = gix_blame::Options::default();
+                opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                opts.range = BlameRanges::from_range(1..=range_end);
+                opts.since = None;
+                opts.rewrites = Some(gix_diff::Rewrites::default());
+                opts.debug_track_path = false;
+                opts
+            }
+            .with_ignored_revisions([commit_to_ignore]),
         )?;
-        
+
         // Range functionality should still work
         for entry in &ignored_outcome.entries {
             assert!(entry.start_in_blamed_file < range_end, "Should respect range limits");
             assert_ne!(entry.commit_id, commit_to_ignore, "Should ignore specified commit");
         }
-        
+
         Ok(())
     }
 
@@ -919,27 +954,27 @@ mod ignore_revisions {
     fn feature_interaction_with_rewrites() -> gix_testtools::Result {
         // Test that ignore revisions work with rename tracking
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
             suspect,
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
-        let baseline_outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_rewrites(Some(gix_diff::Rewrites::default())),
-        )?;
-        
+        let baseline_outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), {
+            let mut opts = gix_blame::Options::default();
+            opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+            opts.range = BlameRanges::default();
+            opts.since = None;
+            opts.rewrites = Some(gix_diff::Rewrites::default());
+            opts.debug_track_path = false;
+            opts
+        })?;
+
         if baseline_outcome.entries.is_empty() {
             return Ok(());
         }
-        
+
         // Find all unique commits and choose non-root commit to ignore
         let mut all_commits: Vec<_> = baseline_outcome
             .entries
@@ -949,32 +984,39 @@ mod ignore_revisions {
             .into_iter()
             .collect();
         all_commits.sort();
-        
+
         if all_commits.len() < 2 {
             return Ok(());
         }
-        
+
         let commit_to_ignore = all_commits[1];
-        
+
         let ignored_outcome = gix_blame::file(
             &odb,
             suspect,
             None,
             &mut resource_cache,
             "simple.txt".into(),
-            gix_blame::Options::default()
-                .with_rewrites(Some(gix_diff::Rewrites::default()))
-                .with_ignored_revisions([commit_to_ignore]),
+            {
+                let mut opts = gix_blame::Options::default();
+                opts.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+                opts.range = BlameRanges::default();
+                opts.since = None;
+                opts.rewrites = Some(gix_diff::Rewrites::default());
+                opts.debug_track_path = false;
+                opts
+            }
+            .with_ignored_revisions([commit_to_ignore]),
         )?;
-        
+
         // Rename tracking should still work
         assert!(!ignored_outcome.entries.is_empty(), "Should maintain rename tracking");
-        
+
         // Ignored commit should not appear
         for entry in &ignored_outcome.entries {
             assert_ne!(entry.commit_id, commit_to_ignore, "Should ignore specified commit");
         }
-        
+
         Ok(())
     }
 
@@ -982,17 +1024,27 @@ mod ignore_revisions {
     fn zero_cost_abstraction_when_none() -> gix_testtools::Result {
         // Test that performance is not impacted when ignored_revs is None
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
             suspect,
         } = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
 
-        let options_with_none = gix_blame::Options::default();
-        
-        let options_default = gix_blame::Options::default();
-        
+        let mut options_with_none = gix_blame::Options::default();
+        options_with_none.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+        options_with_none.range = BlameRanges::default();
+        options_with_none.since = None;
+        options_with_none.rewrites = Some(gix_diff::Rewrites::default());
+        options_with_none.debug_track_path = false;
+
+        let mut options_default = gix_blame::Options::default();
+        options_default.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+        options_default.range = BlameRanges::default();
+        options_default.since = None;
+        options_default.rewrites = Some(gix_diff::Rewrites::default());
+        options_default.debug_track_path = false;
+
         // Both should produce identical results
         let outcome_none = gix_blame::file(
             &odb,
@@ -1002,7 +1054,7 @@ mod ignore_revisions {
             "simple.txt".into(),
             options_with_none,
         )?;
-        
+
         let outcome_default = gix_blame::file(
             &odb,
             suspect,
@@ -1011,10 +1063,12 @@ mod ignore_revisions {
             "simple.txt".into(),
             options_default,
         )?;
-        
-        assert_eq!(outcome_none.entries, outcome_default.entries,
-            "None and default should produce identical results");
-            
+
+        assert_eq!(
+            outcome_none.entries, outcome_default.entries,
+            "None and default should produce identical results"
+        );
+
         Ok(())
     }
 
@@ -1022,7 +1076,7 @@ mod ignore_revisions {
     fn large_ignore_set_performance() -> gix_testtools::Result {
         // Test that large ignore sets don't cause significant performance degradation
         let worktree_path = fixture_path()?;
-        
+
         let Fixture {
             odb,
             mut resource_cache,
@@ -1039,21 +1093,19 @@ mod ignore_revisions {
             })
             .collect();
 
-        let options = gix_blame::Options::default()
-            .with_ignored_revisions(large_ignore_set);
-            
-        let outcome = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            "simple.txt".into(),
-            options,
-        )?;
-        
+        let mut options = gix_blame::Options::default();
+        options.diff_algorithm = gix_diff::blob::Algorithm::Histogram;
+        options.range = BlameRanges::default();
+        options.since = None;
+        options.rewrites = Some(gix_diff::Rewrites::default());
+        options.debug_track_path = false;
+        let options = options.with_ignored_revisions(large_ignore_set);
+
+        let outcome = gix_blame::file(&odb, suspect, None, &mut resource_cache, "simple.txt".into(), options)?;
+
         // Should still work correctly with large ignore set
         assert!(!outcome.entries.is_empty(), "Should handle large ignore sets");
-        
+
         Ok(())
     }
 

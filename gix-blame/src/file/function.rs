@@ -12,7 +12,6 @@ use smallvec::SmallVec;
 use super::{process_changes, Change, UnblamedHunk};
 use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statistics};
 
-
 /// Find the effective commit by walking back through ignored commits.
 /// Returns the first commit in the ancestry that is not ignored, or None if no such commit exists.
 fn find_effective_commit(
@@ -25,7 +24,7 @@ fn find_effective_commit(
     let Some(ignored_set) = ignored_revs else {
         return Ok(Some(commit_id));
     };
-    
+
     if !ignored_set.contains(&commit_id) {
         return Ok(Some(commit_id));
     }
@@ -34,34 +33,34 @@ fn find_effective_commit(
     let mut visited = std::collections::HashSet::new();
     let mut local_buf = Vec::new();
     let mut last_commit = commit_id; // Keep track of the last commit for fallback
-    
+
     loop {
         if !ignored_set.contains(&current) {
             return Ok(Some(current));
         }
-        
+
         // Prevent infinite loops
         if !visited.insert(current) {
             break;
         }
-        
+
         last_commit = current; // Track the current commit
-        
+
         let commit = find_commit(cache, odb, &current, buf)?;
         let parent_ids: ParentIds = collect_parents(commit, odb, cache, &mut local_buf)?;
-        
+
         if parent_ids.is_empty() {
             // Root commit - can't go further back
             // For ignored root commits, we have no choice but to attribute to the root itself
-            return Ok(Some(current)); 
+            return Ok(Some(current));
         }
-        
+
         // For simplicity, follow the first parent
         // In a more complete implementation, we might need to handle multiple parents differently
         current = parent_ids[0].0;
     }
-    
-    // If we've walked back to the root and everything is ignored, 
+
+    // If we've walked back to the root and everything is ignored,
     // return the root commit to ensure all hunks get attributed
     Ok(Some(last_commit))
 }
@@ -181,14 +180,12 @@ pub fn file(
             break;
         }
 
-
         let first_hunk_for_suspect = hunks_to_blame.iter().find(|hunk| hunk.has_suspect(&suspect));
         let Some(first_hunk_for_suspect) = first_hunk_for_suspect else {
             // There are no `UnblamedHunk`s associated with this `suspect`, so we can continue with
             // the next one.
             continue 'outer;
         };
-
 
         let current_file_path = first_hunk_for_suspect
             .source_file_name
@@ -200,7 +197,15 @@ pub fn file(
 
         if let Some(since) = options.since {
             if commit_time < since.seconds {
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
+                if unblamed_to_out_is_done(
+                    &mut hunks_to_blame,
+                    &mut out,
+                    suspect,
+                    options.ignored_revs.as_ref(),
+                    &odb,
+                    cache.as_ref(),
+                    &mut buf,
+                ) {
                     break 'outer;
                 }
 
@@ -217,7 +222,15 @@ pub fn file(
                 // the remaining lines to it, even though we don’t explicitly check whether that is
                 // true here. We could perhaps use diff-tree-to-tree to compare `suspect` against
                 // an empty tree to validate this assumption.
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
+                if unblamed_to_out_is_done(
+                    &mut hunks_to_blame,
+                    &mut out,
+                    suspect,
+                    options.ignored_revs.as_ref(),
+                    &odb,
+                    cache.as_ref(),
+                    &mut buf,
+                ) {
                     if let Some(ref mut blame_path) = blame_path {
                         let entry = previous_entry
                             .take()
@@ -355,7 +368,15 @@ pub fn file(
                         // Do nothing under the assumption that this always (or almost always)
                         // implies that the file comes from a different parent, compared to which
                         // it was modified, not added.
-                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
+                    } else if unblamed_to_out_is_done(
+                        &mut hunks_to_blame,
+                        &mut out,
+                        suspect,
+                        options.ignored_revs.as_ref(),
+                        &odb,
+                        cache.as_ref(),
+                        &mut buf,
+                    ) {
                         if let Some(ref mut blame_path) = blame_path {
                             let blame_path_entry = BlamePathEntry {
                                 source_file_path: current_file_path.clone(),
@@ -449,7 +470,9 @@ pub fn file(
         hunks_to_blame.retain_mut(|unblamed_hunk| {
             if unblamed_hunk.suspects.len() == 1 {
                 // Find the effective commit (walk back through ignored commits)
-                if let Ok(Some(effective_commit)) = find_effective_commit(suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf2) {
+                if let Ok(Some(effective_commit)) =
+                    find_effective_commit(suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf2)
+                {
                     if let Some(mut entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect) {
                         // Replace the ignored commit with the effective commit
                         entry.commit_id = effective_commit;
@@ -477,7 +500,7 @@ pub fn file(
     // I don't know yet whether it would make sense to use a data structure instead that preserves
     // order on insertion.
     out.sort_by(|a, b| a.start_in_blamed_file.cmp(&b.start_in_blamed_file));
-    
+
     Ok(Outcome {
         entries: coalesce_blame_entries(out),
         blob: blamed_file_blob,
