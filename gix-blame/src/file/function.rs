@@ -12,6 +12,60 @@ use smallvec::SmallVec;
 use super::{process_changes, Change, UnblamedHunk};
 use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statistics};
 
+
+/// Find the effective commit by walking back through ignored commits.
+/// Returns the first commit in the ancestry that is not ignored, or None if no such commit exists.
+fn find_effective_commit(
+    commit_id: gix_hash::ObjectId,
+    ignored_revs: Option<&std::collections::HashSet<gix_hash::ObjectId>>,
+    odb: &impl gix_object::Find,
+    cache: Option<&gix_commitgraph::Graph>,
+    buf: &mut Vec<u8>,
+) -> Result<Option<gix_hash::ObjectId>, Error> {
+    let Some(ignored_set) = ignored_revs else {
+        return Ok(Some(commit_id));
+    };
+    
+    if !ignored_set.contains(&commit_id) {
+        return Ok(Some(commit_id));
+    }
+
+    let mut current = commit_id;
+    let mut visited = std::collections::HashSet::new();
+    let mut local_buf = Vec::new();
+    let mut last_commit = commit_id; // Keep track of the last commit for fallback
+    
+    loop {
+        if !ignored_set.contains(&current) {
+            return Ok(Some(current));
+        }
+        
+        // Prevent infinite loops
+        if !visited.insert(current) {
+            break;
+        }
+        
+        last_commit = current; // Track the current commit
+        
+        let commit = find_commit(cache, odb, &current, buf)?;
+        let parent_ids: ParentIds = collect_parents(commit, odb, cache, &mut local_buf)?;
+        
+        if parent_ids.is_empty() {
+            // Root commit - can't go further back
+            // For ignored root commits, we have no choice but to attribute to the root itself
+            return Ok(Some(current)); 
+        }
+        
+        // For simplicity, follow the first parent
+        // In a more complete implementation, we might need to handle multiple parents differently
+        current = parent_ids[0].0;
+    }
+    
+    // If we've walked back to the root and everything is ignored, 
+    // return the root commit to ensure all hunks get attributed
+    Ok(Some(last_commit))
+}
+
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
 ///
@@ -127,12 +181,14 @@ pub fn file(
             break;
         }
 
+
         let first_hunk_for_suspect = hunks_to_blame.iter().find(|hunk| hunk.has_suspect(&suspect));
         let Some(first_hunk_for_suspect) = first_hunk_for_suspect else {
             // There are no `UnblamedHunk`s associated with this `suspect`, so we can continue with
             // the next one.
             continue 'outer;
         };
+
 
         let current_file_path = first_hunk_for_suspect
             .source_file_name
@@ -144,7 +200,7 @@ pub fn file(
 
         if let Some(since) = options.since {
             if commit_time < since.seconds {
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
                     break 'outer;
                 }
 
@@ -161,7 +217,7 @@ pub fn file(
                 // the remaining lines to it, even though we don’t explicitly check whether that is
                 // true here. We could perhaps use diff-tree-to-tree to compare `suspect` against
                 // an empty tree to validate this assumption.
-                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
                     if let Some(ref mut blame_path) = blame_path {
                         let entry = previous_entry
                             .take()
@@ -299,7 +355,7 @@ pub fn file(
                         // Do nothing under the assumption that this always (or almost always)
                         // implies that the file comes from a different parent, compared to which
                         // it was modified, not added.
-                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect) {
+                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf) {
                         if let Some(ref mut blame_path) = blame_path {
                             let blame_path_entry = BlamePathEntry {
                                 source_file_path: current_file_path.clone(),
@@ -392,14 +448,20 @@ pub fn file(
 
         hunks_to_blame.retain_mut(|unblamed_hunk| {
             if unblamed_hunk.suspects.len() == 1 {
-                if let Some(entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect) {
-                    // At this point, we have copied blame for every hunk to a parent. Hunks
-                    // that have only `suspect` left in `suspects` have not passed blame to any
-                    // parent, and so they can be converted to a `BlameEntry` and moved to
-                    // `out`.
-                    out.push(entry);
-                    return false;
+                // Find the effective commit (walk back through ignored commits)
+                if let Ok(Some(effective_commit)) = find_effective_commit(suspect, options.ignored_revs.as_ref(), &odb, cache.as_ref(), &mut buf2) {
+                    if let Some(mut entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect) {
+                        // Replace the ignored commit with the effective commit
+                        entry.commit_id = effective_commit;
+                        // At this point, we have copied blame for every hunk to a parent. Hunks
+                        // that have only `suspect` left in `suspects` have not passed blame to any
+                        // parent, and so they can be converted to a `BlameEntry` and moved to
+                        // `out`.
+                        out.push(entry);
+                        return false;
+                    }
                 }
+                // If we couldn't find an effective commit, don't create a blame entry
             }
             unblamed_hunk.remove_blame(suspect);
             true
@@ -412,9 +474,10 @@ pub fn file(
         "only if there is no portion of the file left we have completed the blame"
     );
 
-    // I don’t know yet whether it would make sense to use a data structure instead that preserves
+    // I don't know yet whether it would make sense to use a data structure instead that preserves
     // order on insertion.
     out.sort_by(|a, b| a.start_in_blamed_file.cmp(&b.start_in_blamed_file));
+    
     Ok(Outcome {
         entries: coalesce_blame_entries(out),
         blob: blamed_file_blob,
@@ -439,13 +502,27 @@ fn unblamed_to_out_is_done(
     hunks_to_blame: &mut Vec<UnblamedHunk>,
     out: &mut Vec<BlameEntry>,
     suspect: ObjectId,
+    ignored_revs: Option<&std::collections::HashSet<gix_hash::ObjectId>>,
+    odb: &impl gix_object::Find,
+    cache: Option<&gix_commitgraph::Graph>,
+    buf: &mut Vec<u8>,
 ) -> bool {
     let mut without_suspect = Vec::new();
     out.extend(hunks_to_blame.drain(..).filter_map(|hunk| {
-        BlameEntry::from_unblamed_hunk(&hunk, suspect).or_else(|| {
+        if let Some(mut entry) = BlameEntry::from_unblamed_hunk(&hunk, suspect) {
+            // Find the effective commit (walk back through ignored commits)
+            if let Ok(Some(effective_commit)) = find_effective_commit(suspect, ignored_revs, odb, cache, buf) {
+                entry.commit_id = effective_commit;
+                Some(entry)
+            } else {
+                // If we couldn't find an effective commit, don't create a blame entry
+                without_suspect.push(hunk);
+                None
+            }
+        } else {
             without_suspect.push(hunk);
             None
-        })
+        }
     }));
     *hunks_to_blame = without_suspect;
     hunks_to_blame.is_empty()

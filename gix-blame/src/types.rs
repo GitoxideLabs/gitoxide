@@ -139,7 +139,7 @@ impl BlameRanges {
 }
 
 /// Options to be passed to [`file()`](crate::file()).
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Options {
     /// The algorithm to use for diffing.
     pub diff_algorithm: gix_diff::blob::Algorithm,
@@ -152,6 +152,54 @@ pub struct Options {
     /// Collect debug information whenever there's a diff or rename that affects the outcome of a
     /// blame.
     pub debug_track_path: bool,
+    /// A set of commit IDs to ignore during blame attribution.
+    /// When a commit in this set is encountered, blame is passed transparently to its parents.
+    pub(crate) ignored_revs: Option<std::collections::HashSet<gix_hash::ObjectId>>,
+}
+
+
+impl Options {
+    /// Configure this instance to ignore the given revisions during blame attribution.
+    /// 
+    /// When a commit in the provided set is encountered during traversal, blame is passed
+    /// transparently to its parents without attributing any lines to the ignored commit.
+    pub fn with_ignored_revisions<I: IntoIterator<Item = gix_hash::ObjectId>>(
+        mut self,
+        iter: I,
+    ) -> Self {
+        self.ignored_revs = Some(iter.into_iter().collect());
+        self
+    }
+
+    /// Set the diff algorithm to use for comparing file versions.
+    pub fn with_diff_algorithm(mut self, algorithm: gix_diff::blob::Algorithm) -> Self {
+        self.diff_algorithm = algorithm;
+        self
+    }
+
+    /// Set the ranges to blame in the file.
+    pub fn with_range(mut self, range: BlameRanges) -> Self {
+        self.range = range;
+        self
+    }
+
+    /// Set a date filter to ignore commits before the given date.
+    pub fn with_since(mut self, since: Option<gix_date::Time>) -> Self {
+        self.since = since;
+        self
+    }
+
+    /// Configure rename/rewrite tracking behavior.
+    pub fn with_rewrites(mut self, rewrites: Option<gix_diff::Rewrites>) -> Self {
+        self.rewrites = rewrites;
+        self
+    }
+
+    /// Enable or disable debug path tracking.
+    pub fn with_debug_track_path(mut self, debug: bool) -> Self {
+        self.debug_track_path = debug;
+        self
+    }
 }
 
 /// Represents a change during history traversal for blame. It is supposed to capture enough
