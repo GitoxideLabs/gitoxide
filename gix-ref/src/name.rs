@@ -221,7 +221,7 @@ impl<'a> convert::TryFrom<&'a str> for PartialName {
     }
 }
 
-#[allow(clippy::infallible_try_from)]
+#[allow(clippy::fallible_impl_from)]
 impl<'a> convert::TryFrom<&'a FullName> for &'a PartialNameRef {
     type Error = Infallible;
 
