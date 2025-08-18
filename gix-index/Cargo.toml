@@ -11,6 +11,7 @@ edition = "2021"
 include = ["src/**/*", "LICENSE-*", "README.md"]
 rust-version = "1.70"
 autotests = false
+readme = "README.md"
 
 
 [lib]
