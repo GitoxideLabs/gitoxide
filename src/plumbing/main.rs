@@ -90,8 +90,8 @@ fn parse_ignore_revisions(
             .with_context(|| "Failed to find object")?
             .peel_to_kind(gix::object::Kind::Commit)
             .with_context(|| match context {
-                Some((path, line)) => format!("Revision '{}' at line {} in file '{}' is not a commit (hint: use a commit SHA or tag that points to a commit)", rev_str, line, path.display()),
-                None => format!("Revision '{}' is not a commit (hint: use a commit SHA or tag that points to a commit)", rev_str),
+                Some((path, line)) => format!("Revision '{rev_str}' at line {line} in file '{}' is not a commit (hint: use a commit SHA or tag that points to a commit)", path.display()),
+                None => format!("Revision '{rev_str}' is not a commit (hint: use a commit SHA or tag that points to a commit)"),
             })?;
 
         Ok(peeled.id)
