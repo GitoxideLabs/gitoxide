@@ -484,7 +484,12 @@ pub fn file(
                         return false;
                     }
                 }
-                // If we couldn't find an effective commit, don't create a blame entry
+                // All reachable ancestors for these lines are in the ignored set.
+                // Intentionally omit a blame entry to keep attribution deterministic at this layer,
+                // instead of attributing to an ignored commit.
+                // Covered by tests: ignore_revisions::consecutive_ignored_commits_transparent_walk
+                // and ignore_revisions::merge_scenarios_with_ignored_parents.
+                // A future change may switch to 'attribute-to-nearest-ignored' to mirror `git blame --ignore-rev`.
             }
             unblamed_hunk.remove_blame(suspect);
             true
@@ -538,7 +543,12 @@ fn unblamed_to_out_is_done(
                 entry.commit_id = effective_commit;
                 Some(entry)
             } else {
-                // If we couldn't find an effective commit, don't create a blame entry
+                // All reachable ancestors for these lines are in the ignored set.
+                // Intentionally omit a blame entry to keep attribution deterministic at this layer,
+                // instead of attributing to an ignored commit.
+                // Covered by tests: ignore_revisions::consecutive_ignored_commits_transparent_walk
+                // and ignore_revisions::merge_scenarios_with_ignored_parents.
+                // A future change may switch to 'attribute-to-nearest-ignored' to mirror `git blame --ignore-rev`.
                 without_suspect.push(hunk);
                 None
             }
