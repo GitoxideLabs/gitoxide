@@ -1,5 +1,5 @@
 use gix_diff::blob::{
-    unified_diff::{ConsumeHunk, ContextSize, NewlineSeparator},
+    unified_diff::{ConsumeHunk, ContextSize, DiffLineType, HunkHeader, NewlineSeparator},
     Algorithm, UnifiedDiff,
 };
 
@@ -399,6 +399,37 @@ fn removed_modified_added_with_newlines_in_tokens() -> crate::Result {
         ]
     );
 
+    let actual = gix_diff::blob::diff(
+        Algorithm::Myers,
+        &interner,
+        UnifiedDiff::new(
+            &interner,
+            DiffLineTypeRecorder::default(),
+            NewlineSeparator::AfterHeaderAndWhenNeeded("\r\n"),
+            ContextSize::symmetrical(1),
+        ),
+    )?;
+
+    assert_eq!(
+        actual,
+        &[
+            vec![DiffLineType::Remove, DiffLineType::Context],
+            vec![
+                DiffLineType::Context,
+                DiffLineType::Remove,
+                DiffLineType::Add,
+                DiffLineType::Context
+            ],
+            vec![
+                DiffLineType::Context,
+                DiffLineType::Remove,
+                DiffLineType::Add,
+                DiffLineType::Add,
+                DiffLineType::Add
+            ]
+        ]
+    );
+
     Ok(())
 }
 
@@ -488,18 +519,43 @@ impl ConsumeHunk for Recorder {
 
     fn consume_hunk(
         &mut self,
-        before_hunk_start: u32,
-        before_hunk_len: u32,
-        after_hunk_start: u32,
-        after_hunk_len: u32,
-        header: &str,
-        _hunk: &[u8],
+        header: HunkHeader,
+        _hunk: &[(DiffLineType, &[u8])],
+        newline: NewlineSeparator<'_>,
     ) -> std::io::Result<()> {
+        let mut formatted_header = header.to_string();
+        formatted_header.push_str(match newline {
+            NewlineSeparator::AfterHeaderAndLine(nl) | NewlineSeparator::AfterHeaderAndWhenNeeded(nl) => nl,
+        });
+
         self.hunks.push((
-            (before_hunk_start, before_hunk_len),
-            (after_hunk_start, after_hunk_len),
-            header.to_string(),
+            (header.before_hunk_start, header.before_hunk_len),
+            (header.after_hunk_start, header.after_hunk_len),
+            formatted_header,
         ));
+        Ok(())
+    }
+
+    fn finish(self) -> Self::Out {
+        self.hunks
+    }
+}
+
+#[derive(Default)]
+struct DiffLineTypeRecorder {
+    hunks: Vec<Vec<DiffLineType>>,
+}
+
+impl ConsumeHunk for DiffLineTypeRecorder {
+    type Out = Vec<Vec<DiffLineType>>;
+
+    fn consume_hunk(
+        &mut self,
+        _header: HunkHeader,
+        hunk: &[(DiffLineType, &[u8])],
+        _newline: NewlineSeparator<'_>,
+    ) -> std::io::Result<()> {
+        self.hunks.push(hunk.iter().map(|(line_type, _)| *line_type).collect());
         Ok(())
     }
 
