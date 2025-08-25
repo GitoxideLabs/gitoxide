@@ -1603,12 +1603,14 @@ pub fn main() -> Result<()> {
                 core::repository::blame::blame_file(
                     repo,
                     &file,
-                    gix::blame::Options {
-                        diff_algorithm,
-                        range: gix::blame::BlameRanges::from_ranges(ranges),
-                        since,
-                        rewrites: Some(gix::diff::Rewrites::default()),
-                        debug_track_path: false,
+                    {
+                        let mut opts = gix::blame::Options::default();
+                        opts.diff_algorithm = diff_algorithm;
+                        opts.range = gix::blame::BlameRanges::from_ranges(ranges);
+                        opts.since = since;
+                        opts.rewrites = Some(gix::diff::Rewrites::default());
+                        opts.debug_track_path = false;
+                        opts
                     },
                     out,
                     statistics.then_some(err),
