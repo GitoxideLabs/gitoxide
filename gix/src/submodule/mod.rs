@@ -314,11 +314,7 @@ pub mod status {
         /// ordered from cheap to expensive shows that the submodule is dirty.
         /// Thus, submodules that are clean will still impose the complete set of computation, as given.
         #[doc(alias = "submodule_status", alias = "git2")]
-        pub fn status(
-            &self,
-            ignore: config::Ignore,
-            check_dirty: bool,
-        ) -> Result<crate::submodule::status::types::Status, Error> {
+        pub fn status(&self, ignore: config::Ignore, check_dirty: bool) -> Result<Status, Error> {
             self.status_opts(ignore, check_dirty, &mut |s| s)
         }
         /// Return the status of the submodule, just like [`status`](Self::status), but allows to adjust options
