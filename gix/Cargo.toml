@@ -24,7 +24,7 @@ required-features = ["blocking-network-client"]
 
 [features]
 
-default = ["max-performance-safe", "comfort", "basic", "extras"]
+default = ["max-performance-safe", "comfort", "basic", "extras", "gix-pack-object-cache-dynamic"]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -304,6 +304,18 @@ progress-tree = ["prodash/progress-tree"]
 ## Print debugging information about usage of object database caches, useful for tuning cache sizes.
 cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 
+## Control gix-pack caching behavior
+## Provide a fixed-size allocation-free LRU cache for packs. It's useful if caching is desired while keeping the memory footprint
+## for the LRU-cache itself low.
+gix-pack-pack-cache-lru-static = ["gix-pack/pack-cache-lru-static"]
+
+## Control gix-pack caching behavior
+## Provide a hash-map based LRU cache whose eviction is based a memory cap calculated from object data.
+gix-pack-pack-cache-lru-dynamic = ["gix-pack/pack-cache-lru-dynamic"]
+
+## Control gix-pack caching behavior
+## If set, select algorithms may additionally use a full-object cache which is queried before the pack itself.
+gix-pack-object-cache-dynamic = ["gix-pack/object-cache-dynamic"]
 
 [dependencies]
 gix-utils = { version = "^0.3.0", path = "../gix-utils" }
@@ -325,9 +337,7 @@ gix-hash = { version = "^0.19.0", path = "../gix-hash" }
 gix-shallow = { version = "^0.5.0", path = "../gix-shallow" }
 gix-object = { version = "^0.50.2", path = "../gix-object" }
 gix-actor = { version = "^0.35.4", path = "../gix-actor" }
-gix-pack = { version = "^0.60.0", path = "../gix-pack", default-features = false, features = [
-    "object-cache-dynamic",
-] }
+gix-pack = { version = "^0.60.0", path = "../gix-pack", default-features = false }
 gix-revision = { version = "^0.35.0", path = "../gix-revision", default-features = false }
 gix-revwalk = { version = "^0.21.0", path = "../gix-revwalk" }
 gix-negotiate = { version = "^0.21.0", path = "../gix-negotiate", optional = true }

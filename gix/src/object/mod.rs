@@ -6,6 +6,7 @@ pub use gix_object::Kind;
 use crate::{Blob, Commit, Id, Object, ObjectDetached, Tag, Tree};
 
 mod errors;
+#[cfg(feature = "object-cache-dynamic")]
 pub(crate) mod cache {
     pub use gix_pack::cache::object::MemoryCappedHashmap;
 }

@@ -12,9 +12,12 @@ impl crate::Repository {
         let bytes = bytes.into();
         match bytes {
             Some(0) => self.objects.unset_object_cache(),
-            Some(bytes) => self
-                .objects
-                .set_object_cache(move || Box::new(crate::object::cache::MemoryCappedHashmap::new(bytes))),
+            Some(bytes) => {
+                #[cfg(feature = "object-cache-dynamic")]
+                self
+                    .objects
+                    .set_object_cache(move || Box::new(crate::object::cache::MemoryCappedHashmap::new(bytes)));
+            },
             None => self.objects.unset_object_cache(),
         }
     }
