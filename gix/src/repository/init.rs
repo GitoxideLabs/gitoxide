@@ -56,6 +56,7 @@ pub(crate) fn setup_objects(objects: &mut crate::OdbHandle, config: &crate::conf
             objects.unset_object_cache();
         } else {
             let bytes = config.object_cache_bytes;
+            #[cfg(feature = "object-cache-dynamic")]
             objects.set_object_cache(move || Box::new(gix_pack::cache::object::MemoryCappedHashmap::new(bytes)));
         }
     }
