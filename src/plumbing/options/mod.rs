@@ -164,6 +164,10 @@ pub enum Subcommands {
     #[clap(subcommand)]
     Free(free::Subcommands),
     /// Blame lines in a file.
+    ///
+    /// Examples:
+    ///   gix blame --ignore-rev 94feb0c5 f.txt
+    ///   gix blame --ignore-revs-file .git-blame-ignore-revs src/lib.rs
     Blame {
         /// Print additional statistics to help understanding performance.
         #[clap(long, short = 's')]
@@ -176,6 +180,12 @@ pub enum Subcommands {
         /// Don't consider commits before the given date.
         #[clap(long,  value_parser=AsTime, value_name = "DATE")]
         since: Option<gix::date::Time>,
+        /// Ignore the specified revision during blame attribution. Can be specified multiple times.
+        #[clap(long, action=clap::ArgAction::Append)]
+        ignore_rev: Vec<String>,
+        /// Read ignore revisions from the specified file, one per line. Paths are resolved relative to the repository root. May be passed multiple times.
+        #[clap(long, action=clap::ArgAction::Append)]
+        ignore_revs_file: Vec<std::path::PathBuf>,
     },
     /// Generate shell completions to stdout or a directory.
     #[clap(visible_alias = "generate-completions", visible_alias = "shell-completions")]
