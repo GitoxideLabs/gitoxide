@@ -6,6 +6,7 @@ use gix::bstr::BString;
 
 #[cfg(feature = "archive")]
 pub mod archive;
+pub mod branch;
 pub mod cat;
 pub use cat::function::cat;
 pub mod blame;

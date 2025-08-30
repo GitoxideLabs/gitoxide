@@ -16,8 +16,8 @@ use gix::bstr::{io::BufReadExt, BString};
 use crate::{
     plumbing::{
         options::{
-            attributes, commit, commitgraph, config, credential, exclude, free, fsck, index, mailmap, merge, odb,
-            revision, tag, tree, Args, Subcommands,
+            attributes, branch, commit, commitgraph, config, credential, exclude, free, fsck, index, mailmap, merge,
+            odb, revision, tag, tree, Args, Subcommands,
         },
         show_progress,
     },
@@ -509,6 +509,30 @@ pub fn main() -> Result<()> {
                 )
             },
         ),
+        Subcommands::Branch(platform) => match platform.cmds {
+            Some(branch::Subcommands::List) | None => {
+                use core::repository::branch;
+
+                let kind = if platform.all {
+                    branch::Kind::All
+                } else {
+                    branch::Kind::Local
+                };
+                let options = branch::Options { kind };
+
+                prepare_and_run(
+                    "branch-list",
+                    trace,
+                    auto_verbose,
+                    progress,
+                    progress_keep_open,
+                    None,
+                    move |_progress, out, _err| {
+                        core::repository::branch::list(repository(Mode::Lenient)?, out, format, options)
+                    },
+                )
+            }
+        },
         #[cfg(feature = "gitoxide-core-tools-corpus")]
         Subcommands::Corpus(crate::plumbing::options::corpus::Platform { db, path, cmd }) => {
             let reverse_trace_lines = progress;

@@ -217,7 +217,7 @@ git commit -m {commit_id}
             // history’s root being the last element. We reverse the order in place so that all
             // methods can rely on the assumption that the root comes first, followed by its
             // descendants. That way, we can use a simple `for` loop to iterate through
-            // `self.blame_path` below.
+            // `self.blame_infos` below.
             self.blame_infos.reverse();
 
             for blame_path_entry in self.blame_infos.clone() {
