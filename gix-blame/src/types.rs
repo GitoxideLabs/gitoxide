@@ -139,7 +139,7 @@ impl BlameRanges {
 }
 
 /// Options to be passed to [`file()`](crate::file()).
-#[derive(Default, Debug, Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Options {
     /// The algorithm to use for diffing.
     pub diff_algorithm: gix_diff::blob::Algorithm,
@@ -152,6 +152,20 @@ pub struct Options {
     /// Collect debug information whenever there's a diff or rename that affects the outcome of a
     /// blame.
     pub debug_track_path: bool,
+    /// A set of commit IDs to ignore during blame attribution.
+    /// When a commit in this set is encountered, blame is passed transparently to its parents.
+    pub(crate) ignored_revs: Option<std::collections::HashSet<gix_hash::ObjectId>>,
+}
+
+impl Options {
+    /// Configure this instance to ignore the given revisions during blame attribution.
+    ///
+    /// When a commit in the provided set is encountered during traversal, blame is passed
+    /// transparently to its parents without attributing any lines to the ignored commit.
+    pub fn with_ignored_revisions<I: IntoIterator<Item = gix_hash::ObjectId>>(mut self, iter: I) -> Self {
+        self.ignored_revs = Some(iter.into_iter().collect());
+        self
+    }
 }
 
 /// Represents a change during history traversal for blame. It is supposed to capture enough
