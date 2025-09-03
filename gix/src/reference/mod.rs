@@ -99,6 +99,9 @@ impl<'repo> Reference<'repo> {
     ///
     /// Note that this ref will point to the first target object afterward, which may be a tag. This is different
     /// from [`peel_to_id_in_place()`](Self::peel_to_id_in_place()) where it will point to the first non-tag object.
+    ///
+    /// Note that `git2::Reference::peel` does not "peel in place", but returns a new object
+    /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>, peel::to_kind::Error> {
         let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
@@ -112,21 +115,45 @@ impl<'repo> Reference<'repo> {
     /// Peel this ref until the first commit.
     ///
     /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    #[deprecated = "Use `peel_to_commit_in_place()` instead"]
     pub fn peel_to_commit(&mut self) -> Result<Commit<'repo>, peel::to_kind::Error> {
+        Ok(self.peel_to_kind(gix_object::Kind::Commit)?.into_commit())
+    }
+
+    /// Peel this ref until the first commit. This method mutates `self` in place.
+    ///
+    /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    pub fn peel_to_commit_in_place(&mut self) -> Result<Commit<'repo>, peel::to_kind::Error> {
         Ok(self.peel_to_kind(gix_object::Kind::Commit)?.into_commit())
     }
 
     /// Peel this ref until the first annotated tag.
     ///
     /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    #[deprecated = "Use `peel_to_tag_in_place()` instead"]
     pub fn peel_to_tag(&mut self) -> Result<Tag<'repo>, peel::to_kind::Error> {
+        Ok(self.peel_to_kind(gix_object::Kind::Tag)?.into_tag())
+    }
+
+    /// Peel this ref until the first annotated tag. This method mutates `self` in place.
+    ///
+    /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    pub fn peel_to_tag_in_place(&mut self) -> Result<Tag<'repo>, peel::to_kind::Error> {
         Ok(self.peel_to_kind(gix_object::Kind::Tag)?.into_tag())
     }
 
     /// Peel this ref until the first tree.
     ///
     /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    #[deprecated = "Use `peel_to_tree_in_place()` instead"]
     pub fn peel_to_tree(&mut self) -> Result<Tree<'repo>, peel::to_kind::Error> {
+        Ok(self.peel_to_kind(gix_object::Kind::Tree)?.into_tree())
+    }
+
+    /// Peel this ref until the first tree. This method mutates `self` in place.
+    ///
+    /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    pub fn peel_to_tree_in_place(&mut self) -> Result<Tree<'repo>, peel::to_kind::Error> {
         Ok(self.peel_to_kind(gix_object::Kind::Tree)?.into_tree())
     }
 
@@ -134,7 +161,17 @@ impl<'repo> Reference<'repo> {
     /// as it would require an annotated tag to point to a blob, instead of a commit.
     ///
     /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    #[deprecated = "Use `peel_to_blob_in_place()` instead"]
     pub fn peel_to_blob(&mut self) -> Result<Blob<'repo>, peel::to_kind::Error> {
+        Ok(self.peel_to_kind(gix_object::Kind::Blob)?.into_blob())
+    }
+
+    /// Peel this ref until it points to a blob. Note that this is highly uncommon to happen
+    /// as it would require an annotated tag to point to a blob, instead of a commit. This method
+    /// mutates `self` in place.
+    ///
+    /// For details, see [`peel_to_kind`()](Self::peel_to_kind()).
+    pub fn peel_to_blob_in_place(&mut self) -> Result<Blob<'repo>, peel::to_kind::Error> {
         Ok(self.peel_to_kind(gix_object::Kind::Blob)?.into_blob())
     }
 
