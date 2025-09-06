@@ -19,6 +19,8 @@ pub enum Kind {
 
 #[cfg(any(feature = "attributes", feature = "excludes"))]
 pub mod attributes;
+#[cfg(feature = "blame")]
+mod blame;
 mod cache;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
@@ -60,6 +62,22 @@ mod state;
 mod submodule;
 mod thread_safe;
 mod worktree;
+
+///
+#[cfg(feature = "blame")]
+pub mod blame_file {
+    /// The error returned by [Repository::blame_file()](crate::Repository::blame_file()).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error(transparent)]
+        CommitGraphIfEnabled(#[from] super::commit_graph_if_enabled::Error),
+        #[error(transparent)]
+        DiffResourceCache(#[from] super::diff_resource_cache::Error),
+        #[error(transparent)]
+        Blame(#[from] gix_blame::Error),
+    }
+}
 
 ///
 #[cfg(feature = "blob-diff")]

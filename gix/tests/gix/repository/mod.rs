@@ -1,5 +1,7 @@
 use gix::Repository;
 
+#[cfg(feature = "blame")]
+mod blame;
 mod config;
 #[cfg(feature = "excludes")]
 mod excludes;

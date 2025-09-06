@@ -15,7 +15,7 @@ use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statisti
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
 ///
-/// ## Paramters
+/// ## Parameters
 ///
 /// * `odb`
 ///    - Access to database objects, also for used for diffing.
@@ -55,13 +55,13 @@ use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statisti
 ///
 /// The algorithm in `libgit2` works by going through parents and keeping a linked list of blame
 /// suspects. It can be visualized as follows:
-//
-// <---------------------------------------->
-// <---------------><----------------------->
-// <---><----------><----------------------->
-// <---><----------><-------><-----><------->
-// <---><---><-----><-------><-----><------->
-// <---><---><-----><-------><-----><-><-><->
+///
+/// <---------------------------------------->
+/// <---------------><----------------------->
+/// <---><----------><----------------------->
+/// <---><----------><-------><-----><------->
+/// <---><---><-----><-------><-----><------->
+/// <---><---><-----><-------><-----><-><-><->
 pub fn file(
     odb: impl gix_object::Find + gix_object::FindHeader,
     suspect: ObjectId,
