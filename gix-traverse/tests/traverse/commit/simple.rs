@@ -269,6 +269,69 @@ mod hide {
             .check()?;
         Ok(())
     }
+
+    #[test]
+    fn debug_single_parent_with_hidden_tips() -> crate::Result {
+        // Simplified test to debug the issue
+        let mut assertion = TraversalAssertion::new_at(
+            "make_repos.sh",
+            "simple", 
+            &["f49838d84281c3988eeadd988d97dd358c9f9dc4"], /* merge */
+            &[
+                "0edb95c0c0d9933d88f532ec08fcd405d0eee882", /* c5 */
+                "8cb5f13b66ce52a49399a2c49f537ee2b812369c", /* c4 */
+                "33aa07785dd667c0196064e3be3c51dd9b4744ef", /* c3 */
+                "ad33ff2d0c4fc77d56b5fbff6f86f332fe792d83", /* c2 */
+                "65d6af66f60b8e39fd1ba6a1423178831e764ec5", /* c1 */
+            ],
+        );
+
+        // First test normal mode to make sure it works
+        assertion.check()?;
+        
+        // Then test single-parent mode without hidden tips - should also work
+        assertion.with_parents(Parents::First).check()?;
+        
+        // Finally test with a single hidden tip - this is where the bug should manifest
+        assertion
+            .with_hidden(&["48e8dac19508f4238f06c8de2b10301ce64a641c"]) /* b2c2 - just one hidden */
+            .with_parents(Parents::First)
+            .check()?;
+        
+        Ok(())
+    }
+
+    #[test]
+    fn single_parent_with_hidden_tips_date_sorting() -> crate::Result {
+        // Test that single-parent mode works correctly with hidden tips when using date-based sorting
+        // This should demonstrate the bug described in issue #2159
+        let mut assertion = TraversalAssertion::new_at(
+            "make_repos.sh", 
+            "simple",
+            &["f49838d84281c3988eeadd988d97dd358c9f9dc4"], /* merge */
+            &[
+                "0edb95c0c0d9933d88f532ec08fcd405d0eee882", /* c5 */
+                "8cb5f13b66ce52a49399a2c49f537ee2b812369c", /* c4 */
+                "33aa07785dd667c0196064e3be3c51dd9b4744ef", /* c3 */
+                "ad33ff2d0c4fc77d56b5fbff6f86f332fe792d83", /* c2 */
+                "65d6af66f60b8e39fd1ba6a1423178831e764ec5", /* c1 */
+            ],
+        );
+
+        // Test with date-based sorting and single-parent mode
+        // This should only follow the first parent line but still properly handle hidden commits
+        for sorting in all_sortings() {
+            assertion
+                .with_hidden(&[
+                    "48e8dac19508f4238f06c8de2b10301ce64a641c", /* b2c2 - should be hidden */
+                    "66a309480201c4157b0eae86da69f2d606aadbe7", /* b1c2 - should be hidden */
+                ])
+                .with_parents(Parents::First)
+                .with_sorting(sorting)
+                .check()?;
+        }
+        Ok(())
+    }
 }
 
 mod different_date_intermixed {

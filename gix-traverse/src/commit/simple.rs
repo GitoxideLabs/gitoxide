@@ -97,20 +97,42 @@ pub(super) struct State {
     candidates: Option<Candidates>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum CommitState {
-    /// The commit may be returned, it hasn't been hidden yet.
-    Interesting,
-    /// The commit should not be returned.
-    Hidden,
+bitflags::bitflags! {
+    /// Flags to track the state of a commit during traversal.
+    #[derive(Debug, Clone, Copy)]
+    struct CommitState: u8 {
+        /// The commit may be returned, it hasn't been hidden yet.
+        const INTERESTING = 0b001;
+        /// The commit should not be returned.
+        const HIDDEN = 0b010;
+        /// The commit is on the first-parent line (relevant when Parents::First is used).
+        const ON_FIRST_PARENT_LINE = 0b100;
+    }
 }
 
 impl CommitState {
-    pub fn is_hidden(&self) -> bool {
-        matches!(self, CommitState::Hidden)
+    pub fn is_hidden(self) -> bool {
+        self.contains(CommitState::HIDDEN)
     }
-    pub fn is_interesting(&self) -> bool {
-        matches!(self, CommitState::Interesting)
+    pub fn is_interesting(self) -> bool {
+        self.contains(CommitState::INTERESTING) && !self.contains(CommitState::HIDDEN)
+    }
+    pub fn is_on_first_parent_line(self) -> bool {
+        self.contains(CommitState::ON_FIRST_PARENT_LINE)
+    }
+    
+    /// Creates an interesting commit state, optionally on the first-parent line.
+    pub fn interesting(on_first_parent_line: bool) -> Self {
+        let mut state = CommitState::INTERESTING;
+        if on_first_parent_line {
+            state |= CommitState::ON_FIRST_PARENT_LINE;
+        }
+        state
+    }
+    
+    /// Creates a hidden commit state.
+    pub fn hidden() -> Self {
+        CommitState::HIDDEN
     }
 }
 
@@ -220,19 +242,19 @@ mod init {
             self.state.candidates = Some(VecDeque::new());
             let state = &mut self.state;
             for id_to_ignore in tips {
-                let previous = state.seen.insert(id_to_ignore, CommitState::Hidden);
+                let previous = state.seen.insert(id_to_ignore, CommitState::hidden());
                 // If there was something, it will pick up whatever commit-state we have set last
                 // upon iteration. Also, hidden states always override everything else.
                 if previous.is_none() {
                     // Assure we *start* traversing hidden variants of a commit first, give them a head-start.
                     match self.sorting {
                         Sorting::BreadthFirst => {
-                            state.next.push_front((id_to_ignore, CommitState::Hidden));
+                            state.next.push_front((id_to_ignore, CommitState::hidden()));
                         }
                         Sorting::ByCommitTime(order) | Sorting::ByCommitTimeCutoff { order, .. } => {
                             add_to_queue(
                                 id_to_ignore,
-                                CommitState::Hidden,
+                                CommitState::hidden(),
                                 order,
                                 self.sorting.cutoff_time(),
                                 &mut state.queue,
@@ -247,7 +269,7 @@ mod init {
                 .state
                 .seen
                 .values()
-                .any(|state| matches!(state, CommitState::Hidden))
+                .any(|state| state.is_hidden())
             {
                 self.state.candidates = None;
             }
@@ -342,7 +364,7 @@ mod init {
                 state.clear();
                 state.next.reserve(tips.size_hint().0);
                 for tip in tips.map(Into::into) {
-                    let commit_state = CommitState::Interesting;
+                    let commit_state = CommitState::interesting(true); // Tips are always on first-parent line
                     let seen = state.seen.insert(tip, commit_state);
                     // We know there can only be duplicate interesting ones.
                     if seen.is_none() && predicate(&tip) {
@@ -446,8 +468,9 @@ mod init {
                             self.cache = None;
                             return self.next_by_commit_date(order, cutoff);
                         }
-                        for (id, parent_commit_time) in state.parent_ids.drain(..) {
+                        for (idx, (id, parent_commit_time)) in state.parent_ids.drain(..).enumerate() {
                             parents.push(id);
+                            let is_first_parent = idx == 0;
                             insert_into_seen_and_queue(
                                 &mut state.seen,
                                 id,
@@ -458,15 +481,19 @@ mod init {
                                 order,
                                 cutoff,
                                 || parent_commit_time,
+                                is_first_parent,
                             );
                         }
                     }
                     Ok(Either::CommitRefIter(commit_iter)) => {
+                        let mut parent_idx = 0;
                         for token in commit_iter {
                             match token {
                                 Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
                                 Ok(gix_object::commit::ref_iter::Token::Parent { id }) => {
                                     parents.push(id);
+                                    let is_first_parent = parent_idx == 0;
+                                    parent_idx += 1;
                                     insert_into_seen_and_queue(
                                         &mut state.seen,
                                         id,
@@ -485,6 +512,7 @@ mod init {
                                                 })
                                                 .unwrap_or_default()
                                         },
+                                        is_first_parent,
                                     );
                                 }
                                 Ok(_unused_token) => break,
@@ -495,22 +523,40 @@ mod init {
                     Err(err) => return Some(Err(err.into())),
                 }
                 match commit_state {
-                    CommitState::Interesting => {
-                        let info = Info {
-                            id: oid,
-                            parent_ids: parents,
-                            commit_time: Some(commit_time),
+                    commit_st if commit_st.is_interesting() => {
+                        // In single-parent mode with hidden tips, only return commits on the first-parent line
+                        let should_return = if matches!(self.parents, crate::commit::Parents::First) {
+                            // In single-parent mode
+                            if state.candidates.is_none() {
+                                // No hidden tips - return all interesting commits (original behavior)
+                                true
+                            } else {
+                                // Hidden tips present - only return commits on first-parent line
+                                commit_st.is_on_first_parent_line()
+                            }
+                        } else {
+                            // Not in single-parent mode - return all interesting commits
+                            true
                         };
-                        match state.candidates.as_mut() {
-                            None => return Some(Ok(info)),
-                            Some(candidates) => {
-                                // assure candidates aren't prematurely returned - hidden commits may catch up with
-                                // them later.
-                                candidates.push_back(info);
+                        
+                        if should_return {
+                            let info = Info {
+                                id: oid,
+                                parent_ids: parents,
+                                commit_time: Some(commit_time),
+                            };
+                            match state.candidates.as_mut() {
+                                None => return Some(Ok(info)),
+                                Some(candidates) => {
+                                    // assure candidates aren't prematurely returned - hidden commits may catch up with
+                                    // them later.
+                                    candidates.push_back(info);
+                                }
                             }
                         }
                     }
-                    CommitState::Hidden => continue 'skip_hidden,
+                    commit_st if commit_st.is_hidden() => continue 'skip_hidden,
+                    _ => continue 'skip_hidden,
                 }
             }
         }
@@ -564,8 +610,9 @@ mod init {
                             return self.next_by_topology();
                         }
 
-                        for (pid, _commit_time) in state.parent_ids.drain(..) {
+                        for (idx, (pid, _commit_time)) in state.parent_ids.drain(..).enumerate() {
                             parents.push(pid);
+                            let is_first_parent = idx == 0;
                             insert_into_seen_and_next(
                                 &mut state.seen,
                                 pid,
@@ -573,18 +620,26 @@ mod init {
                                 commit_state,
                                 &mut self.predicate,
                                 next,
+                                is_first_parent,
                             );
-                            if commit_state.is_interesting() && matches!(self.parents, Parents::First) {
+                            // In single-parent mode, only break if we have no hidden tips
+                            // (candidates == None) and this is an interesting commit
+                            if commit_state.is_interesting() 
+                                && matches!(self.parents, Parents::First) 
+                                && state.candidates.is_none() {
                                 break;
                             }
                         }
                     }
                     Ok(Either::CommitRefIter(commit_iter)) => {
+                        let mut parent_idx = 0;
                         for token in commit_iter {
                             match token {
                                 Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
                                 Ok(gix_object::commit::ref_iter::Token::Parent { id: pid }) => {
                                     parents.push(pid);
+                                    let is_first_parent = parent_idx == 0;
+                                    parent_idx += 1;
                                     insert_into_seen_and_next(
                                         &mut state.seen,
                                         pid,
@@ -592,8 +647,13 @@ mod init {
                                         commit_state,
                                         &mut self.predicate,
                                         next,
+                                        is_first_parent,
                                     );
-                                    if commit_state.is_interesting() && matches!(self.parents, Parents::First) {
+                                    // In single-parent mode, only break if we have no hidden tips
+                                    // (candidates == None) and this is an interesting commit
+                                    if commit_state.is_interesting() 
+                                        && matches!(self.parents, Parents::First) 
+                                        && state.candidates.is_none() {
                                         break;
                                     }
                                 }
@@ -605,22 +665,40 @@ mod init {
                     Err(err) => return Some(Err(err.into())),
                 }
                 match commit_state {
-                    CommitState::Interesting => {
-                        let info = Info {
-                            id: oid,
-                            parent_ids: parents,
-                            commit_time: None,
+                    commit_st if commit_st.is_interesting() => {
+                        // In single-parent mode with hidden tips, only return commits on the first-parent line
+                        let should_return = if matches!(self.parents, crate::commit::Parents::First) {
+                            // In single-parent mode
+                            if state.candidates.is_none() {
+                                // No hidden tips - return all interesting commits (original behavior)
+                                true
+                            } else {
+                                // Hidden tips present - only return commits on first-parent line
+                                commit_st.is_on_first_parent_line()
+                            }
+                        } else {
+                            // Not in single-parent mode - return all interesting commits
+                            true
                         };
-                        match state.candidates.as_mut() {
-                            None => return Some(Ok(info)),
-                            Some(candidates) => {
-                                // assure candidates aren't prematurely returned - hidden commits may catch up with
-                                // them later.
-                                candidates.push_back(info);
+                        
+                        if should_return {
+                            let info = Info {
+                                id: oid,
+                                parent_ids: parents,
+                                commit_time: None,
+                            };
+                            match state.candidates.as_mut() {
+                                None => return Some(Ok(info)),
+                                Some(candidates) => {
+                                    // assure candidates aren't prematurely returned - hidden commits may catch up with
+                                    // them later.
+                                    candidates.push_back(info);
+                                }
                             }
                         }
                     }
-                    CommitState::Hidden => continue 'skip_hidden,
+                    commit_st if commit_st.is_hidden() => continue 'skip_hidden,
+                    _ => continue 'skip_hidden,
                 }
             }
         }
@@ -644,25 +722,36 @@ mod init {
         commit_state: CommitState,
         predicate: &mut impl FnMut(&oid) -> bool,
         next: &mut VecDeque<(ObjectId, CommitState)>,
+        is_first_parent: bool,
     ) {
+        // Determine the parent's commit state
+        let parent_commit_state = if commit_state.is_hidden() {
+            // Hidden commits propagate hidden state
+            CommitState::hidden()
+        } else {
+            // Interesting commits propagate interesting state, tracking first-parent line
+            CommitState::interesting(is_first_parent && commit_state.is_on_first_parent_line())
+        };
+        
         let enqueue = match seen.entry(parent_id) {
             Entry::Occupied(mut e) => {
-                let enqueue = handle_seen(commit_state, *e.get(), parent_id, candidates);
-                if commit_state.is_hidden() {
-                    e.insert(commit_state);
+                let enqueue = handle_seen(parent_commit_state, *e.get(), parent_id, candidates);
+                if parent_commit_state.is_hidden() {
+                    e.insert(parent_commit_state);
                 }
                 enqueue
             }
             Entry::Vacant(e) => {
-                e.insert(commit_state);
-                match commit_state {
-                    CommitState::Interesting => predicate(&parent_id),
-                    CommitState::Hidden => true,
+                e.insert(parent_commit_state);
+                match parent_commit_state {
+                    state if state.is_interesting() => predicate(&parent_id),
+                    state if state.is_hidden() => true,
+                    _ => false,
                 }
             }
         };
         if enqueue {
-            next.push_back((parent_id, commit_state));
+            next.push_back((parent_id, parent_commit_state));
         }
     }
 
@@ -677,20 +766,31 @@ mod init {
         order: CommitTimeOrder,
         cutoff: Option<SecondsSinceUnixEpoch>,
         get_parent_commit_time: impl FnOnce() -> gix_date::SecondsSinceUnixEpoch,
+        is_first_parent: bool,
     ) {
+        // Determine the parent's commit state
+        let parent_commit_state = if commit_state.is_hidden() {
+            // Hidden commits propagate hidden state
+            CommitState::hidden()
+        } else {
+            // Interesting commits propagate interesting state, tracking first-parent line
+            CommitState::interesting(is_first_parent && commit_state.is_on_first_parent_line())
+        };
+        
         let enqueue = match seen.entry(parent_id) {
             Entry::Occupied(mut e) => {
-                let enqueue = handle_seen(commit_state, *e.get(), parent_id, candidates);
-                if commit_state.is_hidden() {
-                    e.insert(commit_state);
+                let enqueue = handle_seen(parent_commit_state, *e.get(), parent_id, candidates);
+                if parent_commit_state.is_hidden() {
+                    e.insert(parent_commit_state);
                 }
                 enqueue
             }
             Entry::Vacant(e) => {
-                e.insert(commit_state);
-                match commit_state {
-                    CommitState::Interesting => (predicate)(&parent_id),
-                    CommitState::Hidden => true,
+                e.insert(parent_commit_state);
+                match parent_commit_state {
+                    state if state.is_interesting() => (predicate)(&parent_id),
+                    state if state.is_hidden() => true,
+                    _ => false,
                 }
             }
         };
@@ -700,7 +800,7 @@ mod init {
             let key = to_queue_key(parent_commit_time, order);
             match cutoff {
                 Some(cutoff_older_than) if parent_commit_time < cutoff_older_than => {}
-                Some(_) | None => queue.insert(key, (parent_id, commit_state)),
+                Some(_) | None => queue.insert(key, (parent_id, parent_commit_state)),
             }
         }
     }
@@ -713,14 +813,15 @@ mod init {
         id: ObjectId,
         candidates: &mut Option<Candidates>,
     ) -> bool {
-        match (current_state, next_state) {
-            (CommitState::Hidden, CommitState::Hidden) => false,
-            (CommitState::Interesting, CommitState::Interesting) => false,
-            (CommitState::Hidden, CommitState::Interesting) => {
-                // keep traversing to paint more hidden. After all, the commit_state overrides the current parent state
+        match (current_state.is_hidden(), next_state.is_hidden()) {
+            (true, true) => false, // Both hidden, no need to traverse again
+            (false, false) => false, // Both interesting, no need to traverse again  
+            (true, false) => {
+                // Previously hidden, now interesting - keep traversing to paint more hidden
                 true
             }
-            (CommitState::Interesting, CommitState::Hidden) => {
+            (false, true) => {
+                // Previously interesting, now hidden - remove from candidates and traverse
                 remove_candidate(candidates.as_mut(), id);
                 true
             }
