@@ -127,12 +127,6 @@ impl CommitState {
             CommitState::Interesting { along_first_parent } | CommitState::Hidden { along_first_parent } => *along_first_parent,
         }
     }
-    pub fn with_first_parent(self, along_first_parent: bool) -> Self {
-        match self {
-            CommitState::Interesting { .. } => CommitState::Interesting { along_first_parent },
-            CommitState::Hidden { .. } => CommitState::Hidden { along_first_parent },
-        }
-    }
 }
 
 ///
