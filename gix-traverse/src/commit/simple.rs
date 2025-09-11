@@ -524,16 +524,10 @@ mod init {
                 }
                 match commit_state {
                     commit_st if commit_st.is_interesting() => {
-                        // In single-parent mode with hidden tips, only return commits on the first-parent line
+                        // In single-parent mode, only return commits on the first-parent line
                         let should_return = if matches!(self.parents, crate::commit::Parents::First) {
-                            // In single-parent mode
-                            if state.candidates.is_none() {
-                                // No hidden tips - return all interesting commits (original behavior)
-                                true
-                            } else {
-                                // Hidden tips present - only return commits on first-parent line
-                                commit_st.is_on_first_parent_line()
-                            }
+                            // In single-parent mode - only return commits on first-parent line
+                            commit_st.is_on_first_parent_line()
                         } else {
                             // Not in single-parent mode - return all interesting commits
                             true
@@ -666,16 +660,10 @@ mod init {
                 }
                 match commit_state {
                     commit_st if commit_st.is_interesting() => {
-                        // In single-parent mode with hidden tips, only return commits on the first-parent line
+                        // In single-parent mode, only return commits on the first-parent line
                         let should_return = if matches!(self.parents, crate::commit::Parents::First) {
-                            // In single-parent mode
-                            if state.candidates.is_none() {
-                                // No hidden tips - return all interesting commits (original behavior)
-                                true
-                            } else {
-                                // Hidden tips present - only return commits on first-parent line
-                                commit_st.is_on_first_parent_line()
-                            }
+                            // In single-parent mode - only return commits on first-parent line
+                            commit_st.is_on_first_parent_line()
                         } else {
                             // Not in single-parent mode - return all interesting commits
                             true

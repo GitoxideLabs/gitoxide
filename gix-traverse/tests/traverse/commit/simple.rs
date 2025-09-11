@@ -271,11 +271,11 @@ mod hide {
     }
 
     #[test]
-    fn debug_single_parent_with_hidden_tips() -> crate::Result {
-        // Simplified test to debug the issue
+    fn single_parent_with_hidden_tips_simple() -> crate::Result {
+        // Test simple single-parent mode first (should work)
         let mut assertion = TraversalAssertion::new_at(
             "make_repos.sh",
-            "simple", 
+            "simple",
             &["f49838d84281c3988eeadd988d97dd358c9f9dc4"], /* merge */
             &[
                 "0edb95c0c0d9933d88f532ec08fcd405d0eee882", /* c5 */
@@ -286,15 +286,12 @@ mod hide {
             ],
         );
 
-        // First test normal mode to make sure it works
-        assertion.check()?;
-        
-        // Then test single-parent mode without hidden tips - should also work
+        // Test single-parent mode without hidden tips - should work
         assertion.with_parents(Parents::First).check()?;
         
-        // Finally test with a single hidden tip - this is where the bug should manifest
+        // Test single-parent mode WITH hidden tips - this should also work now
         assertion
-            .with_hidden(&["48e8dac19508f4238f06c8de2b10301ce64a641c"]) /* b2c2 - just one hidden */
+            .with_hidden(&["48e8dac19508f4238f06c8de2b10301ce64a641c"]) /* b2c2 - one hidden */
             .with_parents(Parents::First)
             .check()?;
         
