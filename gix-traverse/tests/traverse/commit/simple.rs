@@ -269,6 +269,31 @@ mod hide {
             .check()?;
         Ok(())
     }
+
+    #[test]
+    fn single_parent_with_hidden_tips_issue_2159() -> crate::Result {
+        // This test demonstrates the issue from #2159
+        // The issue is that when using Parents::First mode with hidden tips,
+        // the current code breaks after the first parent instead of traversing all parents
+        // to let hidden commits "catch up"
+        
+        // Test the existing case that should work but might not be working correctly
+        let mut assertion = TraversalAssertion::new_at(
+            "make_repos.sh",
+            "simple",
+            &["80947acb398362d8236fcb8bf0f8a9dac640583f"], /* b1c1 - start from a branch */
+            // Expected: This should return nothing because the hidden merge should catch up
+            &[],
+        );
+
+        assertion
+            .with_hidden(&["f49838d84281c3988eeadd988d97dd358c9f9dc4" /* merge */])
+            .with_parents(Parents::First)
+            .expected_without_tips()
+            .check()?;
+        
+        Ok(())
+    }
 }
 
 mod different_date_intermixed {
