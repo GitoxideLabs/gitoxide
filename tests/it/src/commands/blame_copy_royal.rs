@@ -35,13 +35,12 @@ pub(super) mod function {
         let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
         let diff_algorithm = repo.diff_algorithm()?;
 
-        let options = gix::blame::Options {
-            diff_algorithm,
-            range: gix::blame::BlameRanges::default(),
-            since: None,
-            rewrites: Some(gix::diff::Rewrites::default()),
-            debug_track_path: true,
-        };
+        let mut options = gix::blame::Options::default();
+        options.diff_algorithm = diff_algorithm;
+        options.range = gix::blame::BlameRanges::default();
+        options.since = None;
+        options.rewrites = Some(gix::diff::Rewrites::default());
+        options.debug_track_path = true;
 
         let index = repo.index_or_empty()?;
 
