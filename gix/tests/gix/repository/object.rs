@@ -577,6 +577,41 @@ fn empty_blob_is_always_considered_present() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn empty_blob_edge_cases() -> crate::Result {
+    let repo = empty_bare_in_memory_repo()?;
+    let empty_blob_id = gix::hash::ObjectId::empty_blob(repo.object_hash());
+    
+    // Test all the related methods for empty blobs
+    assert!(repo.has_object(&empty_blob_id), "has_object should return true");
+    
+    // Test find_header
+    let header = repo.find_header(empty_blob_id)?;
+    assert_eq!(header.kind(), gix_object::Kind::Blob);
+    assert_eq!(header.size(), 0);
+    
+    // Test try_find_header
+    let header = repo.try_find_header(empty_blob_id)?.expect("should find header");
+    assert_eq!(header.kind(), gix_object::Kind::Blob);
+    assert_eq!(header.size(), 0);
+    
+    // Test find_object
+    let obj = repo.find_object(empty_blob_id)?;
+    assert_eq!(obj.kind, gix_object::Kind::Blob);
+    assert_eq!(obj.data.len(), 0);
+    
+    // Test try_find_object
+    let obj = repo.try_find_object(empty_blob_id)?.expect("should find object");
+    assert_eq!(obj.kind, gix_object::Kind::Blob);
+    assert_eq!(obj.data.len(), 0);
+    
+    // Test that we can get a blob from the object
+    let blob = obj.into_blob();
+    assert_eq!(blob.data.len(), 0);
+    
+    Ok(())
+}
+
 mod tag {
     #[test]
     fn simple() -> crate::Result {
