@@ -148,6 +148,22 @@ impl oid {
             Kind::Sha1 => &self.bytes == oid::null_sha1().as_bytes(),
         }
     }
+
+    /// Returns `true` if this hash is equal to an empty blob.
+    #[inline]
+    pub fn is_empty_blob(&self) -> bool {
+        match self.kind() {
+            Kind::Sha1 => &self.bytes == oid::empty_blob_sha1().as_bytes(),
+        }
+    }
+
+    /// Returns `true` if this hash is equal to an empty tree.
+    #[inline]
+    pub fn is_empty_tree(&self) -> bool {
+        match self.kind() {
+            Kind::Sha1 => &self.bytes == oid::empty_tree_sha1().as_bytes(),
+        }
+    }
 }
 
 /// Sha1 specific methods
@@ -174,6 +190,18 @@ impl oid {
     #[inline]
     pub(crate) fn null_sha1() -> &'static Self {
         oid::from_bytes([0u8; SIZE_OF_SHA1_DIGEST].as_ref())
+    }
+
+    /// Returns an oid representing the hash of an empty blob.
+    #[inline]
+    pub(crate) fn empty_blob_sha1() -> &'static Self {
+        oid::from_bytes(b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91")
+    }
+
+    /// Returns an oid representing the hash of an empty tree.
+    #[inline]
+    pub(crate) fn empty_tree_sha1() -> &'static Self {
+        oid::from_bytes(b"\x4b\x82\x5d\xc6\x42\xcb\x6e\xb9\xa0\x60\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04")
     }
 }
 
