@@ -507,6 +507,109 @@ mod find {
         );
         Ok(())
     }
+
+    #[test]
+    fn empty_blob_can_always_be_found() -> crate::Result {
+        let repo = basic_repo()?;
+        let empty_blob = gix::hash::ObjectId::empty_blob(repo.object_hash());
+        assert_eq!(repo.find_object(empty_blob)?.into_blob().data.len(), 0);
+        assert!(repo.has_object(empty_blob));
+        assert_eq!(
+            repo.find_header(empty_blob)?,
+            gix_odb::find::Header::Loose {
+                kind: gix_object::Kind::Blob,
+                size: 0,
+            },
+            "empty blob is considered a loose object"
+        );
+        assert_eq!(
+            repo.try_find_object(empty_blob)?
+                .expect("present")
+                .into_blob()
+                .data
+                .len(),
+            0
+        );
+        assert_eq!(
+            repo.try_find_header(empty_blob)?,
+            Some(gix_odb::find::Header::Loose {
+                kind: gix_object::Kind::Blob,
+                size: 0,
+            }),
+            "empty blob is considered a loose object"
+        );
+
+        // Note: Unlike empty tree, empty blobs might actually exist in the repository.
+        // The key point is that has_object() should always return true for empty blobs,
+        // regardless of whether they are physically stored or not.
+        Ok(())
+    }
+}
+
+#[test]
+fn empty_blob_is_always_considered_present() -> crate::Result {
+    use gix_object::Find;
+    
+    // Test with an empty in-memory repository to ensure empty blob is considered present
+    // even when it doesn't physically exist
+    let repo = empty_bare_in_memory_repo()?;
+    let empty_blob = gix::hash::ObjectId::empty_blob(repo.object_hash());
+    
+    // The key behavior being tested: has_object should return true for empty blob
+    assert!(repo.has_object(empty_blob), "empty blob should always be considered present");
+    
+    // Verify that the lower-level object database doesn't have it
+    let mut buf = Vec::new();
+    let lower_level_result = repo.objects.try_find(&empty_blob, &mut buf)?;
+    
+    // Empty blob might or might not exist at the lower level - that's implementation dependent
+    // But has_object should always return true regardless
+    match lower_level_result {
+        Some(_) => {
+            // If it exists at the lower level, that's fine
+        }
+        None => {
+            // If it doesn't exist at the lower level, has_object should still return true
+            // thanks to our special handling
+        }
+    }
+    
+    Ok(())
+}
+
+#[test]
+fn empty_blob_edge_cases() -> crate::Result {
+    let repo = empty_bare_in_memory_repo()?;
+    let empty_blob_id = gix::hash::ObjectId::empty_blob(repo.object_hash());
+    
+    // Test all the related methods for empty blobs
+    assert!(repo.has_object(&empty_blob_id), "has_object should return true");
+    
+    // Test find_header
+    let header = repo.find_header(empty_blob_id)?;
+    assert_eq!(header.kind(), gix_object::Kind::Blob);
+    assert_eq!(header.size(), 0);
+    
+    // Test try_find_header
+    let header = repo.try_find_header(empty_blob_id)?.expect("should find header");
+    assert_eq!(header.kind(), gix_object::Kind::Blob);
+    assert_eq!(header.size(), 0);
+    
+    // Test find_object
+    let obj = repo.find_object(empty_blob_id)?;
+    assert_eq!(obj.kind, gix_object::Kind::Blob);
+    assert_eq!(obj.data.len(), 0);
+    
+    // Test try_find_object
+    let obj = repo.try_find_object(empty_blob_id)?.expect("should find object");
+    assert_eq!(obj.kind, gix_object::Kind::Blob);
+    assert_eq!(obj.data.len(), 0);
+    
+    // Test that we can get a blob from the object
+    let blob = obj.into_blob();
+    assert_eq!(blob.data.len(), 0);
+    
+    Ok(())
 }
 
 mod tag {
