@@ -54,6 +54,92 @@ pub mod async_util {
     }
 }
 
+/// Parse ignore revisions from command line arguments and files.
+/// Returns a HashSet of ObjectIds to ignore during blame attribution.
+fn parse_ignore_revisions(
+    repo: &gix::Repository,
+    ignore_rev: &[String],
+    ignore_revs_files: &[std::path::PathBuf],
+) -> anyhow::Result<Option<std::collections::HashSet<gix::hash::ObjectId>>> {
+    let mut ignore_set = std::collections::HashSet::new();
+
+    // Helper function to resolve and validate a revision to a commit ObjectId
+    let resolve_to_commit = |rev_str: &str,
+                             context: Option<(&std::path::Path, usize)>|
+     -> anyhow::Result<gix::hash::ObjectId> {
+        let oid = repo.rev_parse_single(rev_str).map_err(|err| {
+            // Check for ambiguity error and provide exact message format
+            let err_str = err.to_string();
+            if err_str.contains("ambiguous") || err_str.contains("Ambiguous") {
+                anyhow!("error: revision '{}' is ambiguous; please use a longer SHA", rev_str)
+            } else {
+                match context {
+                    Some((path, line)) => anyhow!(
+                        "Invalid revision '{}' at line {} in file '{}': revision not found",
+                        rev_str,
+                        line,
+                        path.display()
+                    ),
+                    None => anyhow!("Invalid revision '{}': revision not found", rev_str),
+                }
+            }
+        })?;
+
+        // Peel to commit if it's a tag or other object
+        let peeled = repo.find_object(oid)
+            .with_context(|| "Failed to find object")?
+            .peel_to_kind(gix::object::Kind::Commit)
+            .with_context(|| match context {
+                Some((path, line)) => format!("Revision '{rev_str}' at line {line} in file '{}' is not a commit (hint: use a commit SHA or tag that points to a commit)", path.display()),
+                None => format!("Revision '{rev_str}' is not a commit (hint: use a commit SHA or tag that points to a commit)"),
+            })?;
+
+        Ok(peeled.id)
+    };
+
+    // Parse individual revision arguments
+    for rev_str in ignore_rev {
+        let commit_oid = resolve_to_commit(rev_str, None)?;
+        ignore_set.insert(commit_oid);
+    }
+
+    // Parse ignore-revs-files if provided
+    for file_path in ignore_revs_files {
+        // Resolve relative paths from repo root, not CWD
+        let resolved_path = if file_path.is_absolute() {
+            file_path.clone()
+        } else {
+            let repo_root = repo.workdir().unwrap_or_else(|| repo.git_dir());
+            repo_root.join(file_path)
+        };
+
+        let file_content = std::fs::read_to_string(&resolved_path)
+            .with_context(|| format!("Failed to read ignore-revs file: {}", file_path.display()))?;
+
+        // Strip UTF-8 BOM if present
+        let content = file_content.strip_prefix('\u{feff}').unwrap_or(&file_content);
+
+        for (line_num, line) in content.lines().enumerate() {
+            // Handle both \n and \r\n line endings by trimming \r
+            let line = line.trim_end_matches('\r').trim();
+
+            // Skip blank lines and comments (including indented comments)
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            let commit_oid = resolve_to_commit(line, Some((&resolved_path, line_num + 1)))?;
+            ignore_set.insert(commit_oid);
+        }
+    }
+
+    if ignore_set.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(ignore_set))
+    }
+}
+
 pub fn main() -> Result<()> {
     let args: Args = Args::parse_from(gix::env::args_os());
     let thread_limit = args.threads;
@@ -1609,6 +1695,8 @@ pub fn main() -> Result<()> {
             file,
             ranges,
             since,
+            ignore_rev,
+            ignore_revs_file,
         } => prepare_and_run(
             "blame",
             trace,
@@ -1620,15 +1708,23 @@ pub fn main() -> Result<()> {
                 let repo = repository(Mode::Lenient)?;
                 let diff_algorithm = repo.diff_algorithm()?;
 
+                // Parse ignore revisions
+                let ignored_revs = parse_ignore_revisions(&repo, &ignore_rev, &ignore_revs_file)?;
+
                 core::repository::blame::blame_file(
                     repo,
                     &file,
-                    gix::blame::Options {
-                        diff_algorithm,
-                        range: gix::blame::BlameRanges::from_ranges(ranges),
-                        since,
-                        rewrites: Some(gix::diff::Rewrites::default()),
-                        debug_track_path: false,
+                    {
+                        let mut opts = gix::blame::Options::default();
+                        opts.diff_algorithm = diff_algorithm;
+                        opts.range = gix::blame::BlameRanges::from_ranges(ranges);
+                        opts.since = since;
+                        opts.rewrites = Some(gix::diff::Rewrites::default());
+                        opts.debug_track_path = false;
+                        if let Some(ignored_revs) = ignored_revs {
+                            opts = opts.with_ignored_revisions(ignored_revs);
+                        }
+                        opts
                     },
                     out,
                     statistics.then_some(err),
