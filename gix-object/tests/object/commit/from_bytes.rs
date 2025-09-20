@@ -37,9 +37,14 @@ fn invalid_email_of_committer() {
         email: b"gh <Gregor Hartmann<gh@openoffice.org".as_bstr(),
         time: "1282910542 +0200",
     };
+    let fixture = fixture_name("commit", "invalid-actor.txt");
+    let commit_ref = CommitRef::from_bytes(&fixture).expect("ignore strangely formed actor format");
+    let mut buf = vec![];
+    let write_result = commit_ref.write_to(&mut buf);
+    assert!(write_result.is_ok(), "write result should be OK for round-tripping");
+
     assert_eq!(
-        CommitRef::from_bytes(&fixture_name("commit", "invalid-actor.txt"))
-            .expect("ignore strangely formed actor format"),
+        commit_ref,
         CommitRef {
             tree: b"220738fd4199e95a2b244465168366a73ebdf271".as_bstr(),
             parents: [b"209fbe2d632761b30b7b17422914e11b93692833".as_bstr()].into(),

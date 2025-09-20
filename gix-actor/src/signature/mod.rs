@@ -104,7 +104,7 @@ pub(crate) mod write {
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub(crate) enum Error {
-        #[error(r"Signature name or email must not contain '<', '>' or \n")]
+        #[error(r"Signature name or email must not contain \n")]
         IllegalCharacter,
     }
 
@@ -144,7 +144,7 @@ pub(crate) mod write {
     }
 
     pub(crate) fn validated_token(name: &BStr) -> Result<&BStr, Error> {
-        if name.find_byteset(b"<>\n").is_some() {
+        if name.find_byte(b'\n').is_some() {
             return Err(Error::IllegalCharacter);
         }
         Ok(name)

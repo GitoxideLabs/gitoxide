@@ -40,12 +40,43 @@ fn lenient_parsing() -> gix_testtools::Result {
         );
         let signature: Identity = identity.into();
         let mut output = Vec::new();
-        let err = signature.write_to(&mut output).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            r"Signature name or email must not contain '<', '>' or \n",
-            "this isn't roundtrippable as the name is technically incorrect - must not contain brackets"
-        );
+        let result = signature.write_to(&mut output);
+        
+        // Both test cases should now work since angle brackets are allowed
+        // and the parser strips newlines from the input
+        assert!(result.is_ok(), 
+            "angle brackets should be allowed for round-tripping, and newlines are stripped during parsing");
     }
+    Ok(())
+}
+
+#[test]
+fn newlines_still_rejected() -> gix_testtools::Result {
+    // Test that newlines within the actual parsed name or email are still rejected
+    let identity = gix_actor::IdentityRef {
+        name: "First\nLast".into(),
+        email: "test@example.com".into(),
+    };
+    let signature: Identity = identity.into();
+    let mut output = Vec::new();
+    let err = signature.write_to(&mut output).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        r"Signature name or email must not contain \n",
+        "newlines within parsed fields should still be rejected"
+    );
+
+    let identity = gix_actor::IdentityRef {
+        name: "First Last".into(),
+        email: "test\n@example.com".into(),
+    };
+    let signature: Identity = identity.into();
+    let mut output = Vec::new();
+    let err = signature.write_to(&mut output).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        r"Signature name or email must not contain \n",
+        "newlines within parsed fields should still be rejected"
+    );
     Ok(())
 }

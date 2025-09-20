@@ -4,29 +4,25 @@ mod write_to {
         use gix_date::Time;
 
         #[test]
-        fn name() {
+        fn name_with_angle_brackets() {
             let signature = Signature {
                 name: "invalid < middlename".into(),
                 email: "ok".into(),
                 time: Time::default(),
             };
-            assert_eq!(
-                format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: IllegalCharacter })"
-            );
+            // This should now work - angle brackets are allowed for round-tripping
+            assert!(signature.write_to(&mut Vec::new()).is_ok());
         }
 
         #[test]
-        fn email() {
+        fn email_with_angle_brackets() {
             let signature = Signature {
                 name: "ok".into(),
                 email: "server>.example.com".into(),
                 time: Time::default(),
             };
-            assert_eq!(
-                format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: IllegalCharacter })"
-            );
+            // This should now work - angle brackets are allowed for round-tripping
+            assert!(signature.write_to(&mut Vec::new()).is_ok());
         }
 
         #[test]
