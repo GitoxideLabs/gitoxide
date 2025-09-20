@@ -1,5 +1,6 @@
 use bstr::ByteSlice;
 use gix_actor::Identity;
+use winnow::stream::AsBStr;
 
 #[test]
 fn round_trip() -> gix_testtools::Result {
@@ -40,12 +41,9 @@ fn lenient_parsing() -> gix_testtools::Result {
         );
         let signature: Identity = identity.into();
         let mut output = Vec::new();
-        let result = signature.write_to(&mut output);
-        
-        // Both test cases should now work since angle brackets are allowed
-        // and the parser strips newlines from the input
-        assert!(result.is_ok(), 
-            "angle brackets should be allowed for round-tripping, and newlines are stripped during parsing");
+        signature.write_to(&mut output).expect("write does not complain");
+
+        assert_eq!(output.as_bstr(), input, "round-tripping should keep these equivalent");
     }
     Ok(())
 }
