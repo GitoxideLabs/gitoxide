@@ -81,6 +81,14 @@ fn git_default() {
     );
 }
 
+#[test]
+fn bad_offset() {
+    assert_eq!(
+        time_bad_offset().format(gix_date::time::format::DEFAULT),
+        "Wed Jan 24 22:36:22 2018 -3407"
+    );
+}
+
 fn time() -> Time {
     Time {
         seconds: 123456789,
@@ -92,5 +100,12 @@ fn time_dec1() -> Time {
     Time {
         seconds: 123543189,
         offset: 9000,
+    }
+}
+
+fn time_bad_offset() -> Time {
+    Time {
+        seconds: 1516956202,
+        offset: -122820,
     }
 }
