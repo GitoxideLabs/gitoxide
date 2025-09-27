@@ -266,6 +266,18 @@ impl convert::TryFrom<BString> for PartialName {
     }
 }
 
+impl std::fmt::Display for PartialName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::fmt::Display for PartialNameRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 /// Note that this method is disagreeing with `gix_validate` as it allows dashes '-' for some reason.
 /// Since partial names cannot be created with dashes inside we adjusted this as it's probably unintended or git creates pseudo-refs
 /// which wouldn't pass its safety checks.
