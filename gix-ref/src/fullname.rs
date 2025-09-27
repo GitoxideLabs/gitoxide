@@ -73,6 +73,12 @@ impl std::fmt::Display for FullName {
     }
 }
 
+impl std::fmt::Display for FullNameRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
 impl FullNameRef {
     /// Interpret this fully qualified reference name as partial name.
     pub fn as_partial_name(&self) -> &PartialNameRef {
