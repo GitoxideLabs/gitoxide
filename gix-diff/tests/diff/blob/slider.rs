@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gix_diff::blob::{
     intern::TokenSource,
-    unified_diff::{ConsumeBinaryHunk, ContextSize},
+    unified_diff::{ConsumeHunk, ContextSize, DiffLineKind, HunkHeader},
     Algorithm, UnifiedDiff,
 };
 use gix_object::FindExt;
@@ -13,6 +13,47 @@ struct Baseline {
 }
 
 mod baseline {}
+
+#[derive(Debug)]
+struct DiffHunk {
+    header: HunkHeader,
+    lines: Vec<(DiffLineKind, BString)>,
+}
+
+struct DiffHunkRecorder {
+    inner: Vec<DiffHunk>,
+}
+
+impl DiffHunkRecorder {
+    fn new() -> Self {
+        Self { inner: Vec::new() }
+    }
+}
+
+impl ConsumeHunk for DiffHunkRecorder {
+    type Out = Vec<DiffHunk>;
+
+    fn consume_hunk(
+        &mut self,
+        header: HunkHeader,
+        lines: &[(gix_diff::blob::unified_diff::DiffLineKind, &[u8])],
+    ) -> std::io::Result<()> {
+        let lines: Vec<_> = lines
+            .iter()
+            .map(|(kind, line)| (*kind, BString::new(line.to_vec())))
+            .collect();
+
+        let diff_hunk = DiffHunk { header, lines };
+
+        self.inner.push(diff_hunk);
+
+        Ok(())
+    }
+
+    fn finish(self) -> Self::Out {
+        self.inner
+    }
+}
 
 #[test]
 fn sliders() -> gix_testtools::Result {
@@ -125,15 +166,10 @@ fn sliders() -> gix_testtools::Result {
         let actual = gix_diff::blob::diff(
             Algorithm::Myers,
             &interner,
-            UnifiedDiff::new(
-                &interner,
-                // TODO: use `ConsumeHunk` instead.
-                ConsumeBinaryHunk::new(String::new(), "\n"),
-                ContextSize::symmetrical(3),
-            ),
+            UnifiedDiff::new(&interner, DiffHunkRecorder::new(), ContextSize::symmetrical(3)),
         )?;
 
-        eprintln!("{actual}");
+        eprintln!("{actual:#?}");
     }
 
     Ok(())
