@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{iter::Peekable, path::PathBuf};
 
 use gix_diff::blob::{
     intern::TokenSource,
@@ -6,15 +6,12 @@ use gix_diff::blob::{
     Algorithm, UnifiedDiff,
 };
 use gix_object::FindExt;
-use gix_ref::{bstr::BString, file::ReferenceExt};
+use gix_ref::{
+    bstr::{self, BString},
+    file::ReferenceExt,
+};
 
-struct Baseline {
-    hunks: (),
-}
-
-mod baseline {}
-
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct DiffHunk {
     header: HunkHeader,
     lines: Vec<(DiffLineKind, BString)>,
@@ -52,6 +49,126 @@ impl ConsumeHunk for DiffHunkRecorder {
 
     fn finish(self) -> Self::Out {
         self.inner
+    }
+}
+
+struct Baseline<'a> {
+    lines: Peekable<bstr::Lines<'a>>,
+}
+
+mod baseline {
+    use std::path::Path;
+
+    use gix_diff::blob::unified_diff::{DiffLineKind, HunkHeader};
+    use gix_ref::bstr::{BString, ByteSlice};
+    use gix_testtools::once_cell::sync::Lazy;
+    use regex::bytes::Regex;
+
+    use super::{Baseline, DiffHunk};
+
+    impl Baseline<'_> {
+        pub fn collect(baseline_path: impl AsRef<Path>) -> std::io::Result<Vec<DiffHunk>> {
+            let content = std::fs::read(baseline_path)?;
+
+            let mut baseline = Baseline {
+                lines: content.lines().peekable(),
+            };
+
+            baseline.skip_header();
+
+            Ok(baseline.collect())
+        }
+
+        fn skip_header(&mut self) -> () {
+            // diff --git a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+            // index ccccccc..ddddddd 100644
+            // --- a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            // +++ b/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+            let line = self.lines.next().expect("line to be present");
+            assert!(line.starts_with(b"diff --git "));
+
+            let line = self.lines.next().expect("line to be present");
+            assert!(line.starts_with(b"index "));
+
+            let line = self.lines.next().expect("line to be present");
+            assert!(line.starts_with(b"--- "));
+
+            let line = self.lines.next().expect("line to be present");
+            assert!(line.starts_with(b"+++ "));
+        }
+    }
+
+    impl Iterator for Baseline<'_> {
+        type Item = DiffHunk;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            static HEADER_REGEX: Lazy<Regex> = Lazy::new(|| {
+                Regex::new(r"@@ -([[:digit:]]+),([[:digit:]]+) \+([[:digit:]]+),([[:digit:]]+) @@")
+                    .expect("regex to be valid")
+            });
+
+            let mut hunk_header = None;
+            let mut hunk_lines: Vec<(DiffLineKind, BString)> = Vec::new();
+
+            while let Some(line) = self.lines.next() {
+                // @@ -18,6 +18,7 @@ abc def ghi
+                // TODO:
+                // make sure that the following is correct
+                // @@ -{before_hunk_start},{before_hunk_len} +{after_hunk_start},{after_hunk_len}
+
+                static START_OF_HEADER: &[u8; 4] = b"@@ -";
+
+                if line.starts_with(START_OF_HEADER) {
+                    let matches = HEADER_REGEX.captures(line).expect("line to be a hunk header");
+
+                    let (_, [before_hunk_start, before_hunk_len, after_hunk_start, after_hunk_len]) = matches.extract();
+
+                    hunk_header = Some(HunkHeader {
+                        before_hunk_start: before_hunk_start
+                            .to_str()
+                            .expect("to be a valid UTF-8 string")
+                            .parse::<u32>()
+                            .expect("to be a number"),
+                        before_hunk_len: before_hunk_len
+                            .to_str()
+                            .expect("to be a valid UTF-8 string")
+                            .parse::<u32>()
+                            .expect("to be a number"),
+                        after_hunk_start: after_hunk_start
+                            .to_str()
+                            .expect("to be a valid UTF-8 string")
+                            .parse::<u32>()
+                            .expect("to be a number"),
+                        after_hunk_len: after_hunk_len
+                            .to_str()
+                            .expect("to be a valid UTF-8 string")
+                            .parse::<u32>()
+                            .expect("to be a number"),
+                    });
+
+                    continue;
+                }
+
+                match line[0] {
+                    b' ' => hunk_lines.push((DiffLineKind::Context, line[1..].into())),
+                    b'+' => hunk_lines.push((DiffLineKind::Add, line[1..].into())),
+                    b'-' => hunk_lines.push((DiffLineKind::Remove, line[1..].into())),
+                    _ => todo!(),
+                };
+
+                match self.lines.peek() {
+                    Some(next_line) if next_line.starts_with(START_OF_HEADER) => break,
+                    None => break,
+                    _ => {}
+                }
+            }
+
+            hunk_header.map(|hunk_header| DiffHunk {
+                header: hunk_header,
+                lines: hunk_lines,
+            })
+        }
     }
 }
 
@@ -108,13 +225,11 @@ fn sliders() -> gix_testtools::Result {
 
     let mut iter = commits.chunks(2);
 
-    while let Some(&[new, old]) = iter.next() {
+    while let Some(&[new_commit_id, old_commit_id]) = iter.next() {
         // TODO: We can extract the duplicate code.
-        let old_commit = odb.find_commit(&old, &mut buffer)?.to_owned();
-        let new_commit = odb.find_commit(&new, &mut buffer)?.to_owned();
+        let old_commit = odb.find_commit(&old_commit_id, &mut buffer)?.to_owned();
+        let new_commit = odb.find_commit(&new_commit_id, &mut buffer)?.to_owned();
         let file_path = BString::from(old_commit.message.trim_ascii_end());
-
-        eprintln!("diffing {old} and {new}, file path {file_path}");
 
         let old_tree = old_commit.tree;
         let old_blob_id = odb
@@ -153,11 +268,6 @@ fn sliders() -> gix_testtools::Result {
 
         let outcome = resource_cache.prepare_diff()?;
 
-        //let old_string: gix_ref::bstr::BString = outcome.old.data.as_slice().unwrap().into();
-        //let new_string: gix_ref::bstr::BString = outcome.new.data.as_slice().unwrap().into();
-        //eprintln!("{old_string}");
-        //eprintln!("{new_string}");
-
         let interner = gix_diff::blob::intern::InternedInput::new(
             tokens_for_diffing(outcome.old.data.as_slice().unwrap_or_default()),
             tokens_for_diffing(outcome.new.data.as_slice().unwrap_or_default()),
@@ -169,7 +279,10 @@ fn sliders() -> gix_testtools::Result {
             UnifiedDiff::new(&interner, DiffHunkRecorder::new(), ContextSize::symmetrical(3)),
         )?;
 
-        eprintln!("{actual:#?}");
+        let baseline_path = git_dir.join(format!("{old_commit_id}-{new_commit_id}.baseline"));
+        let baseline = Baseline::collect(baseline_path).unwrap();
+
+        pretty_assertions::assert_eq!(actual, baseline);
     }
 
     Ok(())
