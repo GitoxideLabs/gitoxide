@@ -124,6 +124,7 @@ mod baseline {
 
                     let (_, [before_hunk_start, before_hunk_len, after_hunk_start, after_hunk_len]) = matches.extract();
 
+                    assert!(hunk_header.is_none(), "should not overwrite existing hunk_header");
                     hunk_header = Some(HunkHeader {
                         before_hunk_start: before_hunk_start
                             .to_str()
