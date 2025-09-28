@@ -79,7 +79,7 @@ mod baseline {
             Ok(baseline.collect())
         }
 
-        fn skip_header(&mut self) -> () {
+        fn skip_header(&mut self) {
             // diff --git a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             // index ccccccc..ddddddd 100644
             // --- a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -156,7 +156,7 @@ mod baseline {
                     b'+' => hunk_lines.push((DiffLineKind::Add, line[1..].into())),
                     b'-' => hunk_lines.push((DiffLineKind::Remove, line[1..].into())),
                     _ => todo!(),
-                };
+                }
 
                 match self.lines.peek() {
                     Some(next_line) if next_line.starts_with(START_OF_HEADER) => break,
@@ -218,7 +218,7 @@ fn sliders() -> gix_testtools::Result {
         stack,
     );
 
-    assert!(commits.len() > 0);
+    assert!(!commits.is_empty());
     assert!(commits.len().is_multiple_of(2));
 
     let mut buffer = Vec::new();

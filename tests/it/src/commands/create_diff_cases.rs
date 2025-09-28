@@ -90,8 +90,8 @@ echo {script_name} >> .gitignore
 
             eprintln!("{old_blob_id:?} {old_path:?} {new_blob_id:?} {new_path:?}");
 
-            let dst_old_blob = assets.join(format!("{}.commit", old_blob_id));
-            let dst_new_blob = assets.join(format!("{}.commit", new_blob_id));
+            let dst_old_blob = assets.join(format!("{old_blob_id}.commit"));
+            let dst_new_blob = assets.join(format!("{new_blob_id}.commit"));
             if !dry_run {
                 let old_blob = repo.objects.find_blob(&old_blob_id, &mut buf)?.data;
                 std::fs::write(dst_old_blob, old_blob)?;
