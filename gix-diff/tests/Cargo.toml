@@ -26,6 +26,7 @@ gix-worktree = { path = "../../gix-worktree" }
 gix-object = { path = "../../gix-object" }
 gix-odb = { path = "../../gix-odb" }
 gix-filter = { path = "../../gix-filter" }
+gix-ref = { path = "../../gix-ref" }
 gix-traverse = { path = "../../gix-traverse" }
 gix-testtools = { path = "../../tests/tools" }
 
