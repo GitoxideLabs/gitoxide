@@ -1698,11 +1698,13 @@ dependencies = [
  "gix-object",
  "gix-odb",
  "gix-pathspec",
+ "gix-ref",
  "gix-testtools",
  "gix-traverse",
  "gix-worktree",
  "insta",
  "pretty_assertions",
+ "regex",
  "shell-words",
 ]
 
