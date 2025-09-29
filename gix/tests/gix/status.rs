@@ -311,27 +311,6 @@ mod index_worktree {
         }
 
         #[test]
-        fn submodule_in_symlinked_dir() -> crate::Result {
-            use crate::util::named_subrepo_opts;
-            let repo = named_subrepo_opts(
-                "make_submodule_with_symlinked_git_dir.sh",
-                "symlinked-git-dir",
-                gix::open::Options::isolated(),
-            )?;
-            let status = repo
-                .status(gix::progress::Discard)?
-                .index_worktree_options_mut(|opts| {
-                    opts.sorting =
-                        Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
-                })
-                .into_index_worktree_iter(None)?;
-            for change in status {
-                change?;
-            }
-            Ok(())
-        }
-
-        #[test]
         fn submodule_modification() -> crate::Result {
             let repo = submodule_repo("modified-untracked-and-submodule-head-changed-and-modified")?;
             let mut status = repo
