@@ -272,7 +272,13 @@ impl ThreadSafeRepository {
                 section
                     .path
                     .as_deref()
-                    .and_then(|p| gix_path::normalize(p.into(), current_dir))
+                    .and_then(|p| {
+                        if p.exists() {
+                            gix_path::realpath_opts(p, current_dir, gix_path::realpath::MAX_SYMLINKS).ok()
+                        } else {
+                            gix_path::normalize(p.into(), current_dir).map(Cow::into_owned)
+                        }
+                    })
                     .is_some_and(|config_path| config_path.starts_with(git_dir))
             }
             let worktree_path = config
@@ -301,7 +307,23 @@ impl ThreadSafeRepository {
                     | gix_config::Source::EnvOverride => wt_path,
                     _ => git_dir.join(wt_path).into(),
                 };
-                worktree_dir = gix_path::normalize(wt_path, current_dir).map(Cow::into_owned);
+
+                // the reason we use realpath instead of gix_path::normalize here is because there
+                // could be any intermediate symlinks (for example due to a symlinked .git
+                // directory)
+                let is_relative = wt_path.is_relative();
+                worktree_dir = if wt_path.exists() {
+                    gix_path::realpath(&wt_path).ok()
+                } else {
+                    Some(wt_path.into_owned())
+                };
+                // restore the relative path if possible after resolving the absolute path
+                if is_relative {
+                    if let Some(rel_path) = worktree_dir.as_deref().and_then(|p| p.strip_prefix(current_dir).ok()) {
+                        worktree_dir = Some(rel_path.to_path_buf());
+                    }
+                }
+
                 #[allow(unused_variables)]
                 if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
                     gix_trace::warn!("The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading", worktree_path.display());
