@@ -32,4 +32,4 @@ gix-hash = { path = "../../gix-hash" }
 gix-validate = { path = "../../gix-validate" }
 gix-lock = { path = "../../gix-lock" }
 gix-object = { path = "../../gix-object" }
-insta = "1.43.1"
+insta = "1.43.2"

@@ -41,7 +41,7 @@ gix-tempfile = { version = "^18.0.0", path = "../gix-tempfile", optional = true 
 gix-trace = { version = "^0.1.13", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.47.0", path = "../gix-traverse", optional = true }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 imara-diff = { version = "0.1.8", optional = true }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 getrandom = { version = "0.2.8", optional = true, default-features = false, features = ["js"] }

@@ -24,7 +24,7 @@ gix-traverse = { version = "^0.47.0", path = "../gix-traverse" }
 gix-fs = { version = "^0.16.1", path = "../gix-fs" }
 gix-path = { version = "^0.10.20", path = "../gix-path" }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 parking_lot = "0.12.4"
 
 [dev-dependencies]

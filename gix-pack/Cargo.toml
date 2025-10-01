@@ -48,7 +48,7 @@ gix-diff = { version = "^0.53.0", path = "../gix-diff", default-features = false
 memmap2 = "0.9.7"
 smallvec = "1.15.1"
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 # for caching
 uluru = { version = "3.0.0", optional = true }

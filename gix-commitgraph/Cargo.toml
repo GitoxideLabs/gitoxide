@@ -26,7 +26,7 @@ gix-chunk = { version = "^0.4.11", path = "../gix-chunk" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 memmap2 = "0.9.7"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 document-features = { version = "0.2.0", optional = true }
 

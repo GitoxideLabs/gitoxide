@@ -34,7 +34,7 @@ gix-revwalk = { version = "^0.21.0", path = "../gix-revwalk" }
 gix-diff = { version = "^0.53.0", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-index = { version = "^0.41.0", path = "../gix-index" }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 imara-diff = { version = "0.1.8" }
 bstr = { version = "1.12.0", default-features = false }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

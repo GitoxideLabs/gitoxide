@@ -22,7 +22,7 @@ gix-path = { version = "^0.10.20", path = "../gix-path" }
 gix-url = { version = "^0.32.0", path = "../gix-url" }
 
 bstr = { version = "1.12.0", default-features = false }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

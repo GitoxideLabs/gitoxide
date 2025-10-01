@@ -20,7 +20,7 @@ gix-validate = { version = "^0.10.0", path = "../gix-validate" }
 gix-hash = { version = "^0.19.0", path = "../gix-hash" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 smallvec = "1.15.1"
 
 [dev-dependencies]

@@ -86,7 +86,7 @@ gix-credentials = { version = "^0.30.0", path = "../gix-credentials", optional =
 gix-refspec = { version = "^0.31.0", path = "../gix-refspec", optional = true }
 gix-lock = { version = "^18.0.0", path = "../gix-lock", optional = true }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",
 ] }

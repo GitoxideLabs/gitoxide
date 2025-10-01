@@ -29,6 +29,6 @@ gix-filter = { path = "../../gix-filter" }
 gix-traverse = { path = "../../gix-traverse" }
 gix-testtools = { path = "../../tests/tools" }
 
-insta = "1.43.1"
+insta = "1.43.2"
 shell-words = "1"
 pretty_assertions = "1.4.0"

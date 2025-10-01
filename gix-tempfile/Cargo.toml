@@ -35,7 +35,7 @@ gix-fs = { version = "^0.16.0", path = "../gix-fs" }
 parking_lot = "0.12.4"
 dashmap = { version = "6.0.1", optional = true }
 once_cell = { version = "1.21.3", default-features = false, features = ["race", "std"] }
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 
 signal-hook = { version = "0.3.18", default-features = false, optional = true }
 signal-hook-registry = { version = "1.4.5", optional = true }
@@ -51,7 +51,7 @@ signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 hp-hashmap = ["dep:dashmap"]
 
 [target.'cfg(not(windows))'.dependencies]
-libc = { version = "0.2.174", default-features = false }
+libc = { version = "0.2.176", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -22,7 +22,7 @@ gix-config-value = { version = "^0.15.1", path = "../gix-config-value" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 bitflags = "2"
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

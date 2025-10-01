@@ -23,7 +23,7 @@ gix-features = { version = "^0.43.1", path = "../gix-features" }
 gix-path = { version = "^0.10.20", path = "../gix-path" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 url = "2.5.2"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 percent-encoding = "2.3.1"

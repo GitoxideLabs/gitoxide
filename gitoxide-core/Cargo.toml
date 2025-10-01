@@ -56,16 +56,16 @@ gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.22
 gix-status = { version = "^0.20.0", path = "../gix-status" }
 gix-fsck = { version = "^0.12.0", path = "../gix-fsck" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
-anyhow = "1.0.98"
-thiserror = "2.0.0"
-bytesize = "2.0.1"
-tempfile = "3.20.0"
+anyhow = "1.0.100"
+thiserror = "2.0.17"
+bytesize = "2.1.0"
+tempfile = "3.23.0"
 
 # for async-client
 async-trait = { version = "0.1.51", optional = true }
 async-net = { version = "2.0", optional = true }
 futures-lite = { version = "2.1.0", optional = true }
-async-io = { version = "2.5", optional = true }
+async-io = { version = "2.6", optional = true }
 futures-io = { version = "0.3.16", optional = true }
 blocking = { version = "1.6.2", optional = true }
 
@@ -74,7 +74,7 @@ gix-url = { version = "^0.32.0", path = "../gix-url", optional = true }
 jwalk = { version = "0.8.0", optional = true }
 
 # for 'hours'
-fs-err = { version = "3.1.1", optional = true }
+fs-err = { version = "3.1.2", optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
 smallvec = { version = "1.15.1", optional = true }
 
@@ -83,8 +83,8 @@ rusqlite = { version = "0.37.0", optional = true, features = ["bundled"] }
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }
-sysinfo = { version = "0.37.0", optional = true, default-features = false, features = ["system"] }
-serde_json = { version = "1.0.142", optional = true }
+sysinfo = { version = "0.37.1", optional = true, default-features = false, features = ["system"] }
+serde_json = { version = "1.0.145", optional = true }
 tracing-forest = { version = "0.2.0", features = ["serde"], optional = true }
 tracing-subscriber = { version = "0.3.20", optional = true }
 tracing = { version = "0.1.37", optional = true }

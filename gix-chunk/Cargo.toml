@@ -17,4 +17,4 @@ doctest = false
 test = false
 
 [dependencies]
-thiserror = "2.0.0"
+thiserror = "2.0.17"

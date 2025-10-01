@@ -15,7 +15,7 @@ name = "traverse"
 path = "traverse/main.rs"
 
 [dev-dependencies]
-insta = "1.43.1"
+insta = "1.43.2"
 gix-traverse = { path = ".." }
 gix-testtools = { path = "../../tests/tools" }
 gix-odb = { path = "../../gix-odb" }

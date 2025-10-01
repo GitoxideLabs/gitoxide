@@ -28,11 +28,11 @@ bitflags = "2"
 document-features = { version = "0.2.1", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-libc = "0.2.174"
+libc = "0.2.176"
 
 [target.'cfg(windows)'.dependencies]
 gix-path = { version = "^0.10.20", path = "../gix-path" }
-windows-sys = { version = "0.60.2", features = [
+windows-sys = { version = "0.61.1", features = [
     "Win32_Foundation",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
@@ -41,7 +41,7 @@ windows-sys = { version = "0.60.2", features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 
 [package.metadata.docs.rs]
 all-features = true

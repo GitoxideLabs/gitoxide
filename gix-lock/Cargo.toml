@@ -18,7 +18,7 @@ test = true
 [dependencies]
 gix-utils = { version = "^0.3.0", default-features = false, path = "../gix-utils" }
 gix-tempfile = { version = "^18.0.0", default-features = false, path = "../gix-tempfile" }
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 [dev-dependencies]
-tempfile = "3.20.0"
+tempfile = "3.23.0"

@@ -22,7 +22,7 @@ gix-worktree = { version = "^0.42.0", path = "../gix-worktree", default-features
 gix-traverse = { version = "^0.47.0", path = "../gix-traverse" }
 
 smallvec = "1.15.1"
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 
 [dev-dependencies]
 gix-ref = { path = "../gix-ref" }

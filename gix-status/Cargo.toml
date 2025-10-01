@@ -33,7 +33,7 @@ gix-pathspec = { version = "^0.12.0", path = "../gix-pathspec" }
 gix-dir = { version = "^0.15.0", path = "../gix-dir", optional = true }
 gix-diff = { version = "^0.53.0", path = "../gix-diff", default-features = false, features = ["blob"], optional = true }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 filetime = "0.2.15"
 bstr = { version = "1.12.0", default-features = false }
 

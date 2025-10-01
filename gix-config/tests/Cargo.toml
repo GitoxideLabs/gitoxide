@@ -29,5 +29,5 @@ gix-sec = { path = "../../gix-sec" }
 serial_test = { version = "3.1.0", default-features = false }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 
-bytesize = "2.0.1"
+bytesize = "2.1.0"
 cap = { version = "0.1.2", features = ["stats"] }

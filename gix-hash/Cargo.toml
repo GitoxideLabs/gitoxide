@@ -22,7 +22,7 @@ serde = ["dep:serde", "faster-hex/serde"]
 [dependencies]
 gix-features = { version = "^0.43.0", path = "../gix-features", features = ["progress"] }
 
-thiserror = "2.0.0"
+thiserror = "2.0.17"
 faster-hex = { version = "0.10.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 sha1-checked = { version = "0.10.0", default-features = false }
