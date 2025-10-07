@@ -5,11 +5,7 @@ use gix_diff::blob::{
     unified_diff::{ConsumeHunk, ContextSize, DiffLineKind, HunkHeader},
     Algorithm, UnifiedDiff,
 };
-use gix_object::FindExt;
-use gix_ref::{
-    bstr::{self, BString},
-    file::ReferenceExt,
-};
+use gix_object::bstr::{self, BString};
 
 #[derive(Debug, PartialEq)]
 struct DiffHunk {
@@ -60,7 +56,7 @@ mod baseline {
     use std::path::Path;
 
     use gix_diff::blob::unified_diff::{DiffLineKind, HunkHeader};
-    use gix_ref::bstr::{BString, ByteSlice};
+    use gix_object::bstr::{BString, ByteSlice};
     use gix_testtools::once_cell::sync::Lazy;
     use regex::bytes::Regex;
 
@@ -176,102 +172,33 @@ mod baseline {
 #[test]
 fn sliders() -> gix_testtools::Result {
     let worktree_path = fixture_path()?;
+    let asset_dir = worktree_path.join("assets");
     let git_dir = worktree_path.join(".git");
-    let odb = gix_odb::at(git_dir.join("objects"))?;
-    let refs = gix_ref::file::Store::at(git_dir.clone(), gix_ref::store::init::Options::default());
-    // In `../tree.rs`, there is `head_of` which would obviate the need for using `gix_ref`.
-    let mut head = refs.find("HEAD")?;
-    let head_id = head.peel_to_id(&refs, &odb)?;
 
-    let commits = gix_traverse::commit::Simple::new(Some(head_id), &odb)
-        .map(Result::unwrap)
-        .map(|commit| commit.id)
-        .collect::<Vec<_>>();
+    let dir = std::fs::read_dir(&git_dir)?;
 
-    let index = gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default())?;
-    let stack = gix_worktree::Stack::from_state_and_ignore_case(
-        worktree_path.clone(),
-        false,
-        gix_worktree::stack::State::AttributesAndIgnoreStack {
-            attributes: Default::default(),
-            ignore: Default::default(),
-        },
-        &index,
-        index.path_backing(),
-    );
-    let capabilities = gix_fs::Capabilities::probe(&git_dir);
-    let mut resource_cache = gix_diff::blob::Platform::new(
-        Default::default(),
-        gix_diff::blob::Pipeline::new(
-            gix_diff::blob::pipeline::WorktreeRoots {
-                old_root: None,
-                new_root: None,
-            },
-            gix_filter::Pipeline::new(Default::default(), Default::default()),
-            vec![],
-            gix_diff::blob::pipeline::Options {
-                large_file_threshold_bytes: 0,
-                fs: capabilities,
-            },
-        ),
-        gix_diff::blob::pipeline::Mode::ToGit,
-        stack,
-    );
+    for entry in dir {
+        let entry = entry?;
+        let file_name = entry.file_name().into_string().expect("to be string");
 
-    assert!(!commits.is_empty());
-    assert!(commits.len().is_multiple_of(2));
+        if !file_name.ends_with(".baseline") {
+            continue;
+        }
 
-    let mut buffer = Vec::new();
-    let mut buffer2 = Vec::new();
+        let parts: Vec<_> = file_name.split(".").collect();
+        let name = parts[0];
 
-    let mut iter = commits.chunks(2);
+        let parts: Vec<_> = name.split("-").collect();
+        let [old_blob_id, new_blob_id] = parts[..] else {
+            unimplemented!();
+        };
 
-    while let Some(&[new_commit_id, old_commit_id]) = iter.next() {
-        // TODO: We can extract the duplicate code.
-        let old_commit = odb.find_commit(&old_commit_id, &mut buffer)?.to_owned();
-        let new_commit = odb.find_commit(&new_commit_id, &mut buffer)?.to_owned();
-        let file_path = BString::from(old_commit.message.trim_ascii_end());
-
-        let old_tree = old_commit.tree;
-        let old_blob_id = odb
-            .find_tree(&old_tree, &mut buffer2)?
-            .entries
-            .iter()
-            .find(|entry| file_path.eq(entry.filename))
-            .unwrap()
-            .oid
-            .to_owned();
-
-        let new_tree = new_commit.tree;
-        let new_blob_id = odb
-            .find_tree(&new_tree, &mut buffer2)?
-            .entries
-            .iter()
-            .find(|entry| entry.filename == file_path)
-            .unwrap()
-            .oid
-            .to_owned();
-
-        resource_cache.set_resource(
-            old_blob_id,
-            gix_object::tree::EntryKind::Blob,
-            file_path.as_ref(),
-            gix_diff::blob::ResourceKind::OldOrSource,
-            &odb,
-        )?;
-        resource_cache.set_resource(
-            new_blob_id,
-            gix_object::tree::EntryKind::Blob,
-            file_path.as_ref(),
-            gix_diff::blob::ResourceKind::NewOrDestination,
-            &odb,
-        )?;
-
-        let outcome = resource_cache.prepare_diff()?;
+        let old_data = std::fs::read(asset_dir.join(format!("{old_blob_id}.commit")))?;
+        let new_data = std::fs::read(asset_dir.join(format!("{new_blob_id}.commit")))?;
 
         let interner = gix_diff::blob::intern::InternedInput::new(
-            tokens_for_diffing(outcome.old.data.as_slice().unwrap_or_default()),
-            tokens_for_diffing(outcome.new.data.as_slice().unwrap_or_default()),
+            tokens_for_diffing(old_data.as_slice()),
+            tokens_for_diffing(new_data.as_slice()),
         );
 
         let actual = gix_diff::blob::diff(
@@ -280,7 +207,7 @@ fn sliders() -> gix_testtools::Result {
             UnifiedDiff::new(&interner, DiffHunkRecorder::new(), ContextSize::symmetrical(3)),
         )?;
 
-        let baseline_path = git_dir.join(format!("{old_commit_id}-{new_commit_id}.baseline"));
+        let baseline_path = git_dir.join(file_name);
         let baseline = Baseline::collect(baseline_path).unwrap();
 
         pretty_assertions::assert_eq!(actual, baseline);

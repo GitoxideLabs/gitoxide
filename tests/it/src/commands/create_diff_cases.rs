@@ -60,7 +60,10 @@ pub(super) mod function {
 
         let mut blocks: Vec<String> = vec![format!(
             r#"#!/usr/bin/env bash
-set -eu -o pipefail
+# TODO:
+# `git diff --no-index` returns 1 when there's differences, but 1 is treated as an error by the
+# shell.
+# set -eu -o pipefail
 
 ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
@@ -68,6 +71,8 @@ git init
 echo .gitignore >> .gitignore
 echo {asset_dir}/ >> .gitignore
 echo {script_name} >> .gitignore
+
+mkdir -p {asset_dir}
 "#
         )];
 
@@ -101,14 +106,9 @@ echo {script_name} >> .gitignore
             }
 
             blocks.push(format!(
-                r#"cp "$ROOT/{asset_dir}/{old_blob_id}.commit" ./{old_blob_id}
-git add {old_blob_id}
-git commit -m {old_blob_id}
-cp "$ROOT/{asset_dir}/{new_blob_id}.commit" ./{old_blob_id}
-git add {old_blob_id}
-git commit -m "{old_blob_id} -> {new_blob_id}"
-
-git diff HEAD^ HEAD > .git/$(git rev-parse HEAD^)-$(git rev-parse HEAD).baseline
+                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.commit" "$ROOT/{asset_dir}/{new_blob_id}.commit" > .git/{old_blob_id}-{new_blob_id}.baseline
+cp "$ROOT/{asset_dir}/{old_blob_id}.commit" assets/
+cp "$ROOT/{asset_dir}/{new_blob_id}.commit" assets/
 "#
             ));
         }
