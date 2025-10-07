@@ -1287,6 +1287,17 @@ pub fn main() -> Result<()> {
                     core::repository::commit::verify(repository(Mode::Lenient)?, rev_spec.as_deref())
                 },
             ),
+            commit::Subcommands::Sign { rev_spec } => prepare_and_run(
+                "commit-sign",
+                trace,
+                auto_verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, _out, _err| {
+                    core::repository::commit::sign(repository(Mode::Lenient)?, rev_spec.as_deref())
+                },
+            ),
             commit::Subcommands::Describe {
                 annotated_tags,
                 all_refs,

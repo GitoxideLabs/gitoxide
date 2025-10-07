@@ -1,6 +1,14 @@
-use std::{io::Write, process::Stdio};
+use std::{
+    borrow::Cow,
+    io::{Read, Write},
+    process::Stdio,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
+use gix::{
+    bstr::{BStr, ByteSlice},
+    objs::commit::SIGNATURE_FIELD_NAME,
+};
 
 /// Note that this is a quick implementation of commit signature verification that ignores a lot of what
 /// git does and can do, while focussing on the gist of it.
@@ -36,6 +44,60 @@ pub fn verify(repo: gix::Repository, rev_spec: Option<&str>) -> Result<()> {
     if !child.wait()?.success() {
         bail!("Command {cmd:?} failed");
     }
+    Ok(())
+}
+
+pub fn sign(repo: gix::Repository, rev_spec: Option<&str>) -> Result<()> {
+    let rev_spec = rev_spec.unwrap_or("HEAD");
+    let commit = repo
+        .rev_parse_single(format!("{rev_spec}^{{commit}}").as_str())?
+        .object()?
+        .into_commit();
+
+    let mut cmd: std::process::Command = gix::command::prepare("gpg").into();
+    cmd.args([
+        "--keyid-format=long",
+        "--status-fd=2",
+        "--detach-sign",
+        "--sign",
+        "--armor",
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped());
+    gix::trace::debug!("About to execute {cmd:?}");
+    let mut child = cmd.spawn()?;
+    child
+        .stdin
+        .take()
+        .expect("to be present")
+        .write_all(commit.data.as_ref())?;
+
+    if !child.wait()?.success() {
+        bail!("Command {cmd:?} failed");
+    }
+
+    let mut signed_data = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("to be present")
+        .read_to_end(&mut signed_data)?;
+
+    let object = repo
+        .rev_parse_single(format!("{rev_spec}^{{commit}}").as_str())?
+        .object()?;
+    let mut commit_ref = object.to_commit_ref();
+
+    let extra_header: Cow<'_, BStr> = Cow::Borrowed(signed_data.as_bstr());
+
+    // TODO:
+    // What do we want to do when there is already a signature?
+    commit_ref
+        .extra_headers
+        .push((BStr::new(SIGNATURE_FIELD_NAME), extra_header));
+
+    eprintln!("{commit_ref:?}");
+
     Ok(())
 }
 
