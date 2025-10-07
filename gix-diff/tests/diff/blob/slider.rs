@@ -2,7 +2,7 @@ use std::{iter::Peekable, path::PathBuf};
 
 use gix_diff::blob::{
     intern::TokenSource,
-    unified_diff::{ConsumeHunk, ContextSize, DiffLineKind, HunkHeader},
+    unified_diff::{ConsumeHunk, ContextSize, HunkHeader},
     Algorithm, UnifiedDiff,
 };
 use gix_object::bstr::{self, BString};
@@ -10,7 +10,7 @@ use gix_object::bstr::{self, BString};
 #[derive(Debug, PartialEq)]
 struct DiffHunk {
     header: HunkHeader,
-    lines: Vec<(DiffLineKind, BString)>,
+    lines: BString,
 }
 
 struct DiffHunkRecorder {
@@ -31,12 +31,18 @@ impl ConsumeHunk for DiffHunkRecorder {
         header: HunkHeader,
         lines: &[(gix_diff::blob::unified_diff::DiffLineKind, &[u8])],
     ) -> std::io::Result<()> {
-        let lines: Vec<_> = lines
-            .iter()
-            .map(|(kind, line)| (*kind, BString::new(line.to_vec())))
-            .collect();
+        let mut buf = Vec::new();
 
-        let diff_hunk = DiffHunk { header, lines };
+        for &(kind, line) in lines {
+            buf.push(kind.to_prefix() as u8);
+            buf.extend_from_slice(line);
+            buf.push(b'\n');
+        }
+
+        let diff_hunk = DiffHunk {
+            header,
+            lines: buf.into(),
+        };
 
         self.inner.push(diff_hunk);
 
@@ -55,8 +61,8 @@ struct Baseline<'a> {
 mod baseline {
     use std::path::Path;
 
-    use gix_diff::blob::unified_diff::{DiffLineKind, HunkHeader};
-    use gix_object::bstr::{BString, ByteSlice};
+    use gix_diff::blob::unified_diff::HunkHeader;
+    use gix_object::bstr::ByteSlice;
     use gix_testtools::once_cell::sync::Lazy;
     use regex::bytes::Regex;
 
@@ -105,7 +111,7 @@ mod baseline {
             });
 
             let mut hunk_header = None;
-            let mut hunk_lines: Vec<(DiffLineKind, BString)> = Vec::new();
+            let mut hunk_lines = Vec::new();
 
             while let Some(line) = self.lines.next() {
                 // @@ -18,6 +18,7 @@ abc def ghi
@@ -148,9 +154,10 @@ mod baseline {
                 }
 
                 match line[0] {
-                    b' ' => hunk_lines.push((DiffLineKind::Context, line[1..].into())),
-                    b'+' => hunk_lines.push((DiffLineKind::Add, line[1..].into())),
-                    b'-' => hunk_lines.push((DiffLineKind::Remove, line[1..].into())),
+                    b' ' | b'+' | b'-' => {
+                        hunk_lines.extend_from_slice(line);
+                        hunk_lines.push(b'\n');
+                    }
                     _ => todo!(),
                 }
 
@@ -163,7 +170,7 @@ mod baseline {
 
             hunk_header.map(|hunk_header| DiffHunk {
                 header: hunk_header,
-                lines: hunk_lines,
+                lines: hunk_lines.into(),
             })
         }
     }
