@@ -32,4 +32,3 @@ gix-testtools = { path = "../../tests/tools" }
 insta = "1.43.1"
 shell-words = "1"
 pretty_assertions = "1.4.0"
-regex = "1.6.0"

@@ -1703,7 +1703,6 @@ dependencies = [
  "gix-worktree",
  "insta",
  "pretty_assertions",
- "regex",
  "shell-words",
 ]
 

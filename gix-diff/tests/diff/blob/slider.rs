@@ -63,10 +63,10 @@ mod baseline {
 
     use gix_diff::blob::unified_diff::HunkHeader;
     use gix_object::bstr::ByteSlice;
-    use gix_testtools::once_cell::sync::Lazy;
-    use regex::bytes::Regex;
 
     use super::{Baseline, DiffHunk};
+
+    static START_OF_HEADER: &[u8; 4] = b"@@ -";
 
     impl Baseline<'_> {
         pub fn collect(baseline_path: impl AsRef<Path>) -> std::io::Result<Vec<DiffHunk>> {
@@ -99,56 +99,52 @@ mod baseline {
             let line = self.lines.next().expect("line to be present");
             assert!(line.starts_with(b"+++ "));
         }
+
+        /// Parse diff hunk headers that conform to the unified diff hunk header format.
+        ///
+        /// The parser is very primitive and relies on the fact that `+18` is parsed as `18`. This
+        /// allows us to split the input on ` ` and `,` only.
+        ///
+        /// @@ -18,6 +18,7 @@ abc def ghi
+        /// @@ -{before_hunk_start},{before_hunk_len} +{after_hunk_start},{after_hunk_len} @@
+        fn parse_hunk_header(&self, line: &[u8]) -> gix_testtools::Result<HunkHeader> {
+            let Some(line) = line.strip_prefix(START_OF_HEADER) else {
+                todo!()
+            };
+
+            let parts: Vec<_> = line.split(|b| *b == b' ' || *b == b',').collect();
+            let [before_hunk_start, before_hunk_len, after_hunk_start, after_hunk_len, ..] = parts[..] else {
+                todo!()
+            };
+
+            Ok(HunkHeader {
+                before_hunk_start: self.parse_number(before_hunk_start),
+                before_hunk_len: self.parse_number(before_hunk_len),
+                after_hunk_start: self.parse_number(after_hunk_start),
+                after_hunk_len: self.parse_number(after_hunk_len),
+            })
+        }
+
+        fn parse_number(&self, bytes: &[u8]) -> u32 {
+            bytes
+                .to_str()
+                .expect("to be a valid UTF-8 string")
+                .parse::<u32>()
+                .expect("to be a number")
+        }
     }
 
     impl Iterator for Baseline<'_> {
         type Item = DiffHunk;
 
         fn next(&mut self) -> Option<Self::Item> {
-            static HEADER_REGEX: Lazy<Regex> = Lazy::new(|| {
-                Regex::new(r"@@ -([[:digit:]]+),([[:digit:]]+) \+([[:digit:]]+),([[:digit:]]+) @@")
-                    .expect("regex to be valid")
-            });
-
             let mut hunk_header = None;
             let mut hunk_lines = Vec::new();
 
             while let Some(line) = self.lines.next() {
-                // @@ -18,6 +18,7 @@ abc def ghi
-                // TODO:
-                // make sure that the following is correct
-                // @@ -{before_hunk_start},{before_hunk_len} +{after_hunk_start},{after_hunk_len}
-
-                static START_OF_HEADER: &[u8; 4] = b"@@ -";
-
                 if line.starts_with(START_OF_HEADER) {
-                    let matches = HEADER_REGEX.captures(line).expect("line to be a hunk header");
-
-                    let (_, [before_hunk_start, before_hunk_len, after_hunk_start, after_hunk_len]) = matches.extract();
-
                     assert!(hunk_header.is_none(), "should not overwrite existing hunk_header");
-                    hunk_header = Some(HunkHeader {
-                        before_hunk_start: before_hunk_start
-                            .to_str()
-                            .expect("to be a valid UTF-8 string")
-                            .parse::<u32>()
-                            .expect("to be a number"),
-                        before_hunk_len: before_hunk_len
-                            .to_str()
-                            .expect("to be a valid UTF-8 string")
-                            .parse::<u32>()
-                            .expect("to be a number"),
-                        after_hunk_start: after_hunk_start
-                            .to_str()
-                            .expect("to be a valid UTF-8 string")
-                            .parse::<u32>()
-                            .expect("to be a number"),
-                        after_hunk_len: after_hunk_len
-                            .to_str()
-                            .expect("to be a valid UTF-8 string")
-                            .parse::<u32>()
-                            .expect("to be a number"),
-                    });
+                    hunk_header = self.parse_hunk_header(line).ok();
 
                     continue;
                 }
