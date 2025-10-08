@@ -60,10 +60,7 @@ pub(super) mod function {
 
         let mut blocks: Vec<String> = vec![format!(
             r#"#!/usr/bin/env bash
-# TODO:
-# `git diff --no-index` returns 1 when there's differences, but 1 is treated as an error by the
-# shell.
-# set -eu -o pipefail
+set -eu -o pipefail
 
 ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
@@ -106,7 +103,7 @@ mkdir -p {asset_dir}
             }
 
             blocks.push(format!(
-                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.commit" "$ROOT/{asset_dir}/{new_blob_id}.commit" > .git/{old_blob_id}-{new_blob_id}.baseline
+                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.commit" "$ROOT/{asset_dir}/{new_blob_id}.commit" > .git/{old_blob_id}-{new_blob_id}.baseline || true
 cp "$ROOT/{asset_dir}/{old_blob_id}.commit" assets/
 cp "$ROOT/{asset_dir}/{new_blob_id}.commit" assets/
 "#
