@@ -11,9 +11,8 @@ use winnow::{
 
 use crate::{
     bstr::ByteSlice,
-    commit::{decode, SignedData},
-    parse,
-    parse::NL,
+    commit::{decode, SignedData, SIGNATURE_FIELD_NAME},
+    parse::{self, NL},
     CommitRefIter,
 };
 
@@ -65,7 +64,7 @@ impl<'a> CommitRefIter<'a> {
         for token in raw_tokens {
             let token = token?;
             if let Token::ExtraHeader((name, value)) = &token.token {
-                if *name == "gpgsig" {
+                if *name == SIGNATURE_FIELD_NAME {
                     // keep track of the signature range alongside the signature data,
                     // because all but the signature is the signed data.
                     signature_and_range = Some((value.clone(), token.token_range));
