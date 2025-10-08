@@ -5,7 +5,7 @@ use gix_diff::blob::{
     unified_diff::{ConsumeHunk, ContextSize, HunkHeader},
     Algorithm, UnifiedDiff,
 };
-use gix_object::bstr::{self, BString};
+use gix_object::bstr::{self, BString, ByteVec};
 
 #[derive(Debug, PartialEq)]
 struct DiffHunk {
@@ -212,6 +212,30 @@ fn sliders() -> gix_testtools::Result {
 
         let baseline_path = git_dir.join(file_name);
         let baseline = Baseline::collect(baseline_path).unwrap();
+
+        let actual = actual
+            .iter()
+            .fold(BString::default(), |mut acc, diff_hunk| {
+                acc.push_str(diff_hunk.header.to_string().as_str());
+                acc.push(b'\n');
+
+                acc.extend_from_slice(&diff_hunk.lines);
+
+                acc
+            })
+            .to_string();
+
+        let baseline = baseline
+            .iter()
+            .fold(BString::default(), |mut acc, diff_hunk| {
+                acc.push_str(diff_hunk.header.to_string().as_str());
+                acc.push(b'\n');
+
+                acc.extend_from_slice(&diff_hunk.lines);
+
+                acc
+            })
+            .to_string();
 
         pretty_assertions::assert_eq!(actual, baseline);
     }
