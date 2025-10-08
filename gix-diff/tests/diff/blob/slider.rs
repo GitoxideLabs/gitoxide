@@ -196,8 +196,8 @@ fn sliders() -> gix_testtools::Result {
             unimplemented!();
         };
 
-        let old_data = std::fs::read(asset_dir.join(format!("{old_blob_id}.commit")))?;
-        let new_data = std::fs::read(asset_dir.join(format!("{new_blob_id}.commit")))?;
+        let old_data = std::fs::read(asset_dir.join(format!("{old_blob_id}.blob")))?;
+        let new_data = std::fs::read(asset_dir.join(format!("{new_blob_id}.blob")))?;
 
         let interner = gix_diff::blob::intern::InternedInput::new(
             tokens_for_diffing(old_data.as_slice()),

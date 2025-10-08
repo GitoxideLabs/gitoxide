@@ -92,8 +92,8 @@ mkdir -p {asset_dir}
 
             eprintln!("{old_blob_id:?} {old_path:?} {new_blob_id:?} {new_path:?}");
 
-            let dst_old_blob = assets.join(format!("{old_blob_id}.commit"));
-            let dst_new_blob = assets.join(format!("{new_blob_id}.commit"));
+            let dst_old_blob = assets.join(format!("{old_blob_id}.blob"));
+            let dst_new_blob = assets.join(format!("{new_blob_id}.blob"));
             if !dry_run {
                 let old_blob = repo.objects.find_blob(&old_blob_id, &mut buf)?.data;
                 std::fs::write(dst_old_blob, old_blob)?;
@@ -103,9 +103,9 @@ mkdir -p {asset_dir}
             }
 
             blocks.push(format!(
-                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.commit" "$ROOT/{asset_dir}/{new_blob_id}.commit" > .git/{old_blob_id}-{new_blob_id}.baseline || true
-cp "$ROOT/{asset_dir}/{old_blob_id}.commit" assets/
-cp "$ROOT/{asset_dir}/{new_blob_id}.commit" assets/
+                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > .git/{old_blob_id}-{new_blob_id}.baseline || true
+cp "$ROOT/{asset_dir}/{old_blob_id}.blob" assets/
+cp "$ROOT/{asset_dir}/{new_blob_id}.blob" assets/
 "#
             ));
         }
