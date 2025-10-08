@@ -37,7 +37,7 @@ pub(super) mod function {
 
         let options = gix::blame::Options {
             diff_algorithm,
-            range: gix::blame::BlameRanges::default(),
+            ranges: gix::blame::BlameRanges::default(),
             since: None,
             rewrites: Some(gix::diff::Rewrites::default()),
             debug_track_path: true,

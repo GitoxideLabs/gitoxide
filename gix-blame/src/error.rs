@@ -30,7 +30,7 @@ pub enum Error {
     #[error(transparent)]
     DiffTreeWithRewrites(#[from] gix_diff::tree_with_rewrites::Error),
     #[error("Invalid line range was given, line range is expected to be a 1-based inclusive range in the format '<start>,<end>'")]
-    InvalidLineRange,
+    InvalidOneBasedLineRange,
     #[error("Failure to decode commit during traversal")]
     DecodeCommit(#[from] gix_object::decode::Error),
     #[error("Failed to get parent from commitgraph during traversal")]
