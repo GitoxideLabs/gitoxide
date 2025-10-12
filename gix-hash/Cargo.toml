@@ -16,6 +16,9 @@ doctest = false
 test = false
 
 [features]
+default = ["sha1"]
+## Support for SHA-1 digests.
+sha1 = []
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "faster-hex/serde"]
 
