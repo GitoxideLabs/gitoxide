@@ -187,10 +187,10 @@ fn sliders() -> gix_testtools::Result {
             continue;
         }
 
-        let parts: Vec<_> = file_name.split(".").collect();
+        let parts: Vec<_> = file_name.split('.').collect();
         let name = parts[0];
 
-        let parts: Vec<_> = name.split("-").collect();
+        let parts: Vec<_> = name.split('-').collect();
         let [old_blob_id, new_blob_id] = parts[..] else {
             unimplemented!();
         };
