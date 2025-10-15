@@ -47,12 +47,13 @@ fn main() -> anyhow::Result<()> {
             patterns,
         } => commands::copy_royal(dry_run, &worktree_root, destination_dir, patterns),
         Subcommands::CreateDiffCases {
+            dry_run,
             sliders_file,
             worktree_dir,
             destination_dir,
             count,
             asset_dir,
-        } => commands::create_diff_cases(sliders_file, &worktree_dir, destination_dir, count, asset_dir),
+        } => commands::create_diff_cases(dry_run, sliders_file, &worktree_dir, destination_dir, count, asset_dir),
         Subcommands::CheckMode {} => commands::check_mode(),
         Subcommands::Env {} => commands::env(),
     }

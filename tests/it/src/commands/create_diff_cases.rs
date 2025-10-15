@@ -11,15 +11,13 @@ pub(super) mod function {
     };
 
     pub fn create_diff_cases(
+        dry_run: bool,
         sliders_file: PathBuf,
         worktree_dir: &Path,
         destination_dir: PathBuf,
         count: usize,
         asset_dir: Option<BString>,
     ) -> anyhow::Result<()> {
-        // TODO: turn into parameter.
-        let dry_run = false;
-
         let prefix = if dry_run { "WOULD" } else { "Will" };
         let sliders = std::fs::read_to_string(&sliders_file)?;
 
