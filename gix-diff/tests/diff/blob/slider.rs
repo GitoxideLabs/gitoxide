@@ -176,9 +176,8 @@ mod baseline {
 fn sliders() -> gix_testtools::Result {
     let worktree_path = fixture_path()?;
     let asset_dir = worktree_path.join("assets");
-    let git_dir = worktree_path.join(".git");
 
-    let dir = std::fs::read_dir(&git_dir)?;
+    let dir = std::fs::read_dir(&worktree_path)?;
 
     for entry in dir {
         let entry = entry?;
@@ -210,7 +209,7 @@ fn sliders() -> gix_testtools::Result {
             UnifiedDiff::new(&interner, DiffHunkRecorder::new(), ContextSize::symmetrical(3)),
         )?;
 
-        let baseline_path = git_dir.join(file_name);
+        let baseline_path = worktree_path.join(file_name);
         let baseline = Baseline::collect(baseline_path).unwrap();
 
         let actual = actual

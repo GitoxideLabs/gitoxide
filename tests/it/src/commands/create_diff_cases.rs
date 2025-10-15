@@ -64,11 +64,6 @@ set -eu -o pipefail
 
 ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
-git init
-echo .gitignore >> .gitignore
-echo {asset_dir}/ >> .gitignore
-echo {script_name} >> .gitignore
-
 mkdir -p {asset_dir}
 "#
         )];
@@ -103,7 +98,7 @@ mkdir -p {asset_dir}
             }
 
             blocks.push(format!(
-                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > .git/{old_blob_id}-{new_blob_id}.baseline || true
+                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.baseline || true
 cp "$ROOT/{asset_dir}/{old_blob_id}.blob" assets/
 cp "$ROOT/{asset_dir}/{new_blob_id}.blob" assets/
 "#
