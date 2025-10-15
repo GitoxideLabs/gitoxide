@@ -540,41 +540,6 @@ jobs:
       - name: gix-pack with all features (including wasm)
         run: cargo build -p gix-pack --all-features --target "$TARGET"
 
-  check-packetline:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          # We consider this script read-only and its effect is the same everywhere.
-          # However, when changes are made to `etc/scripts/copy-packetline.sh`, re-enable the other platforms for testing.
-    #       - macos-latest
-    #       - windows-latest
-
-    runs-on: ${{ matrix.os }}
-
-    defaults:
-      run:
-        # Use `bash` even on Windows, if we ever reenable `windows-latest` for testing.
-        shell: bash
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-      - name: Check that working tree is initially clean
-        run: |
-          set -x
-          git status
-          git diff --exit-code
-      - name: Regenerate gix-packetline-blocking/src
-        run: etc/scripts/copy-packetline.sh
-      - name: Check that gix-packetline-blocking/src was already up to date
-        run: |
-          set -x
-          git status
-          git diff --exit-code
-
   # Check that all `actions/checkout` in CI jobs have `persist-credentials: false`.
   check-no-persist-credentials:
     runs-on: ubuntu-latest
@@ -655,7 +620,6 @@ jobs:
       - test-32bit-windows-size-doc
       - lint
       - cargo-deny
-      - check-packetline
       - check-no-persist-credentials
       - check-blocking
 

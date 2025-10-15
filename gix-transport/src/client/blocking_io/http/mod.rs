@@ -227,7 +227,7 @@ pub struct Transport<H: Http> {
     actual_version: Protocol,
     http: H,
     service: Option<Service>,
-    line_provider: Option<gix_packetline::StreamingPeekableIter<H::ResponseBody>>,
+    line_provider: Option<gix_packetline::read::blocking_io::StreamingPeekableIter<H::ResponseBody>>,
     identity: Option<gix_sec::identity::Account>,
     trace: bool,
 }
@@ -434,7 +434,7 @@ impl<H: Http> client::Transport for Transport<H> {
         <Transport<H>>::check_content_type(service, "advertisement", headers)?;
 
         let line_reader = self.line_provider.get_or_insert_with(|| {
-            gix_packetline::StreamingPeekableIter::new(body, &[PacketLineRef::Flush], self.trace)
+            gix_packetline::read::blocking_io::StreamingPeekableIter::new(body, &[PacketLineRef::Flush], self.trace)
         });
 
         // the service announcement is only sent sometimes depending on the exact server/protocol version/used protocol (http?)

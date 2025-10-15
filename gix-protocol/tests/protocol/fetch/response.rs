@@ -1,9 +1,13 @@
 use crate::fetch::Cursor;
 
-fn mock_reader(path: &str) -> gix_packetline::StreamingPeekableIter<Cursor> {
+fn mock_reader(path: &str) -> gix_packetline::read::blocking_io::StreamingPeekableIter<Cursor> {
     use crate::fixture_bytes;
     let buf = fixture_bytes(path);
-    gix_packetline::StreamingPeekableIter::new(Cursor::new(buf), &[gix_packetline::PacketLineRef::Flush], false)
+    gix_packetline::read::blocking_io::StreamingPeekableIter::new(
+        Cursor::new(buf),
+        &[gix_packetline::PacketLineRef::Flush],
+        false,
+    )
 }
 
 fn id(hex: &str) -> gix_hash::ObjectId {

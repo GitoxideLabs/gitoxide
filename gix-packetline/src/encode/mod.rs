@@ -10,15 +10,13 @@ pub enum Error {
     DataIsEmpty,
 }
 
-#[cfg(all(not(feature = "blocking-io"), feature = "async-io"))]
-mod async_io;
-#[cfg(all(not(feature = "blocking-io"), feature = "async-io"))]
-pub use async_io::*;
+/// Async IO support
+#[cfg(feature = "async-io")]
+pub mod async_io;
 
+/// Blocking IO support
 #[cfg(feature = "blocking-io")]
-mod blocking_io;
-#[cfg(feature = "blocking-io")]
-pub use blocking_io::*;
+pub mod blocking_io;
 
 pub(crate) fn u16_to_hex(value: u16) -> [u8; 4] {
     let mut buf = [0u8; 4];

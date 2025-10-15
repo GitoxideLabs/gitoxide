@@ -79,7 +79,9 @@ impl<'a, T: ExtendedBufRead<'a> + ?Sized + 'a> ExtendedBufRead<'a> for Box<T> {
     }
 }
 
-impl<T: io::Read> ReadlineBufRead for gix_packetline::read::WithSidebands<'_, T, fn(bool, &[u8]) -> ProgressAction> {
+impl<T: io::Read> ReadlineBufRead
+    for gix_packetline::read::blocking_io::WithSidebands<'_, T, fn(bool, &[u8]) -> ProgressAction>
+{
     fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
         self.read_data_line()
     }
@@ -89,7 +91,7 @@ impl<T: io::Read> ReadlineBufRead for gix_packetline::read::WithSidebands<'_, T,
     }
 }
 
-impl<'a, T: io::Read> ReadlineBufRead for gix_packetline::read::WithSidebands<'a, T, HandleProgress<'a>> {
+impl<'a, T: io::Read> ReadlineBufRead for gix_packetline::read::blocking_io::WithSidebands<'a, T, HandleProgress<'a>> {
     fn readline(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, gix_packetline::decode::Error>>> {
         self.read_data_line()
     }
@@ -99,7 +101,9 @@ impl<'a, T: io::Read> ReadlineBufRead for gix_packetline::read::WithSidebands<'a
     }
 }
 
-impl<'a, T: io::Read> ExtendedBufRead<'a> for gix_packetline::read::WithSidebands<'a, T, HandleProgress<'a>> {
+impl<'a, T: io::Read> ExtendedBufRead<'a>
+    for gix_packetline::read::blocking_io::WithSidebands<'a, T, HandleProgress<'a>>
+{
     fn set_progress_handler(&mut self, handle_progress: Option<HandleProgress<'a>>) {
         self.set_progress_handler(handle_progress);
     }

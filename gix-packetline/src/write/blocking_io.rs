@@ -53,9 +53,9 @@ impl<T: io::Write> io::Write for Writer<T> {
         while !buf.is_empty() {
             let (data, rest) = buf.split_at(buf.len().min(MAX_DATA_LEN));
             written += if self.binary {
-                crate::encode::data_to_write(data, &mut self.inner)
+                crate::encode::blocking_io::data_to_write(data, &mut self.inner)
             } else {
-                crate::encode::text_to_write(data, &mut self.inner)
+                crate::encode::blocking_io::text_to_write(data, &mut self.inner)
             }?;
             // subtract header (and trailing NL) because write-all can't handle writing more than it passes in
             written -= U16_HEX_BYTES + usize::from(!self.binary);

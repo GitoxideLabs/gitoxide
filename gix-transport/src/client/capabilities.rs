@@ -193,7 +193,7 @@ pub mod recv {
         /// If [`Protocol::V1`] was requested, or the remote decided to downgrade, the remote refs
         /// advertisement will also be included in the [`Outcome`].
         pub fn from_lines_with_version_detection<T: io::Read>(
-            rd: &mut gix_packetline::StreamingPeekableIter<T>,
+            rd: &mut gix_packetline::read::blocking_io::StreamingPeekableIter<T>,
         ) -> Result<Outcome<'_>, client::Error> {
             // NOTE that this is vitally important - it is turned on and stays on for all following requests so
             // we automatically abort if the server sends an ERR line anywhere.

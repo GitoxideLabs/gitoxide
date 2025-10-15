@@ -293,10 +293,6 @@ check-mode:
     cargo build -p internal-tools
     cargo run -p internal-tools -- check-mode
 
-# Delete `gix-packetline-blocking/src` and regenerate from `gix-packetline/src`
-copy-packetline:
-    etc/scripts/copy-packetline.sh
-
 # Get the unique `v*` tag at `HEAD`, or fail with an error
 unique-v-tag:
     etc/scripts/unique-v-tag.sh

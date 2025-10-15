@@ -6,7 +6,8 @@ use std::{
 
 use futures_io::{AsyncBufRead, AsyncRead};
 
-use crate::{decode, read::ProgressAction, BandRef, PacketLineRef, StreamingPeekableIter, TextRef, U16_HEX_BYTES};
+use crate::read::async_io::StreamingPeekableIter;
+use crate::{decode, read::ProgressAction, BandRef, PacketLineRef, TextRef, U16_HEX_BYTES};
 
 type ReadLineResult<'a> = Option<std::io::Result<Result<PacketLineRef<'a>, decode::Error>>>;
 /// An implementor of [`AsyncBufRead`] yielding packet lines on each call to [`read_line()`][AsyncBufRead::read_line()].
@@ -31,6 +32,7 @@ where
             parent
                 .as_mut()
                 .expect("parent is always available if we are idle")
+                .state
                 .reset();
         }
     }
@@ -105,6 +107,7 @@ where
             parent
                 .as_mut()
                 .expect("parent is always available if we are idle")
+                .state
                 .reset_with(delimiters);
         }
     }
@@ -116,6 +119,7 @@ where
                 parent
                     .as_ref()
                     .expect("parent is always available if we are idle")
+                    .state
                     .stopped_at
             }
             _ => None,
@@ -327,7 +331,9 @@ where
         }
         let range = self.pos..self.cap;
         match &self.get_mut().state {
-            State::Idle { parent } => Poll::Ready(Ok(&parent.as_ref().expect("parent always available").buf[range])),
+            State::Idle { parent } => {
+                Poll::Ready(Ok(&parent.as_ref().expect("parent always available").state.buf[range]))
+            }
             State::ReadLine { .. } => unreachable!("at least in theory"),
         }
     }

@@ -1,6 +1,9 @@
 use std::{io, io::BufRead};
 
-use crate::{read::ProgressAction, BandRef, PacketLineRef, StreamingPeekableIter, TextRef, U16_HEX_BYTES};
+use crate::{
+    read::{blocking_io::StreamingPeekableIter, ProgressAction},
+    BandRef, PacketLineRef, TextRef, U16_HEX_BYTES,
+};
 
 /// An implementor of [`BufRead`][io::BufRead] yielding packet lines on each call to [`read_line()`][io::BufRead::read_line()].
 /// It's also possible to hide the underlying packet lines using the [`Read`][io::Read] implementation which is useful
@@ -20,7 +23,7 @@ where
     T: io::Read,
 {
     fn drop(&mut self) {
-        self.parent.reset();
+        self.parent.state.reset();
     }
 }
 
@@ -69,12 +72,12 @@ where
 
     /// Forwards to the parent [`StreamingPeekableIter::reset_with()`]
     pub fn reset_with(&mut self, delimiters: &'static [PacketLineRef<'static>]) {
-        self.parent.reset_with(delimiters);
+        self.parent.state.reset_with(delimiters);
     }
 
     /// Forwards to the parent [`StreamingPeekableIter::stopped_at()`]
     pub fn stopped_at(&self) -> Option<PacketLineRef<'static>> {
-        self.parent.stopped_at
+        self.parent.state.stopped_at
     }
 
     /// Set or unset the progress handler.
@@ -186,7 +189,7 @@ where
             self.cap = cap + ofs;
             self.pos = ofs;
         }
-        Ok(&self.parent.buf[self.pos..self.cap])
+        Ok(&self.parent.state.buf[self.pos..self.cap])
     }
 
     fn consume(&mut self, amt: usize) {

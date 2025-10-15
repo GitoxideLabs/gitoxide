@@ -1773,7 +1773,7 @@ dependencies = [
  "gix-command",
  "gix-hash",
  "gix-object",
- "gix-packetline-blocking",
+ "gix-packetline",
  "gix-path",
  "gix-quote",
  "gix-testtools",
@@ -2114,18 +2114,6 @@ dependencies = [
  "gix-trace",
  "maybe-async",
  "pin-project-lite",
- "serde",
- "thiserror 2.0.17",
-]
-
-[[package]]
-name = "gix-packetline-blocking"
-version = "0.19.1"
-dependencies = [
- "bstr",
- "document-features",
- "faster-hex",
- "gix-trace",
  "serde",
  "thiserror 2.0.17",
 ]

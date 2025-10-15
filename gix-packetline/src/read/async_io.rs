@@ -1,20 +1,41 @@
-use std::io;
+use std::{
+    io,
+    ops::{Deref, DerefMut},
+};
 
 use bstr::ByteSlice;
 use futures_io::AsyncRead;
 use futures_lite::AsyncReadExt;
 
+pub use super::sidebands::async_io::WithSidebands;
 use crate::{
     decode,
-    read::{ExhaustiveOutcome, ProgressAction, WithSidebands},
-    PacketLineRef, StreamingPeekableIter, MAX_LINE_LEN, U16_HEX_BYTES,
+    read::{ExhaustiveOutcome, ProgressAction},
+    PacketLineRef, StreamingPeekableIterState, MAX_LINE_LEN, U16_HEX_BYTES,
 };
+
+/// Read pack lines one after another, without consuming more than needed from the underlying
+/// [`AsyncRead`]. [`Flush`][PacketLineRef::Flush] lines cause the reader to stop producing lines forever,
+/// leaving [`AsyncRead`] at the start of whatever comes next.
+///
+/// This implementation tries hard not to allocate at all which leads to quite some added complexity and plenty of extra memory copies.
+pub struct StreamingPeekableIter<T> {
+    pub(super) state: StreamingPeekableIterState<T>,
+}
 
 /// Non-IO methods
 impl<T> StreamingPeekableIter<T>
 where
     T: AsyncRead + Unpin,
 {
+    /// Return a new instance from `read` which will stop decoding packet lines when receiving one of the given `delimiters`.
+    /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+    pub fn new(read: T, delimiters: &'static [PacketLineRef<'static>], trace: bool) -> Self {
+        Self {
+            state: StreamingPeekableIterState::new(read, delimiters, trace),
+        }
+    }
+
     #[allow(clippy::needless_lifetimes)] // TODO: remove once this is clippy false positive is fixed
     async fn read_line_inner<'a>(
         reader: &mut T,
@@ -109,28 +130,30 @@ where
     ///  * ERR packet line encountered if [`fail_on_err_lines()`][StreamingPeekableIter::fail_on_err_lines()] is true.
     ///  * A `delimiter` packet line encountered
     pub async fn read_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, decode::Error>>> {
-        if self.is_done {
+        if self.state.is_done {
             return None;
         }
-        if !self.peek_buf.is_empty() {
-            std::mem::swap(&mut self.peek_buf, &mut self.buf);
-            self.peek_buf.clear();
-            Some(Ok(Ok(crate::decode(&self.buf).expect("only valid data in peek buf"))))
+        if !self.state.peek_buf.is_empty() {
+            std::mem::swap(&mut self.state.peek_buf, &mut self.state.buf);
+            self.state.peek_buf.clear();
+            Some(Ok(Ok(
+                crate::decode(&self.state.buf).expect("only valid data in peek buf")
+            )))
         } else {
-            if self.buf.len() != MAX_LINE_LEN {
-                self.buf.resize(MAX_LINE_LEN, 0);
+            if self.state.buf.len() != MAX_LINE_LEN {
+                self.state.buf.resize(MAX_LINE_LEN, 0);
             }
             let (is_done, stopped_at, res) = Self::read_line_inner_exhaustive(
-                &mut self.read,
-                &mut self.buf,
-                self.delimiters,
-                self.fail_on_err_lines,
+                &mut self.state.read,
+                &mut self.state.buf,
+                self.state.delimiters,
+                self.state.fail_on_err_lines,
                 false,
-                self.trace,
+                self.state.trace,
             )
             .await;
-            self.is_done = is_done;
-            self.stopped_at = stopped_at;
+            self.state.is_done = is_done;
+            self.state.stopped_at = stopped_at;
             res
         }
     }
@@ -140,25 +163,27 @@ where
     ///
     /// Multiple calls to peek will return the same packet line, if there is one.
     pub async fn peek_line(&mut self) -> Option<io::Result<Result<PacketLineRef<'_>, decode::Error>>> {
-        if self.is_done {
+        if self.state.is_done {
             return None;
         }
-        if self.peek_buf.is_empty() {
-            self.peek_buf.resize(MAX_LINE_LEN, 0);
+        if self.state.peek_buf.is_empty() {
+            self.state.peek_buf.resize(MAX_LINE_LEN, 0);
             let (is_done, stopped_at, res) = Self::read_line_inner_exhaustive(
-                &mut self.read,
-                &mut self.peek_buf,
-                self.delimiters,
-                self.fail_on_err_lines,
+                &mut self.state.read,
+                &mut self.state.peek_buf,
+                self.state.delimiters,
+                self.state.fail_on_err_lines,
                 true,
-                self.trace,
+                self.state.trace,
             )
             .await;
-            self.is_done = is_done;
-            self.stopped_at = stopped_at;
+            self.state.is_done = is_done;
+            self.state.stopped_at = stopped_at;
             res
         } else {
-            Some(Ok(Ok(crate::decode(&self.peek_buf).expect("only valid data here"))))
+            Some(Ok(Ok(
+                crate::decode(&self.state.peek_buf).expect("only valid data here")
+            )))
         }
     }
 
@@ -192,5 +217,18 @@ where
         &mut self,
     ) -> WithSidebands<'_, T, F> {
         WithSidebands::without_progress_handler(self)
+    }
+}
+
+impl<T> Deref for StreamingPeekableIter<T> {
+    type Target = StreamingPeekableIterState<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl<T> DerefMut for StreamingPeekableIter<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
     }
 }

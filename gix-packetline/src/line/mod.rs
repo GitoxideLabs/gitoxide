@@ -81,8 +81,3 @@ impl<'a> TextRef<'a> {
         self.0.into()
     }
 }
-
-#[cfg(all(not(feature = "blocking-io"), feature = "async-io"))]
-mod async_io;
-#[cfg(feature = "blocking-io")]
-mod blocking_io;
