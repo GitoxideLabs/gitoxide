@@ -22,7 +22,7 @@ pub(super) mod function {
         let sliders = std::fs::read_to_string(&sliders_file)?;
 
         eprintln!(
-            "read {} which has {} lines",
+            "Read '{}' which has {} lines",
             sliders_file.display(),
             sliders.lines().count()
         );
@@ -39,8 +39,6 @@ pub(super) mod function {
                 }
             })
             .collect();
-
-        eprintln!("{sliders:?}");
 
         let repo = gix::open(worktree_dir)?;
 
@@ -71,19 +69,11 @@ mkdir -p {asset_dir}
             let old_blob_id = revspec
                 .single()
                 .context(format!("rev-spec '{before}' must resolve to a single object"))?;
-            let (old_path, _) = revspec
-                .path_and_mode()
-                .context(format!("rev-spec '{before}' must contain a path"))?;
 
             let revspec = repo.rev_parse(*after)?;
             let new_blob_id = revspec
                 .single()
                 .context(format!("rev-spec '{after}' must resolve to a single object"))?;
-            let (new_path, _) = revspec
-                .path_and_mode()
-                .context(format!("rev-spec '{after}' must contain a path"))?;
-
-            eprintln!("{old_blob_id:?} {old_path:?} {new_blob_id:?} {new_path:?}");
 
             let dst_old_blob = assets.join(format!("{old_blob_id}.blob"));
             let dst_new_blob = assets.join(format!("{new_blob_id}.blob"));
