@@ -86,7 +86,8 @@ mkdir -p {asset_dir}
             }
 
             blocks.push(format!(
-                r#"git diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.baseline || true
+                r#"git -c diff.algorithm=myers diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.myers.baseline || true
+git -c diff.algorithm=histogram diff --no-index "$ROOT/{asset_dir}/{old_blob_id}.blob" "$ROOT/{asset_dir}/{new_blob_id}.blob" > {old_blob_id}-{new_blob_id}.histogram.baseline || true
 cp "$ROOT/{asset_dir}/{old_blob_id}.blob" assets/
 cp "$ROOT/{asset_dir}/{new_blob_id}.blob" assets/
 "#

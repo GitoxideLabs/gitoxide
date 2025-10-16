@@ -188,7 +188,14 @@ fn sliders() -> gix_testtools::Result {
         }
 
         let parts: Vec<_> = file_name.split('.').collect();
-        let name = parts[0];
+        let [name, algorithm, ..] = parts[..] else {
+            unimplemented!()
+        };
+        let algorithm = match algorithm {
+            "myers" => Algorithm::Myers,
+            "histogram" => Algorithm::Histogram,
+            _ => unimplemented!(),
+        };
 
         let parts: Vec<_> = name.split('-').collect();
         let [old_blob_id, new_blob_id] = parts[..] else {
@@ -204,7 +211,7 @@ fn sliders() -> gix_testtools::Result {
         );
 
         let actual = gix_diff::blob::diff(
-            Algorithm::Myers,
+            algorithm,
             &interner,
             UnifiedDiff::new(&interner, DiffHunkRecorder::new(), ContextSize::symmetrical(3)),
         )?;
