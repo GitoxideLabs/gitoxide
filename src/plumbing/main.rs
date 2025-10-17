@@ -1636,7 +1636,7 @@ pub fn main() -> Result<()> {
                     &file,
                     gix::blame::Options {
                         diff_algorithm,
-                        range: gix::blame::BlameRanges::from_ranges(ranges),
+                        ranges: gix::blame::BlameRanges::from_one_based_inclusive_ranges(ranges)?,
                         since,
                         rewrites: Some(gix::diff::Rewrites::default()),
                         debug_track_path: false,
