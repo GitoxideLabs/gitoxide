@@ -239,7 +239,6 @@ members = [
     "gix-status",
     "gix-revision",
     "gix-packetline",
-    "gix-packetline-blocking",
     "gix-mailmap",
     "gix-macros",
     "gix-note",

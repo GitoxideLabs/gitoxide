@@ -60,19 +60,28 @@ impl<'a> RequestWriter<'a> {
                 if self.trace {
                     gix_features::trace::trace!(">> FLUSH");
                 }
-                gix_packetline::PacketLineRef::Flush.write_to(self.writer.inner_mut())
+                gix_packetline::encode::blocking_io::write_packet_line(
+                    &gix_packetline::PacketLineRef::Flush,
+                    self.writer.inner_mut(),
+                )
             }
             MessageKind::Delimiter => {
                 if self.trace {
                     gix_features::trace::trace!(">> DELIM");
                 }
-                gix_packetline::PacketLineRef::Delimiter.write_to(self.writer.inner_mut())
+                gix_packetline::encode::blocking_io::write_packet_line(
+                    &gix_packetline::PacketLineRef::Delimiter,
+                    self.writer.inner_mut(),
+                )
             }
             MessageKind::ResponseEnd => {
                 if self.trace {
                     gix_features::trace::trace!(">> RESPONSE_END");
                 }
-                gix_packetline::PacketLineRef::ResponseEnd.write_to(self.writer.inner_mut())
+                gix_packetline::encode::blocking_io::write_packet_line(
+                    &gix_packetline::PacketLineRef::ResponseEnd,
+                    self.writer.inner_mut(),
+                )
             }
             MessageKind::Text(t) => {
                 #[allow(unused_variables, unused_imports)]
@@ -80,7 +89,10 @@ impl<'a> RequestWriter<'a> {
                     use bstr::ByteSlice;
                     gix_features::trace::trace!(">> {}", t.as_bstr());
                 }
-                gix_packetline::TextRef::from(t).write_to(self.writer.inner_mut())
+                gix_packetline::encode::blocking_io::write_text(
+                    &gix_packetline::TextRef::from(t),
+                    self.writer.inner_mut(),
+                )
             }
         }
         .map(|_| ())

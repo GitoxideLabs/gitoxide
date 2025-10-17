@@ -17,7 +17,7 @@ pub enum ConnectMode {
 /// context is passed using command line arguments to a [spawned `git` process][crate::client::file::SpawnProcessOnDemand].
 pub struct Connection<R, W> {
     pub(in crate::client) writer: W,
-    pub(in crate::client) line_provider: gix_packetline::StreamingPeekableIter<R>,
+    pub(in crate::client) line_provider: gix_packetline::read::blocking_io::StreamingPeekableIter<R>,
     pub(in crate::client) path: BString,
     pub(in crate::client) virtual_host: Option<(String, Option<u16>)>,
     pub(in crate::client) desired_version: Protocol,

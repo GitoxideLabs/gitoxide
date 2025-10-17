@@ -1,7 +1,10 @@
 use std::io;
 
 use super::u16_to_hex;
-use crate::{encode::Error, Channel, DELIMITER_LINE, ERR_PREFIX, FLUSH_LINE, MAX_DATA_LEN, RESPONSE_END_LINE};
+use crate::{
+    encode::Error, BandRef, Channel, ErrorRef, PacketLineRef, TextRef, DELIMITER_LINE, ERR_PREFIX, FLUSH_LINE,
+    MAX_DATA_LEN, RESPONSE_END_LINE,
+};
 
 /// Write a response-end message to `out`.
 pub fn response_end_to_write(mut out: impl io::Write) -> io::Result<usize> {
@@ -23,9 +26,27 @@ pub fn error_to_write(message: &[u8], out: impl io::Write) -> io::Result<usize> 
     prefixed_data_to_write(ERR_PREFIX, message, out)
 }
 
+/// Serialize this line as error to `out`.
+///
+/// This includes a marker to allow decoding it outside a side-band channel, returning the amount of bytes written.
+pub fn write_error(error: &ErrorRef<'_>, out: impl io::Write) -> io::Result<usize> {
+    error_to_write(&error.0, out)
+}
+
 /// Write `data` of `kind` to `out` using side-band encoding.
 pub fn band_to_write(kind: Channel, data: &[u8], out: impl io::Write) -> io::Result<usize> {
     prefixed_data_to_write(&[kind as u8], data, out)
+}
+
+/// Serialize [`BandRef`] to `out`, returning the amount of bytes written.
+///
+/// The data written to `out` can be decoded with [`Borrowed::decode_band()]`.
+pub async fn write_band(band: &BandRef<'_>, out: impl io::Write) -> io::Result<usize> {
+    match band {
+        BandRef::Data(d) => band_to_write(Channel::Data, d, out),
+        BandRef::Progress(d) => band_to_write(Channel::Progress, d, out),
+        BandRef::Error(d) => band_to_write(Channel::Error, d, out),
+    }
 }
 
 /// Write a `data` message to `out`.
@@ -33,9 +54,24 @@ pub fn data_to_write(data: &[u8], out: impl io::Write) -> io::Result<usize> {
     prefixed_data_to_write(&[], data, out)
 }
 
+/// Serialize this instance to `out` in git `packetline` format, returning the amount of bytes written to `out`.
+pub fn write_packet_line(line: &PacketLineRef<'_>, out: impl io::Write) -> io::Result<usize> {
+    match line {
+        PacketLineRef::Data(d) => data_to_write(d, out),
+        PacketLineRef::Flush => flush_to_write(out),
+        PacketLineRef::Delimiter => delim_to_write(out),
+        PacketLineRef::ResponseEnd => response_end_to_write(out),
+    }
+}
+
 /// Write a `text` message to `out`, which is assured to end in a newline.
 pub fn text_to_write(text: &[u8], out: impl io::Write) -> io::Result<usize> {
     prefixed_and_suffixed_data_to_write(&[], text, b"\n", out)
+}
+
+/// Serialize this instance to `out`, appending a newline if there is none, returning the amount of bytes written.
+pub fn write_text(text: &TextRef<'_>, out: impl io::Write) -> io::Result<usize> {
+    text_to_write(&text.0, out)
 }
 
 fn prefixed_data_to_write(prefix: &[u8], data: &[u8], out: impl io::Write) -> io::Result<usize> {

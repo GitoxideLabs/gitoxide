@@ -104,7 +104,11 @@ where
     ) -> Self {
         git::Connection {
             writer: write,
-            line_provider: gix_packetline::StreamingPeekableIter::new(read, &[PacketLineRef::Flush], trace),
+            line_provider: gix_packetline::read::blocking_io::StreamingPeekableIter::new(
+                read,
+                &[PacketLineRef::Flush],
+                trace,
+            ),
             path: repository_path.into(),
             virtual_host: virtual_host.map(|(h, p)| (h.into(), p)),
             desired_version,

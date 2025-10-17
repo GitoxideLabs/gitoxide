@@ -1,6 +1,6 @@
 #[cfg(any(feature = "blocking-io", feature = "async-io"))]
 use crate::MAX_LINE_LEN;
-use crate::{PacketLineRef, StreamingPeekableIter, U16_HEX_BYTES};
+use crate::{PacketLineRef, StreamingPeekableIterState, U16_HEX_BYTES};
 
 /// Allow the read-progress handler to determine how to continue.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -41,11 +41,12 @@ mod error {
 }
 pub use error::Error;
 
-impl<T> StreamingPeekableIter<T> {
+impl<T> StreamingPeekableIterState<T> {
     /// Return a new instance from `read` which will stop decoding packet lines when receiving one of the given `delimiters`.
     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
-    pub fn new(read: T, delimiters: &'static [PacketLineRef<'static>], trace: bool) -> Self {
-        StreamingPeekableIter {
+    #[cfg(any(feature = "blocking-io", feature = "async-io"))]
+    fn new(read: T, delimiters: &'static [PacketLineRef<'static>], trace: bool) -> Self {
+        Self {
             read,
             #[cfg(any(feature = "blocking-io", feature = "async-io"))]
             buf: vec![0; MAX_LINE_LEN],
@@ -110,19 +111,14 @@ impl<T> StreamingPeekableIter<T> {
         self.fail_on_err_lines = false;
         prev
     }
-
-    /// Return the inner read
-    pub fn into_inner(self) -> T {
-        self.read
-    }
 }
 
+/// Blocking IO support
 #[cfg(feature = "blocking-io")]
-mod blocking_io;
+pub mod blocking_io;
 
-#[cfg(all(not(feature = "blocking-io"), feature = "async-io"))]
-mod async_io;
+/// Async IO support
+#[cfg(feature = "async-io")]
+pub mod async_io;
 
 mod sidebands;
-#[cfg(any(feature = "blocking-io", feature = "async-io"))]
-pub use sidebands::WithSidebands;
