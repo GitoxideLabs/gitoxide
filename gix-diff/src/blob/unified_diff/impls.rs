@@ -260,7 +260,8 @@ where
 }
 
 impl DiffLineKind {
-    const fn to_prefix(self) -> char {
+    /// Returns a one-character representation for use in unified diffs.
+    pub const fn to_prefix(self) -> char {
         match self {
             DiffLineKind::Context => ' ',
             DiffLineKind::Add => '+',
