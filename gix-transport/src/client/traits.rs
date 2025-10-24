@@ -6,12 +6,6 @@ use std::{
 
 use bstr::BStr;
 
-#[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
-use crate::client::async_io::RequestWriter;
-#[cfg(feature = "blocking-client")]
-use crate::client::blocking_io::RequestWriter;
-#[cfg(any(feature = "blocking-client", feature = "async-client"))]
-use crate::client::{MessageKind, WriteMode};
 use crate::{client::Error, Protocol};
 
 /// This trait represents all transport related functions that don't require any input/output to be done which helps
@@ -26,18 +20,6 @@ pub trait TransportWithoutIO {
     fn set_identity(&mut self, _identity: gix_sec::identity::Account) -> Result<(), Error> {
         Err(Error::AuthenticationUnsupported)
     }
-    /// Get a writer for sending data and obtaining the response. It can be configured in various ways
-    /// to support the task at hand.
-    /// `write_mode` determines how calls to the `write(…)` method are interpreted, and `on_into_read` determines
-    /// which message to write when the writer is turned into the response reader using [`into_read()`][RequestWriter::into_read()].
-    /// If `trace` is `true`, then all packetlines written and received will be traced using facilities provided by the `gix_trace` crate.
-    #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-    fn request(
-        &mut self,
-        write_mode: WriteMode,
-        on_into_read: MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, Error>;
 
     /// Returns the canonical URL pointing to the destination of this transport.
     fn to_url(&self) -> Cow<'_, BStr>;
@@ -75,16 +57,6 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
         self.deref_mut().set_identity(identity)
     }
 
-    #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-    fn request(
-        &mut self,
-        write_mode: WriteMode,
-        on_into_read: MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, Error> {
-        self.deref_mut().request(write_mode, on_into_read, trace)
-    }
-
     fn to_url(&self) -> Cow<'_, BStr> {
         self.deref().to_url()
     }
@@ -105,16 +77,6 @@ impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for Box<T> {
 impl<T: TransportWithoutIO + ?Sized> TransportWithoutIO for &mut T {
     fn set_identity(&mut self, identity: gix_sec::identity::Account) -> Result<(), Error> {
         self.deref_mut().set_identity(identity)
-    }
-
-    #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-    fn request(
-        &mut self,
-        write_mode: WriteMode,
-        on_into_read: MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, Error> {
-        self.deref_mut().request(write_mode, on_into_read, trace)
     }
 
     fn to_url(&self) -> Cow<'_, BStr> {

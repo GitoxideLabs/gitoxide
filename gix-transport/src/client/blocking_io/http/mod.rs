@@ -336,56 +336,6 @@ impl<H: Http> client::TransportWithoutIO for Transport<H> {
         Ok(())
     }
 
-    fn request(
-        &mut self,
-        write_mode: client::WriteMode,
-        on_into_read: MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, client::Error> {
-        let service = self.service.ok_or(client::Error::MissingHandshake)?;
-        let url = append_url(&self.url, service.as_str());
-        let static_headers = &[
-            Cow::Borrowed(self.user_agent_header),
-            Cow::Owned(format!("Content-Type: application/x-{}-request", service.as_str())),
-            format!("Accept: application/x-{}-result", service.as_str()).into(),
-        ];
-        let mut dynamic_headers = Vec::new();
-        self.add_basic_auth_if_present(&mut dynamic_headers)?;
-        if self.actual_version != Protocol::V1 {
-            dynamic_headers.push(Cow::Owned(format!(
-                "Git-Protocol: version={}",
-                self.actual_version as usize
-            )));
-        }
-
-        let PostResponse {
-            headers,
-            body,
-            post_body,
-        } = self.http.post(
-            &url,
-            &self.url,
-            static_headers.iter().chain(&dynamic_headers),
-            write_mode.into(),
-        )?;
-        let line_provider = self
-            .line_provider
-            .as_mut()
-            .expect("handshake to have been called first");
-        line_provider.replace(body);
-        Ok(RequestWriter::new_from_bufread(
-            post_body,
-            Box::new(HeadersThenBody::<H, _> {
-                service,
-                headers: Some(headers),
-                body: line_provider.as_read_without_sidebands(),
-            }),
-            write_mode,
-            on_into_read,
-            trace,
-        ))
-    }
-
     fn to_url(&self) -> Cow<'_, BStr> {
         Cow::Borrowed(self.url.as_str().into())
     }
@@ -474,6 +424,56 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
             capabilities,
             refs,
         })
+    }
+
+    fn request(
+        &mut self,
+        write_mode: client::WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, client::Error> {
+        let service = self.service.ok_or(client::Error::MissingHandshake)?;
+        let url = append_url(&self.url, service.as_str());
+        let static_headers = &[
+            Cow::Borrowed(self.user_agent_header),
+            Cow::Owned(format!("Content-Type: application/x-{}-request", service.as_str())),
+            format!("Accept: application/x-{}-result", service.as_str()).into(),
+        ];
+        let mut dynamic_headers = Vec::new();
+        self.add_basic_auth_if_present(&mut dynamic_headers)?;
+        if self.actual_version != Protocol::V1 {
+            dynamic_headers.push(Cow::Owned(format!(
+                "Git-Protocol: version={}",
+                self.actual_version as usize
+            )));
+        }
+
+        let PostResponse {
+            headers,
+            body,
+            post_body,
+        } = self.http.post(
+            &url,
+            &self.url,
+            static_headers.iter().chain(&dynamic_headers),
+            write_mode.into(),
+        )?;
+        let line_provider = self
+            .line_provider
+            .as_mut()
+            .expect("handshake to have been called first");
+        line_provider.replace(body);
+        Ok(RequestWriter::new_from_bufread(
+            post_body,
+            Box::new(HeadersThenBody::<H, _> {
+                service,
+                headers: Some(headers),
+                body: line_provider.as_read_without_sidebands(),
+            }),
+            write_mode,
+            on_into_read,
+            trace,
+        ))
     }
 }
 

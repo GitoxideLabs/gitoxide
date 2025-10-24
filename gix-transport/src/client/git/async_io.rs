@@ -51,21 +51,6 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    fn request(
-        &mut self,
-        write_mode: client::WriteMode,
-        on_into_read: client::MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, client::Error> {
-        Ok(RequestWriter::new_from_bufread(
-            &mut self.writer,
-            Box::new(self.line_provider.as_read_without_sidebands()),
-            write_mode,
-            on_into_read,
-            trace,
-        ))
-    }
-
     fn to_url(&self) -> Cow<'_, BStr> {
         self.state.custom_url.as_ref().map_or_else(
             || {
@@ -122,6 +107,21 @@ where
             capabilities,
             refs,
         })
+    }
+
+    fn request(
+        &mut self,
+        write_mode: client::WriteMode,
+        on_into_read: client::MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, client::Error> {
+        Ok(RequestWriter::new_from_bufread(
+            &mut self.writer,
+            Box::new(self.line_provider.as_read_without_sidebands()),
+            write_mode,
+            on_into_read,
+            trace,
+        ))
     }
 }
 

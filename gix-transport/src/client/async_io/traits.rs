@@ -6,7 +6,7 @@ use futures_lite::io::AsyncWriteExt;
 
 use crate::{
     client::{
-        async_io::{ExtendedBufRead, ReadlineBufRead},
+        async_io::{request::RequestWriter, ExtendedBufRead, ReadlineBufRead},
         Capabilities, Error, MessageKind, TransportWithoutIO, WriteMode,
     },
     Protocol, Service,
@@ -45,6 +45,18 @@ pub trait Transport: TransportWithoutIO {
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
     ) -> Result<SetServiceResponse<'_>, Error>;
+
+    /// Get a writer for sending data and obtaining the response. It can be configured in various ways
+    /// to support the task at hand.
+    /// `write_mode` determines how calls to the `write(…)` method are interpreted, and `on_into_read` determines
+    /// which message to write when the writer is turned into the response reader using [`into_read()`][RequestWriter::into_read()].
+    /// If `trace` is `true`, then all packetlines written and received will be traced using facilities provided by the `gix_trace` crate.
+    fn request(
+        &mut self,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, Error>;
 }
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
@@ -57,6 +69,15 @@ impl<T: Transport + ?Sized> Transport for Box<T> {
     ) -> Result<SetServiceResponse<'_>, Error> {
         self.deref_mut().handshake(service, extra_parameters).await
     }
+
+    fn request(
+        &mut self,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, Error> {
+        self.deref_mut().request(write_mode, on_into_read, trace)
+    }
 }
 
 // Would be nice if the box implementation could auto-forward to all implemented traits.
@@ -68,6 +89,15 @@ impl<T: Transport + ?Sized> Transport for &mut T {
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
     ) -> Result<SetServiceResponse<'_>, Error> {
         self.deref_mut().handshake(service, extra_parameters).await
+    }
+
+    fn request(
+        &mut self,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, Error> {
+        self.deref_mut().request(write_mode, on_into_read, trace)
     }
 }
 

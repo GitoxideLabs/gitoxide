@@ -34,15 +34,6 @@ mod impls {
             self.inner.set_identity(identity)
         }
 
-        fn request(
-            &mut self,
-            write_mode: WriteMode,
-            on_into_read: MessageKind,
-            trace: bool,
-        ) -> Result<RequestWriter<'_>, Error> {
-            self.inner.request(write_mode, on_into_read, trace)
-        }
-
         fn to_url(&self) -> Cow<'_, BStr> {
             self.inner.to_url()
         }
@@ -71,6 +62,15 @@ mod impls {
         ) -> Result<SetServiceResponse<'_>, Error> {
             self.inner.handshake(service, extra_parameters)
         }
+
+        fn request(
+            &mut self,
+            write_mode: WriteMode,
+            on_into_read: MessageKind,
+            trace: bool,
+        ) -> Result<RequestWriter<'_>, Error> {
+            self.inner.request(write_mode, on_into_read, trace)
+        }
     }
 }
 
@@ -90,15 +90,6 @@ mod impls {
     impl<T: client::TransportWithoutIO + Send> client::TransportWithoutIO for Transport<T> {
         fn set_identity(&mut self, identity: client::Account) -> Result<(), Error> {
             self.inner.set_identity(identity)
-        }
-
-        fn request(
-            &mut self,
-            write_mode: WriteMode,
-            on_into_read: MessageKind,
-            trace: bool,
-        ) -> Result<RequestWriter<'_>, Error> {
-            self.inner.request(write_mode, on_into_read, trace)
         }
 
         fn to_url(&self) -> Cow<'_, BStr> {
@@ -129,6 +120,15 @@ mod impls {
             extra_parameters: &'a [(&'a str, Option<&'a str>)],
         ) -> Result<SetServiceResponse<'_>, Error> {
             self.inner.handshake(service, extra_parameters).await
+        }
+
+        fn request(
+            &mut self,
+            write_mode: WriteMode,
+            on_into_read: MessageKind,
+            trace: bool,
+        ) -> Result<RequestWriter<'_>, Error> {
+            self.inner.request(write_mode, on_into_read, trace)
         }
     }
 }

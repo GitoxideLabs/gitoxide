@@ -108,18 +108,6 @@ impl client::TransportWithoutIO for SpawnProcessOnDemand {
         }
     }
 
-    fn request(
-        &mut self,
-        write_mode: WriteMode,
-        on_into_read: MessageKind,
-        trace: bool,
-    ) -> Result<RequestWriter<'_>, client::Error> {
-        self.connection
-            .as_mut()
-            .ok_or(client::Error::MissingHandshake)?
-            .request(write_mode, on_into_read, trace)
-    }
-
     fn to_url(&self) -> Cow<'_, BStr> {
         Cow::Owned(self.url.to_bstring())
     }
@@ -280,6 +268,18 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
             .as_mut()
             .expect("connection to be there right after setting it")
             .handshake(service, extra_parameters)
+    }
+
+    fn request(
+        &mut self,
+        write_mode: WriteMode,
+        on_into_read: MessageKind,
+        trace: bool,
+    ) -> Result<RequestWriter<'_>, client::Error> {
+        self.connection
+            .as_mut()
+            .ok_or(client::Error::MissingHandshake)?
+            .request(write_mode, on_into_read, trace)
     }
 }
 
