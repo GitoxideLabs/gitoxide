@@ -84,6 +84,41 @@ mod blocking_io {
     }
 
     #[test]
+    fn shallow_clone_uses_single_branch_refspec() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, _out) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
+            .with_shallow(Shallow::DepthAtRemote(1.try_into()?))
+            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        assert!(repo.is_shallow(), "repository should be shallow");
+
+        // Verify that only a single-branch refspec was configured
+        let remote = repo.find_remote("origin")?;
+        let refspecs: Vec<_> = remote
+            .refspecs(Direction::Fetch)
+            .iter()
+            .map(|spec| spec.to_ref().to_bstring())
+            .collect();
+
+        assert_eq!(refspecs.len(), 1, "shallow clone should have only one fetch refspec");
+
+        // The refspec should be for a single branch (main), not a wildcard
+        let refspec_str = refspecs[0].to_str().expect("valid utf8");
+        assert!(
+            !refspec_str.contains("*"),
+            "shallow clone refspec should not use wildcard: {}",
+            refspec_str
+        );
+        assert!(
+            refspec_str.contains("refs/heads/main"),
+            "shallow clone refspec should reference the main branch: {}",
+            refspec_str
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn from_shallow_prohibited_with_option() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let err = gix::clone::PrepareFetch::new(
