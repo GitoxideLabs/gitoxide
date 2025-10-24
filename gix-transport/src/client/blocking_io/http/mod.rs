@@ -25,9 +25,6 @@ use crate::{
     Protocol, Service,
 };
 
-#[cfg(all(feature = "http-client-reqwest", feature = "http-client-curl"))]
-compile_error!("Cannot set both 'http-client-reqwest' and 'http-client-curl' features as they are mutually exclusive");
-
 #[cfg(feature = "http-client-curl")]
 ///
 pub mod curl;
@@ -215,13 +212,6 @@ impl Default for Options {
     }
 }
 
-/// The actual http client implementation, using curl
-#[cfg(feature = "http-client-curl")]
-pub type Impl = curl::Curl;
-/// The actual http client implementation, using reqwest
-#[cfg(feature = "http-client-reqwest")]
-pub type Impl = reqwest::Remote;
-
 /// A transport for supporting arbitrary http clients by abstracting interactions with them into the [Http] trait.
 pub struct Transport<H: Http> {
     url: String,
@@ -270,13 +260,13 @@ impl<H: Http> Transport<H> {
 }
 
 #[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
-impl Transport<Impl> {
+impl<H: Http + Default> Transport<H> {
     /// Create a new instance to communicate to `url` using the given `desired_version` of the `git` protocol.
     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
     ///
     /// Note that the actual implementation depends on feature toggles.
     pub fn new(url: gix_url::Url, desired_version: Protocol, trace: bool) -> Self {
-        Self::new_http(Impl::default(), url, desired_version, trace)
+        Self::new_http(H::default(), url, desired_version, trace)
     }
 }
 
@@ -555,7 +545,7 @@ pub fn connect_http<H: Http>(http: H, url: gix_url::Url, desired_version: Protoc
 /// Connect to the given `url` via HTTP/S using the `desired_version` of the `git` protocol.
 /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
 #[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
-pub fn connect(url: gix_url::Url, desired_version: Protocol, trace: bool) -> Transport<Impl> {
+pub fn connect<H: Http + Default>(url: gix_url::Url, desired_version: Protocol, trace: bool) -> Transport<H> {
     Transport::new(url, desired_version, trace)
 }
 

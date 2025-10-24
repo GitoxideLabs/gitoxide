@@ -1,6 +1,10 @@
 pub use crate::client::non_io_types::connect::{Error, Options};
 
 pub(crate) mod function {
+    #[cfg(feature = "http-client-curl")]
+    use crate::client::blocking_io::http::curl::Curl;
+    #[cfg(feature = "http-client-reqwest")]
+    use crate::client::blocking_io::http::reqwest::Remote;
     use crate::client::{blocking_io::Transport, non_io_types::connect::Error};
 
     /// A general purpose connector connecting to a repository identified by the given `url`.
@@ -57,11 +61,15 @@ pub(crate) mod function {
             }
             #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
             gix_url::Scheme::Https | gix_url::Scheme::Http => return Err(Error::CompiledWithoutHttp(url.scheme)),
-            #[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
-            gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(crate::client::blocking_io::http::connect(
-                url,
-                options.version,
-                options.trace,
+            #[cfg(feature = "http-client-curl")]
+            gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(
+                crate::client::blocking_io::http::connect::<Curl>(url, options.version, options.trace),
+            ),
+            #[cfg(all(feature = "http-client-reqwest", not(feature = "http-client-curl")))]
+            gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(crate::client::blocking_io::http::connect::<
+                Remote,
+            >(
+                url, options.version, options.trace
             )),
         })
     }
