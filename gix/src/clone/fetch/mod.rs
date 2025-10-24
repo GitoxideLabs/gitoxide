@@ -143,7 +143,7 @@ impl PrepareFetch {
                         repo.config
                             .resolved
                             .string(crate::config::tree::Init::DEFAULT_BRANCH)
-                            .and_then(|name| name.to_str().ok().map(|s| format!("refs/heads/{}", s)))
+                            .and_then(|name| name.to_str().ok().map(|s| format!("refs/heads/{s}")))
                     })
                     .unwrap_or_else(|| "refs/heads/main".to_string());
 

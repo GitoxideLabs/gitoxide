@@ -104,15 +104,9 @@ mod blocking_io {
 
         // The refspec should be for a single branch (main), not a wildcard
         let refspec_str = refspecs[0].to_str().expect("valid utf8");
-        assert!(
-            !refspec_str.contains("*"),
-            "shallow clone refspec should not use wildcard: {}",
-            refspec_str
-        );
-        assert!(
-            refspec_str.contains("refs/heads/main"),
-            "shallow clone refspec should reference the main branch: {}",
-            refspec_str
+        assert_eq!(
+            refspec_str, "+refs/heads/main:refs/remotes/origin/main",
+            "shallow clone refspec should not use wildcard and should be the main branch: {refspec_str}"
         );
 
         Ok(())
