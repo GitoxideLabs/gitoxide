@@ -24,14 +24,12 @@ use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statisti
 ///    - The first commit to be responsible for parts of `file_path`.
 /// * `cache`
 ///    - Optionally, the commitgraph cache.
-/// * `file_path`
-///    - A *slash-separated* worktree-relative path to the file to blame.
-/// * `range`
-///    - A 1-based inclusive range, in order to mirror `git`’s behaviour. `Some(20..40)` represents
-///      21 lines, spanning from line 20 up to and including line 40. This will be converted to
-///      `19..40` internally as the algorithm uses 0-based ranges that are exclusive at the end.
 /// * `resource_cache`
 ///    - Used for diffing trees.
+/// * `file_path`
+///    - A *slash-separated* worktree-relative path to the file to blame.
+/// * `options`
+///    - An instance of [`Options`].
 ///
 /// ## The algorithm
 ///
@@ -95,16 +93,11 @@ pub fn file(
         return Ok(Outcome::default());
     }
 
-    let ranges = options.range.to_zero_based_exclusive(num_lines_in_blamed)?;
-    let mut hunks_to_blame = Vec::with_capacity(ranges.len());
-
-    for range in ranges {
-        hunks_to_blame.push(UnblamedHunk {
-            range_in_blamed_file: range.clone(),
-            suspects: [(suspect, range)].into(),
-            source_file_name: None,
-        });
-    }
+    let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
+    let mut hunks_to_blame = ranges_to_blame
+        .into_iter()
+        .map(|range| UnblamedHunk::new(range, suspect))
+        .collect::<Vec<_>>();
 
     let (mut buf, mut buf2) = (Vec::new(), Vec::new());
     let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
