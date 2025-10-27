@@ -45,6 +45,10 @@ fn baseline() {
                             ),
                             true,
                         ) => {} // we prefer failing fast, git let's it pass
+                        // We now allow complex glob patterns in one-sided refspecs
+                        (None, false) if matches!(op, Operation::Fetch) && spec.to_str().map(|s| s.contains('*') && !s.contains(':')).unwrap_or(false) => {
+                            // This is an intentional behavior change: we allow complex globs in one-sided refspecs
+                        }
                         _ => {
                             eprintln!("{err_code} {res:?} {} {:?}", kind.as_bstr(), spec.as_bstr());
                             mismatch += 1;
