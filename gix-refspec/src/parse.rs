@@ -161,7 +161,8 @@ pub(crate) mod function {
                         return Err(Error::PatternUnsupported { pattern: spec.into() });
                     }
                 }
-                let has_globs = glob_count >= 1;
+                // Check if there are any globs (one or more asterisks)
+                let has_globs = glob_count > 0;
                 if has_globs {
                     // For one-sided refspecs, skip validation of glob patterns
                     if !is_one_sided {
