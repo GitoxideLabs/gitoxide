@@ -254,6 +254,43 @@ fn from_nonbare_parent_repo() {
     run_assertions(repo, false /* bare */);
 }
 
+#[test]
+fn from_nonbare_parent_repo_set_workdir() -> gix_testtools::Result {
+    if gix_testtools::should_skip_as_git_version_is_smaller_than(2, 31, 0) {
+        return Ok(());
+    }
+
+    let dir = gix_testtools::scripted_fixture_read_only("make_worktree_repo.sh").unwrap();
+    let mut repo = gix::open(dir.join("repo")).unwrap();
+
+    assert!(repo.worktree().is_some_and(|wt| wt.is_main()), "we have main worktree");
+
+    let worktrees = repo.worktrees()?;
+    assert_eq!(worktrees.len(), 6);
+
+    let linked_wt_dir = worktrees.first().unwrap().base().expect("this linked worktree exists");
+    repo.set_workdir(linked_wt_dir).expect("works as the dir exists");
+
+    assert!(
+        repo.worktree().is_some_and(|wt| wt.is_main()),
+        "it's still the main worktree as that depends on the git_dir"
+    );
+
+    let mut wt_repo = repo.worktrees()?.first().unwrap().clone().into_repo()?;
+    assert!(
+        wt_repo.worktree().is_some_and(|wt| !wt.is_main()),
+        "linked worktrees are never main"
+    );
+
+    wt_repo.set_workdir(Some(repo.workdir().unwrap().to_owned()))?;
+    assert!(
+        wt_repo.worktree().is_some_and(|wt| !wt.is_main()),
+        "it's still the linked worktree as that depends on the git_dir"
+    );
+
+    Ok(())
+}
+
 fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
     assert_eq!(main_repo.is_bare(), should_be_bare);
     let mut baseline = Baseline::collect(

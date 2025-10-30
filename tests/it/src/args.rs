@@ -123,6 +123,34 @@ pub enum Subcommands {
         #[clap(value_parser = AsPathSpec)]
         patterns: Vec<gix::pathspec::Pattern>,
     },
+    /// Take a slider file generated with the help of [diff-slider-tools] and turn it into a series
+    /// of baseline diffs to be used in [slider-rs].
+    ///
+    /// See [make-diff-for-sliders-repo] for details.
+    ///
+    /// [diff-slider-tools]: https://github.com/mhagger/diff-slider-tools
+    /// [slider-rs]: gix-diff/tests/diff/blob/slider.rs
+    /// [make-diff-for-sliders-repo]: gix-diff/tests/fixtures/make_diff_for_sliders_repo.sh
+    CreateDiffCases {
+        /// Don't really copy anything.
+        #[clap(long, short = 'n')]
+        dry_run: bool,
+        /// The `.sliders` file that contains a list of sliders.
+        #[clap(long)]
+        sliders_file: PathBuf,
+        /// The git root to extract the diff-related parts from.
+        #[clap(long)]
+        worktree_dir: PathBuf,
+        /// The directory into which to copy the files.
+        #[clap(long)]
+        destination_dir: PathBuf,
+        /// The number of sliders to generate test cases for.
+        #[clap(long, default_value_t = 10)]
+        count: usize,
+        /// The directory to place assets in.
+        #[clap(long)]
+        asset_dir: Option<BString>,
+    },
     /// Check for executable bits that disagree with shebangs.
     ///
     /// This checks committed and staged files, but not anything unstaged, to find shell scripts

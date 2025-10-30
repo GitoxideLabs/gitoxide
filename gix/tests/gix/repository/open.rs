@@ -154,7 +154,7 @@ fn non_bare_non_git_repo_without_worktree() -> crate::Result {
 
 #[test]
 fn none_bare_repo_without_index() -> crate::Result {
-    let repo = named_subrepo_opts(
+    let mut repo = named_subrepo_opts(
         "make_basic_repo.sh",
         "non-bare-repo-without-index",
         gix::open::Options::isolated(),
@@ -175,6 +175,28 @@ fn none_bare_repo_without_index() -> crate::Result {
             .is_ok(),
         "this is a minimal path"
     );
+
+    let old = repo.set_workdir(None).expect("should never fail");
+    assert_eq!(
+        old.as_ref().and_then(|wd| wd.file_name()?.to_str()),
+        Some("non-bare-repo-without-index")
+    );
+    assert!(repo.workdir().is_none(), "the workdir was unset");
+    assert!(repo.worktree().is_none(), "the worktree was unset");
+    assert!(
+        !repo.is_bare(),
+        "this is based on `core.bare`, not on the lack of worktree"
+    );
+
+    assert_eq!(
+        repo.set_workdir(old.clone()).expect("does not fail as it exists"),
+        None,
+        "nothing was set before"
+    );
+    assert_eq!(repo.workdir(), old.as_deref());
+
+    let worktree = repo.worktree().expect("should be present after setting");
+    assert!(worktree.is_main(), "it's still the main worktree");
     Ok(())
 }
 

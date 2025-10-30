@@ -58,6 +58,36 @@ impl crate::Repository {
         self.work_tree.as_deref()
     }
 
+    /// Forcefully set the given `workdir` to be the worktree of this repository, *in memory*,
+    /// no matter if it had one or not, or unset it with `None`.
+    /// Return the previous working directory if one existed.
+    ///
+    /// Fail if the `workdir`, if not `None`, isn't accessible or isn't a directory.
+    /// No change is performed on error.
+    ///
+    /// ### About Worktrees
+    ///
+    /// * When setting a main worktree to a linked worktree directory, this repository instance
+    ///   will still claim that it is the [main worktree](crate::Worktree::is_main()) as that depends
+    ///   on the `git_dir`, not the worktree dir.
+    /// * When setting a linked worktree to a main worktree directory, this repository instance
+    ///   will still claim that it is *not* a [main worktree](crate::Worktree::is_main()) as that depends
+    ///   on the `git_dir`, not the worktree dir.
+    #[doc(alias = "git2")]
+    pub fn set_workdir(&mut self, workdir: impl Into<Option<PathBuf>>) -> Result<Option<PathBuf>, std::io::Error> {
+        let workdir = workdir.into();
+        Ok(match workdir {
+            None => self.work_tree.take(),
+            Some(new_workdir) => {
+                _ = std::fs::read_dir(&new_workdir)?;
+
+                let old = self.work_tree.take();
+                self.work_tree = Some(new_workdir);
+                old
+            }
+        })
+    }
+
     /// Return the work tree containing all checked out files, if there is one.
     pub fn workdir(&self) -> Option<&std::path::Path> {
         self.work_tree.as_deref()

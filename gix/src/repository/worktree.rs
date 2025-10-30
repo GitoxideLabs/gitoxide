@@ -30,6 +30,7 @@ impl crate::Repository {
         res.sort_by(|a, b| a.git_dir.cmp(&b.git_dir));
         Ok(res)
     }
+
     /// Return the repository owning the main worktree, typically from a linked worktree.
     ///
     /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
@@ -41,7 +42,7 @@ impl crate::Repository {
 
     /// Return the currently set worktree if there is one, acting as platform providing a validated worktree base path.
     ///
-    /// Note that there would be `None` if this repository is `bare` and the parent [`Repository`][crate::Repository] was instantiated without
+    /// Note that there would be `None` if this repository is `bare` and the parent [`Repository`](crate::Repository) was instantiated without
     /// registered worktree in the current working dir, even if no `.git` file or directory exists.
     /// It's merely based on configuration, see [Worktree::dot_git_exists()] for a way to perform more validation.
     pub fn worktree(&self) -> Option<Worktree<'_>> {
@@ -50,7 +51,7 @@ impl crate::Repository {
 
     /// Return true if this repository is bare, and has no main work tree.
     ///
-    /// This is not to be confused with the [`worktree()`][crate::Repository::worktree()] worktree, which may exists if this instance
+    /// This is not to be confused with the [`worktree()`](crate::Repository::worktree()) method, which may exist if this instance
     /// was opened in a worktree that was created separately.
     pub fn is_bare(&self) -> bool {
         self.config.is_bare && self.workdir().is_none()
