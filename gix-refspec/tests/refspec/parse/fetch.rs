@@ -174,3 +174,44 @@ fn ampersand_on_left_hand_side_is_head() {
 fn empty_refspec_is_enough_for_fetching_head_into_fetchhead() {
     assert_parse("", Instruction::Fetch(Fetch::Only { src: b("HEAD") }));
 }
+
+#[test]
+fn complex_glob_patterns_are_allowed_in_one_sided_refspecs() {
+    // Complex patterns with multiple asterisks should work for one-sided refspecs
+    assert_parse(
+        "refs/*/foo/*",
+        Instruction::Fetch(Fetch::Only {
+            src: b("refs/*/foo/*"),
+        }),
+    );
+    
+    assert_parse(
+        "+refs/heads/*/release/*",
+        Instruction::Fetch(Fetch::Only {
+            src: b("refs/heads/*/release/*"),
+        }),
+    );
+    
+    // Even more complex patterns
+    assert_parse(
+        "refs/*/*/branch",
+        Instruction::Fetch(Fetch::Only {
+            src: b("refs/*/*/branch"),
+        }),
+    );
+}
+
+#[test]
+fn complex_glob_patterns_still_fail_for_two_sided_refspecs() {
+    // Two-sided refspecs with complex patterns (multiple asterisks) should still fail
+    for spec in [
+        "refs/*/foo/*:refs/remotes/origin/*",
+        "refs/*/*:refs/remotes/*",
+        "a/*/c/*:b/*",
+    ] {
+        assert!(matches!(
+            try_parse(spec, Operation::Fetch).unwrap_err(),
+            Error::PatternUnsupported { .. }
+        ));
+    }
+}
