@@ -3,7 +3,7 @@ pub use crate::client::non_io_types::connect::{Error, Options};
 pub(crate) mod function {
     #[cfg(feature = "http-client-curl")]
     use crate::client::blocking_io::http::curl::Curl;
-    #[cfg(feature = "http-client-reqwest")]
+    #[cfg(all(feature = "http-client-reqwest", not(feature = "http-client-curl")))]
     use crate::client::blocking_io::http::reqwest::Remote as Reqwest;
     use crate::client::{blocking_io::Transport, non_io_types::connect::Error};
 

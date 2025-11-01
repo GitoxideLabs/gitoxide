@@ -59,7 +59,7 @@ async-client = [
 
 #! ### Other
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
-serde = ["dep:serde"]
+serde = ["dep:serde", "bstr/serde"]
 
 [[test]]
 name = "blocking-transport"
