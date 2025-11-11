@@ -260,8 +260,8 @@ mod summary {
             message: input.as_bstr(),
             extra_headers: vec![],
         };
-        assert_eq!(commit.author(), actor);
-        assert_eq!(commit.committer(), actor);
+        assert_eq!(commit.author().unwrap(), actor);
+        assert_eq!(commit.committer().unwrap(), actor);
         summary
     }
 

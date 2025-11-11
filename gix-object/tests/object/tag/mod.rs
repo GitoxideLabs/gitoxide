@@ -23,11 +23,11 @@ mod method {
             tagger,
             message,
             pgp_signature,
-        } = tag.into_owned();
+        } = tag.into_owned()?;
         assert_eq!(target.to_string(), tag.target);
         assert_eq!(target_kind, tag.target_kind);
         assert_eq!(name, tag.name);
-        let parsed = tag.tagger().map(Into::into);
+        let parsed = tag.tagger()?.map(Into::into);
         assert_eq!(tagger, parsed);
         assert_eq!(message, tag.message);
         assert_eq!(pgp_signature.as_ref().map(|s| s.as_bstr()), tag.pgp_signature);
@@ -285,7 +285,7 @@ KLMHist5yj0sw1E4hDTyQa0=
     fn tagger_method_returns_signature() -> crate::Result {
         let fixture = fixture_name("tag", "empty.txt");
         let tag = TagRef::from_bytes(&fixture)?;
-        assert_eq!(tag.tagger(), Some(signature("1592381636 +0800")));
+        assert_eq!(tag.tagger()?, Some(signature("1592381636 +0800")));
         Ok(())
     }
 }

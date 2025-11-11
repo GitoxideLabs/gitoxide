@@ -46,8 +46,8 @@ fn invalid_email_of_committer() {
             extra_headers: vec![]
         }
     );
-    assert_eq!(commit.author(), actor);
-    assert_eq!(commit.committer(), actor);
+    assert_eq!(commit.author().unwrap(), actor);
+    assert_eq!(commit.committer().unwrap(), actor);
 }
 
 #[test]
@@ -123,8 +123,8 @@ fn mergetag() -> crate::Result {
     assert_eq!(commit, expected);
     assert_eq!(commit.extra_headers().find_all("mergetag").count(), 1);
     assert_eq!(commit.extra_headers().mergetags().count(), 1);
-    assert_eq!(commit.author(), linus_signature("1591996221 -0700"));
-    assert_eq!(commit.committer(), linus_signature("1591996221 -0700"));
+    assert_eq!(commit.author().unwrap(), linus_signature("1591996221 -0700"));
+    assert_eq!(commit.committer().unwrap(), linus_signature("1591996221 -0700"));
     Ok(())
 }
 
@@ -244,8 +244,8 @@ Signed-off-by: Kim Altintop <kim@eagain.st>"
             extra_headers: vec![(b"gpgsig".as_bstr(), b"-----BEGIN PGP SIGNATURE-----\n\niHUEABYIAB0WIQSuZwcGWSQItmusNgR5URpSUCnwXQUCYT7xpAAKCRB5URpSUCnw\nXWB3AP9q323HlxnI8MyqszNOeYDwa7Y3yEZaUM2y/IRjz+z4YQEAq0yr1Syt3mrK\nOSFCqL2vDm3uStP+vF31f6FnzayhNg0=\n=Mhpp\n-----END PGP SIGNATURE-----\n".as_bstr().into())]
         }
     );
-    assert_eq!(commit.author(), kim);
-    assert_eq!(commit.committer(), kim);
+    assert_eq!(commit.author().unwrap(), kim);
+    assert_eq!(commit.committer().unwrap(), kim);
     let message = commit.message();
     assert_eq!(message.title, "test: use gitoxide for link-git-protocol tests");
     assert_eq!(
@@ -364,7 +364,7 @@ fn bogus_multi_gpgsig_header() -> crate::Result {
 fn author_method_returns_trimmed_signature() -> crate::Result {
     let backing = fixture_name("commit", "unsigned.txt");
     let commit = CommitRef::from_bytes(&backing)?;
-    assert_eq!(commit.author(), signature("1592437401 +0800"));
-    assert_eq!(commit.committer(), signature("1592437401 +0800"));
+    assert_eq!(commit.author().unwrap(), signature("1592437401 +0800"));
+    assert_eq!(commit.committer().unwrap(), signature("1592437401 +0800"));
     Ok(())
 }

@@ -4,32 +4,6 @@ use bstr::ByteSlice;
 
 use crate::{encode, encode::NL, Commit, CommitRef, Kind};
 
-fn parse_signature(raw: &bstr::BStr) -> gix_actor::SignatureRef<'_> {
-    gix_actor::SignatureRef::from_bytes::<()>(raw.as_ref()).expect("signatures were validated during parsing")
-}
-
-fn signature_requires_raw(raw: &bstr::BStr) -> bool {
-    let signature = parse_signature(raw);
-    signature.name.find_byteset(b"<>\n").is_some() || signature.email.find_byteset(b"<>\n").is_some()
-}
-
-fn signature_len(raw: &bstr::BStr) -> usize {
-    if signature_requires_raw(raw) {
-        raw.len()
-    } else {
-        parse_signature(raw).size()
-    }
-}
-
-fn write_signature(mut out: &mut dyn io::Write, field: &[u8], raw: &bstr::BStr) -> io::Result<()> {
-    if signature_requires_raw(raw) {
-        encode::trusted_header_field(field, raw.as_ref(), &mut out)
-    } else {
-        let signature = parse_signature(raw);
-        encode::trusted_header_signature(field, &signature, &mut out)
-    }
-}
-
 impl crate::WriteTo for Commit {
     /// Serializes this instance to `out` in the git serialization format.
     fn write_to(&self, mut out: &mut dyn io::Write) -> io::Result<()> {
@@ -84,8 +58,8 @@ impl crate::WriteTo for CommitRef<'_> {
         for parent in self.parents() {
             encode::trusted_header_id(b"parent", &parent, &mut out)?;
         }
-        write_signature(&mut out, b"author", self.author)?;
-        write_signature(&mut out, b"committer", self.committer)?;
+        encode::trusted_header_field(b"author", self.author.as_ref(), &mut out)?;
+        encode::trusted_header_field(b"committer", self.committer.as_ref(), &mut out)?;
         if let Some(encoding) = self.encoding.as_ref() {
             encode::header_field(b"encoding", encoding, &mut out)?;
         }
@@ -104,8 +78,8 @@ impl crate::WriteTo for CommitRef<'_> {
         let hash_in_hex = self.tree().kind().len_in_hex();
         (b"tree".len() + 1 /* space */ + hash_in_hex + 1 /* nl */
             + self.parents.iter().count() * (b"parent".len() + 1 /* space */ + hash_in_hex + 1 /* nl */)
-            + b"author".len() + 1 /* space */ + signature_len(self.author) + 1 /* nl */
-            + b"committer".len() + 1 /* space */ + signature_len(self.committer) + 1 /* nl */
+            + b"author".len() + 1 /* space */ + self.author.len() + 1 /* nl */
+            + b"committer".len() + 1 /* space */ + self.committer.len() + 1 /* nl */
             + self
                 .encoding
                 .as_ref()
