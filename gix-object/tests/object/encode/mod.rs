@@ -26,7 +26,7 @@ macro_rules! round_trip {
                 item.write_to(&mut output)?;
                 assert_eq!(output.as_bstr(), input.as_bstr(), "borrowed: {input_name}");
 
-                let item: $owned = item.into();
+                let item: $owned = <$owned>::try_from(item)?;
                 output.clear();
                 item.write_to(&mut output)?;
                 assert_eq!(output.as_bstr(), input.as_bstr());
@@ -37,7 +37,7 @@ macro_rules! round_trip {
                 item.write_to(&mut output)?;
                 assert_eq!(output.as_bstr(), input.as_bstr(), "object-ref");
 
-                let item: Object = item.into();
+                let item: Object = Object::try_from(item)?;
                 output.clear();
                 item.write_to(&mut output)?;
                 assert_eq!(output.as_bstr(), input.as_bstr(), "owned");
@@ -55,14 +55,15 @@ macro_rules! round_trip {
                     assert_eq!(item2, item, "object-ref loose: {input_name} {:?}\n{:?}", output.as_bstr(), input.as_bstr());
                 }
 
-                let item: $owned = item.into();
+                let item: $owned = <$owned>::try_from(item)?;
                 // serialise an owned to a tagged loose object
                 output.clear();
                 let w = &mut output;
                 w.write_all(&item.loose_header())?;
                 item.write_to(w)?;
                 let parsed = ObjectRef::from_loose(&output)?;
-                let item2: $owned = <$borrowed>::try_from(parsed).or(Err(super::Error::TryFromError))?.into();
+                let parsed_borrowed = <$borrowed>::try_from(parsed).or(Err(super::Error::TryFromError))?;
+                let item2: $owned = <$owned>::try_from(parsed_borrowed).or(Err(super::Error::TryFromError))?;
                 assert_eq!(item2, item, "object-ref loose owned: {input_name} {:?}\n{:?}", output.as_bstr(), input.as_bstr());
             }
             Ok(())

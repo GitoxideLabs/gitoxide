@@ -58,8 +58,8 @@ impl crate::WriteTo for CommitRef<'_> {
         for parent in self.parents() {
             encode::trusted_header_id(b"parent", &parent, &mut out)?;
         }
-        encode::trusted_header_signature(b"author", &self.author, &mut out)?;
-        encode::trusted_header_signature(b"committer", &self.committer, &mut out)?;
+        encode::trusted_header_field(b"author", self.author.as_ref(), &mut out)?;
+        encode::trusted_header_field(b"committer", self.committer.as_ref(), &mut out)?;
         if let Some(encoding) = self.encoding.as_ref() {
             encode::header_field(b"encoding", encoding, &mut out)?;
         }
@@ -78,8 +78,8 @@ impl crate::WriteTo for CommitRef<'_> {
         let hash_in_hex = self.tree().kind().len_in_hex();
         (b"tree".len() + 1 /* space */ + hash_in_hex + 1 /* nl */
             + self.parents.iter().count() * (b"parent".len() + 1 /* space */ + hash_in_hex + 1 /* nl */)
-            + b"author".len() + 1 /* space */ + self.author.size() + 1 /* nl */
-            + b"committer".len() + 1 /* space */ + self.committer.size() + 1 /* nl */
+            + b"author".len() + 1 /* space */ + self.author.len() + 1 /* nl */
+            + b"committer".len() + 1 /* space */ + self.committer.len() + 1 /* nl */
             + self
                 .encoding
                 .as_ref()

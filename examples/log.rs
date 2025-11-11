@@ -142,15 +142,16 @@ fn run(args: Args) -> anyhow::Result<()> {
                 let info = info?;
                 let commit = info.object()?;
                 let commit_ref = commit.decode()?;
+                let author = commit_ref.author()?;
                 Ok(LogEntryInfo {
                     commit_id: commit.id().to_hex().to_string(),
                     parents: info.parent_ids().map(|id| id.shorten_or_id().to_string()).collect(),
                     author: {
                         let mut buf = Vec::new();
-                        commit_ref.author.actor().write_to(&mut buf)?;
+                        author.actor().write_to(&mut buf)?;
                         buf.into()
                     },
-                    time: commit_ref.author.time()?.format_or_unix(format::DEFAULT),
+                    time: author.time()?.format_or_unix(format::DEFAULT),
                     message: commit_ref.message.to_owned(),
                 })
             }),

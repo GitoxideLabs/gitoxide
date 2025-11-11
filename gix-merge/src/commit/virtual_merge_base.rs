@@ -19,6 +19,8 @@ pub enum Error {
     MergeTree(#[from] crate::tree::Error),
     #[error("Failed to write tree for merged merge-base or virtual commit")]
     WriteObject(gix_object::write::Error),
+    #[error("Failed to decode a commit needed to build a virtual merge-base")]
+    DecodeCommit(#[from] gix_object::decode::Error),
     #[error(
         "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug."
     )]
@@ -28,6 +30,8 @@ pub enum Error {
 }
 
 pub(super) mod function {
+    use std::convert::TryFrom;
+
     use gix_object::FindExt;
 
     use super::Error;
@@ -128,7 +132,8 @@ pub(super) mod function {
         tree_id: gix_hash::ObjectId,
     ) -> Result<gix_hash::ObjectId, Error> {
         let mut buf = Vec::new();
-        let mut commit: gix_object::Commit = objects.find_commit(&parent_a, &mut buf)?.into();
+        let commit_ref = objects.find_commit(&parent_a, &mut buf)?;
+        let mut commit = gix_object::Commit::try_from(commit_ref)?;
         commit.parents = vec![parent_a, parent_b].into();
         commit.tree = tree_id;
         objects.write(&commit).map_err(Error::WriteObject)

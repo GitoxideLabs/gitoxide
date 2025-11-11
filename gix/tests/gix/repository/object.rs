@@ -630,7 +630,7 @@ mod tag {
         assert_eq!(current_head_id, tag.target(), "the tag points to the commit");
         assert_eq!(tag.target_kind, gix_object::Kind::Commit);
         assert_eq!(
-            tag.tagger.as_ref().expect("tagger").actor(),
+            tag.tagger()?.expect("tagger").actor(),
             repo.committer().expect("present")?.actor()
         );
         assert_eq!(tag.message, message);
@@ -845,8 +845,8 @@ fn new_commit_as() -> crate::Result {
     let commit = commit.decode()?;
 
     let mut buf = TimeBuf::default();
-    assert_eq!(commit.committer, committer.to_ref(&mut buf));
-    assert_eq!(commit.author, author.to_ref(&mut buf));
+    assert_eq!(commit.committer()?, committer.to_ref(&mut buf));
+    assert_eq!(commit.author()?, author.to_ref(&mut buf));
     assert_eq!(commit.message, "message");
     assert_eq!(commit.tree(), empty_tree.id);
     assert_eq!(commit.parents.len(), 0);

@@ -74,6 +74,11 @@ impl<'a> CommitRef<'a> {
 
 /// Access
 impl<'a> CommitRef<'a> {
+    fn parse_signature(raw: &'a BStr) -> Result<gix_actor::SignatureRef<'a>, crate::decode::Error> {
+        gix_actor::SignatureRef::from_bytes::<crate::decode::ParseError>(raw.as_ref())
+            .map_err(|err| crate::decode::Error::with_err(err, raw.as_ref()))
+    }
+
     /// Return the `tree` fields hash digest.
     pub fn tree(&self) -> gix_hash::ObjectId {
         gix_hash::ObjectId::from_hex(self.tree).expect("prior validation of tree hash during parsing")
@@ -94,15 +99,15 @@ impl<'a> CommitRef<'a> {
     /// Return the author, with whitespace trimmed.
     ///
     /// This is different from the `author` field which may contain whitespace.
-    pub fn author(&self) -> gix_actor::SignatureRef<'a> {
-        self.author.trim()
+    pub fn author(&self) -> Result<gix_actor::SignatureRef<'a>, crate::decode::Error> {
+        Self::parse_signature(self.author).map(|signature| signature.trim())
     }
 
     /// Return the committer, with whitespace trimmed.
     ///
     /// This is different from the `committer` field which may contain whitespace.
-    pub fn committer(&self) -> gix_actor::SignatureRef<'a> {
-        self.committer.trim()
+    pub fn committer(&self) -> Result<gix_actor::SignatureRef<'a>, crate::decode::Error> {
+        Self::parse_signature(self.committer).map(|signature| signature.trim())
     }
 
     /// Returns a partially parsed message from which more information can be derived.
@@ -111,21 +116,21 @@ impl<'a> CommitRef<'a> {
     }
 
     /// Returns the time at which this commit was created, or a default time if it could not be parsed.
-    pub fn time(&self) -> gix_date::Time {
-        self.committer.time.parse().unwrap_or_default()
+    pub fn time(&self) -> Result<gix_date::Time, crate::decode::Error> {
+        Self::parse_signature(self.committer).map(|signature| signature.time().unwrap_or_default())
     }
 }
 
 /// Conversion
 impl CommitRef<'_> {
     /// Copy all fields of this instance into a fully owned commit, consuming this instance.
-    pub fn into_owned(self) -> Commit {
-        self.into()
+    pub fn into_owned(self) -> Result<Commit, crate::decode::Error> {
+        Commit::try_from(self)
     }
 
     /// Copy all fields of this instance into a fully owned commit, internally cloning this instance.
-    pub fn to_owned(self) -> Commit {
-        self.clone().into()
+    pub fn to_owned(self) -> Result<Commit, crate::decode::Error> {
+        Commit::try_from(self.clone())
     }
 }
 
