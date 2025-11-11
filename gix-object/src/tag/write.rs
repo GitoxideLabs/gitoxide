@@ -1,9 +1,26 @@
 use std::io;
 
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
 use gix_date::parse::TimeBuf;
 
 use crate::{encode, encode::NL, Kind, Tag, TagRef};
+
+fn parse_signature(raw: &BStr) -> gix_actor::SignatureRef<'_> {
+    gix_actor::SignatureRef::from_bytes::<()>(raw.as_ref()).expect("signatures were validated during parsing")
+}
+
+fn signature_requires_raw(raw: &BStr) -> bool {
+    let signature = parse_signature(raw);
+    signature.name.find_byteset(b"<>\n").is_some() || signature.email.find_byteset(b"<>\n").is_some()
+}
+
+fn signature_len(raw: &BStr) -> usize {
+    if signature_requires_raw(raw) {
+        raw.len()
+    } else {
+        parse_signature(raw).size()
+    }
+}
 
 /// An Error used in [`Tag::write_to()`][crate::WriteTo::write_to()].
 #[derive(Debug, thiserror::Error)]
@@ -64,8 +81,13 @@ impl crate::WriteTo for TagRef<'_> {
         encode::trusted_header_field(b"object", self.target, &mut out)?;
         encode::trusted_header_field(b"type", self.target_kind.as_bytes(), &mut out)?;
         encode::header_field(b"tag", validated_name(self.name)?, &mut out)?;
-        if let Some(tagger) = &self.tagger {
-            encode::trusted_header_signature(b"tagger", tagger, &mut out)?;
+        if let Some(tagger) = self.tagger {
+            if signature_requires_raw(tagger) {
+                encode::trusted_header_field(b"tagger", tagger.as_ref(), &mut out)?;
+            } else {
+                let signature = parse_signature(tagger);
+                encode::trusted_header_signature(b"tagger", &signature, &mut out)?;
+            }
         }
 
         if !self.message.iter().all(|b| *b == b'\n') {
@@ -89,8 +111,7 @@ impl crate::WriteTo for TagRef<'_> {
             + b"tag".len() + 1 /* space */ + self.name.len() + 1 /* nl */
             + self
                 .tagger
-                .as_ref()
-                .map_or(0, |t| b"tagger".len() + 1 /* space */ + t.size() + 1 /* nl */)
+                .map_or(0, |raw| b"tagger".len() + 1 /* space */ + signature_len(raw) + 1 /* nl */)
             + if self.message.iter().all(|b| *b == b'\n') { 0 } else { 1 /* nl */ } + self.message.len()
             + self.pgp_signature.as_ref().map_or(0, |m| 1 /* nl */ + m.len())) as u64
     }

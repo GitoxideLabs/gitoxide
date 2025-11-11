@@ -24,6 +24,13 @@ impl<'a> TagRef<'a> {
         gix_hash::ObjectId::from_hex(self.target).expect("prior validation")
     }
 
+    /// Return the tagger, if present.
+    pub fn tagger(&self) -> Option<gix_actor::SignatureRef<'a>> {
+        self.tagger.map(|raw| {
+            gix_actor::SignatureRef::from_bytes::<()>(raw.as_ref()).expect("tagger was validated during parsing")
+        })
+    }
+
     /// Copy all data into a fully-owned instance.
     pub fn into_owned(self) -> crate::Tag {
         self.into()

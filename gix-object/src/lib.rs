@@ -88,17 +88,16 @@ pub struct CommitRef<'a> {
     pub tree: &'a BStr,
     /// HEX hash of each parent commit. Empty for first commit in repository.
     pub parents: SmallVec<[&'a BStr; 1]>,
-    /// Who wrote this commit. Name and email might contain whitespace and are not trimmed to ensure round-tripping.
+    /// The raw author header value as encountered during parsing.
     ///
-    /// Use the [`author()`](CommitRef::author()) method to received a trimmed version of it.
-    pub author: gix_actor::SignatureRef<'a>,
-    /// Who committed this commit. Name and email might contain whitespace and are not trimmed to ensure round-tripping.
+    /// Use the [`author()`](CommitRef::author()) method to obtain a parsed version of it.
+    #[cfg_attr(feature = "serde", serde(borrow))]
+    pub author: &'a BStr,
+    /// The raw committer header value as encountered during parsing.
     ///
-    /// Use the [`committer()`](CommitRef::committer()) method to received a trimmed version of it.
-    ///
-    /// This may be different from the `author` in case the author couldn't write to the repository themselves and
-    /// is commonly encountered with contributed commits.
-    pub committer: gix_actor::SignatureRef<'a>,
+    /// Use the [`committer()`](CommitRef::committer()) method to obtain a parsed version of it.
+    #[cfg_attr(feature = "serde", serde(borrow))]
+    pub committer: &'a BStr,
     /// The name of the message encoding, otherwise [UTF-8 should be assumed](https://github.com/git/git/blob/e67fbf927dfdf13d0b21dc6ea15dc3c7ef448ea0/commit.c#L1493:L1493).
     pub encoding: Option<&'a BStr>,
     /// The commit message documenting the change.
@@ -150,8 +149,11 @@ pub struct TagRef<'a> {
     pub target_kind: Kind,
     /// The name of the tag, e.g. "v1.0".
     pub name: &'a BStr,
-    /// The author of the tag.
-    pub tagger: Option<gix_actor::SignatureRef<'a>>,
+    /// The raw tagger header value as encountered during parsing.
+    ///
+    /// Use the [`tagger()`](TagRef::tagger()) method to obtain a parsed version of it.
+    #[cfg_attr(feature = "serde", serde(borrow))]
+    pub tagger: Option<&'a BStr>,
     /// The message describing this release.
     pub message: &'a BStr,
     /// A cryptographic signature over the entire content of the serialized tag object thus far.

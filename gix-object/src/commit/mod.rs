@@ -74,6 +74,10 @@ impl<'a> CommitRef<'a> {
 
 /// Access
 impl<'a> CommitRef<'a> {
+    fn parse_signature(raw: &'a BStr) -> gix_actor::SignatureRef<'a> {
+        gix_actor::SignatureRef::from_bytes::<()>(raw.as_ref()).expect("signatures were validated during parsing")
+    }
+
     /// Return the `tree` fields hash digest.
     pub fn tree(&self) -> gix_hash::ObjectId {
         gix_hash::ObjectId::from_hex(self.tree).expect("prior validation of tree hash during parsing")
@@ -95,14 +99,14 @@ impl<'a> CommitRef<'a> {
     ///
     /// This is different from the `author` field which may contain whitespace.
     pub fn author(&self) -> gix_actor::SignatureRef<'a> {
-        self.author.trim()
+        Self::parse_signature(self.author).trim()
     }
 
     /// Return the committer, with whitespace trimmed.
     ///
     /// This is different from the `committer` field which may contain whitespace.
     pub fn committer(&self) -> gix_actor::SignatureRef<'a> {
-        self.committer.trim()
+        Self::parse_signature(self.committer).trim()
     }
 
     /// Returns a partially parsed message from which more information can be derived.
@@ -112,7 +116,7 @@ impl<'a> CommitRef<'a> {
 
     /// Returns the time at which this commit was created, or a default time if it could not be parsed.
     pub fn time(&self) -> gix_date::Time {
-        self.committer.time.parse().unwrap_or_default()
+        Self::parse_signature(self.committer).time().unwrap_or_default()
     }
 }
 

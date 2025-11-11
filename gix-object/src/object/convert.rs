@@ -7,15 +7,20 @@ impl From<TagRef<'_>> for Tag {
             name,
             target_kind,
             message,
-            tagger: signature,
+            tagger,
             pgp_signature,
         } = other;
+        let tagger = tagger.map(|raw| {
+            gix_actor::SignatureRef::from_bytes::<()>(raw.as_ref())
+                .expect("signatures were validated during parsing")
+                .into()
+        });
         Tag {
             target: gix_hash::ObjectId::from_hex(target).expect("prior parser validation"),
             name: name.to_owned(),
             target_kind,
             message: message.to_owned(),
-            tagger: signature.map(Into::into),
+            tagger,
             pgp_signature: pgp_signature.map(ToOwned::to_owned),
         }
     }
@@ -32,6 +37,10 @@ impl From<CommitRef<'_>> for Commit {
             message,
             extra_headers,
         } = other;
+        let author = gix_actor::SignatureRef::from_bytes::<()>(author.as_ref())
+            .expect("signatures were validated during parsing");
+        let committer = gix_actor::SignatureRef::from_bytes::<()>(committer.as_ref())
+            .expect("signatures were validated during parsing");
         Commit {
             tree: gix_hash::ObjectId::from_hex(tree).expect("prior parser validation"),
             parents: parents
