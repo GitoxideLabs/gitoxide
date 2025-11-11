@@ -1,7 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
 use gix_features::progress;
-use gix_object::bstr::ByteSlice;
 use gix_odb::loose::Store;
 use gix_testtools::fixture_path_standalone;
 use pretty_assertions::assert_eq;
@@ -229,7 +228,7 @@ mod find {
 
     use crate::{
         hex_to_id,
-        store::loose::{ldb, locate_oid, signature},
+        store::loose::{ldb, locate_oid},
     };
 
     fn find<'a>(hex: &str, buf: &'a mut Vec<u8>) -> gix_object::Data<'a> {
@@ -284,7 +283,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
 "
                 .as_bstr(),
             ),
-            tagger: Some(signature("1528473343 +0200")),
+            tagger: Some(b"Sebastian Thiel <byronimo@gmail.com> 1528473343 +0200".as_bstr()),
         };
         assert_eq!(o.decode()?.as_tag().expect("tag"), &expected);
         Ok(())
@@ -299,8 +298,8 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
         let expected = CommitRef {
             tree: b"6ba2a0ded519f737fd5b8d5ccfb141125ef3176f".as_bstr(),
             parents: vec![].into(),
-            author: signature("1528473303 +0200"),
-            committer: signature("1528473303 +0200"),
+            author: b"Sebastian Thiel <byronimo@gmail.com> 1528473303 +0200".as_bstr(),
+            committer: b"Sebastian Thiel <byronimo@gmail.com> 1528473303 +0200".as_bstr(),
             encoding: None,
             message: b"initial commit\n".as_bstr(),
             extra_headers: vec![(b"gpgsig".as_bstr(), b"-----BEGIN PGP SIGNATURE-----\nComment: GPGTools - https://gpgtools.org\n\niQIzBAABCgAdFiEEw7xSvXbiwjusbsBqZl+Z+p2ZlmwFAlsaptwACgkQZl+Z+p2Z\nlmxXSQ//fj6t7aWoEKeMdFigfj6OXWPUyrRbS0N9kpJeOfA0BIOea/6Jbn8J5qh1\nYRfrySOzHPXR5Y+w4GwLiVas66qyhAbk4yeqZM0JxBjHDyPyRGhjUd3y7WjEa6bj\nP0ACAIkYZQ/Q/LDE3eubmhAwEobBH3nZbwE+/zDIG0i265bD5C0iDumVOiKkSelw\ncr6FZVw1HH+GcabFkeLRZLNGmPqGdbeBwYERqb0U1aRCzV1xLYteoKwyWcYaH8E3\n97z1rwhUO/L7o8WUEJtP3CLB0zuocslMxskf6bCeubBnRNJ0YrRmxGarxCP3vn4D\n3a/MwECnl6mnUU9t+OnfvrzLDN73rlq8iasUq6hGe7Sje7waX6b2UGpxHqwykmXg\nVimD6Ah7svJanHryfJn38DvJW/wOMqmAnSUAp+Y8W9EIe0xVntCmtMyoKuqBoY7T\nJlZ1kHJte6ELIM5JOY9Gx7D0ZCSKZJQqyjoqtl36dsomT0I78/+7QS1DP4S6XB7d\nc3BYH0JkW81p7AAFbE543ttN0Z4wKXErMFqUKnPZUIEuybtlNYV+krRdfDBWQysT\n3MBebjguVQ60oGs06PzeYBosKGQrHggAcwduLFuqXhLTJqN4UQ18RkE0vbtG3YA0\n+XtZQM13vURdfwFI5qitAGgw4EzPVrkWWzApzLCrRPEMbvP+b9A=\n=2qqN\n-----END PGP SIGNATURE-----\n".as_bstr().into())]
@@ -425,13 +424,5 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             }
             Ok(())
         }
-    }
-}
-
-fn signature(time: &str) -> gix_actor::SignatureRef<'_> {
-    gix_actor::SignatureRef {
-        name: b"Sebastian Thiel".as_bstr(),
-        email: b"byronimo@gmail.com".as_bstr(),
-        time,
     }
 }
