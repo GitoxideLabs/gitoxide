@@ -478,41 +478,41 @@ mod validate {
         }
     }
 
+    #[cfg(feature = "attributes")]
     pub struct SafeCrlf;
+    #[cfg(feature = "attributes")]
     impl keys::Validate for SafeCrlf {
-        #[cfg_attr(not(feature = "attributes"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            #[cfg(feature = "attributes")]
             super::Core::SAFE_CRLF.try_into_safecrlf(value.into())?;
             Ok(())
         }
     }
 
+    #[cfg(feature = "attributes")]
     pub struct AutoCrlf;
+    #[cfg(feature = "attributes")]
     impl keys::Validate for AutoCrlf {
-        #[cfg_attr(not(feature = "attributes"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            #[cfg(feature = "attributes")]
             super::Core::AUTO_CRLF.try_into_autocrlf(value.into())?;
             Ok(())
         }
     }
 
+    #[cfg(feature = "attributes")]
     pub struct Eol;
+    #[cfg(feature = "attributes")]
     impl keys::Validate for Eol {
-        #[cfg_attr(not(feature = "attributes"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            #[cfg(feature = "attributes")]
             super::Core::EOL.try_into_eol(value.into())?;
             Ok(())
         }
     }
 
+    #[cfg(feature = "attributes")]
     pub struct CheckRoundTripEncoding;
+    #[cfg(feature = "attributes")]
     impl keys::Validate for CheckRoundTripEncoding {
-        #[cfg_attr(not(feature = "attributes"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            #[cfg(feature = "attributes")]
             super::Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(Some(value.into()))?;
             Ok(())
         }

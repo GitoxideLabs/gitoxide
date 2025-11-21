@@ -87,11 +87,11 @@ mod validate {
         }
     }
 
+    #[cfg(feature = "attributes")]
     pub struct RecurseSubmodules;
+    #[cfg(feature = "attributes")]
     impl keys::Validate for RecurseSubmodules {
-        #[cfg_attr(not(feature = "attributes"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            #[cfg(feature = "attributes")]
             {
                 let boolean = gix_config::Boolean::try_from(value).map(|b| b.0);
                 crate::config::tree::Fetch::RECURSE_SUBMODULES.try_into_recurse_submodules(boolean)?;

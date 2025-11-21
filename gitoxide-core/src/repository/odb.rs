@@ -17,10 +17,15 @@ pub fn info(
 
     #[cfg_attr(feature = "serde", derive(serde::Serialize))]
     pub struct Statistics {
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub path: std::path::PathBuf,
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub object_hash: String,
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub use_multi_pack_index: bool,
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub structure: Vec<gix::odb::store::structure::Record>,
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub metrics: gix::odb::store::Metrics,
     }
 

@@ -25,6 +25,7 @@ mod entries {
         pub num_blobs_exec: usize,
         pub num_submodules: usize,
         #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+        #[cfg_attr(not(feature = "serde"), allow(dead_code))]
         pub bytes: Option<u64>,
         #[cfg_attr(feature = "serde", serde(skip))]
         pub num_bytes: u64,
