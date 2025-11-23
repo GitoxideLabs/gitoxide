@@ -61,7 +61,8 @@ pub(crate) mod function {
     };
 
     /// Invoke a ls-refs V2 command on `transport`, which requires a prior handshake that yielded
-    /// server `capabilities`. `prepare_ls_refs(capabilities, arguments)` can be used to alter the _ls-refs_.
+    /// server `capabilities`. `prepare_ls_refs(capabilities)` can be used to alter the _ls-refs_.
+    /// `arguments` are extra arguments to send to the server.
     /// `progress` is used to provide feedback.
     /// The `agent` information will be added to the features sent to the server.
     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
@@ -69,7 +70,8 @@ pub(crate) mod function {
     pub async fn ls_refs(
         mut transport: impl Transport,
         capabilities: &Capabilities,
-        prepare_ls_refs: impl FnOnce(&Capabilities, &mut Vec<BString>) -> std::io::Result<Action>,
+        prepare_ls_refs: impl FnOnce(&Capabilities) -> std::io::Result<Action>,
+        extra_args: Vec<BString>,
         progress: &mut impl Progress,
         trace: bool,
         agent: (&'static str, Option<Cow<'static, str>>),
@@ -86,7 +88,9 @@ pub(crate) mod function {
         {
             ls_args.push("unborn".into());
         }
-        let refs = match prepare_ls_refs(capabilities, &mut ls_args) {
+
+        ls_args.extend(extra_args);
+        let refs = match prepare_ls_refs(capabilities) {
             Ok(Action::Skip) => Vec::new(),
             Ok(Action::Continue) => {
                 ls_refs.validate_argument_prefixes(

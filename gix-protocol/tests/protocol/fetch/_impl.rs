@@ -95,7 +95,8 @@ mod fetch_fn {
                 gix_protocol::ls_refs(
                     &mut transport,
                     &capabilities,
-                    |a, _b| delegate.prepare_ls_refs(a),
+                    |a| delegate.prepare_ls_refs(a),
+                    Vec::new(),
                     &mut progress,
                     trace,
                     ("agent", Some(Cow::Owned(agent.clone()))),

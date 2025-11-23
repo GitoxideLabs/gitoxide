@@ -80,10 +80,8 @@ impl RefMap {
         let remote_refs = crate::ls_refs(
             transport,
             capabilities,
-            |_capabilities, arguments| {
-                push_prefix_arguments(prefix_from_spec_as_filter_on_remote, arguments, &all_refspecs);
-                Ok(crate::ls_refs::Action::Continue)
-            },
+            |_capabilities| Ok(crate::ls_refs::Action::Continue),
+            push_prefix_arguments(prefix_from_spec_as_filter_on_remote, &all_refspecs),
             &mut progress,
             trace_packetlines,
             user_agent,
@@ -164,13 +162,13 @@ impl RefMap {
 
 fn push_prefix_arguments(
     prefix_from_spec_as_filter_on_remote: bool,
-    arguments: &mut Vec<BString>,
     all_refspecs: &[gix_refspec::RefSpec],
-) {
+) -> Vec<BString> {
     if !prefix_from_spec_as_filter_on_remote {
-        return;
+        return Vec::new();
     }
 
+    let mut arguments = Vec::new();
     let mut seen = HashSet::new();
     for spec in all_refspecs {
         let spec = spec.to_ref();
@@ -183,4 +181,6 @@ fn push_prefix_arguments(
             }
         }
     }
+
+    arguments
 }
