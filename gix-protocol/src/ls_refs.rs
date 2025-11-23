@@ -29,18 +29,6 @@ mod error {
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use error::Error;
 
-/// What to do after preparing ls-refs in [`ls_refs()`][crate::ls_refs()].
-#[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
-pub enum Action {
-    /// Continue by sending a 'ls-refs' command.
-    Continue,
-    /// Skip 'ls-refs' entirely.
-    ///
-    /// This is useful if the `ref-in-want` capability is taken advantage of. When fetching, one must must then send
-    /// `want-ref`s during the negotiation phase.
-    Skip,
-}
-
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub(crate) mod function {
     use std::borrow::Cow;
@@ -50,14 +38,14 @@ pub(crate) mod function {
     use gix_transport::client::Capabilities;
     use maybe_async::maybe_async;
 
-    use super::{Action, Error};
+    use super::Error;
     #[cfg(feature = "async-client")]
     use crate::transport::client::async_io::{Transport, TransportV2Ext};
     #[cfg(feature = "blocking-client")]
     use crate::transport::client::blocking_io::{Transport, TransportV2Ext};
     use crate::{
         handshake::{refs::from_v2_refs, Ref},
-        indicate_end_of_interaction, Command,
+        Command,
     };
 
     /// Invoke a ls-refs V2 command on `transport`, which requires a prior handshake that yielded
@@ -70,7 +58,6 @@ pub(crate) mod function {
     pub async fn ls_refs(
         mut transport: impl Transport,
         capabilities: &Capabilities,
-        prepare_ls_refs: impl FnOnce(&Capabilities) -> std::io::Result<Action>,
         extra_args: Vec<BString>,
         progress: &mut impl Progress,
         trace: bool,
@@ -90,37 +77,22 @@ pub(crate) mod function {
         }
 
         ls_args.extend(extra_args);
-        let refs = match prepare_ls_refs(capabilities) {
-            Ok(Action::Skip) => Vec::new(),
-            Ok(Action::Continue) => {
-                ls_refs.validate_argument_prefixes(
-                    gix_transport::Protocol::V2,
-                    capabilities,
-                    &ls_args,
-                    &ls_features,
-                )?;
+        ls_refs.validate_argument_prefixes(gix_transport::Protocol::V2, capabilities, &ls_args, &ls_features)?;
 
-                progress.step();
-                progress.set_name("list refs".into());
-                let mut remote_refs = transport
-                    .invoke(
-                        ls_refs.as_str(),
-                        ls_features.into_iter(),
-                        if ls_args.is_empty() {
-                            None
-                        } else {
-                            Some(ls_args.into_iter())
-                        },
-                        trace,
-                    )
-                    .await?;
-                from_v2_refs(&mut remote_refs).await?
-            }
-            Err(err) => {
-                indicate_end_of_interaction(transport, trace).await?;
-                return Err(err.into());
-            }
-        };
-        Ok(refs)
+        progress.step();
+        progress.set_name("list refs".into());
+        let mut remote_refs = transport
+            .invoke(
+                ls_refs.as_str(),
+                ls_features.into_iter(),
+                if ls_args.is_empty() {
+                    None
+                } else {
+                    Some(ls_args.into_iter())
+                },
+                trace,
+            )
+            .await?;
+        Ok(from_v2_refs(&mut remote_refs).await?)
     }
 }

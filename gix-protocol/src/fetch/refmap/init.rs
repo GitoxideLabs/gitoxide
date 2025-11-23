@@ -80,7 +80,6 @@ impl RefMap {
         let remote_refs = crate::ls_refs(
             transport,
             capabilities,
-            |_capabilities| Ok(crate::ls_refs::Action::Continue),
             push_prefix_arguments(prefix_from_spec_as_filter_on_remote, &all_refspecs),
             &mut progress,
             trace_packetlines,
