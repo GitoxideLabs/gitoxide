@@ -259,7 +259,10 @@ fn ipv6_address_with_user() -> crate::Result {
 
 #[test]
 fn ipv6_address_with_user_and_port() -> crate::Result {
-    let url = assert_url("ssh://user@[::1]:22/repo", url(Scheme::Ssh, "user", "::1", 22, b"/repo"))?;
+    let url = assert_url(
+        "ssh://user@[::1]:22/repo",
+        url(Scheme::Ssh, "user", "::1", 22, b"/repo"),
+    )?;
     assert_eq!(url.host(), Some("::1"));
     assert_eq!(url.user(), Some("user"));
     assert_eq!(url.port, Some(22));
@@ -268,7 +271,10 @@ fn ipv6_address_with_user_and_port() -> crate::Result {
 
 #[test]
 fn ipv6_full_address() -> crate::Result {
-    let url = assert_url("ssh://[2001:db8::1]/repo", url(Scheme::Ssh, None, "2001:db8::1", None, b"/repo"))?;
+    let url = assert_url(
+        "ssh://[2001:db8::1]/repo",
+        url(Scheme::Ssh, None, "2001:db8::1", None, b"/repo"),
+    )?;
     assert_eq!(url.host(), Some("2001:db8::1"));
     Ok(())
 }

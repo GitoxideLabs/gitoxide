@@ -102,7 +102,10 @@ fn http_with_ipv6() -> crate::Result {
 
 #[test]
 fn http_with_ipv6_and_port() -> crate::Result {
-    assert_url_roundtrip("http://[::1]:8080/repo", url(Scheme::Http, None, "[::1]", 8080, b"/repo"))
+    assert_url_roundtrip(
+        "http://[::1]:8080/repo",
+        url(Scheme::Http, None, "[::1]", 8080, b"/repo"),
+    )
 }
 
 #[test]
@@ -123,6 +126,9 @@ fn percent_encoded_path() -> crate::Result {
 #[test]
 fn percent_encoded_international_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/caf%C3%A9".into())?;
-    assert_eq!(url.path, "/caf%C3%A9", "international characters remain encoded in path");
+    assert_eq!(
+        url.path, "/caf%C3%A9",
+        "international characters remain encoded in path"
+    );
     Ok(())
 }

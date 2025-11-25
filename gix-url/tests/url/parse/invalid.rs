@@ -54,6 +54,10 @@ fn port_too_large() {
 #[test]
 fn invalid_port_format() {
     let url = parse("ssh://host.xz:abc/path").expect("non-numeric port is treated as part of host");
-    assert_eq!(url.host(), Some("host.xz:abc"), "port parse failure makes it part of hostname");
+    assert_eq!(
+        url.host(),
+        Some("host.xz:abc"),
+        "port parse failure makes it part of hostname"
+    );
     assert_eq!(url.port, None);
 }

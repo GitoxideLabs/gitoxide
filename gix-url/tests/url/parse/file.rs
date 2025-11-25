@@ -234,9 +234,6 @@ mod unix {
 
     #[test]
     fn file_url_with_ipv6() -> crate::Result {
-        assert_url_roundtrip(
-            "file://[::1]/repo",
-            url(Scheme::File, None, "[::1]", None, b"/repo"),
-        )
+        assert_url_roundtrip("file://[::1]/repo", url(Scheme::File, None, "[::1]", None, b"/repo"))
     }
 }
