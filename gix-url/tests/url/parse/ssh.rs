@@ -27,7 +27,7 @@ fn host_is_ipv4() -> crate::Result {
 fn username_expansion_with_username() -> crate::Result {
     assert_url_roundtrip(
         "ssh://example.com/~byron/hello/git",
-        url(Scheme::Ssh, None, "example.com", None, b"/~byron/hello/git"),
+        url(Scheme::Ssh, None, "example.com", None, b"~byron/hello/git"),
     )
 }
 
@@ -35,7 +35,7 @@ fn username_expansion_with_username() -> crate::Result {
 fn username_expansion_without_username() -> crate::Result {
     assert_url_roundtrip(
         "ssh://example.com/~/hello/git",
-        url(Scheme::Ssh, None, "example.com", None, b"/~/hello/git"),
+        url(Scheme::Ssh, None, "example.com", None, b"~/hello/git"),
     )
 }
 

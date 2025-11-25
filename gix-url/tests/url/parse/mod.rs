@@ -116,7 +116,7 @@ mod git {
     fn username_expansion_with_username() -> crate::Result {
         assert_url_roundtrip(
             "git://example.com/~byron/hello",
-            url(Scheme::Git, None, "example.com", None, b"/~byron/hello"),
+            url(Scheme::Git, None, "example.com", None, b"~byron/hello"),
         )
     }
 }
