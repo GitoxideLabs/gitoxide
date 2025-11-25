@@ -14,7 +14,10 @@ struct Sample {
     seconds: SecondsSinceUnixEpoch,
 }
 
-/// Returns true if the pattern looks like a relative date (e.g., "1 day ago").
+/// Returns true if the pattern looks like a relative date of the form "N unit ago".
+/// Note: This only covers the relative dates tested in the baseline (e.g., "1 day ago").
+/// Other relative formats like "yesterday", "last week" etc. are not included in baseline
+/// testing because they would require additional handling in the baseline script.
 fn is_relative_date(pattern: &str) -> bool {
     pattern.ends_with(" ago")
 }
