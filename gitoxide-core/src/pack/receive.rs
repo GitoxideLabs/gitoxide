@@ -88,14 +88,8 @@ where
         extra_refspecs: vec![],
     };
     let refmap = handshake
-        .fetch_or_extract_refmap(
-            &mut progress,
-            &mut transport.inner,
-            user_agent.clone(),
-            trace_packetlines,
-            true,
-            context,
-        )
+        .fetch_or_extract_refmap(user_agent.clone(), true, context)?
+        .fetch(&mut progress, &mut transport.inner, trace_packetlines)
         .await?;
 
     if refmap.mappings.is_empty() && !refmap.remote_refs.is_empty() {

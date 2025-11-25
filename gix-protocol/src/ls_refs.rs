@@ -50,7 +50,7 @@ pub(crate) mod function {
 
     /// A command to list references from a remote Git repository.
     pub struct LsRefsCommand<'a> {
-        capabilities: &'a Capabilities,
+        pub(crate) capabilities: &'a Capabilities,
         features: Vec<(&'static str, Option<Cow<'static, str>>)>,
         arguments: Vec<BString>,
     }
