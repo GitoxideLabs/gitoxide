@@ -18,7 +18,7 @@ pub struct Options<'a> {
     pub reject_shallow_remote: bool,
 }
 
-/// For use in [`RefMap::fetch()`] and [`fetch`](crate::fetch()).
+/// For use in [`crate::Handshake::fetch_or_extract_refmap()`] and [`fetch`](crate::fetch()).
 #[cfg(feature = "handshake")]
 pub struct Context<'a, T> {
     /// The outcome of the handshake performed with the remote.
@@ -29,7 +29,7 @@ pub struct Context<'a, T> {
     ///
     /// This is always done if the underlying protocol is V2, which is implied by the absence of refs in the `handshake` outcome.
     pub transport: &'a mut T,
-    /// How to self-identify during the `ls-refs` call in [`RefMap::fetch()`] or the `fetch` call in [`fetch()`](crate::fetch()).
+    /// How to self-identify during the `ls-refs` call in [`crate::Handshake::fetch_or_extract_refmap()`] or the `fetch` call in [`fetch()`](crate::fetch()).
     ///
     /// This could be read from the `gitoxide.userAgent` configuration variable.
     pub user_agent: (&'static str, Option<std::borrow::Cow<'static, str>>),

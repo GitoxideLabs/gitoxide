@@ -75,7 +75,7 @@ pub(crate) mod hero {
         use crate::transport::client::async_io::Transport;
         #[cfg(feature = "blocking-client")]
         use crate::transport::client::blocking_io::Transport;
-        use crate::Handshake;
+        use crate::{fetch::RefMap, Handshake};
         use gix_features::progress::Progress;
         use std::borrow::Cow;
 
@@ -96,21 +96,17 @@ pub(crate) mod hero {
             where
                 T: Transport,
             {
-                Ok(match self.refs.take() {
-                    Some(refs) => crate::fetch::RefMap::from_refs(refs, &self.capabilities, refmap_context)?,
-                    None => {
-                        crate::fetch::RefMap::fetch(
-                            &mut progress,
-                            &self.capabilities,
-                            transport,
-                            user_agent,
-                            trace_packetlines,
-                            prefix_from_spec_as_filter_on_remote,
-                            refmap_context,
-                        )
-                        .await?
-                    }
-                })
+                if let Some(refs) = self.refs.take() {
+                    return crate::fetch::RefMap::from_refs(refs, &self.capabilities, refmap_context);
+                }
+
+                let _span = gix_trace::coarse!("gix_protocol::handshake::fetch_or_extract_refmap()");
+                let all_refspecs = refmap_context.aggregate_refspecs();
+                let prefix_refspecs = prefix_from_spec_as_filter_on_remote.then_some(&all_refspecs[..]);
+                let remote_refs = crate::LsRefsCommand::new(prefix_refspecs, &self.capabilities, user_agent)
+                    .invoke(transport, &mut progress, trace_packetlines)
+                    .await?;
+                RefMap::from_refs(remote_refs, &self.capabilities, refmap_context)
             }
         }
     }

@@ -111,7 +111,7 @@ pub struct Round {
 /// * `graph`
 ///     - The commit-graph for use by the `negotiator` - we populate it with tips to initialize the graph traversal.
 /// * `ref_map`
-///     - The references known on the remote, as previously obtained with [`RefMap::fetch()`].
+///     - The references known on the remote, as previously obtained with [`crate::Handshake::fetch_or_extract_refmap()`].
 /// * `shallow`
 ///     - How to deal with shallow repositories. It does affect how negotiations are performed.
 /// * `mapping_is_ignored`
