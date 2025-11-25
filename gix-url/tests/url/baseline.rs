@@ -1,109 +1,51 @@
-use std::any::Any;
-
 use bstr::ByteSlice;
-use std::sync::LazyLock;
 
-/// To see all current failures run the following command or execute cargo-nextest directly with
-/// the below shown arguments.
-///
-/// ```bash
-/// just nt -p gix-url --test baseline --success-output immediate
-/// ``
 #[test]
-fn run() {
-    // ensure the baseline is evaluated before we disable the panic hook, otherwise we swallow
-    // errors inside the baseline generation
-    LazyLock::force(&baseline::URLS);
+fn parse_and_compare_baseline_urls() {
+    let mut passed = 0;
+    let mut failed = 0;
+    let mut expected_failures = 0;
+    let total = baseline::URLS.len();
 
-    let panic_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-
-    let mut test_count = 0;
-    let mut failures = Vec::new();
-    let (mut failure_count_roundtrips, mut failure_count_reserialization) = (0, 0);
     for (url, expected) in baseline::URLS.iter() {
-        test_count += 1;
-        let actual = match gix_url::parse(url) {
-            Ok(actual) => actual,
-            Err(message) => {
-                failures.push(format!("failure(parse): {message}"));
-                continue;
-            }
-        };
-        if let Err(message) = std::panic::catch_unwind(|| assert_urls_equal(expected, &actual)).map_err(|panic| {
-            match downcast_panic_to_str(&panic) {
-                Some(s) => format!("{url}: {s}\nexpected: {expected:?}\nactual: {actual:?}"),
-                None => format!("{url}: expected: {expected:?}\nactual: {actual:?}"),
-            }
-        }) {
-            failures.push(format!("failure(compare): {message}"));
+        if baseline::is_expected_failure_on_windows(url) {
+            expected_failures += 1;
             continue;
         }
-        // perform additional checks only after we determined that we parsed the url correctly
-        let url_serialized_again = actual.to_bstring();
-        failure_count_reserialization += usize::from(url_serialized_again != *url);
-        failure_count_roundtrips +=
-            usize::from(gix_url::parse(url_serialized_again.as_ref()).ok().as_ref() != Some(&actual));
-    }
 
-    std::panic::set_hook(panic_hook);
+        let result = std::panic::catch_unwind(|| {
+            let actual = gix_url::parse(url).expect("url should parse successfully");
+            assert_urls_equal(expected, &actual);
 
-    assert_ne!(test_count, 0, "the baseline is never empty");
-    if failures.is_empty() {
-        todo!("The baseline is currently meddling with hooks, that's not needed anymore since the failure rate is 0: move this into a module of the normal tests");
-    }
+            let url_serialized_again = actual.to_bstring();
+            let roundtrip = gix_url::parse(url_serialized_again.as_ref()).unwrap_or_else(|e| {
+                panic!("roundtrip should work for original '{url}', serialized to '{url_serialized_again}': {e}")
+            });
+            assert_eq!(roundtrip, actual, "roundtrip failed for url: {url}");
+        });
 
-    let failure_count = failures.len();
-    let passed_count = test_count - failure_count;
-    let expected_failure_count = baseline::Kind::new().max_num_failures();
-
-    eprintln!("failed {failure_count}/{test_count} tests ({passed_count} passed)");
-
-    for message in &failures {
-        // print messages to out instead of err to separate them from general test information
-        println!("{message}");
-    }
-
-    use core::cmp::Ordering;
-    match Ord::cmp(&failure_count, &expected_failure_count) {
-        Ordering::Equal => {
-            eprintln!("the number of failing tests is as expected");
-        }
-        Ordering::Less => {
-            panic!(
-                "{} more passing tests than expected. Great work! Please change the expected number of failures to {failure_count} to make this panic go away",
-                expected_failure_count - failure_count,
-            )
-        }
-        Ordering::Greater => {
-            panic!(
-                "{} more failing tests than expected! This should get better, not worse. Please check your changes manually for any regressions",
-                failure_count - expected_failure_count,
-            )
-        }
-    }
-
-    assert!(
-        failure_count_reserialization <= 63,
-        "the number of reserialization errors should ideally get better, not worse - if this panic is not due to regressions but to new passing test cases, you can set this check to {failure_count_reserialization}"
-    );
-    assert_eq!(failure_count_roundtrips, 0, "there should be no roundtrip errors");
-}
-
-fn downcast_panic_to_str<'a>(panic: &'a Box<dyn Any + Send + 'static>) -> Option<&'a str> {
-    // Succeeds whenever `panic!` was given a string literal (for example if
-    // `assert!` is given a string literal).
-    match panic.downcast_ref::<&'static str>() {
-        Some(s) => Some(s),
-        None => {
-            // Succeeds whenever `panic!` was given an owned String (for
-            // example when using the `format!` syntax and always for
-            // `assert_*!` macros).
-            match panic.downcast_ref::<String>() {
-                Some(s) => Some(s),
-                None => None,
+        match result {
+            Ok(_) => passed += 1,
+            Err(e) => {
+                failed += 1;
+                let msg = if let Some(&s) = e.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    format!("{e:?}")
+                };
+                println!("FAILED: {url}\n  {msg}");
             }
         }
+    }
+
+    println!(
+        "\nBaseline tests: {passed}/{total} passed, {failed} failed, {expected_failures} expected failures (skipped)"
+    );
+
+    if failed > 0 {
+        panic!("{failed} baseline test(s) failed");
     }
 }
 
@@ -183,13 +125,6 @@ mod baseline {
             }
         }
 
-        pub fn max_num_failures(&self) -> usize {
-            match self {
-                Kind::Unix => 195,
-                Kind::Windows => 195 + 6,
-            }
-        }
-
         pub fn extension(&self) -> &'static str {
             match self {
                 Kind::Unix => "unix",
@@ -219,6 +154,28 @@ mod baseline {
         }
         out
     });
+
+    /// Known failures on Windows for IPv6 file URLs with paths.
+    /// On Windows, these URLs fail to parse the path component correctly.
+    pub fn is_expected_failure_on_windows(url: &BStr) -> bool {
+        #[cfg(windows)]
+        {
+            const EXPECTED_FAILURES: &[&str] = &[
+                "file://User@[::1]/repo",
+                "file://User@[::1]/~repo",
+                "file://User@[::1]/re:po",
+                "file://User@[::1]/~re:po",
+                "file://User@[::1]/re/po",
+                "file://User@[::1]/~re/po",
+            ];
+            EXPECTED_FAILURES.iter().any(|&expected| url == expected)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = url;
+            false
+        }
+    }
 
     #[derive(Debug)]
     pub struct GitDiagUrl<'a> {

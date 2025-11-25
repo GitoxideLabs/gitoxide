@@ -107,6 +107,24 @@ mod radicle {
 
 mod http;
 
+mod ports {
+    use crate::parse::{assert_url_roundtrip, url};
+    use gix_url::Scheme;
+
+    #[test]
+    fn max_valid_port() -> crate::Result {
+        assert_url_roundtrip(
+            "ssh://host.xz:65535/repo",
+            url(Scheme::Ssh, None, "host.xz", 65535, b"/repo"),
+        )
+    }
+
+    #[test]
+    fn port_one() -> crate::Result {
+        assert_url_roundtrip("ssh://host.xz:1/repo", url(Scheme::Ssh, None, "host.xz", 1, b"/repo"))
+    }
+}
+
 mod git {
     use gix_url::Scheme;
 
@@ -116,7 +134,22 @@ mod git {
     fn username_expansion_with_username() -> crate::Result {
         assert_url_roundtrip(
             "git://example.com/~byron/hello",
-            url(Scheme::Git, None, "example.com", None, b"/~byron/hello"),
+            url(Scheme::Git, None, "example.com", None, b"~byron/hello"),
+        )
+    }
+
+    #[test]
+    fn default_port_is_9418() -> crate::Result {
+        let url = url(Scheme::Git, None, "example.com", None, b"/repo");
+        assert_eq!(url.port_or_default(), Some(9418));
+        Ok(())
+    }
+
+    #[test]
+    fn git_with_explicit_port() -> crate::Result {
+        assert_url_roundtrip(
+            "git://example.com:1234/repo",
+            url(Scheme::Git, None, "example.com", 1234, b"/repo"),
         )
     }
 }

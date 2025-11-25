@@ -55,6 +55,48 @@ fn password() -> crate::Result {
 }
 
 #[test]
+fn mutation_roundtrip() -> crate::Result {
+    let mut url = gix_url::parse("https://user@host/path".into())?;
+    url.set_user(Some("newuser".into()));
+    url.set_password(Some("secret".into()));
+
+    let serialized = url.to_bstring();
+    let reparsed = gix_url::parse(serialized.as_ref())?;
+
+    assert_eq!(url, reparsed);
+    assert_eq!(reparsed.user(), Some("newuser"));
+    assert_eq!(reparsed.password(), Some("secret"));
+
+    Ok(())
+}
+
+#[test]
+fn from_bytes_roundtrip() -> crate::Result {
+    let original = "https://user:password@example.com:8080/path/to/repo";
+    let url = gix_url::parse(original.into())?;
+
+    let bytes = url.to_bstring();
+    let from_bytes = gix_url::Url::from_bytes(bytes.as_ref())?;
+
+    assert_eq!(url, from_bytes);
+    assert_eq!(from_bytes.to_bstring(), bytes);
+
+    Ok(())
+}
+
+#[test]
+fn from_bytes_with_non_utf8_path() -> crate::Result {
+    let url = gix_url::parse(b"/path/to\xff/repo".as_slice().into())?;
+    let bytes = url.to_bstring();
+    let from_bytes = gix_url::Url::from_bytes(bytes.as_ref())?;
+
+    assert_eq!(url, from_bytes);
+    assert_eq!(from_bytes.path, url.path);
+
+    Ok(())
+}
+
+#[test]
 fn user_argument_safety() -> crate::Result {
     let url = gix_url::parse("ssh://-Fconfigfile@foo/bar".into())?;
 
