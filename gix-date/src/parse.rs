@@ -312,14 +312,16 @@ pub(crate) mod function {
     fn parse_iso8601_dots(input: &str) -> Option<Time> {
         // Format: YYYY.MM.DD HH:MM:SS offset
         let input = input.trim();
-        if !input.contains('.') || !input[..10].contains('.') {
+        if input.len() < 10 || !input.is_char_boundary(10) {
+            return None;
+        }
+        let first_10 = &input[..10];
+        if !first_10.is_ascii() || !first_10.contains('.') {
             return None;
         }
 
         // Replace dots with dashes for date part only
-        let mut parts = input.splitn(2, ' ');
-        let date_part = parts.next()?;
-        let rest = parts.next()?;
+        let (date_part, rest) = input.split_once(' ')?;
 
         // Validate date part has dot separators
         if date_part.len() != 10 || date_part.chars().nth(4)? != '.' || date_part.chars().nth(7)? != '.' {
@@ -343,11 +345,15 @@ pub(crate) mod function {
 
         // Must have T separator and start with 8 digits for YYYYMMDD
         let t_pos = input.find('T')?;
-        if t_pos != 8 {
+        if t_pos != 8 || !input.is_char_boundary(8) || !input.is_char_boundary(9) {
             return None;
         }
 
         let date_part = &input[..8];
+        // Verify date part is ASCII (valid date chars are all ASCII)
+        if !date_part.is_ascii() {
+            return None;
+        }
         let rest = &input[9..]; // after T
 
         // Parse YYYYMMDD
@@ -355,7 +361,7 @@ pub(crate) mod function {
         let month: i32 = date_part[4..6].parse().ok()?;
         let day: i32 = date_part[6..8].parse().ok()?;
 
-        if month < 1 || month > 12 || day < 1 || day > 31 {
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
             return None;
         }
 
@@ -391,10 +397,15 @@ pub(crate) mod function {
         let input = input.trim();
 
         // Check if this looks like ISO8601 (YYYY-MM-DD format)
-        if input.len() < 10 {
+        // Must be at least 10 ASCII chars and first 10 chars must be ASCII
+        if input.len() < 10 || !input.is_char_boundary(10) {
             return None;
         }
         let date_part = &input[..10];
+        // Verify date part is ASCII (valid date chars are all ASCII)
+        if !date_part.is_ascii() {
+            return None;
+        }
         if date_part.chars().nth(4)? != '-' || date_part.chars().nth(7)? != '-' {
             return None;
         }
@@ -404,7 +415,7 @@ pub(crate) mod function {
         let month: i32 = date_part[5..7].parse().ok()?;
         let day: i32 = date_part[8..10].parse().ok()?;
 
-        if month < 1 || month > 12 || day < 1 || day > 31 {
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
             return None;
         }
 
@@ -455,8 +466,8 @@ pub(crate) mod function {
         let input = input.trim();
 
         // Check for Z suffix
-        if input.ends_with('Z') {
-            return (&input[..input.len() - 1], "Z");
+        if let Some(stripped) = input.strip_suffix('Z') {
+            return (stripped, "Z");
         }
 
         // Look for + or - that indicates timezone (not part of time)
@@ -467,7 +478,7 @@ pub(crate) mod function {
             if (c == '+' || c == '-') && i >= 5 {
                 // Check if this looks like an offset (followed by digits)
                 let after = &input[i + 1..];
-                if after.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                if after.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                     offset_start = Some(i);
                     break;
                 }
@@ -497,6 +508,11 @@ pub(crate) mod function {
     /// Parse time component: HH:MM:SS, HHMMSS, HH:MM, HHMM, or HH
     fn parse_time_component(time: &str) -> Option<(u32, u32, u32)> {
         let time = time.trim();
+        
+        // Time components must be ASCII
+        if !time.is_ascii() {
+            return None;
+        }
 
         if time.contains(':') {
             // Colon-separated: HH:MM:SS or HH:MM
@@ -553,14 +569,19 @@ pub(crate) mod function {
             return Some(0);
         }
 
+        // Offset must be ASCII
+        if !offset.is_ascii() {
+            return None;
+        }
+
         if offset == "Z" {
             return Some(0);
         }
 
-        let (sign, rest) = if offset.starts_with('+') {
-            (1i32, &offset[1..])
-        } else if offset.starts_with('-') {
-            (-1i32, &offset[1..])
+        let (sign, rest) = if let Some(stripped) = offset.strip_prefix('+') {
+            (1i32, stripped)
+        } else if let Some(stripped) = offset.strip_prefix('-') {
+            (-1i32, stripped)
         } else {
             return None;
         };
