@@ -215,4 +215,28 @@ mod unix {
             url(Scheme::File, None, "x:", None, b"/path/to/git"),
         )
     }
+
+    #[test]
+    fn file_url_with_ipv6_and_user() -> crate::Result {
+        assert_url_roundtrip(
+            "file://User@[::1]/repo",
+            gix_url::Url::from_parts(
+                Scheme::File,
+                Some("User".into()),
+                None,
+                Some("[::1]".into()),
+                None,
+                b"/repo".into(),
+                false,
+            )?,
+        )
+    }
+
+    #[test]
+    fn file_url_with_ipv6() -> crate::Result {
+        assert_url_roundtrip(
+            "file://[::1]/repo",
+            url(Scheme::File, None, "[::1]", None, b"/repo"),
+        )
+    }
 }

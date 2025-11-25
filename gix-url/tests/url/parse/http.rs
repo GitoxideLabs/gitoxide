@@ -94,3 +94,35 @@ fn http_missing_path() -> crate::Result {
     assert_url("http://host.xz", url(Scheme::Http, None, "host.xz", None, b"/"))?;
     Ok(())
 }
+
+#[test]
+fn http_with_ipv6() -> crate::Result {
+    assert_url_roundtrip("http://[::1]/repo", url(Scheme::Http, None, "[::1]", None, b"/repo"))
+}
+
+#[test]
+fn http_with_ipv6_and_port() -> crate::Result {
+    assert_url_roundtrip("http://[::1]:8080/repo", url(Scheme::Http, None, "[::1]", 8080, b"/repo"))
+}
+
+#[test]
+fn https_with_ipv6_user_and_port() -> crate::Result {
+    assert_url_roundtrip(
+        "https://user@[2001:db8::1]:8443/repo",
+        url(Scheme::Https, "user", "[2001:db8::1]", 8443, b"/repo"),
+    )
+}
+
+#[test]
+fn percent_encoded_path() -> crate::Result {
+    let url = gix_url::parse("https://example.com/path/with%20spaces/file".into())?;
+    assert_eq!(url.path, "/path/with%20spaces/file", "paths are not decoded");
+    Ok(())
+}
+
+#[test]
+fn percent_encoded_international_path() -> crate::Result {
+    let url = gix_url::parse("https://example.com/caf%C3%A9".into())?;
+    assert_eq!(url.path, "/caf%C3%A9", "international characters remain encoded in path");
+    Ok(())
+}

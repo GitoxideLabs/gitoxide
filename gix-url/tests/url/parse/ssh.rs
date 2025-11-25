@@ -233,3 +233,59 @@ fn bad_alternative_form_with_port() -> crate::Result {
     assert_eq!(url, "ssh://host.xz:21/");
     Ok(())
 }
+
+#[test]
+fn ipv6_address_without_port() -> crate::Result {
+    let url = assert_url("ssh://[::1]/repo", url(Scheme::Ssh, None, "::1", None, b"/repo"))?;
+    assert_eq!(url.host(), Some("::1"), "brackets are stripped for SSH");
+    Ok(())
+}
+
+#[test]
+fn ipv6_address_with_port() -> crate::Result {
+    let url = assert_url("ssh://[::1]:22/repo", url(Scheme::Ssh, None, "::1", 22, b"/repo"))?;
+    assert_eq!(url.host(), Some("::1"));
+    assert_eq!(url.port, Some(22));
+    Ok(())
+}
+
+#[test]
+fn ipv6_address_with_user() -> crate::Result {
+    let url = assert_url("ssh://user@[::1]/repo", url(Scheme::Ssh, "user", "::1", None, b"/repo"))?;
+    assert_eq!(url.host(), Some("::1"));
+    assert_eq!(url.user(), Some("user"));
+    Ok(())
+}
+
+#[test]
+fn ipv6_address_with_user_and_port() -> crate::Result {
+    let url = assert_url("ssh://user@[::1]:22/repo", url(Scheme::Ssh, "user", "::1", 22, b"/repo"))?;
+    assert_eq!(url.host(), Some("::1"));
+    assert_eq!(url.user(), Some("user"));
+    assert_eq!(url.port, Some(22));
+    Ok(())
+}
+
+#[test]
+fn ipv6_full_address() -> crate::Result {
+    let url = assert_url("ssh://[2001:db8::1]/repo", url(Scheme::Ssh, None, "2001:db8::1", None, b"/repo"))?;
+    assert_eq!(url.host(), Some("2001:db8::1"));
+    Ok(())
+}
+
+#[test]
+fn ipv6_address_scp_like() -> crate::Result {
+    let url = assert_url("[::1]:repo", url_alternate(Scheme::Ssh, None, "::1", None, b"repo"))?;
+    assert_eq!(url.host(), Some("::1"), "SCP-like format with IPv6");
+    Ok(())
+}
+
+#[test]
+fn ipv6_address_scp_like_with_user() -> crate::Result {
+    let result = gix_url::parse("user@[::1]:repo".into());
+    assert!(
+        result.is_err(),
+        "SCP-like format with brackets is not supported - Git doesn't support this either"
+    );
+    Ok(())
+}
