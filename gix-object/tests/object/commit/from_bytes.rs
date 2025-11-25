@@ -9,19 +9,14 @@ use crate::{
 
 #[test]
 fn invalid_timestsamp() {
-    let actor = gix_actor::SignatureRef {
-        name: b"Name".as_bstr(),
-        email: b"name@example.com".as_bstr(),
-        time: "1312735823 +051800",
-    };
     assert_eq!(
         CommitRef::from_bytes(&fixture_name("commit", "invalid-timestamp.txt"))
             .expect("auto-correct invalid timestamp by discarding it (time is still valid UTC)"),
         CommitRef {
             tree: b"7989dfb2ec2f41914611a22fb30bbc2b3849df9a".as_bstr(),
             parents: [b"8845ae683e2688bc619baade49510c17e978518f".as_bstr()].into(),
-            author: actor,
-            committer: actor,
+            author: b"Name <name@example.com> 1312735823 +051800".as_bstr(),
+            committer: b"Name <name@example.com> 1312735823 +051800".as_bstr(),
             encoding: None,
             message: b"edit changelog to mention about x_sendfile_header default change".as_bstr(),
             extra_headers: vec![]
@@ -37,19 +32,22 @@ fn invalid_email_of_committer() {
         email: b"gh <Gregor Hartmann<gh@openoffice.org".as_bstr(),
         time: "1282910542 +0200",
     };
+    let backing = fixture_name("commit", "invalid-actor.txt");
+    let commit = CommitRef::from_bytes(&backing).expect("ignore strangely formed actor format");
     assert_eq!(
-        CommitRef::from_bytes(&fixture_name("commit", "invalid-actor.txt"))
-            .expect("ignore strangely formed actor format"),
+        commit,
         CommitRef {
             tree: b"220738fd4199e95a2b244465168366a73ebdf271".as_bstr(),
             parents: [b"209fbe2d632761b30b7b17422914e11b93692833".as_bstr()].into(),
-            author: actor,
-            committer: actor,
+            author: b"Gregor Hartmann<gh <Gregor Hartmann<gh@openoffice.org>> 1282910542 +0200".as_bstr(),
+            committer: b"Gregor Hartmann<gh <Gregor Hartmann<gh@openoffice.org>> 1282910542 +0200".as_bstr(),
             encoding: None,
             message: b"build breakers".as_bstr(),
             extra_headers: vec![]
         }
     );
+    assert_eq!(commit.author().unwrap(), actor);
+    assert_eq!(commit.committer().unwrap(), actor);
 }
 
 #[test]
@@ -59,8 +57,8 @@ fn unsigned() -> crate::Result {
         CommitRef {
             tree: b"1b2dfb4ac5e42080b682fc676e9738c94ce6d54d".as_bstr(),
             parents: SmallVec::default(),
-            author: signature("1592437401 +0800"),
-            committer: signature("1592437401 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592437401 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592437401 +0800".as_bstr(),
             encoding: None,
             message: b"without sig".as_bstr(),
             extra_headers: vec![]
@@ -76,8 +74,8 @@ fn whitespace() -> crate::Result {
         CommitRef {
             tree: b"9bed6275068a0575243ba8409253e61af81ab2ff".as_bstr(),
             parents: SmallVec::from(vec![b"26b4df046d1776c123ac69d918f5aec247b58cc6".as_bstr()]),
-            author: signature("1592448450 +0800"),
-            committer: signature("1592448450 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592448450 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592448450 +0800".as_bstr(),
             encoding: None,
             message: b" nl".as_bstr(), // this one had a \n trailing it, but git seems to trim that
             extra_headers: vec![]
@@ -93,8 +91,8 @@ fn signed_singleline() -> crate::Result {
         CommitRef {
             tree: b"00fc39317701176e326974ce44f5bd545a32ec0b".as_bstr(),
             parents: SmallVec::from(vec![b"09d8d3a12e161a7f6afb522dbe8900a9c09bce06".as_bstr()]),
-            author: signature("1592391367 +0800"),
-            committer: signature("1592391367 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592391367 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592391367 +0800".as_bstr(),
             encoding: None,
             message: b"update tasks\n".as_bstr(),
             extra_headers: vec![(b"gpgsig".as_bstr(), b"magic:signature".as_bstr().into())]
@@ -106,14 +104,14 @@ fn signed_singleline() -> crate::Result {
 #[test]
 fn mergetag() -> crate::Result {
     let fixture = fixture_name("commit", "mergetag.txt");
-    let commit = CommitRef {
+    let expected = CommitRef {
         tree: b"1c61918031bf2c7fab9e17dde3c52a6a9884fcb5".as_bstr(),
         parents: SmallVec::from(vec![
             b"44ebe016df3aad96e3be8f95ec52397728dd7701".as_bstr(),
             b"8d485da0ddee79d0e6713405694253d401e41b93".as_bstr(),
         ]),
-        author: linus_signature("1591996221 -0700"),
-        committer: linus_signature("1591996221 -0700"),
+        author: b"Linus Torvalds <torvalds@linux-foundation.org> 1591996221 -0700".as_bstr(),
+        committer: b"Linus Torvalds <torvalds@linux-foundation.org> 1591996221 -0700".as_bstr(),
         encoding: None,
         message: LONG_MESSAGE.as_bytes().as_bstr(),
         extra_headers: vec![(
@@ -121,9 +119,12 @@ fn mergetag() -> crate::Result {
             std::borrow::Cow::Owned(MERGE_TAG.as_bytes().into()),
         )],
     };
-    assert_eq!(CommitRef::from_bytes(&fixture)?, commit);
+    let commit = CommitRef::from_bytes(&fixture)?;
+    assert_eq!(commit, expected);
     assert_eq!(commit.extra_headers().find_all("mergetag").count(), 1);
     assert_eq!(commit.extra_headers().mergetags().count(), 1);
+    assert_eq!(commit.author().unwrap(), linus_signature("1591996221 -0700"));
+    assert_eq!(commit.committer().unwrap(), linus_signature("1591996221 -0700"));
     Ok(())
 }
 
@@ -134,8 +135,8 @@ fn signed() -> crate::Result {
         CommitRef {
             tree: b"00fc39317701176e326974ce44f5bd545a32ec0b".as_bstr(),
             parents: SmallVec::from(vec![b"09d8d3a12e161a7f6afb522dbe8900a9c09bce06".as_bstr()]),
-            author: signature("1592391367 +0800"),
-            committer: signature("1592391367 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592391367 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592391367 +0800".as_bstr(),
             encoding: None,
             message: b"update tasks\n".as_bstr(),
             extra_headers: vec![(b"gpgsig".as_bstr(), b"-----BEGIN PGP SIGNATURE-----\n\niQEzBAABCAAdFiEEdjYp/sh4j8NRKLX27gKdHl60AwAFAl7p9tgACgkQ7gKdHl60\nAwBpegf+KQciv9AOIN7+yPmowecGxBnSfpKWTDzFxnyGR8dq63SpWT8WEKG5mf3a\nG6iUqpsDWaMHlzihaMKRvgRpZxFRbjnNPFBj6F4RRqfE+5R7k6DRSLUV5PqnsdSH\nuccfIDWi1imhsm7AaP5trwl1t+83U2JhHqPcPVFLMODYwWeO6NLR/JCzGSTQRa8t\nRgaVMKI19O/fge5OT5Ua8D47VKEhsJX0LfmkP5RfZQ8JJvNd40TupqKRdlv0sAzP\nya7NXkSHXCavHNR6kA+KpWxn900UoGK8/IDlwU6MeOkpPVawb3NFMqnc7KJDaC2p\nSMzpuEG8LTrCx2YSpHNLqHyzvQ1CZA==\n=5ITV\n-----END PGP SIGNATURE-----\n".as_bstr().into())]
@@ -151,8 +152,8 @@ fn signed_with_encoding() -> crate::Result {
         CommitRef {
             tree: b"1973afa74d87b2bb73fa884aaaa8752aec43ea88".as_bstr(),
             parents: SmallVec::from(vec![b"79c51cc86923e2b8ca0ee5c4eb75e48027133f9a".as_bstr()]),
-            author: signature("1592448995 +0800"),
-            committer: signature("1592449083 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592448995 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592449083 +0800".as_bstr(),
             encoding: Some(b"ISO-8859-1".as_bstr()),
             message: b"encoding & sig".as_bstr(),
             extra_headers: vec![(b"gpgsig".as_bstr(), SIGNATURE.as_bstr().into())]
@@ -168,8 +169,8 @@ fn with_encoding() -> crate::Result {
         CommitRef {
             tree: b"4a1c03029e7407c0afe9fc0320b3258e188b115e".as_bstr(),
             parents: SmallVec::from(vec![b"7ca98aad461a5c302cb4c9e3acaaa6053cc67a62".as_bstr()]),
-            author: signature("1592438199 +0800"),
-            committer: signature("1592438199 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592438199 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592438199 +0800".as_bstr(),
             encoding: Some("ISO-8859-1".into()),
             message: b"commit with encoding".as_bstr(),
             extra_headers: vec![]
@@ -180,18 +181,13 @@ fn with_encoding() -> crate::Result {
 
 #[test]
 fn pre_epoch() -> crate::Result {
-    let signature = || SignatureRef {
-        name: "Législateur".into(),
-        email: "".into(),
-        time: "-5263834140 +0009",
-    };
     assert_eq!(
         CommitRef::from_bytes(&fixture_name("commit", "pre-epoch.txt"))?,
         CommitRef {
             tree: b"71cdd4015386b764b178005cad4c88966bc9d61a".as_bstr(),
             parents: SmallVec::default(),
-            author: signature(),
-            committer: signature(),
+            author: "Législateur <> -5263834140 +0009".as_bytes().as_bstr(),
+            committer: "Législateur <> -5263834140 +0009".as_bytes().as_bstr(),
             encoding: None,
             message: "Version consolidée au 14 mars 1803\n".into(),
             extra_headers: vec![]
@@ -202,18 +198,13 @@ fn pre_epoch() -> crate::Result {
 
 #[test]
 fn double_dash_special_time_offset() -> crate::Result {
-    let signature = || SignatureRef {
-        name: "name".into(),
-        email: "name@example.com".into(),
-        time: "1288373970 --700",
-    };
     assert_eq!(
         CommitRef::from_bytes(&fixture_name("commit", "double-dash-date-offset.txt"))?,
         CommitRef {
             tree: b"0a851d7a2a66084ab10516c406a405d147e974ad".as_bstr(),
             parents: SmallVec::from(vec![b"31350f4f0f459485eff2131517e3450cf251f6fa".as_bstr()]),
-            author: signature(),
-            committer: signature(),
+            author: "name <name@example.com> 1288373970 --700".as_bytes().as_bstr(),
+            committer: "name <name@example.com> 1288373970 --700".as_bytes().as_bstr(),
             encoding: None,
             message: "msg\n".into(),
             extra_headers: vec![]
@@ -236,8 +227,8 @@ fn with_trailer() -> crate::Result {
         CommitRef {
             tree: b"25a19c29c5e36884c1ad85d8faf23f1246b7961b".as_bstr(),
             parents: SmallVec::from(vec![b"699ae71105dddfcbb9711ed3a92df09e91a04e90".as_bstr()]),
-            author: kim,
-            committer: kim,
+            author: "Kim Altintop <kim@eagain.st> 1631514803 +0200".as_bytes().as_bstr(),
+            committer: "Kim Altintop <kim@eagain.st> 1631514803 +0200".as_bytes().as_bstr(),
             encoding: None,
             message: b"test: use gitoxide for link-git-protocol tests
 
@@ -253,6 +244,8 @@ Signed-off-by: Kim Altintop <kim@eagain.st>"
             extra_headers: vec![(b"gpgsig".as_bstr(), b"-----BEGIN PGP SIGNATURE-----\n\niHUEABYIAB0WIQSuZwcGWSQItmusNgR5URpSUCnwXQUCYT7xpAAKCRB5URpSUCnw\nXWB3AP9q323HlxnI8MyqszNOeYDwa7Y3yEZaUM2y/IRjz+z4YQEAq0yr1Syt3mrK\nOSFCqL2vDm3uStP+vF31f6FnzayhNg0=\n=Mhpp\n-----END PGP SIGNATURE-----\n".as_bstr().into())]
         }
     );
+    assert_eq!(commit.author().unwrap(), kim);
+    assert_eq!(commit.committer().unwrap(), kim);
     let message = commit.message();
     assert_eq!(message.title, "test: use gitoxide for link-git-protocol tests");
     assert_eq!(
@@ -316,8 +309,8 @@ fn merge() -> crate::Result {
                 b"6a6054db4ce3c1e4e6a37f8c4d7acb63a4d6ad71".as_bstr(),
                 b"c91d592913d47ac4e4a76daf16fd649b276e211e".as_bstr()
             ]),
-            author: signature("1592454703 +0800"),
-            committer: signature("1592454738 +0800"),
+            author: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592454703 +0800".as_bstr(),
+            committer: b"Sebastian Thiel <sebastian.thiel@icloud.com> 1592454738 +0800".as_bstr(),
             encoding: Some("ISO-8859-1".into()),
             message: b"Merge branch 'branch'".as_bstr(),
             extra_headers: vec![]
@@ -364,5 +357,14 @@ fn bogus_multi_gpgsig_header() -> crate::Result {
         hex_to_id("5f549aa2f78314ac37bbd436c8f80aea4c752e07"),
         "round-tripping works despite the strangeness"
     );
+    Ok(())
+}
+
+#[test]
+fn author_method_returns_trimmed_signature() -> crate::Result {
+    let backing = fixture_name("commit", "unsigned.txt");
+    let commit = CommitRef::from_bytes(&backing)?;
+    assert_eq!(commit.author().unwrap(), signature("1592437401 +0800"));
+    assert_eq!(commit.committer().unwrap(), signature("1592437401 +0800"));
     Ok(())
 }

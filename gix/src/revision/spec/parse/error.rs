@@ -96,8 +96,12 @@ impl Error {
                             gix_object::Kind::Commit => {
                                 use bstr::ByteSlice;
                                 let commit = obj.to_commit_ref();
+                                let date = match commit.committer() {
+                                    Ok(signature) => signature.time.trim().to_owned(),
+                                    Err(_) => String::from_utf8_lossy(commit.committer.as_ref()).into_owned(),
+                                };
                                 CandidateInfo::Commit {
-                                    date: commit.committer().time.trim().into(),
+                                    date,
                                     title: commit.message().title.trim().into(),
                                 }
                             }

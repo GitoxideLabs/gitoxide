@@ -216,15 +216,15 @@ impl<'a> ObjectRef<'a> {
     /// Convert the immutable object into a mutable version, consuming the source in the process.
     ///
     /// Note that this is an expensive operation.
-    pub fn into_owned(self) -> Object {
-        self.into()
+    pub fn into_owned(self) -> Result<Object, crate::decode::Error> {
+        Object::try_from(self)
     }
 
     /// Convert this immutable object into its mutable counterpart.
     ///
     /// Note that this is an expensive operation.
-    pub fn to_owned(&self) -> Object {
-        self.clone().into()
+    pub fn to_owned(&self) -> Result<Object, crate::decode::Error> {
+        Object::try_from(self.clone())
     }
 }
 
