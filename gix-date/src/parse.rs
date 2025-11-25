@@ -489,10 +489,7 @@ pub(crate) mod function {
         if let Some(space_pos) = input.rfind(' ') {
             if space_pos > 5 {
                 let potential_offset = input[space_pos + 1..].trim();
-                if potential_offset.starts_with('+')
-                    || potential_offset.starts_with('-')
-                    || potential_offset == "Z"
-                {
+                if potential_offset.starts_with('+') || potential_offset.starts_with('-') || potential_offset == "Z" {
                     return (&input[..space_pos], potential_offset);
                 }
             }
@@ -508,7 +505,7 @@ pub(crate) mod function {
     /// Parse time component: HH:MM:SS, HHMMSS, HH:MM, HHMM, or HH
     fn parse_time_component(time: &str) -> Option<(u32, u32, u32)> {
         let time = time.trim();
-        
+
         // Time components must be ASCII
         if !time.is_ascii() {
             return None;
