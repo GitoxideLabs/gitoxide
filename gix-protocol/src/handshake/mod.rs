@@ -72,9 +72,9 @@ pub(crate) mod hero {
     #[cfg(feature = "fetch")]
     mod fetch {
         #[cfg(feature = "async-client")]
-        use crate::transport::client::async_io::Transport;
+        use crate::transport::client::async_io;
         #[cfg(feature = "blocking-client")]
-        use crate::transport::client::blocking_io::Transport;
+        use crate::transport::client::blocking_io;
         use crate::{fetch::RefMap, Handshake};
         use gix_features::progress::Progress;
         use std::borrow::Cow;
@@ -86,12 +86,12 @@ pub(crate) mod hero {
 
         impl FetchRefMap<'_> {
             /// Fetch the refmap, either by returning the existing one or invoking the command.
+            #[cfg(feature = "async-client")]
             #[allow(clippy::result_large_err)]
-            #[maybe_async::maybe_async]
-            pub async fn fetch(
+            pub async fn fetch_async(
                 self,
                 mut progress: impl Progress,
-                transport: &mut impl Transport,
+                transport: &mut impl async_io::Transport,
                 trace_packetlines: bool,
             ) -> Result<crate::fetch::RefMap, crate::fetch::refmap::init::Error> {
                 let (cmd, cx) = match self {
@@ -100,7 +100,26 @@ pub(crate) mod hero {
                 };
 
                 let capabilities = cmd.capabilities;
-                let remote_refs = cmd.invoke(transport, &mut progress, trace_packetlines).await?;
+                let remote_refs = cmd.invoke_async(transport, &mut progress, trace_packetlines).await?;
+                RefMap::from_refs(remote_refs, capabilities, cx)
+            }
+
+            /// Fetch the refmap, either by returning the existing one or invoking the command.
+            #[cfg(feature = "blocking-client")]
+            #[allow(clippy::result_large_err)]
+            pub fn fetch_blocking(
+                self,
+                mut progress: impl Progress,
+                transport: &mut impl blocking_io::Transport,
+                trace_packetlines: bool,
+            ) -> Result<crate::fetch::RefMap, crate::fetch::refmap::init::Error> {
+                let (cmd, cx) = match self {
+                    FetchRefMap::Map(map) => return Ok(map),
+                    FetchRefMap::Command(cmd, cx) => (cmd, cx),
+                };
+
+                let capabilities = cmd.capabilities;
+                let remote_refs = cmd.invoke_blocking(transport, &mut progress, trace_packetlines)?;
                 RefMap::from_refs(remote_refs, capabilities, cx)
             }
         }

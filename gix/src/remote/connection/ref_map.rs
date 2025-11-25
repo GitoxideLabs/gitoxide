@@ -157,14 +157,19 @@ where
             extra_refspecs,
         };
 
-        let ref_map = handshake
-            .fetch_or_extract_refmap(
-                self.remote.repo.config.user_agent_tuple(),
-                prefix_from_spec_as_filter_on_remote,
-                context,
-            )?
-            .fetch(progress, &mut self.transport.inner, self.trace)
+        let fetch_refmap = handshake.fetch_or_extract_refmap(
+            self.remote.repo.config.user_agent_tuple(),
+            prefix_from_spec_as_filter_on_remote,
+            context,
+        )?;
+
+        #[cfg(feature = "async-network-client")]
+        let ref_map = fetch_refmap
+            .fetch_async(progress, &mut self.transport.inner, self.trace)
             .await?;
+
+        #[cfg(feature = "blocking-network-client")]
+        let ref_map = fetch_refmap.fetch_blocking(progress, &mut self.transport.inner, self.trace)?;
 
         self.handshake = Some(handshake);
         Ok(ref_map)

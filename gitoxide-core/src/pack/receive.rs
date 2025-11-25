@@ -87,10 +87,16 @@ where
         fetch_refspecs: fetch_refspecs.clone(),
         extra_refspecs: vec![],
     };
-    let refmap = handshake
-        .fetch_or_extract_refmap(user_agent.clone(), true, context)?
-        .fetch(&mut progress, &mut transport.inner, trace_packetlines)
+
+    let fetch_refmap = handshake.fetch_or_extract_refmap(user_agent.clone(), true, context)?;
+
+    #[cfg(feature = "async-client")]
+    let refmap = fetch_refmap
+        .fetch_async(&mut progress, &mut transport.inner, trace_packetlines)
         .await?;
+
+    #[cfg(feature = "blocking-client")]
+    let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
 
     if refmap.mappings.is_empty() && !refmap.remote_refs.is_empty() {
         return Err(Error::NoMapping {

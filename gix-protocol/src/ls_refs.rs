@@ -36,13 +36,12 @@ pub(crate) mod function {
     use bstr::{BString, ByteVec};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
-    use maybe_async::maybe_async;
 
     use super::Error;
     #[cfg(feature = "async-client")]
-    use crate::transport::client::async_io::{Transport, TransportV2Ext};
+    use crate::transport::client::async_io::{self, TransportV2Ext as _};
     #[cfg(feature = "blocking-client")]
-    use crate::transport::client::blocking_io::{Transport, TransportV2Ext};
+    use crate::transport::client::blocking_io::{self, TransportV2Ext as _};
     use crate::{
         handshake::{refs::from_v2_refs, Ref},
         Command,
@@ -103,10 +102,10 @@ pub(crate) mod function {
         ///
         /// `progress` is used to provide feedback.
         /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
-        #[maybe_async]
-        pub async fn invoke(
+        #[cfg(feature = "async-client")]
+        pub async fn invoke_async(
             self,
-            mut transport: impl Transport,
+            mut transport: impl async_io::Transport,
             progress: &mut impl Progress,
             trace: bool,
         ) -> Result<Vec<Ref>, Error> {
@@ -132,6 +131,39 @@ pub(crate) mod function {
                 )
                 .await?;
             Ok(from_v2_refs(&mut remote_refs).await?)
+        }
+
+        /// Invoke a ls-refs V2 command on `transport`.
+        ///
+        /// `progress` is used to provide feedback.
+        /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+        #[cfg(feature = "blocking-client")]
+        pub fn invoke_blocking(
+            self,
+            mut transport: impl blocking_io::Transport,
+            progress: &mut impl Progress,
+            trace: bool,
+        ) -> Result<Vec<Ref>, Error> {
+            Command::LsRefs.validate_argument_prefixes(
+                gix_transport::Protocol::V2,
+                self.capabilities,
+                &self.arguments,
+                &self.features,
+            )?;
+
+            progress.step();
+            progress.set_name("list refs".into());
+            let mut remote_refs = transport.invoke(
+                Command::LsRefs.as_str(),
+                self.features.into_iter(),
+                if self.arguments.is_empty() {
+                    None
+                } else {
+                    Some(self.arguments.into_iter())
+                },
+                trace,
+            )?;
+            Ok(from_v2_refs(&mut remote_refs)?)
         }
     }
 }

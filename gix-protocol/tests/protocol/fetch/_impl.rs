@@ -106,9 +106,18 @@ mod fetch_fn {
             None => match delegate.action() {
                 Ok(RefsAction::Skip) => Vec::new(),
                 Ok(RefsAction::Continue) => {
-                    LsRefsCommand::new(None, &capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
-                        .invoke(&mut transport, &mut progress, trace)
-                        .await?
+                    #[cfg(feature = "async-client")]
+                    {
+                        LsRefsCommand::new(None, &capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
+                            .invoke_async(&mut transport, &mut progress, trace)
+                            .await?
+                    }
+                    #[cfg(feature = "blocking-client")]
+                    {
+                        LsRefsCommand::new(None, &capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
+                            .invoke_blocking(&mut transport, &mut progress, trace)
+                            .await?
+                    }
                 }
                 Err(err) => {
                     indicate_end_of_interaction(transport, trace).await?;
