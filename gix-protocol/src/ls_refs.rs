@@ -31,9 +31,9 @@ pub use error::Error;
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub(crate) mod function {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, collections::HashSet};
 
-    use bstr::BString;
+    use bstr::{BString, ByteVec};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
     use maybe_async::maybe_async;
@@ -115,9 +115,19 @@ pub(crate) mod function {
             Ok(from_v2_refs(&mut remote_refs).await?)
         }
 
-        /// The arguments that will be sent to the server as part of the ls-refs command.
-        pub fn arguments(&mut self) -> &mut Vec<BString> {
-            &mut self.arguments
+        pub(crate) fn push_prefix_arguments(&mut self, all_refspecs: &[gix_refspec::RefSpec]) {
+            let mut seen = HashSet::new();
+            for spec in all_refspecs {
+                let spec = spec.to_ref();
+                if seen.insert(spec.instruction()) {
+                    let mut prefixes = Vec::with_capacity(1);
+                    spec.expand_prefixes(&mut prefixes);
+                    for mut prefix in prefixes {
+                        prefix.insert_str(0, "ref-prefix ");
+                        self.arguments.push(prefix);
+                    }
+                }
+            }
         }
     }
 }

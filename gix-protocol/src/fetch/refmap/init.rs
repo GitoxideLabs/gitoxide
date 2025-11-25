@@ -1,6 +1,6 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::borrow::Cow;
 
-use bstr::{BString, ByteSlice, ByteVec};
+use bstr::{BString, ByteSlice};
 use gix_features::progress::Progress;
 use gix_transport::client::Capabilities;
 
@@ -79,7 +79,7 @@ impl RefMap {
         let all_refspecs = context.aggregate_refspecs();
         let mut refs_cmd = crate::LsRefsCommand::new(capabilities, user_agent);
         if prefix_from_spec_as_filter_on_remote {
-            push_prefix_arguments(&all_refspecs, refs_cmd.arguments());
+            refs_cmd.push_prefix_arguments(&all_refspecs);
         }
 
         let remote_refs = refs_cmd.invoke(transport, &mut progress, trace_packetlines).await?;
@@ -152,20 +152,5 @@ impl RefMap {
             remote_refs,
             object_hash,
         })
-    }
-}
-
-fn push_prefix_arguments(all_refspecs: &[gix_refspec::RefSpec], arguments: &mut Vec<BString>) {
-    let mut seen = HashSet::new();
-    for spec in all_refspecs {
-        let spec = spec.to_ref();
-        if seen.insert(spec.instruction()) {
-            let mut prefixes = Vec::with_capacity(1);
-            spec.expand_prefixes(&mut prefixes);
-            for mut prefix in prefixes {
-                prefix.insert_str(0, "ref-prefix ");
-                arguments.push(prefix);
-            }
-        }
     }
 }
