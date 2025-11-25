@@ -77,12 +77,10 @@ impl RefMap {
     {
         let _span = gix_trace::coarse!("gix_protocol::fetch::RefMap::new()");
         let all_refspecs = context.aggregate_refspecs();
-        let mut refs_cmd = crate::LsRefsCommand::new(capabilities, user_agent);
-        if prefix_from_spec_as_filter_on_remote {
-            refs_cmd.push_prefix_arguments(&all_refspecs);
-        }
-
-        let remote_refs = refs_cmd.invoke(transport, &mut progress, trace_packetlines).await?;
+        let prefix_refspecs = prefix_from_spec_as_filter_on_remote.then_some(&all_refspecs[..]);
+        let remote_refs = crate::LsRefsCommand::new(prefix_refspecs, capabilities, user_agent)
+            .invoke(transport, &mut progress, trace_packetlines)
+            .await?;
         Self::from_refs(remote_refs, capabilities, context)
     }
 

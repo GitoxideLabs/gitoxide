@@ -58,7 +58,11 @@ pub(crate) mod function {
     impl<'a> LsRefsCommand<'a> {
         /// Build a command to list refs from the given server `capabilities`,
         /// using `agent` information to identify ourselves.
-        pub fn new(capabilities: &'a Capabilities, agent: (&'static str, Option<Cow<'static, str>>)) -> Self {
+        pub fn new(
+            prefix_refspecs: Option<&[gix_refspec::RefSpec]>,
+            capabilities: &'a Capabilities,
+            agent: (&'static str, Option<Cow<'static, str>>),
+        ) -> Self {
             let _span =
                 gix_features::trace::detail!("gix_protocol::LsRefsCommand::new()", capabilities = ?capabilities);
             let ls_refs = Command::LsRefs;
@@ -71,6 +75,21 @@ pub(crate) mod function {
                 .unwrap_or_default()
             {
                 arguments.push("unborn".into());
+            }
+
+            if let Some(refspecs) = prefix_refspecs {
+                let mut seen = HashSet::new();
+                for spec in refspecs {
+                    let spec = spec.to_ref();
+                    if seen.insert(spec.instruction()) {
+                        let mut prefixes = Vec::with_capacity(1);
+                        spec.expand_prefixes(&mut prefixes);
+                        for mut prefix in prefixes {
+                            prefix.insert_str(0, "ref-prefix ");
+                            arguments.push(prefix);
+                        }
+                    }
+                }
             }
 
             Self {
@@ -113,21 +132,6 @@ pub(crate) mod function {
                 )
                 .await?;
             Ok(from_v2_refs(&mut remote_refs).await?)
-        }
-
-        pub(crate) fn push_prefix_arguments(&mut self, all_refspecs: &[gix_refspec::RefSpec]) {
-            let mut seen = HashSet::new();
-            for spec in all_refspecs {
-                let spec = spec.to_ref();
-                if seen.insert(spec.instruction()) {
-                    let mut prefixes = Vec::with_capacity(1);
-                    spec.expand_prefixes(&mut prefixes);
-                    for mut prefix in prefixes {
-                        prefix.insert_str(0, "ref-prefix ");
-                        self.arguments.push(prefix);
-                    }
-                }
-            }
         }
     }
 }

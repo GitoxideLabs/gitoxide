@@ -106,7 +106,7 @@ mod fetch_fn {
             None => match delegate.action() {
                 Ok(RefsAction::Skip) => Vec::new(),
                 Ok(RefsAction::Continue) => {
-                    LsRefsCommand::new(&capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
+                    LsRefsCommand::new(None, &capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
                         .invoke(&mut transport, &mut progress, trace)
                         .await?
                 }
