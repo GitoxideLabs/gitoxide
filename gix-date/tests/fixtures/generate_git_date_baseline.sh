@@ -48,7 +48,6 @@ function baseline_relative() {
 # FIXED DATE FORMATS
 # ============================================================================
 # Tests from https://github.com/git/git/blob/master/t/t0006-date.sh
-# Only including formats that gix-date currently supports.
 
 # Note: SHORT format (YYYY-MM-DD) is NOT included in baseline tests because
 # Git fills in current time-of-day, making it non-reproducible for baseline comparison.
@@ -73,8 +72,8 @@ baseline '2008-02-14 20:30:45 +0000' ''  # from git t0006
 baseline '2008-02-14 20:30:45 -0500' ''  # from git t0006
 baseline '2016-06-15 16:13:20 +0200' 'ISO8601'  # from git t0006
 
-# Note: ISO8601 with dots (2008.02.14 20:30:45 -0500) is supported by Git
-# but not yet supported by gix-date.
+# ISO8601 with dots: "YYYY.MM.DD HH:MM:SS +/-ZZZZ" from git t0006
+baseline '2008.02.14 20:30:45 -0500' ''
 
 # ISO8601_STRICT format: "YYYY-MM-DDTHH:MM:SS+ZZ:ZZ"
 baseline '2022-08-17T21:43:13+08:00' 'ISO8601_STRICT'
@@ -82,7 +81,31 @@ baseline '2000-01-01T00:00:00+00:00' 'ISO8601_STRICT'
 baseline '2009-02-13T23:31:30+00:00' 'ISO8601_STRICT'  # Unix timestamp 1234567890
 baseline '2016-06-15T16:13:20+02:00' 'ISO8601_STRICT'  # from git t0006
 
-# Timezone edge cases from git t0006 (that gix-date supports)
+# Z suffix for UTC timezone from git t0006
+baseline '1970-01-01 00:00:00 Z' ''
+
+# Compact ISO8601 formats from git t0006 (YYYYMMDDTHHMMSS)
+baseline '20080214T20:30:45' ''
+baseline '20080214T20:30' ''
+baseline '20080214T20' ''
+baseline '20080214T203045' ''
+baseline '20080214T2030' ''
+baseline '20080214T203045-04:00' ''
+baseline '20080214T203045 -04:00' ''
+
+# Subsecond precision (Git ignores the subseconds)
+baseline '20080214T000000.20' ''
+baseline '20080214T00:00:00.20' ''
+baseline '20080214T203045.019-04:00' ''
+baseline '2008-02-14 20:30:45.019-04:00' ''
+
+# Various timezone formats from git t0006
+baseline '2008-02-14 20:30:45 -0015' ''  # 15-minute offset
+baseline '2008-02-14 20:30:45 -05' ''    # 2-digit hour offset
+baseline '2008-02-14 20:30:45 -05:00' '' # colon-separated offset
+baseline '2008-02-14 20:30:45 +00' ''    # 2-digit +00
+
+# Timezone edge cases from git t0006
 baseline '1970-01-01 00:00:00 +0000' ''
 baseline '1970-01-01 01:00:00 +0100' ''
 baseline '1970-01-02 00:00:00 +1100' ''

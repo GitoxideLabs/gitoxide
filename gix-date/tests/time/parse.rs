@@ -3,25 +3,23 @@ use std::time::SystemTime;
 use gix_date::Time;
 
 #[test]
-fn time_without_offset_is_not_parsed_yet() {
-    assert!(
-        gix_date::parse("1979-02-26 18:30:00", Some(SystemTime::now())).is_err(),
-        "This was a special time with special handling, but it is not  anymore"
-    );
+fn time_without_offset_defaults_to_utc() {
+    // Git parses datetime without offset and defaults to UTC (+0000)
+    let result = gix_date::parse("1979-02-26 18:30:00", Some(SystemTime::now()));
+    assert!(result.is_ok(), "Git parses datetime without offset, defaulting to UTC");
+    let time = result.unwrap();
+    assert_eq!(time.offset, 0, "Offset should default to UTC (+0000)");
 }
 
 #[test]
 fn parse_header_is_not_too_lenient() {
-    let now = SystemTime::now();
     for not_a_header_str in ["2005-04-07T22:13:09", "2005-04-07 22:13:09"] {
         assert!(
             gix_date::parse_header(not_a_header_str).is_none(),
-            "It's not timestamp-like, despite some leniency"
+            "parse_header only accepts raw format (timestamp +offset), not ISO8601"
         );
-        assert!(
-            gix_date::parse(not_a_header_str, Some(now)).is_err(),
-            "it misses the timezone offset, so can't be parsed"
-        );
+        // Note: gix_date::parse() DOES accept these formats, matching Git's behavior
+        // Git parses them with default UTC offset
     }
 }
 
