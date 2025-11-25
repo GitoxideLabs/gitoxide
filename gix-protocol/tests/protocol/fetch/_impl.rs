@@ -17,7 +17,7 @@ mod fetch_fn {
     use gix_protocol::{
         credentials,
         fetch::{Arguments, Response},
-        indicate_end_of_interaction, Command,
+        indicate_end_of_interaction, Command, LsRefsCommand,
     };
     #[cfg(feature = "async-client")]
     use gix_transport::client::async_io::{ExtendedBufRead, HandleProgress, Transport};
@@ -103,26 +103,18 @@ mod fetch_fn {
         let agent = gix_protocol::agent(agent);
         let refs = match refs {
             Some(refs) => refs,
-            None => {
-                match delegate.action() {
-                    Ok(RefsAction::Skip) => Vec::new(),
-                    Ok(RefsAction::Continue) => {
-                        gix_protocol::ls_refs(
-                            &mut transport,
-                            &capabilities,
-                            Vec::new(),
-                            &mut progress,
-                            trace,
-                            ("agent", Some(Cow::Owned(agent.clone()))),
-                        )
+            None => match delegate.action() {
+                Ok(RefsAction::Skip) => Vec::new(),
+                Ok(RefsAction::Continue) => {
+                    LsRefsCommand::new(&capabilities, ("agent", Some(Cow::Owned(agent.clone()))))
+                        .invoke(&mut transport, &mut progress, trace)
                         .await?
-                    }
-                    Err(err) => {
-                        indicate_end_of_interaction(transport, trace).await?;
-                        return Err(err.into());
-                    }
                 }
-            }
+                Err(err) => {
+                    indicate_end_of_interaction(transport, trace).await?;
+                    return Err(err.into());
+                }
+            },
         };
 
         let fetch = Command::Fetch;

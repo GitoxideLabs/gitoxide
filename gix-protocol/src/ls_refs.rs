@@ -2,7 +2,7 @@
 mod error {
     use crate::handshake::refs::parse;
 
-    /// The error returned by [`ls_refs()`][crate::ls_refs()].
+    /// The error returned by invoking a [`super::function::LsRefsCommand`].
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
@@ -48,51 +48,76 @@ pub(crate) mod function {
         Command,
     };
 
-    /// Invoke a ls-refs V2 command on `transport`, which requires a prior handshake that yielded
-    /// server `capabilities`. `prepare_ls_refs(capabilities)` can be used to alter the _ls-refs_.
-    /// `arguments` are extra arguments to send to the server.
-    /// `progress` is used to provide feedback.
-    /// The `agent` information will be added to the features sent to the server.
-    /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
-    #[maybe_async]
-    pub async fn ls_refs(
-        mut transport: impl Transport,
-        capabilities: &Capabilities,
-        extra_args: Vec<BString>,
-        progress: &mut impl Progress,
-        trace: bool,
-        agent: (&'static str, Option<Cow<'static, str>>),
-    ) -> Result<Vec<Ref>, Error> {
-        let _span = gix_features::trace::detail!("gix_protocol::ls_refs()", capabilities = ?capabilities);
-        let ls_refs = Command::LsRefs;
-        let mut ls_features = ls_refs.default_features(gix_transport::Protocol::V2, capabilities);
-        ls_features.push(agent);
-        let mut ls_args = ls_refs.initial_v2_arguments(&ls_features);
-        if capabilities
-            .capability("ls-refs")
-            .and_then(|cap| cap.supports("unborn"))
-            .unwrap_or_default()
-        {
-            ls_args.push("unborn".into());
+    /// A command to list references from a remote Git repository.
+    pub struct LsRefsCommand<'a> {
+        capabilities: &'a Capabilities,
+        features: Vec<(&'static str, Option<Cow<'static, str>>)>,
+        arguments: Vec<BString>,
+    }
+
+    impl<'a> LsRefsCommand<'a> {
+        /// Build a command to list refs from the given server `capabilities`,
+        /// using `agent` information to identify ourselves.
+        pub fn new(capabilities: &'a Capabilities, agent: (&'static str, Option<Cow<'static, str>>)) -> Self {
+            let _span =
+                gix_features::trace::detail!("gix_protocol::LsRefsCommand::new()", capabilities = ?capabilities);
+            let ls_refs = Command::LsRefs;
+            let mut features = ls_refs.default_features(gix_transport::Protocol::V2, capabilities);
+            features.push(agent);
+            let mut arguments = ls_refs.initial_v2_arguments(&features);
+            if capabilities
+                .capability("ls-refs")
+                .and_then(|cap| cap.supports("unborn"))
+                .unwrap_or_default()
+            {
+                arguments.push("unborn".into());
+            }
+
+            Self {
+                capabilities,
+                features,
+                arguments,
+            }
         }
 
-        ls_args.extend(extra_args);
-        ls_refs.validate_argument_prefixes(gix_transport::Protocol::V2, capabilities, &ls_args, &ls_features)?;
+        /// Invoke a ls-refs V2 command on `transport`.
+        ///
+        /// `progress` is used to provide feedback.
+        /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+        #[maybe_async]
+        pub async fn invoke(
+            self,
+            mut transport: impl Transport,
+            progress: &mut impl Progress,
+            trace: bool,
+        ) -> Result<Vec<Ref>, Error> {
+            Command::LsRefs.validate_argument_prefixes(
+                gix_transport::Protocol::V2,
+                self.capabilities,
+                &self.arguments,
+                &self.features,
+            )?;
 
-        progress.step();
-        progress.set_name("list refs".into());
-        let mut remote_refs = transport
-            .invoke(
-                ls_refs.as_str(),
-                ls_features.into_iter(),
-                if ls_args.is_empty() {
-                    None
-                } else {
-                    Some(ls_args.into_iter())
-                },
-                trace,
-            )
-            .await?;
-        Ok(from_v2_refs(&mut remote_refs).await?)
+            progress.step();
+            progress.set_name("list refs".into());
+            let mut remote_refs = transport
+                .invoke(
+                    Command::LsRefs.as_str(),
+                    self.features.into_iter(),
+                    if self.arguments.is_empty() {
+                        None
+                    } else {
+                        Some(self.arguments.into_iter())
+                    },
+                    trace,
+                )
+                .await?;
+            Ok(from_v2_refs(&mut remote_refs).await?)
+        }
+
+        /// The arguments that will be sent to the server as part of the ls-refs command.
+        pub fn arguments(&mut self) -> &mut Vec<BString> {
+            &mut self.arguments
+        }
     }
 }
