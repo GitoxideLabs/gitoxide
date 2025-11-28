@@ -2,7 +2,7 @@
 mod error {
     use crate::handshake::refs::parse;
 
-    /// The error returned by [`ls_refs()`][crate::ls_refs()].
+    /// The error returned by invoking a [`super::function::LsRefsCommand`].
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
@@ -29,94 +29,141 @@ mod error {
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use error::Error;
 
-/// What to do after preparing ls-refs in [`ls_refs()`][crate::ls_refs()].
-#[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
-pub enum Action {
-    /// Continue by sending a 'ls-refs' command.
-    Continue,
-    /// Skip 'ls-refs' entirely.
-    ///
-    /// This is useful if the `ref-in-want` capability is taken advantage of. When fetching, one must must then send
-    /// `want-ref`s during the negotiation phase.
-    Skip,
-}
-
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub(crate) mod function {
-    use std::borrow::Cow;
+    use std::{borrow::Cow, collections::HashSet};
 
-    use bstr::BString;
+    use bstr::{BString, ByteVec};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
-    use maybe_async::maybe_async;
 
-    use super::{Action, Error};
+    use super::Error;
     #[cfg(feature = "async-client")]
-    use crate::transport::client::async_io::{Transport, TransportV2Ext};
+    use crate::transport::client::async_io::{self, TransportV2Ext as _};
     #[cfg(feature = "blocking-client")]
-    use crate::transport::client::blocking_io::{Transport, TransportV2Ext};
+    use crate::transport::client::blocking_io::{self, TransportV2Ext as _};
     use crate::{
         handshake::{refs::from_v2_refs, Ref},
-        indicate_end_of_interaction, Command,
+        Command,
     };
 
-    /// Invoke a ls-refs V2 command on `transport`, which requires a prior handshake that yielded
-    /// server `capabilities`. `prepare_ls_refs(capabilities, arguments)` can be used to alter the _ls-refs_.
-    /// `progress` is used to provide feedback.
-    /// The `agent` information will be added to the features sent to the server.
-    /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
-    #[maybe_async]
-    pub async fn ls_refs(
-        mut transport: impl Transport,
-        capabilities: &Capabilities,
-        prepare_ls_refs: impl FnOnce(&Capabilities, &mut Vec<BString>) -> std::io::Result<Action>,
-        progress: &mut impl Progress,
-        trace: bool,
-        agent: (&'static str, Option<Cow<'static, str>>),
-    ) -> Result<Vec<Ref>, Error> {
-        let _span = gix_features::trace::detail!("gix_protocol::ls_refs()", capabilities = ?capabilities);
-        let ls_refs = Command::LsRefs;
-        let mut ls_features = ls_refs.default_features(gix_transport::Protocol::V2, capabilities);
-        ls_features.push(agent);
-        let mut ls_args = ls_refs.initial_v2_arguments(&ls_features);
-        if capabilities
-            .capability("ls-refs")
-            .and_then(|cap| cap.supports("unborn"))
-            .unwrap_or_default()
-        {
-            ls_args.push("unborn".into());
-        }
-        let refs = match prepare_ls_refs(capabilities, &mut ls_args) {
-            Ok(Action::Skip) => Vec::new(),
-            Ok(Action::Continue) => {
-                ls_refs.validate_argument_prefixes(
-                    gix_transport::Protocol::V2,
-                    capabilities,
-                    &ls_args,
-                    &ls_features,
-                )?;
+    /// A command to list references from a remote Git repository.
+    pub struct LsRefsCommand<'a> {
+        pub(crate) capabilities: &'a Capabilities,
+        features: Vec<(&'static str, Option<Cow<'static, str>>)>,
+        arguments: Vec<BString>,
+    }
 
-                progress.step();
-                progress.set_name("list refs".into());
-                let mut remote_refs = transport
-                    .invoke(
-                        ls_refs.as_str(),
-                        ls_features.into_iter(),
-                        if ls_args.is_empty() {
-                            None
-                        } else {
-                            Some(ls_args.into_iter())
-                        },
-                        trace,
-                    )
-                    .await?;
-                from_v2_refs(&mut remote_refs).await?
+    impl<'a> LsRefsCommand<'a> {
+        /// Build a command to list refs from the given server `capabilities`,
+        /// using `agent` information to identify ourselves.
+        pub fn new(
+            prefix_refspecs: Option<&[gix_refspec::RefSpec]>,
+            capabilities: &'a Capabilities,
+            agent: (&'static str, Option<Cow<'static, str>>),
+        ) -> Self {
+            let _span =
+                gix_features::trace::detail!("gix_protocol::LsRefsCommand::new()", capabilities = ?capabilities);
+            let ls_refs = Command::LsRefs;
+            let mut features = ls_refs.default_features(gix_transport::Protocol::V2, capabilities);
+            features.push(agent);
+            let mut arguments = ls_refs.initial_v2_arguments(&features);
+            if capabilities
+                .capability("ls-refs")
+                .and_then(|cap| cap.supports("unborn"))
+                .unwrap_or_default()
+            {
+                arguments.push("unborn".into());
             }
-            Err(err) => {
-                indicate_end_of_interaction(transport, trace).await?;
-                return Err(err.into());
+
+            if let Some(refspecs) = prefix_refspecs {
+                let mut seen = HashSet::new();
+                for spec in refspecs {
+                    let spec = spec.to_ref();
+                    if seen.insert(spec.instruction()) {
+                        let mut prefixes = Vec::with_capacity(1);
+                        spec.expand_prefixes(&mut prefixes);
+                        for mut prefix in prefixes {
+                            prefix.insert_str(0, "ref-prefix ");
+                            arguments.push(prefix);
+                        }
+                    }
+                }
             }
-        };
-        Ok(refs)
+
+            Self {
+                capabilities,
+                features,
+                arguments,
+            }
+        }
+
+        /// Invoke a ls-refs V2 command on `transport`.
+        ///
+        /// `progress` is used to provide feedback.
+        /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+        #[cfg(feature = "async-client")]
+        pub async fn invoke_async(
+            self,
+            mut transport: impl async_io::Transport,
+            progress: &mut impl Progress,
+            trace: bool,
+        ) -> Result<Vec<Ref>, Error> {
+            Command::LsRefs.validate_argument_prefixes(
+                gix_transport::Protocol::V2,
+                self.capabilities,
+                &self.arguments,
+                &self.features,
+            )?;
+
+            progress.step();
+            progress.set_name("list refs".into());
+            let mut remote_refs = transport
+                .invoke(
+                    Command::LsRefs.as_str(),
+                    self.features.into_iter(),
+                    if self.arguments.is_empty() {
+                        None
+                    } else {
+                        Some(self.arguments.into_iter())
+                    },
+                    trace,
+                )
+                .await?;
+            Ok(from_v2_refs(&mut remote_refs).await?)
+        }
+
+        /// Invoke a ls-refs V2 command on `transport`.
+        ///
+        /// `progress` is used to provide feedback.
+        /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+        #[cfg(feature = "blocking-client")]
+        pub fn invoke_blocking(
+            self,
+            mut transport: impl blocking_io::Transport,
+            progress: &mut impl Progress,
+            trace: bool,
+        ) -> Result<Vec<Ref>, Error> {
+            Command::LsRefs.validate_argument_prefixes(
+                gix_transport::Protocol::V2,
+                self.capabilities,
+                &self.arguments,
+                &self.features,
+            )?;
+
+            progress.step();
+            progress.set_name("list refs".into());
+            let mut remote_refs = transport.invoke(
+                Command::LsRefs.as_str(),
+                self.features.into_iter(),
+                if self.arguments.is_empty() {
+                    None
+                } else {
+                    Some(self.arguments.into_iter())
+                },
+                trace,
+            )?;
+            Ok(from_v2_refs(&mut remote_refs)?)
+        }
     }
 }
