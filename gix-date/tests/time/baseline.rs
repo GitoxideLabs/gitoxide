@@ -6,11 +6,27 @@ use gix_date::{
 };
 use gix_testtools::Result;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 struct Sample {
     format_name: Option<String>,
     exit_code: usize,
     seconds: SecondsSinceUnixEpoch,
+}
+
+/// Returns true if the pattern looks like a relative date of the form "N unit ago".
+/// Note: This only covers the relative dates tested in the baseline (e.g., "1 day ago").
+/// Other relative formats like "yesterday", "last week" etc. are not included in baseline
+/// testing because they would require additional handling in the baseline script.
+fn is_relative_date(pattern: &str) -> bool {
+    pattern.ends_with(" ago")
+}
+
+/// The fixed "now" timestamp used for testing relative dates.
+/// This matches GIT_TEST_DATE_NOW=1000000000 in the baseline script.
+/// This is Sun Sep 9 01:46:40 UTC 2001.
+fn fixed_now() -> SystemTime {
+    std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000)
 }
 
 static BASELINE: LazyLock<HashMap<String, Sample>> = LazyLock::new(|| {
@@ -53,7 +69,13 @@ fn parse_compare_format() {
         },
     ) in BASELINE.iter()
     {
-        let res = gix_date::parse(pattern.as_str(), Some(SystemTime::now()));
+        // Use fixed_now() for relative dates, current time for absolute dates
+        let now = if is_relative_date(pattern) {
+            Some(fixed_now())
+        } else {
+            Some(SystemTime::now())
+        };
+        let res = gix_date::parse(pattern.as_str(), now);
         assert_eq!(
             res.is_ok(),
             *exit_code == 0,
@@ -68,6 +90,7 @@ fn parse_compare_format() {
             if let Some(format_name) = format_name {
                 let reformatted = t
                     .format(match format_name.as_str() {
+                        "SHORT" => Format::Custom(format::SHORT),
                         "RFC2822" => Format::Custom(format::RFC2822),
                         "ISO8601" => Format::Custom(format::ISO8601),
                         "ISO8601_STRICT" => Format::Custom(format::ISO8601_STRICT),
