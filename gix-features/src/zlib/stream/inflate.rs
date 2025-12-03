@@ -1,9 +1,9 @@
 use std::{io, io::BufRead};
 
-use crate::zlib::{Decompress, FlushDecompress, Status};
+use crate::zlib::{FlushDecompress, Status};
 
 /// Read bytes from `rd` and decompress them using `state` into a pre-allocated fitting buffer `dst`, returning the amount of bytes written.
-pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -> io::Result<usize> {
+pub fn read(rd: &mut impl BufRead, state: &mut zlib_rs::Inflate, mut dst: &mut [u8]) -> io::Result<usize> {
     let mut total_written = 0;
     loop {
         let (written, consumed, ret, eof);
@@ -15,7 +15,7 @@ pub fn read(rd: &mut impl BufRead, state: &mut Decompress, mut dst: &mut [u8]) -
             let flush = if eof {
                 FlushDecompress::Finish
             } else {
-                FlushDecompress::None
+                FlushDecompress::NoFlush
             };
             ret = state.decompress(input, dst, flush);
             written = (state.total_out() - before_out) as usize;
