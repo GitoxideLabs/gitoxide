@@ -1690,12 +1690,12 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "libc",
- "libz-rs-sys",
  "once_cell",
  "parking_lot",
  "prodash",
  "thiserror 2.0.17",
  "walkdir",
+ "zlib-rs 0.5.2 (git+https://github.com/trifectatechfoundation/zlib-rs.git?rev=bc0c9fd8b29a5ba64869717f47cb241008621f30)",
 ]
 
 [[package]]
@@ -3196,7 +3196,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "840db8cf39d9ec4dd794376f38acc40d0fc65eec2a8f484f7fd375b84602becd"
 dependencies = [
- "zlib-rs",
+ "zlib-rs 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5865,3 +5865,8 @@ name = "zlib-rs"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f06ae92f42f5e5c42443fd094f245eb656abf56dd7cce9b8b263236565e00f2"
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.2"
+source = "git+https://github.com/trifectatechfoundation/zlib-rs.git?rev=bc0c9fd8b29a5ba64869717f47cb241008621f30#bc0c9fd8b29a5ba64869717f47cb241008621f30"

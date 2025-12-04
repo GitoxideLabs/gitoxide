@@ -1,6 +1,6 @@
 use std::{fs, io};
 
-use gix_features::zlib::Decompress;
+use gix_features::zlib::Inflate;
 use gix_hash::{Hasher, ObjectId};
 
 use crate::data::input;
@@ -10,7 +10,7 @@ use crate::data::input;
 /// The iterator used as part of [`Bundle::write_to_directory(…)`][crate::Bundle::write_to_directory()].
 pub struct BytesToEntriesIter<BR> {
     read: BR,
-    decompressor: Decompress,
+    decompressor: Inflate,
     offset: u64,
     had_error: bool,
     version: crate::data::Version,
@@ -62,7 +62,7 @@ where
         );
         Ok(BytesToEntriesIter {
             read,
-            decompressor: Decompress::new(),
+            decompressor: Inflate::default(),
             compressed,
             offset: 12,
             had_error: false,
@@ -288,7 +288,7 @@ pub struct DecompressRead<'a, R> {
     /// The reader from which bytes should be decompressed.
     pub inner: R,
     /// The decompressor doing all the work.
-    pub decompressor: &'a mut Decompress,
+    pub decompressor: &'a mut Inflate,
 }
 
 impl<R> io::Read for DecompressRead<'_, R>
@@ -296,7 +296,7 @@ where
     R: io::BufRead,
 {
     fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
-        gix_features::zlib::stream::inflate::read(&mut self.inner, self.decompressor, into)
+        gix_features::zlib::stream::inflate::read(&mut self.inner, &mut self.decompressor.state, into)
     }
 }
 

@@ -22,7 +22,7 @@ mod deflate_stream {
     {
         pub fn from_read(read: R) -> InflateReader<R> {
             InflateReader {
-                decompressor: Decompress::new(),
+                decompressor: Decompress::new(true, 15),
                 inner: read,
             }
         }
