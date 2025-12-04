@@ -72,45 +72,85 @@ pub(crate) mod hero {
     #[cfg(feature = "fetch")]
     mod fetch {
         #[cfg(feature = "async-client")]
-        use crate::transport::client::async_io::Transport;
+        use crate::transport::client::async_io;
         #[cfg(feature = "blocking-client")]
-        use crate::transport::client::blocking_io::Transport;
-        use crate::Handshake;
+        use crate::transport::client::blocking_io;
+        use crate::{fetch::RefMap, Handshake};
         use gix_features::progress::Progress;
         use std::borrow::Cow;
 
-        impl Handshake {
-            /// Obtain a [refmap](crate::fetch::RefMap) either from this instance, taking it out in the process, if the handshake was
-            /// created from a V1 connection, or use `transport` to fetch the refmap as a separate command invocation.
+        /// Intermediate state while potentially fetching a refmap after the handshake.
+        pub enum FetchRefMap<'a> {
+            /// We already got a refmap to use from the handshake.
+            Map(RefMap),
+            /// We need to invoke another command to get the refmap.
+            Command(crate::LsRefsCommand<'a>, crate::fetch::refmap::init::Context),
+        }
+
+        impl FetchRefMap<'_> {
+            /// Fetch the refmap, either by returning the existing one or invoking the command.
+            #[cfg(feature = "async-client")]
             #[allow(clippy::result_large_err)]
-            #[maybe_async::maybe_async]
-            pub async fn fetch_or_extract_refmap<T>(
-                &mut self,
+            pub async fn fetch_async(
+                self,
                 mut progress: impl Progress,
-                transport: &mut T,
-                user_agent: (&'static str, Option<Cow<'static, str>>),
+                transport: &mut impl async_io::Transport,
                 trace_packetlines: bool,
+            ) -> Result<crate::fetch::RefMap, crate::fetch::refmap::init::Error> {
+                let (cmd, cx) = match self {
+                    FetchRefMap::Map(map) => return Ok(map),
+                    FetchRefMap::Command(cmd, cx) => (cmd, cx),
+                };
+
+                let capabilities = cmd.capabilities;
+                let remote_refs = cmd.invoke_async(transport, &mut progress, trace_packetlines).await?;
+                RefMap::from_refs(remote_refs, capabilities, cx)
+            }
+
+            /// Fetch the refmap, either by returning the existing one or invoking the command.
+            #[cfg(feature = "blocking-client")]
+            #[allow(clippy::result_large_err)]
+            pub fn fetch_blocking(
+                self,
+                mut progress: impl Progress,
+                transport: &mut impl blocking_io::Transport,
+                trace_packetlines: bool,
+            ) -> Result<crate::fetch::RefMap, crate::fetch::refmap::init::Error> {
+                let (cmd, cx) = match self {
+                    FetchRefMap::Map(map) => return Ok(map),
+                    FetchRefMap::Command(cmd, cx) => (cmd, cx),
+                };
+
+                let capabilities = cmd.capabilities;
+                let remote_refs = cmd.invoke_blocking(transport, &mut progress, trace_packetlines)?;
+                RefMap::from_refs(remote_refs, capabilities, cx)
+            }
+        }
+
+        impl Handshake {
+            /// Prepare fetching a [refmap](crate::fetch::RefMap) if not present in the handshake.
+            #[allow(clippy::result_large_err)]
+            pub fn fetch_or_extract_refmap(
+                &mut self,
+                user_agent: (&'static str, Option<Cow<'static, str>>),
                 prefix_from_spec_as_filter_on_remote: bool,
                 refmap_context: crate::fetch::refmap::init::Context,
-            ) -> Result<crate::fetch::RefMap, crate::fetch::refmap::init::Error>
-            where
-                T: Transport,
-            {
-                Ok(match self.refs.take() {
-                    Some(refs) => crate::fetch::RefMap::from_refs(refs, &self.capabilities, refmap_context)?,
-                    None => {
-                        crate::fetch::RefMap::fetch(
-                            &mut progress,
-                            &self.capabilities,
-                            transport,
-                            user_agent,
-                            trace_packetlines,
-                            prefix_from_spec_as_filter_on_remote,
-                            refmap_context,
-                        )
-                        .await?
-                    }
-                })
+            ) -> Result<FetchRefMap<'_>, crate::fetch::refmap::init::Error> {
+                if let Some(refs) = self.refs.take() {
+                    return Ok(FetchRefMap::Map(crate::fetch::RefMap::from_refs(
+                        refs,
+                        &self.capabilities,
+                        refmap_context,
+                    )?));
+                }
+
+                let _span = gix_trace::coarse!("gix_protocol::handshake::fetch_or_extract_refmap()");
+                let all_refspecs = refmap_context.aggregate_refspecs();
+                let prefix_refspecs = prefix_from_spec_as_filter_on_remote.then_some(&all_refspecs[..]);
+                Ok(FetchRefMap::Command(
+                    crate::LsRefsCommand::new(prefix_refspecs, &self.capabilities, user_agent),
+                    refmap_context,
+                ))
             }
         }
     }
@@ -150,6 +190,7 @@ mod error {
         }
     }
 }
+
 #[cfg(feature = "handshake")]
 pub use error::Error;
 

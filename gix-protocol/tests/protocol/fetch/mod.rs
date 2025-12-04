@@ -3,14 +3,14 @@ use std::{borrow::Cow, io};
 use bstr::{BString, ByteSlice};
 use gix_protocol::{
     fetch::{Arguments, Response},
-    handshake, ls_refs,
+    handshake,
 };
 use gix_transport::client::Capabilities;
 
 use crate::fixture_bytes;
 
 pub(super) mod _impl;
-use _impl::{Action, DelegateBlocking};
+use _impl::{Action, DelegateBlocking, RefsAction};
 
 mod error {
     use std::io;
@@ -102,12 +102,8 @@ pub struct CloneRefInWantDelegate {
 }
 
 impl DelegateBlocking for CloneRefInWantDelegate {
-    fn prepare_ls_refs(
-        &mut self,
-        _server: &Capabilities,
-        _arguments: &mut Vec<BString>,
-    ) -> io::Result<ls_refs::Action> {
-        Ok(ls_refs::Action::Skip)
+    fn action(&mut self) -> io::Result<RefsAction> {
+        Ok(RefsAction::Skip)
     }
 
     fn prepare_fetch(
@@ -145,14 +141,10 @@ impl DelegateBlocking for LsRemoteDelegate {
     fn handshake_extra_parameters(&self) -> Vec<(String, Option<String>)> {
         vec![("value-only".into(), None), ("key".into(), Some("value".into()))]
     }
-    fn prepare_ls_refs(
-        &mut self,
-        _server: &Capabilities,
-        _arguments: &mut Vec<BString>,
-    ) -> std::io::Result<ls_refs::Action> {
+    fn action(&mut self) -> std::io::Result<RefsAction> {
         match self.abort_with.take() {
             Some(err) => Err(err),
-            None => Ok(ls_refs::Action::Continue),
+            None => Ok(RefsAction::Continue),
         }
     }
     fn prepare_fetch(

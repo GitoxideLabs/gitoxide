@@ -1,6 +1,6 @@
 use bstr::ByteSlice;
 use gix_features::progress;
-use gix_protocol::{handshake, ls_refs};
+use gix_protocol::handshake;
 use gix_transport::Protocol;
 
 use crate::fetch::{
@@ -143,7 +143,7 @@ async fn ls_remote_abort_in_prep_ls_refs() -> crate::Result {
         b"0044git-upload-pack does/not/matter\x00\x00version=2\x00value-only\x00key=value\x000000".as_bstr()
     );
     match err {
-        Error::LsRefs(ls_refs::Error::Io(err)) => {
+        Error::Io(err) => {
             assert_eq!(err.kind(), std::io::ErrorKind::Other);
             assert_eq!(err.get_ref().expect("other error").to_string(), "hello world");
         }
