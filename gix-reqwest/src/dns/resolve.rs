@@ -86,7 +86,11 @@ impl DynResolver {
         &self,
         target: &http::Uri,
     ) -> Result<impl Iterator<Item = std::net::SocketAddr>, BoxError> {
-        let host = target.host().ok_or("missing host")?;
+        let host = target
+            .host()
+            .ok_or("missing host")?
+            .trim_start_matches('[')
+            .trim_end_matches(']');
         let port = target
             .port_u16()
             .unwrap_or_else(|| match target.scheme_str() {
