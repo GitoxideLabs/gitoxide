@@ -67,6 +67,7 @@ pub(super) mod _impl {
     pub fn hasher(kind: crate::Kind) -> Hasher {
         match kind {
             crate::Kind::Sha1 => Hasher::default(),
+            crate::Kind::Sha256 => Hasher::default(),
         }
     }
 }

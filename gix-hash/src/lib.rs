@@ -49,6 +49,9 @@ pub struct Prefix {
 /// The size of a SHA1 hash digest in bytes.
 const SIZE_OF_SHA1_DIGEST: usize = 20;
 
+/// The size of a SHA256 hash digest in bytes.
+const SIZE_OF_SHA256_DIGEST: usize = 32;
+
 /// Denotes the kind of function to produce a [`ObjectId`].
 #[derive(Default, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -57,6 +60,8 @@ pub enum Kind {
     /// The Sha1 hash with 160 bits.
     #[default]
     Sha1 = 1,
+    /// The Sha256 hash with 256 bits.
+    Sha256 = 2,
 }
 
 mod kind;

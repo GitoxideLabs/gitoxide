@@ -28,6 +28,7 @@ impl std::fmt::Display for Kind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Kind::Sha1 => f.write_str("SHA1"),
+            Kind::Sha256 => f.write_str("SHA256"),
         }
     }
 }
@@ -62,13 +63,16 @@ impl Kind {
     pub const fn len_in_hex(&self) -> usize {
         match self {
             Kind::Sha1 => 40,
+            Kind::Sha256 => 64,
         }
     }
+
     /// Returns the amount of bytes taken up by the hash of this instance.
     #[inline]
     pub const fn len_in_bytes(&self) -> usize {
         match self {
             Kind::Sha1 => 20,
+            Kind::Sha256 => 32,
         }
     }
 
@@ -103,6 +107,7 @@ impl Kind {
     pub fn null_ref(&self) -> &'static oid {
         match self {
             Kind::Sha1 => oid::null_sha1(),
+            Kind::Sha256 => oid::null_sha256(),
         }
     }
 
@@ -111,6 +116,7 @@ impl Kind {
     pub const fn null(&self) -> ObjectId {
         match self {
             Kind::Sha1 => ObjectId::null_sha1(),
+            Kind::Sha256 => ObjectId::null_sha256(),
         }
     }
 
