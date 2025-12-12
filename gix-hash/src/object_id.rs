@@ -73,7 +73,18 @@ pub mod decode {
                     })
                 }),
                 #[cfg(feature = "sha256")]
-                SIZE_OF_SHA256_HEX_DIGEST => todo!(),
+                SIZE_OF_SHA256_HEX_DIGEST => Ok({
+                    ObjectId::Sha256({
+                        let mut buf = [0; SIZE_OF_SHA256_DIGEST];
+                        faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
+                            faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => Error::Invalid,
+                            faster_hex::Error::InvalidLength(_) => {
+                                unreachable!("BUG: This is already checked")
+                            }
+                        })?;
+                        buf
+                    })
+                }),
                 len => Err(Error::InvalidHexEncodingLength(len)),
             }
         }
