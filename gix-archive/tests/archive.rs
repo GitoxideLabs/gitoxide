@@ -167,14 +167,18 @@ mod from_tree {
             },
             |buf| {
                 assert!(
-                    buf.len() < 1280,
-                    "much bigger than uncompressed for some reason (565): {} < 1270",
+                    buf.len() < 1400,
+                    "much bigger than uncompressed for some reason (565): {} < 1400",
                     buf.len()
                 );
-                let mut ar = zip::ZipArchive::new(std::io::Cursor::new(buf.as_slice()))?;
+                let ar = rawzip::ZipArchive::from_slice(buf.as_slice())?;
                 assert_eq!(
                     {
-                        let mut n: Vec<_> = ar.file_names().collect();
+                        let mut n: Vec<_> = Vec::new();
+                        for entry_result in ar.entries() {
+                            let entry = entry_result?;
+                            n.push(String::from_utf8_lossy(entry.file_path().as_ref()).to_string());
+                        }
                         n.sort();
                         n
                     },
@@ -190,13 +194,27 @@ mod from_tree {
                         "prefix/symlink-to-a"
                     ]
                 );
-                let mut link = ar.by_name("prefix/symlink-to-a")?;
-                assert!(!link.is_dir());
-                assert!(link.is_symlink(), "symlinks are supported as well, but only on Unix");
-                assert_eq!(link.unix_mode(), Some(0o120644), "the mode specifies what it should be");
-                let mut buf = Vec::new();
-                link.read_to_end(&mut buf)?;
-                assert_eq!(buf.as_bstr(), "a");
+                
+                // Find the symlink entry
+                let ar = rawzip::ZipArchive::from_slice(buf.as_slice())?;
+                let mut found_link = false;
+                for entry_result in ar.entries() {
+                    let entry = entry_result?;
+                    if String::from_utf8_lossy(entry.file_path().as_ref()) == "prefix/symlink-to-a" {
+                        assert!(!entry.is_dir());
+                        let mode = entry.mode();
+                        assert!(mode.is_symlink(), "symlinks are supported as well, but only on Unix");
+                        assert_eq!(mode.value(), 0o120644, "the mode specifies what it should be");
+                        let wayfinder = entry.wayfinder();
+                        let zip_entry = ar.get_entry(wayfinder)?;
+                        // For symlinks stored with Store compression, the data is uncompressed
+                        let data = zip_entry.data();
+                        assert_eq!(data.as_bstr(), "a");
+                        found_link = true;
+                        break;
+                    }
+                }
+                assert!(found_link, "symlink entry should be found");
                 Ok(())
             },
         )

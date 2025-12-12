@@ -2,6 +2,9 @@ use gix_worktree_stream::{Entry, Stream};
 
 use crate::{Error, Format, Options};
 
+#[cfg(feature = "zip")]
+use std::io::Write;
+
 /// Write all stream entries in `stream` as provided by `next_entry(stream)` to `out` configured according to `opts` which
 /// also includes the streaming format.
 ///
@@ -135,24 +138,9 @@ where
 
     #[cfg(feature = "zip")]
     {
-        let mut ar = zip::write::ZipWriter::new(out);
+        let mut ar = rawzip::ZipArchiveWriter::new(out);
         let mut buf = Vec::new();
-        let zdt = jiff::Timestamp::from_second(opts.modification_time)
-            .map_err(|err| Error::InvalidModificationTime(Box::new(err)))?
-            .to_zoned(jiff::tz::TimeZone::UTC);
-        let mtime = zip::DateTime::from_date_and_time(
-            zdt.year()
-                .try_into()
-                .map_err(|err| Error::InvalidModificationTime(Box::new(err)))?,
-            // These are all OK because month, day, hour, minute and second
-            // are always positive.
-            zdt.month().try_into().expect("non-negative"),
-            zdt.day().try_into().expect("non-negative"),
-            zdt.hour().try_into().expect("non-negative"),
-            zdt.minute().try_into().expect("non-negative"),
-            zdt.second().try_into().expect("non-negative"),
-        )
-        .map_err(|err| Error::InvalidModificationTime(Box::new(err)))?;
+        let mtime = rawzip::time::UtcDateTime::from_unix(opts.modification_time);
         while let Some(entry) = next_entry(stream)? {
             append_zip_entry(
                 &mut ar,
@@ -171,35 +159,95 @@ where
 
 #[cfg(feature = "zip")]
 fn append_zip_entry<W: std::io::Write + std::io::Seek>(
-    ar: &mut zip::write::ZipWriter<W>,
+    ar: &mut rawzip::ZipArchiveWriter<W>,
     mut entry: gix_worktree_stream::Entry<'_>,
     buf: &mut Vec<u8>,
-    mtime: zip::DateTime,
+    mtime: rawzip::time::UtcDateTime,
     compression_level: Option<i64>,
     tree_prefix: Option<&bstr::BString>,
 ) -> Result<(), Error> {
-    let file_opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .compression_level(compression_level)
-        .large_file(entry.bytes_remaining().is_none_or(|len| len > u32::MAX as usize))
-        .last_modified_time(mtime)
-        .unix_permissions(if entry.mode.is_executable() { 0o755 } else { 0o644 });
     let path = add_prefix(entry.relative_path(), tree_prefix).into_owned();
+    let unix_permissions = if entry.mode.is_executable() { 0o755 } else { 0o644 };
+    
     match entry.mode.kind() {
         gix_object::tree::EntryKind::Blob | gix_object::tree::EntryKind::BlobExecutable => {
-            ar.start_file(path.to_string(), file_opts)
-                .map_err(std::io::Error::other)?;
-            std::io::copy(&mut entry, ar)?;
+            use bstr::ByteSlice;
+            let file_builder = ar
+                .new_file(path.to_str().map_err(|_| {
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "Invalid UTF-8 in file path",
+                    ))
+                })?)
+                .compression_method(rawzip::CompressionMethod::Deflate)
+                .last_modified(mtime)
+                .unix_permissions(unix_permissions);
+            
+            let (mut zip_entry, config) = file_builder.start().map_err(std::io::Error::other)?;
+            
+            // Use flate2 for compression. Level 9 is the maximum compression level for deflate.
+            let encoder = flate2::write::DeflateEncoder::new(
+                &mut zip_entry,
+                match compression_level {
+                    None => flate2::Compression::default(),
+                    Some(level) => flate2::Compression::new(level.clamp(0, 9) as u32),
+                },
+            );
+            let mut writer = config.wrap(encoder);
+            std::io::copy(&mut entry, &mut writer)?;
+            let (encoder, descriptor) = writer.finish().map_err(std::io::Error::other)?;
+            encoder.finish()?;
+            zip_entry.finish(descriptor).map_err(std::io::Error::other)?;
         }
         gix_object::tree::EntryKind::Tree | gix_object::tree::EntryKind::Commit => {
-            ar.add_directory(path.to_string(), file_opts)
-                .map_err(std::io::Error::other)?;
+            use bstr::ByteSlice;
+            // rawzip requires directory paths to end with '/'
+            let mut dir_path = path.to_str().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 in directory path",
+                ))
+            })?.to_string();
+            if !dir_path.ends_with('/') {
+                dir_path.push('/');
+            }
+            ar.new_dir(&dir_path)
+            .last_modified(mtime)
+            .unix_permissions(unix_permissions)
+            .create()
+            .map_err(std::io::Error::other)?;
         }
         gix_object::tree::EntryKind::Link => {
             use bstr::ByteSlice;
+            buf.clear();
             std::io::copy(&mut entry, buf)?;
-            ar.add_symlink(path.to_string(), buf.as_bstr().to_string(), file_opts)
+            
+            // For symlinks, we need to create a file with symlink permissions
+            let symlink_path = path.to_str().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 in symlink path",
+                ))
+            })?;
+            let target = buf.as_bstr().to_str().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid UTF-8 in symlink target",
+                ))
+            })?;
+            
+            let (mut zip_entry, config) = ar
+                .new_file(symlink_path)
+                .compression_method(rawzip::CompressionMethod::Store)
+                .last_modified(mtime)
+                .unix_permissions(0o120644) // Symlink mode
+                .start()
                 .map_err(std::io::Error::other)?;
+            
+            let mut writer = config.wrap(&mut zip_entry);
+            writer.write_all(target.as_bytes())?;
+            let (_, descriptor) = writer.finish().map_err(std::io::Error::other)?;
+            zip_entry.finish(descriptor).map_err(std::io::Error::other)?;
         }
     }
     Ok(())
