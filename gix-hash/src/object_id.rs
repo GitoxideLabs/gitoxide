@@ -4,10 +4,10 @@ use std::{
     ops::Deref,
 };
 
-use crate::{borrowed::oid, Kind, SIZE_OF_SHA1_DIGEST};
+use crate::{borrowed::oid, Kind, EMPTY_BLOB_SHA1, EMPTY_TREE_SHA1, SIZE_OF_SHA1_DIGEST};
 
 #[cfg(feature = "sha256")]
-use crate::SIZE_OF_SHA256_DIGEST;
+use crate::{EMPTY_BLOB_SHA256, EMPTY_TREE_SHA256, SIZE_OF_SHA256_DIGEST};
 
 /// An owned hash identifying objects, most commonly `Sha1`
 #[derive(PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
@@ -119,13 +119,9 @@ impl ObjectId {
     #[inline]
     pub const fn empty_blob(hash: Kind) -> ObjectId {
         match hash {
-            Kind::Sha1 => {
-                ObjectId::Sha1(*b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91")
-            }
-    #[cfg(feature = "sha256")]
-            Kind::Sha256 => {
-                ObjectId::Sha256(*b"\x47\x3a\x0f\x4c\x3b\xe8\xa9\x36\x81\xa2\x67\xe3\xb1\xe9\xa7\xdc\xda\x11\x85\x43\x6f\xe1\x41\xf7\x74\x91\x20\xa3\x03\x72\x18\x13")
-            }
+            Kind::Sha1 => ObjectId::Sha1(*EMPTY_BLOB_SHA1),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => ObjectId::Sha256(*EMPTY_BLOB_SHA256),
         }
     }
 
@@ -133,13 +129,9 @@ impl ObjectId {
     #[inline]
     pub const fn empty_tree(hash: Kind) -> ObjectId {
         match hash {
-            Kind::Sha1 => {
-                ObjectId::Sha1(*b"\x4b\x82\x5d\xc6\x42\xcb\x6e\xb9\xa0\x60\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04")
-            }
-    #[cfg(feature = "sha256")]
-            Kind::Sha256 => {
-                ObjectId::Sha256(*b"\x6e\xf1\x9b\x41\x22\x5c\x53\x69\xf1\xc1\x04\xd4\x5d\x8d\x85\xef\xa9\xb0\x57\xb5\x3b\x14\xb4\xb9\xb9\x39\xdd\x74\xde\xcc\x53\x21")
-            },
+            Kind::Sha1 => ObjectId::Sha1(*EMPTY_TREE_SHA1),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => ObjectId::Sha256(*EMPTY_TREE_SHA256),
         }
     }
 
