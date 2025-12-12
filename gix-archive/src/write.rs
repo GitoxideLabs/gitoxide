@@ -185,7 +185,7 @@ fn append_zip_entry<W: std::io::Write + std::io::Seek>(
             
             let (mut zip_entry, config) = file_builder.start().map_err(std::io::Error::other)?;
             
-            // Use flate2 for compression
+            // Use flate2 for compression. Level 9 is the maximum compression level for deflate.
             let encoder = flate2::write::DeflateEncoder::new(
                 &mut zip_entry,
                 match compression_level {

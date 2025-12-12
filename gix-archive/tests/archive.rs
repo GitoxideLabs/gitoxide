@@ -174,11 +174,11 @@ mod from_tree {
                 let ar = rawzip::ZipArchive::from_slice(buf.as_slice())?;
                 assert_eq!(
                     {
-                        let mut n: Vec<_> = ar.entries().filter_map(|e| {
-                            e.ok().map(|entry| {
-                                String::from_utf8_lossy(entry.file_path().as_ref()).to_string()
-                            })
-                        }).collect();
+                        let mut n: Vec<_> = Vec::new();
+                        for entry_result in ar.entries() {
+                            let entry = entry_result?;
+                            n.push(String::from_utf8_lossy(entry.file_path().as_ref()).to_string());
+                        }
                         n.sort();
                         n
                     },
