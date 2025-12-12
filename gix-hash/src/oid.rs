@@ -1,6 +1,9 @@
 use std::hash;
 
-use crate::{Kind, ObjectId, SIZE_OF_SHA1_DIGEST};
+use crate::{Kind, ObjectId, EMPTY_BLOB_SHA1, EMPTY_TREE_SHA1, SIZE_OF_SHA1_DIGEST};
+
+#[cfg(feature = "sha256")]
+use crate::{EMPTY_BLOB_SHA256, EMPTY_TREE_SHA256, SIZE_OF_SHA256_DIGEST};
 
 /// A borrowed reference to a hash identifying objects.
 ///
@@ -57,6 +60,8 @@ impl std::fmt::Debug for oid {
             "{}({})",
             match self.kind() {
                 Kind::Sha1 => "Sha1",
+                #[cfg(feature = "sha256")]
+                Kind::Sha256 => "Sha256",
             },
             self.to_hex(),
         )
@@ -77,7 +82,14 @@ impl oid {
     #[inline]
     pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, Error> {
         match digest.len() {
-            20 => Ok(
+            SIZE_OF_SHA1_DIGEST => Ok(
+                #[allow(unsafe_code)]
+                unsafe {
+                    &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
+                },
+            ),
+            #[cfg(feature = "sha256")]
+            SIZE_OF_SHA256_DIGEST => Ok(
                 #[allow(unsafe_code)]
                 unsafe {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
@@ -146,6 +158,8 @@ impl oid {
     pub fn is_null(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::null_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::null_sha256().as_bytes(),
         }
     }
 
@@ -154,6 +168,8 @@ impl oid {
     pub fn is_empty_blob(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::empty_blob_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::empty_blob_sha256().as_bytes(),
         }
     }
 
@@ -162,6 +178,8 @@ impl oid {
     pub fn is_empty_tree(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::empty_tree_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::empty_tree_sha256().as_bytes(),
         }
     }
 }
@@ -192,16 +210,37 @@ impl oid {
         oid::from_bytes([0u8; SIZE_OF_SHA1_DIGEST].as_ref())
     }
 
-    /// Returns an oid representing the hash of an empty blob.
+    /// Returns a Sha256 digest with all bytes being initialized to zero.
     #[inline]
-    pub(crate) fn empty_blob_sha1() -> &'static Self {
-        oid::from_bytes(b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91")
+    #[cfg(feature = "sha256")]
+    pub(crate) fn null_sha256() -> &'static Self {
+        oid::from_bytes([0u8; SIZE_OF_SHA256_DIGEST].as_ref())
     }
 
-    /// Returns an oid representing the hash of an empty tree.
+    /// Returns an oid representing the SHA-1 hash of an empty blob.
+    #[inline]
+    pub(crate) fn empty_blob_sha1() -> &'static Self {
+        oid::from_bytes(EMPTY_BLOB_SHA1)
+    }
+
+    /// Returns an oid representing the SHA-256 hash of an empty blob.
+    #[inline]
+    #[cfg(feature = "sha256")]
+    pub(crate) fn empty_blob_sha256() -> &'static Self {
+        oid::from_bytes(EMPTY_BLOB_SHA256)
+    }
+
+    /// Returns an oid representing the SHA-1 hash of an empty tree.
     #[inline]
     pub(crate) fn empty_tree_sha1() -> &'static Self {
-        oid::from_bytes(b"\x4b\x82\x5d\xc6\x42\xcb\x6e\xb9\xa0\x60\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04")
+        oid::from_bytes(EMPTY_TREE_SHA1)
+    }
+
+    /// Returns an oid representing the SHA-256 hash of an empty tree.
+    #[inline]
+    #[cfg(feature = "sha256")]
+    pub(crate) fn empty_tree_sha256() -> &'static Self {
+        oid::from_bytes(EMPTY_TREE_SHA256)
     }
 }
 
@@ -225,6 +264,8 @@ impl ToOwned for oid {
     fn to_owned(&self) -> Self::Owned {
         match self.kind() {
             Kind::Sha1 => ObjectId::Sha1(self.bytes.try_into().expect("no bug in hash detection")),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => ObjectId::Sha256(self.bytes.try_into().expect("no bug in hash detection")),
         }
     }
 }
