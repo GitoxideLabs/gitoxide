@@ -1,6 +1,5 @@
-use gix_diff::blob::intern::TokenSource;
-use gix_diff::blob::unified_diff::ContextSize;
-use gix_diff::blob::{Algorithm, UnifiedDiff};
+use gix_diff::blob::v2::{Algorithm, BasicLineDiffPrinter, Diff, InternedInput, UnifiedDiffConfig};
+use gix_object::bstr::ByteSlice;
 use gix_testtools::bstr::{BString, ByteVec};
 use pretty_assertions::StrComparison;
 
@@ -39,36 +38,22 @@ fn baseline() -> gix_testtools::Result {
         let old_data = std::fs::read(asset_dir.join(format!("{old_blob_id}.blob")))?;
         let new_data = std::fs::read(asset_dir.join(format!("{new_blob_id}.blob")))?;
 
-        let interner = gix_diff::blob::intern::InternedInput::new(
-            tokens_for_diffing(old_data.as_slice()),
-            tokens_for_diffing(new_data.as_slice()),
-        );
+        let input = InternedInput::new(old_data.to_str().unwrap(), new_data.to_str().unwrap());
 
-        let actual = gix_diff::blob::diff(
-            algorithm,
-            &interner,
-            UnifiedDiff::new(
-                &interner,
-                baseline::DiffHunkRecorder::new(),
-                ContextSize::symmetrical(3),
-            ),
-        )?;
+        let mut diff = Diff::compute(algorithm, &input);
+        diff.postprocess_lines(&input);
+
+        let actual = diff
+            .unified_diff(
+                &BasicLineDiffPrinter(&input.interner),
+                UnifiedDiffConfig::default(),
+                &input,
+            )
+            .to_string();
 
         let baseline_path = worktree_path.join(&file_name);
         let baseline = std::fs::read(baseline_path)?;
         let baseline = baseline::Baseline::new(&baseline);
-
-        let actual = actual
-            .iter()
-            .fold(BString::default(), |mut acc, diff_hunk| {
-                acc.push_str(diff_hunk.header.to_string().as_str());
-                acc.push(b'\n');
-
-                acc.extend_from_slice(&diff_hunk.lines);
-
-                acc
-            })
-            .to_string();
 
         let baseline = baseline
             .fold(BString::default(), |mut acc, diff_hunk| {
@@ -119,15 +104,11 @@ fn baseline() -> gix_testtools::Result {
     Ok(())
 }
 
-fn tokens_for_diffing(data: &[u8]) -> impl TokenSource<Token = &[u8]> {
-    gix_diff::blob::sources::byte_lines(data)
-}
-
 mod baseline {
     use gix_object::bstr::ByteSlice;
     use std::iter::Peekable;
 
-    use gix_diff::blob::unified_diff::{ConsumeHunk, HunkHeader};
+    use gix_diff::blob::unified_diff::HunkHeader;
     use gix_object::bstr::{self, BString};
 
     static START_OF_HEADER: &[u8; 4] = b"@@ -";
@@ -136,47 +117,6 @@ mod baseline {
     pub struct DiffHunk {
         pub header: HunkHeader,
         pub lines: BString,
-    }
-
-    pub struct DiffHunkRecorder {
-        inner: Vec<DiffHunk>,
-    }
-
-    impl DiffHunkRecorder {
-        pub fn new() -> Self {
-            Self { inner: Vec::new() }
-        }
-    }
-
-    impl ConsumeHunk for DiffHunkRecorder {
-        type Out = Vec<DiffHunk>;
-
-        fn consume_hunk(
-            &mut self,
-            header: HunkHeader,
-            lines: &[(gix_diff::blob::unified_diff::DiffLineKind, &[u8])],
-        ) -> std::io::Result<()> {
-            let mut buf = Vec::new();
-
-            for &(kind, line) in lines {
-                buf.push(kind.to_prefix() as u8);
-                buf.extend_from_slice(line);
-                buf.push(b'\n');
-            }
-
-            let diff_hunk = DiffHunk {
-                header,
-                lines: buf.into(),
-            };
-
-            self.inner.push(diff_hunk);
-
-            Ok(())
-        }
-
-        fn finish(self) -> Self::Out {
-            self.inner
-        }
     }
 
     type Lines<'a> = Peekable<bstr::Lines<'a>>;
