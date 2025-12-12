@@ -48,10 +48,15 @@ pub struct Prefix {
 
 /// The size of a SHA1 hash digest in bytes.
 const SIZE_OF_SHA1_DIGEST: usize = 20;
+/// The size of a SHA1 hash digest in hex.
+const SIZE_OF_SHA1_HEX_DIGEST: usize = 2 * SIZE_OF_SHA1_DIGEST;
 
 /// The size of a SHA256 hash digest in bytes.
 #[cfg(feature = "sha256")]
 const SIZE_OF_SHA256_DIGEST: usize = 32;
+/// The size of a SHA256 hash digest in hex.
+#[cfg(feature = "sha256")]
+const SIZE_OF_SHA256_HEX_DIGEST: usize = 2 * SIZE_OF_SHA256_DIGEST;
 
 const EMPTY_BLOB_SHA1: &[u8; SIZE_OF_SHA1_DIGEST] =
     b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91";

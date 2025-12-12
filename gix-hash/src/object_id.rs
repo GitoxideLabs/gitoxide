@@ -38,7 +38,10 @@ impl Hash for ObjectId {
 pub mod decode {
     use std::str::FromStr;
 
-    use crate::object_id::ObjectId;
+    use crate::{object_id::ObjectId, SIZE_OF_SHA1_DIGEST, SIZE_OF_SHA1_HEX_DIGEST};
+
+    #[cfg(feature = "sha256")]
+    use crate::{SIZE_OF_SHA256_DIGEST, SIZE_OF_SHA256_HEX_DIGEST};
 
     /// An error returned by [`ObjectId::from_hex()`][crate::ObjectId::from_hex()]
     #[derive(Debug, thiserror::Error)]
@@ -57,9 +60,9 @@ pub mod decode {
         /// Such a buffer can be obtained using [`oid::write_hex_to(buffer)`][super::oid::write_hex_to()]
         pub fn from_hex(buffer: &[u8]) -> Result<ObjectId, Error> {
             match buffer.len() {
-                40 => Ok({
+                SIZE_OF_SHA1_HEX_DIGEST => Ok({
                     ObjectId::Sha1({
-                        let mut buf = [0; 20];
+                        let mut buf = [0; SIZE_OF_SHA1_DIGEST];
                         faster_hex::hex_decode(buffer, &mut buf).map_err(|err| match err {
                             faster_hex::Error::InvalidChar | faster_hex::Error::Overflow => Error::Invalid,
                             faster_hex::Error::InvalidLength(_) => {
@@ -70,7 +73,7 @@ pub mod decode {
                     })
                 }),
                 #[cfg(feature = "sha256")]
-                len if len == 2 * SIZE_OF_SHA256_DIGEST => todo!(),
+                SIZE_OF_SHA256_HEX_DIGEST => todo!(),
                 len => Err(Error::InvalidHexEncodingLength(len)),
             }
         }
@@ -177,7 +180,7 @@ impl ObjectId {
     /// Use `Self::try_from(bytes)` for a fallible version.
     pub fn from_bytes_or_panic(bytes: &[u8]) -> Self {
         match bytes.len() {
-            20 => Self::Sha1(bytes.try_into().expect("prior length validation")),
+            SIZE_OF_SHA1_DIGEST => Self::Sha1(bytes.try_into().expect("prior length validation")),
             other => panic!("BUG: unsupported hash len: {other}"),
         }
     }
@@ -215,7 +218,7 @@ impl ObjectId {
     /// Returns a Digest representing a Sha1 whose memory is zeroed.
     #[inline]
     pub(crate) const fn null_sha1() -> ObjectId {
-        ObjectId::Sha1([0u8; 20])
+        ObjectId::Sha1([0u8; SIZE_OF_SHA1_DIGEST])
     }
 
     /// Returns a Digest representing a Sha256 whose memory is zeroed.
@@ -241,7 +244,7 @@ impl std::fmt::Debug for ObjectId {
 }
 
 impl From<[u8; SIZE_OF_SHA1_DIGEST]> for ObjectId {
-    fn from(v: [u8; 20]) -> Self {
+    fn from(v: [u8; SIZE_OF_SHA1_DIGEST]) -> Self {
         Self::new_sha1(v)
     }
 }

@@ -82,7 +82,14 @@ impl oid {
     #[inline]
     pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, Error> {
         match digest.len() {
-            20 => Ok(
+            SIZE_OF_SHA1_DIGEST => Ok(
+                #[allow(unsafe_code)]
+                unsafe {
+                    &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
+                },
+            ),
+            #[cfg(feature = "sha256")]
+            SIZE_OF_SHA256_DIGEST => Ok(
                 #[allow(unsafe_code)]
                 unsafe {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)

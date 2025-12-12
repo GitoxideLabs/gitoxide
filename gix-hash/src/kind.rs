@@ -1,6 +1,9 @@
 use std::str::FromStr;
 
-use crate::{oid, Kind, ObjectId};
+use crate::{oid, Kind, ObjectId, SIZE_OF_SHA1_DIGEST, SIZE_OF_SHA1_HEX_DIGEST};
+
+#[cfg(feature = "sha256")]
+use crate::{SIZE_OF_SHA256_DIGEST, SIZE_OF_SHA256_HEX_DIGEST};
 
 impl TryFrom<u8> for Kind {
     type Error = u8;
@@ -81,9 +84,9 @@ impl Kind {
     #[inline]
     pub const fn len_in_hex(&self) -> usize {
         match self {
-            Kind::Sha1 => 40,
+            Kind::Sha1 => SIZE_OF_SHA1_HEX_DIGEST,
             #[cfg(feature = "sha256")]
-            Kind::Sha256 => 64,
+            Kind::Sha256 => SIZE_OF_SHA256_HEX_DIGEST,
         }
     }
 
@@ -91,9 +94,9 @@ impl Kind {
     #[inline]
     pub const fn len_in_bytes(&self) -> usize {
         match self {
-            Kind::Sha1 => 20,
+            Kind::Sha1 => SIZE_OF_SHA1_DIGEST,
             #[cfg(feature = "sha256")]
-            Kind::Sha256 => 32,
+            Kind::Sha256 => SIZE_OF_SHA256_DIGEST,
         }
     }
 
@@ -102,9 +105,9 @@ impl Kind {
     #[inline]
     pub const fn from_hex_len(hex_len: usize) -> Option<Self> {
         Some(match hex_len {
-            0..=40 => Kind::Sha1,
+            0..=SIZE_OF_SHA1_HEX_DIGEST => Kind::Sha1,
             #[cfg(feature = "sha256")]
-            0..=64 => Kind::Sha256,
+            0..=SIZE_OF_SHA256_HEX_DIGEST => Kind::Sha256,
             _ => return None,
         })
     }
@@ -120,9 +123,9 @@ impl Kind {
     #[inline]
     pub(crate) fn from_len_in_bytes(bytes: usize) -> Self {
         match bytes {
-            20 => Kind::Sha1,
+            SIZE_OF_SHA1_DIGEST => Kind::Sha1,
             #[cfg(feature = "sha256")]
-            32 => Kind::Sha256,
+            SIZE_OF_SHA256_DIGEST => Kind::Sha256,
             _ => panic!("BUG: must be called only with valid hash lengths produced by len_in_bytes()"),
         }
     }
