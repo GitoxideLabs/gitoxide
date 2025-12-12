@@ -21,6 +21,13 @@ fn is_null() {
 }
 
 #[test]
+#[cfg(feature = "sha256")]
+fn is_null_sha256() {
+    assert!(gix_hash::Kind::Sha256.null().is_null());
+    assert!(gix_hash::Kind::Sha256.null().as_ref().is_null());
+}
+
+#[test]
 fn is_empty_blob() {
     let empty_blob = gix_hash::ObjectId::empty_blob(gix_hash::Kind::Sha1);
     assert!(empty_blob.is_empty_blob());

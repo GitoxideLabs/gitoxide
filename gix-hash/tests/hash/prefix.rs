@@ -107,9 +107,19 @@ mod try_from {
     }
 
     #[test]
+    #[cfg(all(not(feature = "sha256"), feature = "sha1"))]
     fn id_to_long() {
         let input = "abcdefabcdefabcdefabcdefabcdefabcdefabcd123123123123123123";
         let expected = Error::TooLong { hex_len: 58 };
+        let actual = Prefix::try_from(input).unwrap_err();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[cfg(all(feature = "sha256", feature = "sha1"))]
+    fn id_to_long() {
+        let input = "abcdefabcdefabcdefabcdefabcdefabcdefabcd123123123123123123123123123123";
+        let expected = Error::TooLong { hex_len: 70 };
         let actual = Prefix::try_from(input).unwrap_err();
         assert_eq!(actual, expected);
     }

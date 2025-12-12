@@ -14,10 +14,21 @@ fn size_of_hasher() {
 }
 
 #[test]
-fn size_of_try_finalize_return_type() {
+#[cfg(all(not(feature = "sha256"), feature = "sha1"))]
+fn size_of_try_finalize_return_type_sha1_only() {
     assert_eq!(
         std::mem::size_of::<Result<ObjectId, gix_hash::hasher::Error>>(),
         21,
+        "The size of the return value is just 1 byte larger than just returning the object hash itself"
+    );
+}
+
+#[test]
+#[cfg(all(feature = "sha256", feature = "sha1"))]
+fn size_of_try_finalize_return_type_sha1_and_sha256() {
+    assert_eq!(
+        std::mem::size_of::<Result<ObjectId, gix_hash::hasher::Error>>(),
+        34,
         "The size of the return value is just 1 byte larger than just returning the object hash itself"
     );
 }
