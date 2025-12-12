@@ -8,6 +8,8 @@ impl TryFrom<u8> for Kind {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         Ok(match value {
             1 => Kind::Sha1,
+            #[cfg(feature = "sha256")]
+            2 => Kind::Sha256,
             unknown => return Err(unknown),
         })
     }
@@ -19,6 +21,8 @@ impl FromStr for Kind {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "sha1" | "SHA1" => Kind::Sha1,
+            #[cfg(feature = "sha256")]
+            "sha256" | "SHA256" => Kind::Sha256,
             other => return Err(other.into()),
         })
     }
@@ -28,6 +32,7 @@ impl std::fmt::Display for Kind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Kind::Sha1 => f.write_str("SHA1"),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => f.write_str("SHA256"),
         }
     }
@@ -37,13 +42,27 @@ impl Kind {
     /// Returns the shortest hash we support.
     #[inline]
     pub const fn shortest() -> Self {
-        Self::Sha1
+        #[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+        {
+            Self::Sha256
+        }
+        #[cfg(feature = "sha1")]
+        {
+            Self::Sha1
+        }
     }
 
     /// Returns the longest hash we support.
     #[inline]
     pub const fn longest() -> Self {
-        Self::Sha1
+        #[cfg(feature = "sha256")]
+        {
+            Self::Sha256
+        }
+        #[cfg(all(not(feature = "sha256"), feature = "sha1"))]
+        {
+            Self::Sha1
+        }
     }
 
     /// Returns a buffer suitable to hold the longest possible hash in hex.
@@ -63,6 +82,7 @@ impl Kind {
     pub const fn len_in_hex(&self) -> usize {
         match self {
             Kind::Sha1 => 40,
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => 64,
         }
     }
@@ -72,6 +92,7 @@ impl Kind {
     pub const fn len_in_bytes(&self) -> usize {
         match self {
             Kind::Sha1 => 20,
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => 32,
         }
     }
@@ -82,6 +103,8 @@ impl Kind {
     pub const fn from_hex_len(hex_len: usize) -> Option<Self> {
         Some(match hex_len {
             0..=40 => Kind::Sha1,
+            #[cfg(feature = "sha256")]
+            0..=64 => Kind::Sha256,
             _ => return None,
         })
     }
@@ -98,6 +121,8 @@ impl Kind {
     pub(crate) fn from_len_in_bytes(bytes: usize) -> Self {
         match bytes {
             20 => Kind::Sha1,
+            #[cfg(feature = "sha256")]
+            32 => Kind::Sha256,
             _ => panic!("BUG: must be called only with valid hash lengths produced by len_in_bytes()"),
         }
     }
@@ -107,6 +132,7 @@ impl Kind {
     pub fn null_ref(&self) -> &'static oid {
         match self {
             Kind::Sha1 => oid::null_sha1(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => oid::null_sha256(),
         }
     }
@@ -116,6 +142,7 @@ impl Kind {
     pub const fn null(&self) -> ObjectId {
         match self {
             Kind::Sha1 => ObjectId::null_sha1(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => ObjectId::null_sha256(),
         }
     }

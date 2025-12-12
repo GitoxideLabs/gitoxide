@@ -19,6 +19,8 @@ test = false
 default = ["sha1"]
 ## Support for SHA-1 digests.
 sha1 = []
+## Support for SHA256 digests.
+sha256 = []
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "faster-hex/serde"]
 

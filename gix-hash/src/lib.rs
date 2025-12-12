@@ -50,6 +50,7 @@ pub struct Prefix {
 const SIZE_OF_SHA1_DIGEST: usize = 20;
 
 /// The size of a SHA256 hash digest in bytes.
+#[cfg(feature = "sha256")]
 const SIZE_OF_SHA256_DIGEST: usize = 32;
 
 /// Denotes the kind of function to produce a [`ObjectId`].
@@ -61,6 +62,7 @@ pub enum Kind {
     #[default]
     Sha1 = 1,
     /// The Sha256 hash with 256 bits.
+    #[cfg(feature = "sha256")]
     Sha256 = 2,
 }
 

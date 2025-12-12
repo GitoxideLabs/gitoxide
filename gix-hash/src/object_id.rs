@@ -4,7 +4,10 @@ use std::{
     ops::Deref,
 };
 
-use crate::{borrowed::oid, Kind, SIZE_OF_SHA1_DIGEST, SIZE_OF_SHA256_DIGEST};
+use crate::{borrowed::oid, Kind, SIZE_OF_SHA1_DIGEST};
+
+#[cfg(feature = "sha256")]
+use crate::SIZE_OF_SHA256_DIGEST;
 
 /// An owned hash identifying objects, most commonly `Sha1`
 #[derive(PartialEq, Eq, Ord, PartialOrd, Clone, Copy)]
@@ -14,6 +17,7 @@ pub enum ObjectId {
     /// A SHA 1 hash digest
     Sha1([u8; SIZE_OF_SHA1_DIGEST]),
     /// A SHA 256 hash digest
+    #[cfg(feature = "sha256")]
     Sha256([u8; SIZE_OF_SHA256_DIGEST]),
 }
 
@@ -65,6 +69,8 @@ pub mod decode {
                         buf
                     })
                 }),
+                #[cfg(feature = "sha256")]
+                len if len == 2 * SIZE_OF_SHA256_DIGEST => todo!(),
                 len => Err(Error::InvalidHexEncodingLength(len)),
             }
         }
@@ -86,6 +92,7 @@ impl ObjectId {
     pub fn kind(&self) -> Kind {
         match self {
             ObjectId::Sha1(_) => Kind::Sha1,
+            #[cfg(feature = "sha256")]
             ObjectId::Sha256(_) => Kind::Sha256,
         }
     }
@@ -94,6 +101,7 @@ impl ObjectId {
     pub fn as_slice(&self) -> &[u8] {
         match self {
             Self::Sha1(b) => b.as_ref(),
+            #[cfg(feature = "sha256")]
             Self::Sha256(b) => b.as_ref(),
         }
     }
@@ -102,6 +110,7 @@ impl ObjectId {
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         match self {
             Self::Sha1(b) => b.as_mut(),
+            #[cfg(feature = "sha256")]
             Self::Sha256(b) => b.as_mut(),
         }
     }
@@ -113,6 +122,7 @@ impl ObjectId {
             Kind::Sha1 => {
                 ObjectId::Sha1(*b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91")
             }
+    #[cfg(feature = "sha256")]
             Kind::Sha256 => {
                 ObjectId::Sha256(*b"\x47\x3a\x0f\x4c\x3b\xe8\xa9\x36\x81\xa2\x67\xe3\xb1\xe9\xa7\xdc\xda\x11\x85\x43\x6f\xe1\x41\xf7\x74\x91\x20\xa3\x03\x72\x18\x13")
             }
@@ -126,6 +136,7 @@ impl ObjectId {
             Kind::Sha1 => {
                 ObjectId::Sha1(*b"\x4b\x82\x5d\xc6\x42\xcb\x6e\xb9\xa0\x60\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04")
             }
+    #[cfg(feature = "sha256")]
             Kind::Sha256 => {
                 ObjectId::Sha256(*b"\x6e\xf1\x9b\x41\x22\x5c\x53\x69\xf1\xc1\x04\xd4\x5d\x8d\x85\xef\xa9\xb0\x57\xb5\x3b\x14\xb4\xb9\xb9\x39\xdd\x74\xde\xcc\x53\x21")
             },
@@ -138,6 +149,7 @@ impl ObjectId {
     pub const fn null(kind: Kind) -> ObjectId {
         match kind {
             Kind::Sha1 => Self::null_sha1(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => Self::null_sha256(),
         }
     }
@@ -148,6 +160,7 @@ impl ObjectId {
     pub fn is_null(&self) -> bool {
         match self {
             ObjectId::Sha1(digest) => &digest[..] == oid::null_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
             ObjectId::Sha256(digest) => &digest[..] == oid::null_sha256().as_bytes(),
         }
     }
@@ -200,6 +213,7 @@ impl ObjectId {
     ///
     /// Panics if the slice doesn't have a length of 32.
     #[inline]
+    #[cfg(feature = "sha256")]
     pub(crate) fn from_32_bytes(b: &[u8]) -> ObjectId {
         let mut id = [0; SIZE_OF_SHA256_DIGEST];
         id.copy_from_slice(b);
@@ -214,6 +228,7 @@ impl ObjectId {
 
     /// Returns a Digest representing a Sha256 whose memory is zeroed.
     #[inline]
+    #[cfg(feature = "sha256")]
     pub(crate) const fn null_sha256() -> ObjectId {
         ObjectId::Sha256([0u8; SIZE_OF_SHA256_DIGEST])
     }
@@ -223,6 +238,7 @@ impl std::fmt::Debug for ObjectId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ObjectId::Sha1(_hash) => f.write_str("Sha1(")?,
+            #[cfg(feature = "sha256")]
             ObjectId::Sha256(_) => f.write_str("Sha256(")?,
         }
         for b in self.as_bytes() {
@@ -242,6 +258,7 @@ impl From<&oid> for ObjectId {
     fn from(v: &oid) -> Self {
         match v.kind() {
             Kind::Sha1 => ObjectId::from_20_bytes(v.as_bytes()),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => ObjectId::from_32_bytes(v.as_bytes()),
         }
     }

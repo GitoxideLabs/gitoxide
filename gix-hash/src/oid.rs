@@ -1,6 +1,9 @@
 use std::hash;
 
-use crate::{Kind, ObjectId, SIZE_OF_SHA1_DIGEST, SIZE_OF_SHA256_DIGEST};
+use crate::{Kind, ObjectId, SIZE_OF_SHA1_DIGEST};
+
+#[cfg(feature = "sha256")]
+use crate::SIZE_OF_SHA256_DIGEST;
 
 /// A borrowed reference to a hash identifying objects.
 ///
@@ -57,6 +60,7 @@ impl std::fmt::Debug for oid {
             "{}({})",
             match self.kind() {
                 Kind::Sha1 => "Sha1",
+                #[cfg(feature = "sha256")]
                 Kind::Sha256 => "Sha256",
             },
             self.to_hex(),
@@ -147,6 +151,7 @@ impl oid {
     pub fn is_null(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::null_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => &self.bytes == oid::null_sha256().as_bytes(),
         }
     }
@@ -156,6 +161,7 @@ impl oid {
     pub fn is_empty_blob(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::empty_blob_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => &self.bytes == oid::empty_blob_sha256().as_bytes(),
         }
     }
@@ -165,6 +171,7 @@ impl oid {
     pub fn is_empty_tree(&self) -> bool {
         match self.kind() {
             Kind::Sha1 => &self.bytes == oid::empty_tree_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => &self.bytes == oid::empty_tree_sha256().as_bytes(),
         }
     }
@@ -198,6 +205,7 @@ impl oid {
 
     /// Returns a Sha256 digest with all bytes being initialized to zero.
     #[inline]
+    #[cfg(feature = "sha256")]
     pub(crate) fn null_sha256() -> &'static Self {
         oid::from_bytes([0u8; SIZE_OF_SHA256_DIGEST].as_ref())
     }
@@ -210,6 +218,7 @@ impl oid {
 
     /// Returns an oid representing the SHA-256 hash of an empty blob.
     #[inline]
+    #[cfg(feature = "sha256")]
     pub(crate) fn empty_blob_sha256() -> &'static Self {
         oid::from_bytes(b"\x47\x3a\x0f\x4c\x3b\xe8\xa9\x36\x81\xa2\x67\xe3\xb1\xe9\xa7\xdc\xda\x11\x85\x43\x6f\xe1\x41\xf7\x74\x91\x20\xa3\x03\x72\x18\x13")
     }
@@ -222,6 +231,7 @@ impl oid {
 
     /// Returns an oid representing the SHA-256 hash of an empty tree.
     #[inline]
+    #[cfg(feature = "sha256")]
     pub(crate) fn empty_tree_sha256() -> &'static Self {
         oid::from_bytes(
             b"\x6e\xf1\x9b\x41\x22\x5c\x53\x69\xf1\xc1\x04\xd4\x5d\x8d\x85\xef\xa9\xb0\x57\xb5\x3b\x14\xb4\xb9\xb9\x39\xdd\x74\xde\xcc\x53\x21",
@@ -249,6 +259,7 @@ impl ToOwned for oid {
     fn to_owned(&self) -> Self::Owned {
         match self.kind() {
             Kind::Sha1 => ObjectId::Sha1(self.bytes.try_into().expect("no bug in hash detection")),
+            #[cfg(feature = "sha256")]
             Kind::Sha256 => ObjectId::Sha256(self.bytes.try_into().expect("no bug in hash detection")),
         }
     }
