@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::num::NonZeroU32;
+
+#[cfg(feature = "blob-experimental")]
+use gix_diff::blob::v2::Hunk;
 
 use gix_diff::{blob::intern::TokenSource, tree::Visit};
 use gix_hash::ObjectId;
@@ -748,6 +751,7 @@ fn tree_diff_with_rewrites_at_file_path(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(feature = "blob-experimental"))]
 fn blob_changes(
     odb: impl gix_object::Find + gix_object::FindHeader,
     resource_cache: &mut gix_diff::blob::Platform,
@@ -776,6 +780,8 @@ fn blob_changes(
             }
         }
     }
+
+    use std::ops::Range;
 
     impl gix_diff::blob::Sink for ChangeRecorder {
         type Out = Vec<Change>;
@@ -837,6 +843,79 @@ fn blob_changes(
     let res = gix_diff::blob::diff(diff_algorithm, &input, change_recorder);
     stats.blobs_diffed += 1;
     Ok(res)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "blob-experimental")]
+fn blob_changes(
+    odb: impl gix_object::Find + gix_object::FindHeader,
+    resource_cache: &mut gix_diff::blob::Platform,
+    oid: ObjectId,
+    previous_oid: ObjectId,
+    file_path: &BStr,
+    previous_file_path: &BStr,
+    diff_algorithm: gix_diff::blob::Algorithm,
+    stats: &mut Statistics,
+) -> Result<Vec<Change>, Error> {
+    resource_cache.set_resource(
+        previous_oid,
+        gix_object::tree::EntryKind::Blob,
+        previous_file_path,
+        gix_diff::blob::ResourceKind::OldOrSource,
+        &odb,
+    )?;
+    resource_cache.set_resource(
+        oid,
+        gix_object::tree::EntryKind::Blob,
+        file_path,
+        gix_diff::blob::ResourceKind::NewOrDestination,
+        &odb,
+    )?;
+
+    let outcome = resource_cache.prepare_diff()?;
+    let input = gix_diff::blob::v2::InternedInput::new(
+        outcome.old.data.as_slice().unwrap_or_default(),
+        outcome.new.data.as_slice().unwrap_or_default(),
+    );
+
+    let diff_algorithm: gix_diff::blob::v2::Algorithm = match diff_algorithm {
+        gix_diff::blob::Algorithm::Histogram => gix_diff::blob::v2::Algorithm::Histogram,
+        gix_diff::blob::Algorithm::Myers => gix_diff::blob::v2::Algorithm::Myers,
+        gix_diff::blob::Algorithm::MyersMinimal => gix_diff::blob::v2::Algorithm::MyersMinimal,
+    };
+    let mut diff = gix_diff::blob::v2::Diff::compute(diff_algorithm, &input);
+    diff.postprocess_lines(&input);
+
+    let changes = diff
+        .hunks()
+        .fold((Vec::new(), 0), |(mut hunks, mut last_seen_after_end), hunk| {
+            let Hunk { before, after } = hunk;
+
+            // This checks for unchanged hunks.
+            if after.start > last_seen_after_end {
+                hunks.push(Change::Unchanged(last_seen_after_end..after.start));
+            }
+
+            match (!before.is_empty(), !after.is_empty()) {
+                (_, true) => {
+                    hunks.push(Change::AddedOrReplaced(
+                        after.start..after.end,
+                        before.end - before.start,
+                    ));
+                }
+                (true, false) => {
+                    hunks.push(Change::Deleted(after.start, before.end - before.start));
+                }
+                (false, false) => unreachable!("BUG: imara-diff provided a non-change"),
+            }
+
+            last_seen_after_end = after.end;
+
+            (hunks, last_seen_after_end)
+        });
+
+    stats.blobs_diffed += 1;
+    Ok(changes.0)
 }
 
 fn find_path_entry_in_commit(
