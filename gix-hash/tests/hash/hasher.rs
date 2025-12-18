@@ -29,6 +29,6 @@ fn size_of_try_finalize_return_type_sha1_and_sha256() {
     assert_eq!(
         std::mem::size_of::<Result<ObjectId, gix_hash::hasher::Error>>(),
         34,
-        "The size of the return value is just 1 byte larger than just returning the object hash itself"
+        "The size of the return value is just 2 bytes larger than just returning the object hash itself"
     );
 }
