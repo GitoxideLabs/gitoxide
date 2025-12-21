@@ -14,16 +14,16 @@ use crate::{EMPTY_BLOB_SHA256, EMPTY_TREE_SHA256, SIZE_OF_SHA256_DIGEST};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum ObjectId {
-    /// A SHA 1 hash digest
+    /// A SHA1 hash digest
     Sha1([u8; SIZE_OF_SHA1_DIGEST]),
-    /// A SHA 256 hash digest
+    /// A SHA256 hash digest
     #[cfg(feature = "sha256")]
     Sha256([u8; SIZE_OF_SHA256_DIGEST]),
 }
 
 // False positive: https://github.com/rust-lang/rust-clippy/issues/2627
 // ignoring some fields while hashing is perfectly valid and just leads to
-// increased HashCollisions. One Sha1 being a prefix of another Sha256 is
+// increased HashCollisions. One SHA1 being a prefix of another SHA256 is
 // extremely unlikely to begin with so it doesn't matter.
 // This implementation matches the `Hash` implementation for `oid`
 // and allows the usage of custom Hashers that only copy a truncated ShaHash

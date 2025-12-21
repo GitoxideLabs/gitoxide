@@ -9,7 +9,7 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs, rust_2018_idioms, unsafe_code)]
 
-// Remove this once other hashes (e.g., SHA-256, and potentially others)
+// Remove this once other hashes (e.g., SHA256, and potentially others)
 // are supported, and this crate can build without [`ObjectId::Sha1`].
 #[cfg(not(feature = "sha1"))]
 compile_error!("Please set the `sha1` feature flag");
@@ -73,10 +73,10 @@ const EMPTY_TREE_SHA256: &[u8; SIZE_OF_SHA256_DIGEST] = b"\x6e\xf1\x9b\x41\x22\x
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Kind {
-    /// The Sha1 hash with 160 bits.
+    /// The SHA1 hash with 160 bits.
     #[default]
     Sha1 = 1,
-    /// The Sha256 hash with 256 bits.
+    /// The SHA256 hash with 256 bits.
     #[cfg(feature = "sha256")]
     Sha256 = 2,
 }

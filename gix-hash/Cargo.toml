@@ -17,7 +17,7 @@ test = false
 
 [features]
 default = ["sha1"]
-## Support for SHA-1 digests.
+## Support for SHA1 digests.
 sha1 = []
 ## Support for SHA256 digests.
 sha256 = []

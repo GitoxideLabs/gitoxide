@@ -99,7 +99,7 @@ impl oid {
         }
     }
 
-    /// Create an OID from the input `value` slice without performing any safety check.
+    /// Create an `oid` from the input `value` slice without performing any safety check.
     /// Use only once sure that `value` is a hash of valid length.
     pub fn from_bytes_unchecked(value: &[u8]) -> &Self {
         Self::from_bytes(value)
@@ -143,7 +143,7 @@ impl oid {
         }
     }
 
-    /// Return a type which displays this oid as hex in full.
+    /// Return a type which displays this `oid` as hex in full.
     #[inline]
     pub fn to_hex(&self) -> HexDisplay<'_> {
         HexDisplay {
@@ -204,39 +204,39 @@ impl oid {
 
 /// Methods for creating special SHA1 and SHA256 `oid`s
 impl oid {
-    /// Returns a Sha1 digest with all bytes being initialized to zero.
+    /// Returns a SHA1 digest with all bytes being initialized to zero.
     #[inline]
     pub(crate) fn null_sha1() -> &'static Self {
         oid::from_bytes([0u8; SIZE_OF_SHA1_DIGEST].as_ref())
     }
 
-    /// Returns a Sha256 digest with all bytes being initialized to zero.
+    /// Returns a SHA256 digest with all bytes being initialized to zero.
     #[inline]
     #[cfg(feature = "sha256")]
     pub(crate) fn null_sha256() -> &'static Self {
         oid::from_bytes([0u8; SIZE_OF_SHA256_DIGEST].as_ref())
     }
 
-    /// Returns an oid representing the SHA-1 hash of an empty blob.
+    /// Returns an `oid` representing the SHA1 hash of an empty blob.
     #[inline]
     pub(crate) fn empty_blob_sha1() -> &'static Self {
         oid::from_bytes(EMPTY_BLOB_SHA1)
     }
 
-    /// Returns an oid representing the SHA-256 hash of an empty blob.
+    /// Returns an `oid` representing the SHA256 hash of an empty blob.
     #[inline]
     #[cfg(feature = "sha256")]
     pub(crate) fn empty_blob_sha256() -> &'static Self {
         oid::from_bytes(EMPTY_BLOB_SHA256)
     }
 
-    /// Returns an oid representing the SHA-1 hash of an empty tree.
+    /// Returns an `oid` representing the SHA1 hash of an empty tree.
     #[inline]
     pub(crate) fn empty_tree_sha1() -> &'static Self {
         oid::from_bytes(EMPTY_TREE_SHA1)
     }
 
-    /// Returns an oid representing the SHA-256 hash of an empty tree.
+    /// Returns an `oid` representing the SHA256 hash of an empty tree.
     #[inline]
     #[cfg(feature = "sha256")]
     pub(crate) fn empty_tree_sha256() -> &'static Self {

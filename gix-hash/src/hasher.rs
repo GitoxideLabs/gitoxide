@@ -11,7 +11,7 @@ pub(super) mod _impl {
 
     use crate::hasher::Error;
 
-    /// An implementation of the Sha1 hash, which can be used once.
+    /// An implementation of the SHA1 hash, which can be used once.
     ///
     /// We use [`sha1_checked`] to implement the same collision detection
     /// algorithm as Git.
