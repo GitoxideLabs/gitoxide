@@ -207,6 +207,13 @@ impl ObjectId {
         ObjectId::Sha1(id)
     }
 
+    /// Instantiate an `ObjectId` from a 32 bytes SHA256 digest.
+    #[inline]
+    #[cfg(feature = "sha256")]
+    fn new_sha256(id: [u8; SIZE_OF_SHA256_DIGEST]) -> Self {
+        ObjectId::Sha256(id)
+    }
+
     /// Instantiate an `ObjectId` from a borrowed 20 bytes SHA1 digest.
     ///
     /// Panics if the slice doesn't have a length of 20.
@@ -259,6 +266,13 @@ impl std::fmt::Debug for ObjectId {
 impl From<[u8; SIZE_OF_SHA1_DIGEST]> for ObjectId {
     fn from(v: [u8; SIZE_OF_SHA1_DIGEST]) -> Self {
         Self::new_sha1(v)
+    }
+}
+
+#[cfg(feature = "sha256")]
+impl From<[u8; SIZE_OF_SHA256_DIGEST]> for ObjectId {
+    fn from(v: [u8; SIZE_OF_SHA256_DIGEST]) -> Self {
+        Self::new_sha256(v)
     }
 }
 
