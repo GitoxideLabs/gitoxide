@@ -152,6 +152,24 @@ impl oid {
         }
     }
 
+    /// Write ourselves to the `out` in hexadecimal notation, returning the hex-string ready for display.
+    ///
+    /// **Panics** if the buffer isn't big enough to hold twice as many bytes as the current binary size.
+    #[inline]
+    #[must_use]
+    pub fn hex_to_buf<'a>(&self, buf: &'a mut [u8]) -> &'a mut str {
+        let num_hex_bytes = self.bytes.len() * 2;
+        faster_hex::hex_encode(&self.bytes, &mut buf[..num_hex_bytes]).expect("to count correctly")
+    }
+
+    /// Write ourselves to `out` in hexadecimal notation.
+    #[inline]
+    pub fn write_hex_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        let mut hex = Kind::hex_buf();
+        let hex_len = self.hex_to_buf(&mut hex).len();
+        out.write_all(&hex[..hex_len])
+    }
+
     /// Returns `true` if this hash consists of all null bytes.
     #[inline]
     #[doc(alias = "is_zero", alias = "git2")]
@@ -184,26 +202,8 @@ impl oid {
     }
 }
 
-/// Sha1 specific methods
+/// Methods for creating special SHA1 and SHA256 `oid`s
 impl oid {
-    /// Write ourselves to the `out` in hexadecimal notation, returning the hex-string ready for display.
-    ///
-    /// **Panics** if the buffer isn't big enough to hold twice as many bytes as the current binary size.
-    #[inline]
-    #[must_use]
-    pub fn hex_to_buf<'a>(&self, buf: &'a mut [u8]) -> &'a mut str {
-        let num_hex_bytes = self.bytes.len() * 2;
-        faster_hex::hex_encode(&self.bytes, &mut buf[..num_hex_bytes]).expect("to count correctly")
-    }
-
-    /// Write ourselves to `out` in hexadecimal notation.
-    #[inline]
-    pub fn write_hex_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
-        let mut hex = Kind::hex_buf();
-        let hex_len = self.hex_to_buf(&mut hex).len();
-        out.write_all(&hex[..hex_len])
-    }
-
     /// Returns a Sha1 digest with all bytes being initialized to zero.
     #[inline]
     pub(crate) fn null_sha1() -> &'static Self {
