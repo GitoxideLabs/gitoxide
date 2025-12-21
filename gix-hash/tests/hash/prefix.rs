@@ -41,6 +41,20 @@ mod cmp_oid {
     }
 
     #[test]
+    #[cfg(all(feature = "sha1", feature = "sha256"))]
+    fn it_detects_inequality_sha1_and_sha256() {
+        let prefix_sha1 = gix_hash::Prefix::new(&hex_to_id("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), 7).unwrap();
+        let prefix_sha256 = gix_hash::Prefix::new(
+            &hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            7,
+        )
+        .unwrap();
+        assert_eq!(prefix_sha256.cmp(&prefix_sha1), Ordering::Greater);
+        assert_eq!(prefix_sha1.to_string(), "bbbbbbb");
+        assert_eq!(prefix_sha256.to_string(), "aaaaaaa");
+    }
+
+    #[test]
     fn it_detects_equality_sha1() {
         let id = hex_to_id("a920bbb055e1efb9080592a409d3975738b6efb3");
         let prefix = gix_hash::Prefix::new(&id, 6).unwrap();
