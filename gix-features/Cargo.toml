@@ -57,7 +57,7 @@ crc32 = ["dep:crc32fast"]
 
 ## Enable the usage of zlib-related utilities to compress or decompress data.
 ## This enables and uses the high-performance `zlib-rs` backend.
-zlib = ["dep:libz-rs-sys", "dep:thiserror"]
+zlib = ["dep:zlib-rs", "dep:thiserror"]
 
 #! ### Other
 
@@ -108,7 +108,7 @@ bytesize = { version = "2.3.1", optional = true }
 bytes = { version = "1.0.0", optional = true }
 
 # zlib module
-libz-rs-sys = { version = "0.5.2", optional = true }
+zlib-rs = { version = "0.5.4", optional = true }
 thiserror = { version = "2.0.17", optional = true }
 
 # Note: once_cell is kept for OnceCell type because std::sync::OnceLock::get_or_try_init() is not yet stable.

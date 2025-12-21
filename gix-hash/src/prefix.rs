@@ -93,12 +93,23 @@ impl Prefix {
     }
 
     /// Create an instance from the given hexadecimal prefix `value`, e.g. `35e77c16` would yield a `Prefix` with `hex_len()` = 8.
+    /// Note that the minimum hex length is `4` - use [`Self::from_hex_nonempty()`].
     pub fn from_hex(value: &str) -> Result<Self, from_hex::Error> {
+        let hex_len = value.len();
+        if hex_len < Self::MIN_HEX_LEN {
+            return Err(from_hex::Error::TooShort { hex_len });
+        }
+        Self::from_hex_nonempty(value)
+    }
+
+    /// Create an instance from the given hexadecimal prefix `value`, e.g. `35e` would yield a `Prefix` with `hex_len()` = 3.
+    /// Note that this function supports all non-empty hex input - for a more typical implementation, use [`Self::from_hex()`].
+    pub fn from_hex_nonempty(value: &str) -> Result<Self, from_hex::Error> {
         let hex_len = value.len();
 
         if hex_len > crate::Kind::longest().len_in_hex() {
             return Err(from_hex::Error::TooLong { hex_len });
-        } else if hex_len < Self::MIN_HEX_LEN {
+        } else if hex_len == 0 {
             return Err(from_hex::Error::TooShort { hex_len });
         }
 

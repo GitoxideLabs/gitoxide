@@ -121,6 +121,9 @@ impl PrepareFetch {
                 // For shallow clones without a specified ref, we need to determine the default branch.
                 // We'll connect to get HEAD information. For Protocol V2, we need to explicitly list refs.
                 let mut connection = remote.connect(remote::Direction::Fetch).await?;
+                if let Some(f) = self.configure_connection.as_mut() {
+                    f(&mut connection).map_err(Error::RemoteConnection)?;
+                }
 
                 // Perform handshake and try to get HEAD from it (works for Protocol V1)
                 let _ = connection.ref_map_by_ref(&mut progress, Default::default()).await?;

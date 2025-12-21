@@ -10,6 +10,11 @@ authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thi
 edition = "2021"
 rust-version = "1.82"
 
+[features]
+## An experimental use of the v0.2 branch of `imara-diff` to allow trying it out, and for writing tests against it more easily.
+## We will decide later how it should actually be exposed.
+blob-experimental = ["gix-diff/blob-experimental"]
+
 [dependencies]
 gix-commitgraph = { version = "^0.30.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.23.0", path = "../gix-revwalk" }

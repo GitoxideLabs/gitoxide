@@ -147,7 +147,7 @@ mod try_from {
     use crate::hex_to_id;
 
     #[test]
-    fn id_8_chars() {
+    fn id_6_chars() {
         let oid_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
         let input = "abcdef";
 
@@ -157,7 +157,7 @@ mod try_from {
     }
 
     #[test]
-    fn id_9_chars() {
+    fn id_7_chars() {
         let oid_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
         let input = "abcdefa";
 
@@ -196,6 +196,62 @@ mod try_from {
         let input = "abcdfOsd";
         let expected = Error::Invalid;
         let actual = Prefix::try_from(input).unwrap_err();
+        assert_eq!(actual, expected);
+    }
+}
+
+mod from_hex_nonempty {
+    use std::cmp::Ordering;
+
+    use gix_hash::{prefix::from_hex::Error, Prefix};
+
+    use crate::hex_to_id;
+
+    #[test]
+    fn id_6_chars() {
+        let oid_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        let input = "abcdef";
+
+        let expected = hex_to_id(oid_hex);
+        let actual = Prefix::from_hex_nonempty(input).expect("No errors");
+        assert_eq!(actual.cmp_oid(&expected), Ordering::Equal);
+    }
+
+    #[test]
+    fn id_7_chars() {
+        let oid_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+        let input = "abcdefa";
+
+        let expected = hex_to_id(oid_hex);
+        let actual = Prefix::from_hex_nonempty(input).expect("No errors");
+        assert_eq!(actual.cmp_oid(&expected), Ordering::Equal);
+    }
+
+    #[test]
+    fn id_2_chars_and_less() {
+        let oid_hex = "abcdefabcdefabcdefabcdefabcdefabcdefabcd";
+
+        let oid = hex_to_id(oid_hex);
+        let actual = Prefix::from_hex_nonempty("ab").expect("no errors");
+        assert_eq!(actual.cmp_oid(&oid), Ordering::Equal);
+
+        let actual = Prefix::from_hex_nonempty("a").expect("no errors");
+        assert_eq!(actual.cmp_oid(&oid), Ordering::Equal);
+    }
+
+    #[test]
+    fn id_empty() {
+        let input = "";
+        let expected = Error::TooShort { hex_len: 0 };
+        let actual = Prefix::from_hex_nonempty(input).unwrap_err();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn id_too_long() {
+        let input = "abcdefabcdefabcdefabcdefabcdefabcdefabcd123123123123123123";
+        let expected = Error::TooLong { hex_len: 58 };
+        let actual = Prefix::from_hex_nonempty(input).unwrap_err();
         assert_eq!(actual, expected);
     }
 }

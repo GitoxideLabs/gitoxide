@@ -149,9 +149,9 @@ unit-tests:
     cargo nextest run -p gix-testtools --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
     cargo nextest run -p gix-archive --no-default-features --no-fail-fast
-    cargo nextest run -p gix-archive --features tar --no-fail-fast
-    cargo nextest run -p gix-archive --features tar_gz --no-fail-fast
-    cargo nextest run -p gix-archive --features zip --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features tar --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features tar_gz --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features zip --no-fail-fast
     cargo nextest run -p gix-status-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-worktree-state-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
@@ -173,6 +173,7 @@ unit-tests:
     cargo nextest run -p gix-transport --features async-client --no-fail-fast
     cargo nextest run -p gix-protocol --features blocking-client --no-fail-fast
     cargo nextest run -p gix-protocol --features async-client --no-fail-fast
+    cargo nextest run -p gix-blame --features blob-experimental --no-fail-fast
     cargo nextest run -p gix --no-default-features --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance-safe --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,extras,comfort,need-more-recent-msrv --no-fail-fast

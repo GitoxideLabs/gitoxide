@@ -1,10 +1,7 @@
-use std::ffi::c_int;
+use zlib_rs::InflateError;
 
 /// A type to hold all state needed for decompressing a ZLIB encoded stream.
-pub struct Decompress(libz_rs_sys::z_stream);
-
-unsafe impl Sync for Decompress {}
-unsafe impl Send for Decompress {}
+pub struct Decompress(zlib_rs::Inflate);
 
 impl Default for Decompress {
     fn default() -> Self {
@@ -15,32 +12,23 @@ impl Default for Decompress {
 impl Decompress {
     /// The amount of bytes consumed from the input so far.
     pub fn total_in(&self) -> u64 {
-        self.0.total_in as _
+        self.0.total_in()
     }
 
     /// The amount of decompressed bytes that have been written to the output thus far.
     pub fn total_out(&self) -> u64 {
-        self.0.total_out as _
+        self.0.total_out()
     }
 
     /// Create a new instance. Note that it allocates in various ways and thus should be re-used.
     pub fn new() -> Self {
-        let mut this = libz_rs_sys::z_stream::default();
-
-        unsafe {
-            libz_rs_sys::inflateInit_(
-                &mut this,
-                libz_rs_sys::zlibVersion(),
-                core::mem::size_of::<libz_rs_sys::z_stream>() as core::ffi::c_int,
-            );
-        }
-
-        Self(this)
+        let inner = zlib_rs::Inflate::new(true, zlib_rs::MAX_WBITS as u8);
+        Self(inner)
     }
 
     /// Reset the state to allow handling a new stream.
     pub fn reset(&mut self) {
-        unsafe { libz_rs_sys::inflateReset(&mut self.0) };
+        self.0.reset(true);
     }
 
     /// Decompress `input` and write all decompressed bytes into `output`, with `flush` defining some details about this.
@@ -50,28 +38,18 @@ impl Decompress {
         output: &mut [u8],
         flush: FlushDecompress,
     ) -> Result<Status, DecompressError> {
-        self.0.avail_in = input.len() as _;
-        self.0.avail_out = output.len() as _;
+        let inflate_flush = match flush {
+            FlushDecompress::None => zlib_rs::InflateFlush::NoFlush,
+            FlushDecompress::Sync => zlib_rs::InflateFlush::SyncFlush,
+            FlushDecompress::Finish => zlib_rs::InflateFlush::Finish,
+        };
 
-        self.0.next_in = input.as_ptr();
-        self.0.next_out = output.as_mut_ptr();
-
-        match unsafe { libz_rs_sys::inflate(&mut self.0, flush as _) } {
-            libz_rs_sys::Z_OK => Ok(Status::Ok),
-            libz_rs_sys::Z_BUF_ERROR => Ok(Status::BufError),
-            libz_rs_sys::Z_STREAM_END => Ok(Status::StreamEnd),
-
-            libz_rs_sys::Z_STREAM_ERROR => Err(DecompressError::StreamError),
-            libz_rs_sys::Z_DATA_ERROR => Err(DecompressError::DataError),
-            libz_rs_sys::Z_MEM_ERROR => Err(DecompressError::InsufficientMemory),
-            err => Err(DecompressError::Unknown { err }),
+        let status = self.0.decompress(input, output, inflate_flush)?;
+        match status {
+            zlib_rs::Status::Ok => Ok(Status::Ok),
+            zlib_rs::Status::BufError => Ok(Status::BufError),
+            zlib_rs::Status::StreamEnd => Ok(Status::StreamEnd),
         }
-    }
-}
-
-impl Drop for Decompress {
-    fn drop(&mut self) {
-        unsafe { libz_rs_sys::inflateEnd(&mut self.0) };
     }
 }
 
@@ -85,8 +63,19 @@ pub enum DecompressError {
     InsufficientMemory,
     #[error("Invalid input data")]
     DataError,
-    #[error("An unknown error occurred: {err}")]
-    Unknown { err: c_int },
+    #[error("Decompressing this input requires a dictionary")]
+    NeedDict,
+}
+
+impl From<zlib_rs::InflateError> for DecompressError {
+    fn from(value: InflateError) -> Self {
+        match value {
+            InflateError::NeedDict { .. } => DecompressError::NeedDict,
+            InflateError::StreamError => DecompressError::StreamError,
+            InflateError::DataError => DecompressError::DataError,
+            InflateError::MemError => DecompressError::InsufficientMemory,
+        }
+    }
 }
 
 /// The status returned by [`Decompress::decompress()`].
@@ -110,7 +99,7 @@ pub enum FlushDecompress {
     /// A typical parameter for passing to compression/decompression functions,
     /// this indicates that the underlying stream to decide how much data to
     /// accumulate before producing output in order to maximize compression.
-    None = libz_rs_sys::Z_NO_FLUSH as isize,
+    None = 0,
 
     /// All pending output is flushed to the output buffer and the output is
     /// aligned on a byte boundary so that the decompressor can get all input
@@ -119,13 +108,13 @@ pub enum FlushDecompress {
     /// Flushing may degrade compression for some compression algorithms and so
     /// it should only be used when necessary. This will complete the current
     /// deflate block and follow it with an empty stored block.
-    Sync = libz_rs_sys::Z_SYNC_FLUSH as isize,
+    Sync = 2,
 
     /// Pending input is processed and pending output is flushed.
     ///
     /// The return value may indicate that the stream is not yet done and more
     /// data has yet to be processed.
-    Finish = libz_rs_sys::Z_FINISH as isize,
+    Finish = 4,
 }
 
 /// non-streaming interfaces for decompression
