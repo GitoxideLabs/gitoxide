@@ -101,7 +101,8 @@ impl Kind {
     }
 
     /// Returns the kind of hash that would fit the given `hex_len`, or `None` if there is no fitting hash.
-    /// Note that `0` as `hex_len` up to 40 always yields `Sha1`.
+    /// Note that `0` as `hex_len` up to 40 always yields `SHA1` while anything in the range 41..64
+    /// always yields `SHA256` if it is enabled.
     #[inline]
     pub const fn from_hex_len(hex_len: usize) -> Option<Self> {
         Some(match hex_len {

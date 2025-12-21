@@ -55,7 +55,9 @@ pub mod decode {
 
     /// Hash decoding
     impl ObjectId {
-        /// Create an instance from a `buffer` of 40 bytes encoded with hexadecimal notation.
+        /// Create an instance from a `buffer` of 40 bytes or 64 bytes encoded with hexadecimal
+        /// notation. The former will be interpreted as SHA1 while the latter will be interpreted
+        /// as SHA256 when it is enabled.
         ///
         /// Such a buffer can be obtained using [`oid::write_hex_to(buffer)`][super::oid::write_hex_to()]
         pub fn from_hex(buffer: &[u8]) -> Result<ObjectId, Error> {
