@@ -199,15 +199,15 @@ impl ObjectId {
     }
 }
 
-/// Sha1 hash specific methods
+/// Methods related to SHA1 and SHA256
 impl ObjectId {
-    /// Instantiate a Digest from 20 bytes of a Sha1 digest.
+    /// Instantiate an `ObjectId` from a 20 bytes SHA1 digest.
     #[inline]
     fn new_sha1(id: [u8; SIZE_OF_SHA1_DIGEST]) -> Self {
         ObjectId::Sha1(id)
     }
 
-    /// Instantiate a Digest from a slice 20 borrowed bytes of a Sha1 digest.
+    /// Instantiate an `ObjectId` from a borrowed 20 bytes SHA1 digest.
     ///
     /// Panics if the slice doesn't have a length of 20.
     #[inline]
@@ -217,7 +217,7 @@ impl ObjectId {
         ObjectId::Sha1(id)
     }
 
-    /// Instantiate a Digest from a slice 32 borrowed bytes of a Sha256 digest.
+    /// Instantiate an `ObjectId` from a borrowed 32 bytes SHA256 digest.
     ///
     /// Panics if the slice doesn't have a length of 32.
     #[inline]
@@ -228,13 +228,13 @@ impl ObjectId {
         ObjectId::Sha256(id)
     }
 
-    /// Returns a Digest representing a Sha1 whose memory is zeroed.
+    /// Returns an `ObjectId` representing a SHA1 whose memory is zeroed.
     #[inline]
     pub(crate) const fn null_sha1() -> ObjectId {
         ObjectId::Sha1([0u8; SIZE_OF_SHA1_DIGEST])
     }
 
-    /// Returns a Digest representing a Sha256 whose memory is zeroed.
+    /// Returns an `ObjectId` representing a SHA256 whose memory is zeroed.
     #[inline]
     #[cfg(feature = "sha256")]
     pub(crate) const fn null_sha256() -> ObjectId {
