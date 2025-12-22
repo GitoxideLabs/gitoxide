@@ -11,29 +11,32 @@ pub(super) mod _impl {
 
     use crate::hasher::Error;
 
-    /// An implementation of the SHA1 hash, which can be used once.
-    ///
-    /// We use [`sha1_checked`] to implement the same collision detection
-    /// algorithm as Git.
+    /// Hash implementations that can be used once.
     #[derive(Clone)]
     pub enum Hasher {
-        /// TODO:
-        /// Document.
+        /// An implementation of the SHA1 hash.
+        ///
+        /// We use [`sha1_checked`] to implement the same collision detection algorithm as Git.
         Sha1(sha1_checked::Sha1),
+        /// An implementation of the SHA256 hash.
         #[cfg(feature = "sha256")]
         Sha256(sha2::Sha256),
     }
 
     impl Hasher {
-        /// Let's not provide a public default implementation to force people to go through [`hasher()`].
-        fn default() -> Self {
+        /// Let's not make this public to force people to go through [`hasher()`].
+        fn new_sha1() -> Self {
             // This matches the configuration used by Git, which only uses
             // the collision detection to bail out, rather than computing
             // alternate “safe hashes” for inputs where a collision attack
             // was detected.
-            // TODO:
-            // Decide how to implement.
             Self::Sha1(sha1_checked::Builder::default().safe_hash(false).build())
+        }
+
+        /// Let's not make this public to force people to go through [`hasher()`].
+        #[cfg(feature = "sha256")]
+        fn new_sha256() -> Self {
+            Self::Sha256(sha2::Sha256::new())
         }
     }
 
@@ -42,10 +45,12 @@ pub(super) mod _impl {
         pub fn update(&mut self, bytes: &[u8]) {
             match self {
                 Hasher::Sha1(sha1) => sha1.update(bytes),
+                #[cfg(feature = "sha256")]
+                Hasher::Sha256(sha256) => sha256.update(bytes),
             }
         }
 
-        /// Finalize the hash and produce an object ID.
+        /// Finalize the hash and produce an object id.
         ///
         /// Returns [`Error`] if a collision attack is detected.
         #[inline]
@@ -70,6 +75,8 @@ pub(super) mod _impl {
                         digest: crate::ObjectId::Sha1(digest.into()),
                     }),
                 },
+                #[cfg(feature = "sha256")]
+                Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha256.finalize().into())),
             }
         }
     }
@@ -78,9 +85,9 @@ pub(super) mod _impl {
     #[inline]
     pub fn hasher(kind: crate::Kind) -> Hasher {
         match kind {
-            crate::Kind::Sha1 => Hasher::default(),
+            crate::Kind::Sha1 => Hasher::new_sha1(),
             #[cfg(feature = "sha256")]
-            crate::Kind::Sha256 => Hasher::default(),
+            crate::Kind::Sha256 => Hasher::new_sha256(),
         }
     }
 }
