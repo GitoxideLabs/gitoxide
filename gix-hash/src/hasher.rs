@@ -53,6 +53,10 @@ pub(super) mod _impl {
         /// Finalize the hash and produce an object id.
         ///
         /// Returns [`Error`] if a collision attack is detected.
+        ///
+        /// TODO: Since SHA256 has an infallible `finalize`, it might be worth investigating
+        /// turning the return type into `Result<crate::ObjectId, Infallible>` when this crate is
+        /// compiled with SHA256 support only.
         #[inline]
         pub fn try_finalize(self) -> Result<crate::ObjectId, Error> {
             match self {
