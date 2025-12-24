@@ -28,3 +28,45 @@ fn empty_tree() {
     let sha1 = Kind::Sha1;
     assert_eq!(sha1.empty_tree(), ObjectId::empty_tree(sha1));
 }
+
+#[test]
+#[cfg(all(feature = "sha1", not(feature = "sha256")))]
+fn shortest_sha1() {
+    let shortest = Kind::shortest();
+    assert_eq!(shortest, Kind::Sha1);
+}
+
+#[test]
+#[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+fn shortest_sha256() {
+    let shortest = Kind::shortest();
+    assert_eq!(shortest, Kind::Sha256);
+}
+
+#[test]
+#[cfg(all(feature = "sha1", feature = "sha256"))]
+fn shortest_sha1_and_sha256() {
+    let shortest = Kind::shortest();
+    assert_eq!(shortest, Kind::Sha1);
+}
+
+#[test]
+#[cfg(all(feature = "sha1", not(feature = "sha256")))]
+fn longest_sha1() {
+    let longest = Kind::longest();
+    assert_eq!(longest, Kind::Sha1);
+}
+
+#[test]
+#[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+fn longest_sha256() {
+    let longest = Kind::longest();
+    assert_eq!(longest, Kind::Sha256);
+}
+
+#[test]
+#[cfg(all(feature = "sha1", feature = "sha256"))]
+fn longest_sha1_and_sha256() {
+    let longest = Kind::longest();
+    assert_eq!(longest, Kind::Sha256);
+}
