@@ -1,6 +1,9 @@
 use std::hash;
 
-use crate::{Kind, ObjectId, SIZE_OF_SHA1_DIGEST};
+use crate::{Kind, ObjectId, EMPTY_BLOB_SHA1, EMPTY_TREE_SHA1, SIZE_OF_SHA1_DIGEST};
+
+#[cfg(feature = "sha256")]
+use crate::{EMPTY_BLOB_SHA256, EMPTY_TREE_SHA256, SIZE_OF_SHA256_DIGEST};
 
 /// A borrowed reference to a hash identifying objects.
 ///
@@ -57,6 +60,8 @@ impl std::fmt::Debug for oid {
             "{}({})",
             match self.kind() {
                 Kind::Sha1 => "Sha1",
+                #[cfg(feature = "sha256")]
+                Kind::Sha256 => "Sha256",
             },
             self.to_hex(),
         )
@@ -77,7 +82,14 @@ impl oid {
     #[inline]
     pub fn try_from_bytes(digest: &[u8]) -> Result<&Self, Error> {
         match digest.len() {
-            20 => Ok(
+            SIZE_OF_SHA1_DIGEST => Ok(
+                #[allow(unsafe_code)]
+                unsafe {
+                    &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
+                },
+            ),
+            #[cfg(feature = "sha256")]
+            SIZE_OF_SHA256_DIGEST => Ok(
                 #[allow(unsafe_code)]
                 unsafe {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
@@ -87,7 +99,7 @@ impl oid {
         }
     }
 
-    /// Create an OID from the input `value` slice without performing any safety check.
+    /// Create an `oid` from the input `value` slice without performing any safety check.
     /// Use only once sure that `value` is a hash of valid length.
     pub fn from_bytes_unchecked(value: &[u8]) -> &Self {
         Self::from_bytes(value)
@@ -131,7 +143,7 @@ impl oid {
         }
     }
 
-    /// Return a type which displays this oid as hex in full.
+    /// Return a type which displays this `oid` as hex in full.
     #[inline]
     pub fn to_hex(&self) -> HexDisplay<'_> {
         HexDisplay {
@@ -140,34 +152,6 @@ impl oid {
         }
     }
 
-    /// Returns `true` if this hash consists of all null bytes.
-    #[inline]
-    #[doc(alias = "is_zero", alias = "git2")]
-    pub fn is_null(&self) -> bool {
-        match self.kind() {
-            Kind::Sha1 => &self.bytes == oid::null_sha1().as_bytes(),
-        }
-    }
-
-    /// Returns `true` if this hash is equal to an empty blob.
-    #[inline]
-    pub fn is_empty_blob(&self) -> bool {
-        match self.kind() {
-            Kind::Sha1 => &self.bytes == oid::empty_blob_sha1().as_bytes(),
-        }
-    }
-
-    /// Returns `true` if this hash is equal to an empty tree.
-    #[inline]
-    pub fn is_empty_tree(&self) -> bool {
-        match self.kind() {
-            Kind::Sha1 => &self.bytes == oid::empty_tree_sha1().as_bytes(),
-        }
-    }
-}
-
-/// Sha1 specific methods
-impl oid {
     /// Write ourselves to the `out` in hexadecimal notation, returning the hex-string ready for display.
     ///
     /// **Panics** if the buffer isn't big enough to hold twice as many bytes as the current binary size.
@@ -186,22 +170,77 @@ impl oid {
         out.write_all(&hex[..hex_len])
     }
 
-    /// Returns a Sha1 digest with all bytes being initialized to zero.
+    /// Returns `true` if this hash consists of all null bytes.
+    #[inline]
+    #[doc(alias = "is_zero", alias = "git2")]
+    pub fn is_null(&self) -> bool {
+        match self.kind() {
+            Kind::Sha1 => &self.bytes == oid::null_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::null_sha256().as_bytes(),
+        }
+    }
+
+    /// Returns `true` if this hash is equal to an empty blob.
+    #[inline]
+    pub fn is_empty_blob(&self) -> bool {
+        match self.kind() {
+            Kind::Sha1 => &self.bytes == oid::empty_blob_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::empty_blob_sha256().as_bytes(),
+        }
+    }
+
+    /// Returns `true` if this hash is equal to an empty tree.
+    #[inline]
+    pub fn is_empty_tree(&self) -> bool {
+        match self.kind() {
+            Kind::Sha1 => &self.bytes == oid::empty_tree_sha1().as_bytes(),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => &self.bytes == oid::empty_tree_sha256().as_bytes(),
+        }
+    }
+}
+
+/// Methods for creating special SHA1 and SHA256 `oid`s
+impl oid {
+    /// Returns a SHA1 digest with all bytes being initialized to zero.
     #[inline]
     pub(crate) fn null_sha1() -> &'static Self {
         oid::from_bytes([0u8; SIZE_OF_SHA1_DIGEST].as_ref())
     }
 
-    /// Returns an oid representing the hash of an empty blob.
+    /// Returns a SHA256 digest with all bytes being initialized to zero.
     #[inline]
-    pub(crate) fn empty_blob_sha1() -> &'static Self {
-        oid::from_bytes(b"\xe6\x9d\xe2\x9b\xb2\xd1\xd6\x43\x4b\x8b\x29\xae\x77\x5a\xd8\xc2\xe4\x8c\x53\x91")
+    #[cfg(feature = "sha256")]
+    pub(crate) fn null_sha256() -> &'static Self {
+        oid::from_bytes([0u8; SIZE_OF_SHA256_DIGEST].as_ref())
     }
 
-    /// Returns an oid representing the hash of an empty tree.
+    /// Returns an `oid` representing the SHA1 hash of an empty blob.
+    #[inline]
+    pub(crate) fn empty_blob_sha1() -> &'static Self {
+        oid::from_bytes(EMPTY_BLOB_SHA1)
+    }
+
+    /// Returns an `oid` representing the SHA256 hash of an empty blob.
+    #[inline]
+    #[cfg(feature = "sha256")]
+    pub(crate) fn empty_blob_sha256() -> &'static Self {
+        oid::from_bytes(EMPTY_BLOB_SHA256)
+    }
+
+    /// Returns an `oid` representing the SHA1 hash of an empty tree.
     #[inline]
     pub(crate) fn empty_tree_sha1() -> &'static Self {
-        oid::from_bytes(b"\x4b\x82\x5d\xc6\x42\xcb\x6e\xb9\xa0\x60\xe5\x4b\xf8\xd6\x92\x88\xfb\xee\x49\x04")
+        oid::from_bytes(EMPTY_TREE_SHA1)
+    }
+
+    /// Returns an `oid` representing the SHA256 hash of an empty tree.
+    #[inline]
+    #[cfg(feature = "sha256")]
+    pub(crate) fn empty_tree_sha256() -> &'static Self {
+        oid::from_bytes(EMPTY_TREE_SHA256)
     }
 }
 
@@ -225,6 +264,8 @@ impl ToOwned for oid {
     fn to_owned(&self) -> Self::Owned {
         match self.kind() {
             Kind::Sha1 => ObjectId::Sha1(self.bytes.try_into().expect("no bug in hash detection")),
+            #[cfg(feature = "sha256")]
+            Kind::Sha256 => ObjectId::Sha256(self.bytes.try_into().expect("no bug in hash detection")),
         }
     }
 }

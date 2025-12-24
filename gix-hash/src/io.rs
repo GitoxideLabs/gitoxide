@@ -118,6 +118,11 @@ pub(super) mod _impl {
                     inner,
                     hash: crate::hasher(object_hash),
                 },
+                #[cfg(feature = "sha256")]
+                crate::Kind::Sha256 => Write {
+                    inner,
+                    hash: crate::hasher(object_hash),
+                },
             }
         }
     }

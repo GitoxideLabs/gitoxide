@@ -10,9 +10,9 @@ pub struct Error {
 }
 
 impl oid {
-    /// Verify that `self` matches the `expected` object ID.
+    /// Verify that `self` matches the `expected` object id.
     ///
-    /// Returns an [`Error`] containing both object IDs if they differ.
+    /// Returns an [`Error`] containing both object ids if they differ.
     #[inline]
     pub fn verify(&self, expected: &oid) -> Result<(), Error> {
         if self == expected {
