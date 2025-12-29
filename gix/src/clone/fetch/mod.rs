@@ -238,8 +238,9 @@ impl PrepareFetch {
                         }
                         crate::clone::CloneRef::ObjectHash(oid) => {
                             // For object hashes, we create a refspec that fetches the object directly
+                            let oid_hex = oid.to_hex().to_string();
                             opts.extra_refspecs.push(
-                                gix_refspec::parse(oid.to_string().as_str().into(), gix_refspec::parse::Operation::Fetch)
+                                gix_refspec::parse(oid_hex.as_bytes().into(), gix_refspec::parse::Operation::Fetch)
                                     .expect("object hashes are valid refspecs")
                                     .to_owned(),
                             );

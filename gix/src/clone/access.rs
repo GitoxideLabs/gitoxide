@@ -53,15 +53,18 @@ impl PrepareFetch {
         self.ref_name = name
             .map(|n| -> Result<crate::clone::CloneRef, crate::clone::Error> {
                 let s = n.into();
-                // Try to parse as an object hash first
-                if let Ok(oid) = gix_hash::ObjectId::from_hex(s.as_ref()) {
-                    Ok(crate::clone::CloneRef::ObjectHash(oid))
-                } else {
-                    // Otherwise, try as a partial ref name
-                    let partial_ref = <&gix_ref::PartialNameRef>::try_from(s.as_bstr())
-                        .map_err(crate::clone::Error::ReferenceName)?;
-                    Ok(crate::clone::CloneRef::RefName(partial_ref.to_owned()))
+                // Try to parse as an object hash first (40 hex chars for SHA-1, 64 for SHA-256)
+                // This check helps differentiate between hex ref names and actual object hashes
+                let is_valid_oid_length = s.len() == 40 || s.len() == 64;
+                if is_valid_oid_length {
+                    if let Ok(oid) = gix_hash::ObjectId::from_hex(s.as_ref()) {
+                        return Ok(crate::clone::CloneRef::ObjectHash(oid));
+                    }
                 }
+                // Otherwise, try as a partial ref name
+                let partial_ref = <&gix_ref::PartialNameRef>::try_from(s.as_bstr())
+                    .map_err(crate::clone::Error::ReferenceName)?;
+                Ok(crate::clone::CloneRef::RefName(partial_ref.to_owned()))
             })
             .transpose()?;
         Ok(self)
