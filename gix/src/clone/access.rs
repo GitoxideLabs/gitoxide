@@ -55,7 +55,9 @@ impl PrepareFetch {
                 let s = n.into();
                 // Try to parse as an object hash first (40 hex chars for SHA-1, 64 for SHA-256)
                 // This check helps differentiate between hex ref names and actual object hashes
-                let is_valid_oid_length = s.len() == 40 || s.len() == 64;
+                let sha1_hex_len = gix_hash::Kind::Sha1.len_in_hex();
+                let sha256_hex_len = sha1_hex_len * 2; // SHA-256 is twice the length of SHA-1
+                let is_valid_oid_length = s.len() == sha1_hex_len || s.len() == sha256_hex_len;
                 if is_valid_oid_length {
                     if let Ok(oid) = gix_hash::ObjectId::from_hex(s.as_ref()) {
                         return Ok(crate::clone::CloneRef::ObjectHash(oid));
