@@ -39,11 +39,11 @@ pub enum Error {
     },
     #[error("Failed to update HEAD with values from remote")]
     HeadUpdate(#[from] crate::reference::edit::Error),
-    #[error("The remote didn't have any ref that matched '{}'", wanted.as_ref().as_bstr())]
-    RefNameMissing { wanted: gix_ref::PartialName },
-    #[error("The remote has {} refs for '{}', try to use a specific name: {}", candidates.len(), wanted.as_ref().as_bstr(), candidates.iter().filter_map(|n| n.to_str().ok()).collect::<Vec<_>>().join(", "))]
+    #[error("The remote didn't have any ref that matched '{wanted}'")]
+    RefNameMissing { wanted: String },
+    #[error("The remote has {} refs for '{}', try to use a specific name: {}", candidates.len(), wanted, candidates.iter().filter_map(|n| n.to_str().ok()).collect::<Vec<_>>().join(", "))]
     RefNameAmbiguous {
-        wanted: gix_ref::PartialName,
+        wanted: String,
         candidates: Vec<BString>,
     },
     #[error(transparent)]
@@ -116,7 +116,16 @@ impl PrepareFetch {
         let target_ref = if use_single_branch_for_shallow {
             // Determine target branch from user-specified ref_name or default branch
             if let Some(ref_name) = &self.ref_name {
-                Some(Category::LocalBranch.to_full_name(ref_name.as_ref().as_bstr())?)
+                match ref_name {
+                    crate::clone::CloneRef::RefName(name) => {
+                        Some(Category::LocalBranch.to_full_name(name.as_ref().as_bstr())?)
+                    }
+                    crate::clone::CloneRef::ObjectHash(_) => {
+                        // For object hashes, we don't use a single-branch refspec
+                        // We'll let the normal logic handle this
+                        None
+                    }
+                }
             } else {
                 // For shallow clones without a specified ref, we need to determine the default branch.
                 // We'll connect to get HEAD information. For Protocol V2, we need to explicitly list refs.
@@ -219,11 +228,23 @@ impl PrepareFetch {
                     opts.extra_refspecs.push(head_refspec.clone());
                 }
                 if let Some(ref_name) = &self.ref_name {
-                    opts.extra_refspecs.push(
-                        gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
-                            .expect("partial names are valid refspecs")
-                            .to_owned(),
-                    );
+                    match ref_name {
+                        crate::clone::CloneRef::RefName(name) => {
+                            opts.extra_refspecs.push(
+                                gix_refspec::parse(name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                                    .expect("partial names are valid refspecs")
+                                    .to_owned(),
+                            );
+                        }
+                        crate::clone::CloneRef::ObjectHash(oid) => {
+                            // For object hashes, we create a refspec that fetches the object directly
+                            opts.extra_refspecs.push(
+                                gix_refspec::parse(oid.to_string().as_str().into(), gix_refspec::parse::Operation::Fetch)
+                                    .expect("object hashes are valid refspecs")
+                                    .to_owned(),
+                            );
+                        }
+                    }
                 }
                 opts
             };

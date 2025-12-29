@@ -4,7 +4,7 @@ use crate::{clone::PrepareCheckout, Repository};
 pub mod main_worktree {
     use std::{path::PathBuf, sync::atomic::AtomicBool};
 
-    use crate::{clone::PrepareCheckout, Progress, Repository};
+    use crate::{clone::PrepareCheckout, ext::ObjectIdExt, Progress, Repository};
 
     /// The error returned by [`PrepareCheckout::main_worktree()`].
     #[derive(Debug, thiserror::Error)]
@@ -97,7 +97,13 @@ pub mod main_worktree {
             })?;
 
             let root_tree_id = match &self.ref_name {
-                Some(reference_val) => Some(repo.find_reference(reference_val)?.peel_to_id()?),
+                Some(crate::clone::CloneRef::RefName(reference_name)) => {
+                    Some(repo.find_reference(reference_name)?.peel_to_id()?)
+                }
+                Some(crate::clone::CloneRef::ObjectHash(oid)) => {
+                    // For object hashes, we attach the object ID to the repository
+                    Some(oid.attach(repo))
+                }
                 None => repo.head()?.try_peel_to_id()?,
             };
 

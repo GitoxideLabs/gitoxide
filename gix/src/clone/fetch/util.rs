@@ -2,7 +2,7 @@ use std::{borrow::Cow, io::Write};
 
 use gix_ref::{
     transaction::{LogChange, RefLog},
-    FullNameRef, PartialName,
+    FullNameRef,
 };
 
 use super::Error;
@@ -66,7 +66,7 @@ pub fn update_head(
     ref_map: &crate::remote::fetch::RefMap,
     reflog_message: &BStr,
     remote_name: &BStr,
-    ref_name: Option<&PartialName>,
+    ref_name: Option<&crate::clone::CloneRef>,
 ) -> Result<(), Error> {
     use gix_ref::{
         transaction::{PreviousValue, RefEdit},
@@ -185,49 +185,83 @@ pub fn update_head(
 
 pub(super) fn find_custom_refname<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
-    ref_name: &PartialName,
+    ref_name: &crate::clone::CloneRef,
 ) -> Result<(Option<&'a gix_hash::oid>, Option<&'a BStr>), Error> {
-    let group = gix_refspec::MatchGroup::from_fetch_specs(Some(
-        gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
-            .expect("partial names are valid refs"),
-    ));
-    // TODO: to fix ambiguity, implement priority system
-    let filtered_items: Vec<_> = ref_map
-        .mappings
-        .iter()
-        .filter_map(|m| {
-            m.remote
-                .as_name()
-                .and_then(|name| m.remote.as_id().map(|id| (name, id)))
-        })
-        .map(|(full_ref_name, target)| gix_refspec::match_group::Item {
-            full_ref_name,
-            target,
-            object: None,
-        })
-        .collect();
-    let res = group.match_lhs(filtered_items.iter().copied());
-    match res.mappings.len() {
-        0 => Err(Error::RefNameMissing {
-            wanted: ref_name.clone(),
-        }),
-        1 => {
-            let item = filtered_items[res.mappings[0]
-                .item_index
-                .expect("we map by name only and have no object-id in refspec")];
-            Ok((Some(item.target), Some(item.full_ref_name)))
-        }
-        _ => Err(Error::RefNameAmbiguous {
-            wanted: ref_name.clone(),
-            candidates: res
+    match ref_name {
+        crate::clone::CloneRef::RefName(partial_name) => {
+            let group = gix_refspec::MatchGroup::from_fetch_specs(Some(
+                gix_refspec::parse(partial_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                    .expect("partial names are valid refs"),
+            ));
+            // TODO: to fix ambiguity, implement priority system
+            let filtered_items: Vec<_> = ref_map
                 .mappings
-                .into_iter()
-                .filter_map(|m| match m.lhs {
-                    gix_refspec::match_group::SourceRef::FullName(name) => Some(name.into_owned()),
-                    gix_refspec::match_group::SourceRef::ObjectId(_) => None,
+                .iter()
+                .filter_map(|m| {
+                    m.remote
+                        .as_name()
+                        .and_then(|name| m.remote.as_id().map(|id| (name, id)))
                 })
-                .collect(),
-        }),
+                .map(|(full_ref_name, target)| gix_refspec::match_group::Item {
+                    full_ref_name,
+                    target,
+                    object: None,
+                })
+                .collect();
+            let res = group.match_lhs(filtered_items.iter().copied());
+            match res.mappings.len() {
+                0 => Err(Error::RefNameMissing {
+                    wanted: partial_name.as_ref().as_bstr().to_string(),
+                }),
+                1 => {
+                    let item = filtered_items[res.mappings[0]
+                        .item_index
+                        .expect("we map by name only and have no object-id in refspec")];
+                    Ok((Some(item.target), Some(item.full_ref_name)))
+                }
+                _ => Err(Error::RefNameAmbiguous {
+                    wanted: partial_name.as_ref().as_bstr().to_string(),
+                    candidates: res
+                        .mappings
+                        .into_iter()
+                        .filter_map(|m| match m.lhs {
+                            gix_refspec::match_group::SourceRef::FullName(name) => Some(name.into_owned()),
+                            gix_refspec::match_group::SourceRef::ObjectId(_) => None,
+                        })
+                        .collect(),
+                }),
+            }
+        }
+        crate::clone::CloneRef::ObjectHash(oid) => {
+            // For object hashes, we need to find the object in the ref map
+            // Check if the object exists in the mappings
+            for mapping in &ref_map.mappings {
+                if let Some(id) = mapping.remote.as_id() {
+                    if id == oid.as_ref() {
+                        // Found a direct match
+                        return Ok((Some(id), mapping.remote.as_name()));
+                    }
+                }
+            }
+            // If not found in mappings, check remote_refs
+            for remote_ref in &ref_map.remote_refs {
+                match remote_ref {
+                    gix_protocol::handshake::Ref::Direct { object, full_ref_name }
+                    | gix_protocol::handshake::Ref::Symbolic { object, full_ref_name, .. }
+                        if object.as_ref() == oid.as_ref() =>
+                    {
+                        return Ok((Some(object.as_ref()), Some(full_ref_name.as_bstr())));
+                    }
+                    gix_protocol::handshake::Ref::Peeled { object, full_ref_name, .. } if object.as_ref() == oid.as_ref() => {
+                        return Ok((Some(object.as_ref()), Some(full_ref_name.as_bstr())));
+                    }
+                    _ => {}
+                }
+            }
+            Err(Error::RefNameMissing {
+                wanted: oid.to_string(),
+            })
+        }
     }
 }
 

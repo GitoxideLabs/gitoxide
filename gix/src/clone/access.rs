@@ -1,4 +1,4 @@
-use crate::{bstr::BString, clone::PrepareFetch, Repository};
+use crate::{bstr::{BString, ByteSlice}, clone::PrepareFetch, Repository};
 
 /// Builder
 impl PrepareFetch {
@@ -43,16 +43,27 @@ impl PrepareFetch {
         self
     }
 
-    /// Set the `name` of the reference to check out, instead of the remote `HEAD`.
+    /// Set the `name` of the reference or object hash to check out, instead of the remote `HEAD`.
     /// If `None`, the `HEAD` will be used, which is the default.
     ///
-    /// Note that `name` should be a partial name like `main` or `feat/one`, but can be a full ref name.
+    /// Note that `name` should be a partial name like `main` or `feat/one`, a full ref name, or a hex object hash.
     /// If a branch on the remote matches, it will automatically be retrieved even without a refspec.
-    pub fn with_ref_name<'a, Name, E>(mut self, name: Option<Name>) -> Result<Self, E>
-    where
-        Name: TryInto<&'a gix_ref::PartialNameRef, Error = E>,
-    {
-        self.ref_name = name.map(TryInto::try_into).transpose()?.map(ToOwned::to_owned);
+    /// If an object hash is provided, it will be fetched and checked out if available on the remote.
+    pub fn with_ref_name(mut self, name: Option<impl Into<crate::bstr::BString>>) -> Result<Self, crate::clone::Error> {
+        self.ref_name = name
+            .map(|n| -> Result<crate::clone::CloneRef, crate::clone::Error> {
+                let s = n.into();
+                // Try to parse as an object hash first
+                if let Ok(oid) = gix_hash::ObjectId::from_hex(s.as_ref()) {
+                    Ok(crate::clone::CloneRef::ObjectHash(oid))
+                } else {
+                    // Otherwise, try as a partial ref name
+                    let partial_ref = <&gix_ref::PartialNameRef>::try_from(s.as_bstr())
+                        .map_err(crate::clone::Error::ReferenceName)?;
+                    Ok(crate::clone::CloneRef::RefName(partial_ref.to_owned()))
+                }
+            })
+            .transpose()?;
         Ok(self)
     }
 }

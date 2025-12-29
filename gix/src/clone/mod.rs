@@ -6,6 +6,15 @@ use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
+/// The reference or object to check out during a clone operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloneRef {
+    /// A partial reference name like "main" or "feat/one".
+    RefName(gix_ref::PartialName),
+    /// An object hash to check out directly.
+    ObjectHash(gix_hash::ObjectId),
+}
+
 type ConfigureRemoteFn =
     Box<dyn FnMut(crate::Remote<'_>) -> Result<crate::Remote<'_>, Box<dyn std::error::Error + Send + Sync>>>;
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
@@ -39,9 +48,9 @@ pub struct PrepareFetch {
     /// How to handle shallow clones
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
     shallow: remote::fetch::Shallow,
-    /// The name of the reference to fetch. If `None`, the reference pointed to by `HEAD` will be checked out.
+    /// The reference or object to fetch. If `None`, the reference pointed to by `HEAD` will be checked out.
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
-    ref_name: Option<gix_ref::PartialName>,
+    ref_name: Option<CloneRef>,
 }
 
 /// The error returned by [`PrepareFetch::new()`].
@@ -59,6 +68,8 @@ pub enum Error {
         url: gix_url::Url,
         source: gix_path::realpath::Error,
     },
+    #[error(transparent)]
+    ReferenceName(#[from] gix_validate::reference::name::Error),
 }
 
 /// Instantiation
@@ -134,8 +145,8 @@ impl PrepareFetch {
 pub struct PrepareCheckout {
     /// A freshly initialized repository which is owned by us, or `None` if it was successfully checked out.
     pub(self) repo: Option<crate::Repository>,
-    /// The name of the reference to check out. If `None`, the reference pointed to by `HEAD` will be checked out.
-    pub(self) ref_name: Option<gix_ref::PartialName>,
+    /// The reference or object to check out. If `None`, the reference pointed to by `HEAD` will be checked out.
+    pub(self) ref_name: Option<CloneRef>,
 }
 
 // This module encapsulates functionality that works with both feature toggles. Can be combined with `fetch`

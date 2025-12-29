@@ -680,6 +680,43 @@ mod blocking_io {
         Ok(())
     }
 
+    #[test]
+    fn fetch_and_checkout_specific_object_hash() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let remote_repo = remote::repo("base");
+        // Get a commit ID from the remote repo to test with
+        // Using the commit ID from branch 'a' (main commit)
+        let commit_id = "dfd0954dabef3b64f458321ef15571cc1a46d552";
+        
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote_repo.path(),
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            restricted(),
+        )?
+        .with_ref_name(Some(commit_id))?;
+        
+        let (mut checkout, _out) =
+            prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        // Verify that the HEAD points to the correct commit
+        let head_id = repo.head_id()?;
+        assert_eq!(
+            head_id,
+            hex_to_id(commit_id),
+            "HEAD should point to the specified commit hash"
+        );
+
+        let index = repo.index()?;
+        assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
+
+        assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"));
+        Ok(())
+    }
+
     fn assure_index_entries_on_disk(index: &gix::worktree::Index, work_dir: &Path) {
         for entry in index.entries() {
             let entry_path = work_dir.join(gix_path::from_bstr(entry.path(index)));
