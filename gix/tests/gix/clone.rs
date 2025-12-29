@@ -717,6 +717,64 @@ mod blocking_io {
         Ok(())
     }
 
+    #[test]
+    fn fetch_only_with_object_hash() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let remote_repo = remote::repo("base");
+        // Using a commit ID from the base repository
+        let commit_id = "dfd0954dabef3b64f458321ef15571cc1a46d552";
+        
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote_repo.path(),
+            tmp.path(),
+            gix::create::Kind::Bare,
+            Default::default(),
+            restricted(),
+        )?
+        .with_ref_name(Some(commit_id))?;
+        
+        let (repo, _out) = prepare.fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        // Verify that the repository was created and HEAD points to the correct commit
+        let head_id = repo.head_id()?;
+        assert_eq!(
+            head_id,
+            hex_to_id(commit_id),
+            "HEAD should point to the specified commit hash in bare repository"
+        );
+        
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_with_invalid_object_hash() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let remote_repo = remote::repo("base");
+        // Use an object hash that doesn't exist in the repository
+        let invalid_commit_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote_repo.path(),
+            tmp.path(),
+            gix::create::Kind::Bare,
+            Default::default(),
+            restricted(),
+        )?
+        .with_ref_name(Some(invalid_commit_id))?;
+        
+        let err = prepare
+            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .unwrap_err();
+        
+        // The error message can vary depending on the protocol, but it should fail
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("didn't have any ref that matched") || err_str.contains("Could not decode"),
+            "Should fail when object hash is not found: {err}"
+        );
+        Ok(())
+    }
+
     fn assure_index_entries_on_disk(index: &gix::worktree::Index, work_dir: &Path) {
         for entry in index.entries() {
             let entry_path = work_dir.join(gix_path::from_bstr(entry.path(index)));
