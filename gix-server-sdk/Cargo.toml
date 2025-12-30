@@ -1,0 +1,36 @@
+[package]
+name = "gix-server-sdk"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "A high-performance SDK for building Git read-only RPC servers on top of gitoxide"
+
+[dependencies]
+gix = { version = "0.76", path = "../gix", features = ["max-performance-safe"] }
+gix-actor = { version = "0.36", path = "../gix-actor" }
+gix-hash = { version = "0.21", path = "../gix-hash" }
+gix-object = { version = "0.53", path = "../gix-object" }
+gix-odb = { version = "0.73", path = "../gix-odb" }
+gix-pack = { version = "0.63", path = "../gix-pack" }
+gix-ref = { version = "0.56", path = "../gix-ref" }
+gix-traverse = { version = "0.50", path = "../gix-traverse" }
+gix-diff = { version = "0.56", path = "../gix-diff", features = ["blob"] }
+gix-revwalk = { version = "0.24", path = "../gix-revwalk" }
+gix-revision = { version = "0.38", path = "../gix-revision" }
+gix-blame = { version = "0.6", path = "../gix-blame" }
+gix-archive = { version = "0.25", path = "../gix-archive" }
+gix-worktree-stream = { version = "0.25", path = "../gix-worktree-stream" }
+gix-worktree = { version = "0.45", path = "../gix-worktree" }
+gix-filter = { version = "0.23", path = "../gix-filter" }
+gix-index = { version = "0.44", path = "../gix-index" }
+gix-fs = { version = "0.18", path = "../gix-fs" }
+dashmap = "6"
+parking_lot = "0.12"
+thiserror = "2"
+bstr = { version = "1.12", default-features = false, features = ["std"] }
+imara-diff = "0.1"
+regex = "1"
+gix-glob = { version = "0.23", path = "../gix-glob" }
+
+[dev-dependencies]
+tempfile = "3"

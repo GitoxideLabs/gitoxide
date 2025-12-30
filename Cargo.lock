@@ -2235,6 +2235,38 @@ name = "gix-sequencer"
 version = "0.0.0"
 
 [[package]]
+name = "gix-server-sdk"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "dashmap",
+ "gix",
+ "gix-actor",
+ "gix-archive",
+ "gix-blame",
+ "gix-diff",
+ "gix-filter",
+ "gix-fs",
+ "gix-glob",
+ "gix-hash",
+ "gix-index",
+ "gix-object",
+ "gix-odb",
+ "gix-pack",
+ "gix-ref",
+ "gix-revision",
+ "gix-revwalk",
+ "gix-traverse",
+ "gix-worktree",
+ "gix-worktree-stream",
+ "imara-diff 0.1.8",
+ "parking_lot",
+ "regex",
+ "tempfile",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "gix-shallow"
 version = "0.7.0"
 dependencies = [

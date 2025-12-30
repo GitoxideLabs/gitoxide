@@ -292,7 +292,8 @@ members = [
     "gix-ref/tests",
     "gix-config/tests",
     "gix-traverse/tests",
-    "gix-shallow"
+    "gix-shallow",
+    "gix-server-sdk"
 ]
 
 [workspace.dependencies]
