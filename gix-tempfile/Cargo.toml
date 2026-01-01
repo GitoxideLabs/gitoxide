@@ -34,10 +34,10 @@ test = true
 gix-fs = { version = "^0.18.0", path = "../gix-fs" }
 parking_lot = "0.12.4"
 dashmap = { version = "6.0.1", optional = true }
-tempfile = "3.23.0"
+tempfile = "3.24.0"
 
-signal-hook = { version = "0.3.18", default-features = false, optional = true }
-signal-hook-registry = { version = "1.4.5", optional = true }
+signal-hook = { version = "0.4.1", default-features = false, optional = true }
+signal-hook-registry = { version = "1.4.8", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
 
@@ -50,7 +50,7 @@ signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 hp-hashmap = ["dep:dashmap"]
 
 [target.'cfg(not(windows))'.dependencies]
-libc = { version = "0.2.176", default-features = false }
+libc = { version = "0.2.178", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
