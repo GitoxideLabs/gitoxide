@@ -255,9 +255,9 @@ impl Engine {
                 Ok(db::Repo {
                     id: r.get(0)?,
                     path: corpus_path.join(r.get::<_, String>(1)?),
-                    odb_size: ByteSize(r.get::<_, i64>(2)? as u64),
-                    num_objects: r.get::<_, i64>(3)? as u64,
-                    num_references: r.get::<_, i64>(4)? as usize,
+                    odb_size: ByteSize(r.get(2)?),
+                    num_objects: r.get(3)?,
+                    num_references: r.get(4)?,
                 })
             })?
             .inspect(|_| self.state.progress.inc())
@@ -313,7 +313,7 @@ impl Engine {
                         match repo_res {
                             Ok(mut repo) => {
                                 let rela_path = repo.path.strip_prefix(corpus_path)?;
-                                repo.id = statement.query_row(params![rela_path.to_str().context("only valid UTF8 is allowed for repository paths")?, corpus_id, repo.odb_size.as_u64() as i64, repo.num_objects as i64, repo.num_references as i64], |r| r.get(0))?;
+                                repo.id = statement.query_row(params![rela_path.to_str().context("only valid UTF8 is allowed for repository paths")?, corpus_id, repo.odb_size.as_u64(), repo.num_objects, repo.num_references], |r| r.get(0))?;
                                 out.push(repo);
                                 progress.inc();
                             }
