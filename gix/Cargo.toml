@@ -376,7 +376,7 @@ gix-transport = { version = "^0.52.0", path = "../gix-transport", optional = tru
 
 # Just to get the progress-tree feature
 prodash = { version = "30.0.1", optional = true, features = ["progress-tree"] }
-signal-hook = { version = "0.3.18", default-features = false, optional = true }
+signal-hook = { version = "0.4.1", default-features = false, optional = true }
 thiserror = "2.0.17"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",
@@ -410,7 +410,7 @@ walkdir = "2.3.2"
 serial_test = { version = "3.1.0", default-features = false }
 async-std = { version = "1.12.0", features = ["attributes"] }
 termtree = "0.5.1"
-insta = "1.44.3"
+insta = "1.45.1"
 
 [package.metadata.docs.rs]
 features = [
