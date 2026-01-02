@@ -12,10 +12,11 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
             version int
         )"#;
     con.execute_batch(meta_table)?;
-    let version: Option<usize> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    let version: Option<i64> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    let version = version.map(|v| v as usize);
     match version {
         None => {
-            con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+            con.execute("INSERT into meta(version) values(?)", params![VERSION as i64])?;
         }
         Some(version) if version != VERSION => match con.close() {
             Ok(()) => {
@@ -27,7 +28,7 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
                 })?;
                 con = rusqlite::Connection::open(path)?;
                 con.execute_batch(meta_table)?;
-                con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+                con.execute("INSERT into meta(version) values(?)", params![VERSION as i64])?;
             }
             Err((_, err)) => return Err(err.into()),
         },

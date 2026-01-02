@@ -22,7 +22,7 @@ organize = ["dep:gix-url", "dep:jwalk"]
 ## Derive the amount of time invested into a git repository akin to [git-hours](https://github.com/kimmobrunfeldt/git-hours).
 estimate-hours = ["dep:fs-err", "dep:crossbeam-channel", "dep:smallvec"]
 ## Gather information about repositories and store it in a database for easy querying.
-query = ["dep:rusqlite"]
+query = ["dep:rusqlite", "dep:crossbeam-channel"]
 ## Run algorithms on a corpus of repositories and store their results for later comparison and intelligence gathering.
 ## *Note that* `organize` we need for finding git repositories fast.
 corpus = ["dep:rusqlite", "dep:sysinfo", "organize", "dep:crossbeam-channel", "dep:serde_json", "dep:tracing-forest", "dep:tracing-subscriber", "tracing", "dep:parking_lot"]
