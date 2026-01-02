@@ -73,8 +73,9 @@ pub fn update(
         let start = Instant::now();
         let (tx_stats, rx_stats) = std::sync::mpsc::channel::<Result<(SequenceId, Vec<CommitDiffStats>), Infallible>>();
 
-        let mut all_commits =
-            Vec::with_capacity(con.query_row("SELECT  COUNT(hash) from commits", [], |r| r.get::<_, i64>(0).map(|v| v as usize))?);
+        let mut all_commits = Vec::with_capacity(con.query_row("SELECT  COUNT(hash) from commits", [], |r| {
+            r.get::<_, i64>(0).map(|v| v as usize)
+        })?);
         for item in con
             .prepare("SELECT hash from commits ORDER BY ROWID")?
             .query_map([], |r| {
@@ -417,14 +418,9 @@ pub fn update(
                         });
                     }
                     if self.chunk.borrow().len() == self.chunk_size {
-                        let chunk = std::mem::take(&mut *self.chunk.borrow_mut());
-                        *self.chunk.borrow_mut() = Vec::with_capacity(self.chunk_size);
-                        self.tx
-                            .send((
-                                *self.chunk_id.borrow(),
-                                chunk,
-                            ))
-                            .ok();
+                        let chunk =
+                            std::mem::replace(&mut *self.chunk.borrow_mut(), Vec::with_capacity(self.chunk_size));
+                        self.tx.send((*self.chunk_id.borrow(), chunk)).ok();
                         *self.chunk_id.borrow_mut() += 1;
                     }
                 }
