@@ -82,7 +82,7 @@ crossbeam-channel = { version = "0.5.15", optional = true }
 smallvec = { version = "1.15.1", optional = true }
 
 # for 'query' and 'corpus'
-rusqlite = { version = "0.38.0", optional = true, features = ["bundled"] }
+rusqlite = { version = "0.38.0", optional = true, features = ["bundled", "fallible_uint"] }
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }
