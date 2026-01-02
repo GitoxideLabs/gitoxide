@@ -58,10 +58,11 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         version int
     )"#;
     con.execute_batch(meta_table)?;
-    let version: Option<usize> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    let version: Option<i64> = con.query_row("SELECT version FROM meta", [], |r| r.get(0)).optional()?;
+    let version = version.map(|v| v as usize);
     match version {
         None => {
-            con.execute("INSERT into meta(version) values(?)", params![VERSION])?;
+            con.execute("INSERT into meta(version) values(?)", params![VERSION as i64])?;
         }
         Some(version) if version != VERSION => match con.close() {
             Ok(()) => {
@@ -212,7 +213,7 @@ impl Engine {
         repository: Id,
     ) -> anyhow::Result<Run> {
         let insertion_time = std::time::UNIX_EPOCH.elapsed()?.as_secs();
-        let id = con.query_row("INSERT INTO run (gitoxide_version, runner, task, repository, insertion_time) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id", params![gitoxide_version, runner, task, repository, insertion_time], |r| r.get(0))?;
+        let id = con.query_row("INSERT INTO run (gitoxide_version, runner, task, repository, insertion_time) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id", params![gitoxide_version, runner, task, repository, insertion_time as i64], |r| r.get(0))?;
         Ok(Run {
             id,
             duration: Default::default(),
