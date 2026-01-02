@@ -44,7 +44,7 @@ impl query::Engine {
                     .query_row(
                         "SELECT file_id FROM files WHERE file_path = ?",
                         params![relpath.to_str_lossy()],
-                        |r| r.get::<_, i64>(0).map(|v| v as usize),
+                        |r| r.get(0),
                     )
                     .optional()?
                     .with_context(|| format!("Path '{relpath}' not found anywhere in recorded history"))?;
@@ -62,8 +62,8 @@ impl query::Engine {
                 let mut progress = progress.add_child("run sql query");
                 progress.init(None, gix::progress::count("round"));
                 while let Some(file_id) = stack.pop() {
-                    let rows = by_file_id.query_map([file_id as i64], |r| {
-                        Ok((r.get(0)?, r.get::<_, i64>(1)? as usize, r.get::<_, Option<i64>>(2)?.map(|v| v as usize), r.get(3)?, r.get::<_, i64>(4)? as usize, r.get::<_, i64>(5)? as usize))
+                    let rows = by_file_id.query_map([file_id], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
                     })?;
                     progress.inc();
                     for row in rows {
@@ -92,7 +92,7 @@ impl query::Engine {
                         if let Some(source_id) = source_file_id {
                             if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(source_id) {
                                 stack.push(source_id);
-                                e.insert(path_by_id.query_row([source_id as i64], |r| r.get(0))?);
+                                e.insert(path_by_id.query_row([source_id], |r| r.get(0))?);
                             }
                         }
                     }
