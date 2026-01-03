@@ -62,7 +62,7 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 anyhow = "1.0.100"
 thiserror = "2.0.17"
 bytesize = "2.3.1"
-tempfile = "3.23.0"
+tempfile = "3.24.0"
 
 # for async-client
 async-trait = { version = "0.1.51", optional = true }
@@ -77,17 +77,17 @@ gix-url = { version = "^0.34.0", path = "../gix-url", optional = true }
 jwalk = { version = "0.8.0", optional = true }
 
 # for 'hours'
-fs-err = { version = "3.1.2", optional = true }
+fs-err = { version = "3.2.2", optional = true }
 crossbeam-channel = { version = "0.5.15", optional = true }
 smallvec = { version = "1.15.1", optional = true }
 
 # for 'query' and 'corpus'
-rusqlite = { version = "0.37.0", optional = true, features = ["bundled"] }
+rusqlite = { version = "0.38.0", optional = true, features = ["bundled"] }
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }
 sysinfo = { version = "0.37.2", optional = true, default-features = false, features = ["system"] }
-serde_json = { version = "1.0.145", optional = true }
+serde_json = { version = "1.0.148", optional = true }
 tracing-forest = { version = "0.2.0", features = ["serde"], optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 tracing = { version = "0.1.43", optional = true }
