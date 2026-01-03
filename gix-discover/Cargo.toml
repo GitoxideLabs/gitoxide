@@ -36,4 +36,4 @@ is_ci = "1.1.1"
 defer = "0.2.1"
 
 [target.'cfg(any(unix, windows))'.dev-dependencies]
-tempfile = "3.23.0"
+tempfile = "3.24.0"

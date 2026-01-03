@@ -32,4 +32,4 @@ fastrand = { version = "2.1.0", default-features = false, features = ["std"] }
 [dev-dependencies]
 crossbeam-channel = "0.5.15"
 is_ci = "1.1.1"
-tempfile = "3.23.0"
+tempfile = "3.24.0"
