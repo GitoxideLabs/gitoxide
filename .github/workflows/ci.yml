@@ -54,6 +54,19 @@ jobs:
           # available. See https://github.com/rust-lang/cargo/issues/5657 on that feature,
           # and https://github.com/GitoxideLabs/gitoxide/issues/1119 on its use here.
           cargo +nightly update -Zminimal-versions
+      - name: Upgrade `errno` just enough for `winapi` to build on modern Rust
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          # `gix-tempfile` depends directly on a recent version of `signal-hook-registry`. Since
+          # version 1.4.8, `signal-hook-registry` depends on `errno`, and it allows a wide version
+          # range. Downgrading dependencies to minimal versions in the previous step gives `errno`
+          # 0.2.0; on Windows, this depends on `winapi` 0.2. Until version 0.3, `winapi` relied on
+          # implicit wraparound in unsigned overflow at compile time, which modern Rust prohibits
+          # (https://github.com/rust-lang/rust/issues/49765). To work around the problem of having
+          # downgraded `errno` too far to build on Windows, we bump it back up just a bit. (These
+          # steps can't easily be done together in a single `cargo update` command, because there
+          # is no `errno@0.2` to upgrade until after the downgrade done in the previous step.)
+          cargo +nightly update -Zminimal-versions -p errno@0.2 --precise 0.2.4
       - name: Run some `cargo build` commands on `gix`
         run: just check-rust-version "$MSRV"
 
