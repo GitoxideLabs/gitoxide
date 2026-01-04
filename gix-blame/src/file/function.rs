@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, path::PathBuf};
 
 use gix_diff::{blob::intern::TokenSource, tree::Visit};
 use gix_hash::ObjectId;
@@ -61,6 +61,7 @@ use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statisti
 /// <---><---><-----><-------><-----><------->
 /// <---><---><-----><-------><-----><-><-><->
 pub fn file(
+    worktree_path: PathBuf,
     odb: impl gix_object::Find + gix_object::FindHeader,
     suspect: ObjectId,
     cache: Option<gix_commitgraph::Graph>,
@@ -313,6 +314,7 @@ pub fn file(
                 }
                 TreeDiffChange::Modification { previous_id, id } => {
                     let changes = blob_changes(
+                        worktree_path.clone(),
                         &odb,
                         resource_cache,
                         id,
@@ -345,6 +347,7 @@ pub fn file(
                     id,
                 } => {
                     let changes = blob_changes(
+                        worktree_path.clone(),
                         &odb,
                         resource_cache,
                         id,
@@ -747,99 +750,232 @@ fn tree_diff_with_rewrites_at_file_path(
     }
 }
 
+mod baseline {
+    use gix_diff::blob::unified_diff::HunkHeader;
+    use gix_object::bstr::ByteSlice;
+    use gix_object::bstr::{self};
+    use std::iter::Peekable;
+
+    static START_OF_HEADER: &[u8; 4] = b"@@ -";
+
+    #[derive(Debug, PartialEq)]
+    pub struct DiffHunk {
+        pub header: HunkHeader,
+    }
+
+    type Lines<'a> = Peekable<bstr::Lines<'a>>;
+
+    pub struct Baseline<'a> {
+        lines: Lines<'a>,
+    }
+
+    impl<'a> Baseline<'a> {
+        pub fn new(content: &'a [u8]) -> Baseline<'a> {
+            let mut lines = content.lines().peekable();
+            skip_header(&mut lines);
+            Baseline { lines }
+        }
+    }
+
+    impl Iterator for Baseline<'_> {
+        type Item = DiffHunk;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            let mut hunk_header = None;
+
+            while let Some(line) = self.lines.next() {
+                if line.starts_with(START_OF_HEADER) {
+                    assert!(hunk_header.is_none(), "should not overwrite existing hunk_header");
+                    hunk_header = parse_hunk_header(line).ok();
+
+                    continue;
+                }
+
+                match line[0] {
+                    b' ' | b'+' | b'-' => {
+                        // Do nothing.
+                    }
+                    b'\\' => {
+                        assert_eq!(line, "\\ No newline at end of file".as_bytes());
+                    }
+                    _ => unreachable!(
+                        "BUG: expecting unified diff format, found line: `{}`",
+                        line.to_str_lossy()
+                    ),
+                }
+
+                match self.lines.peek() {
+                    Some(next_line) if next_line.starts_with(START_OF_HEADER) => break,
+                    None => break,
+                    _ => {}
+                }
+            }
+
+            hunk_header.map(|hunk_header| DiffHunk { header: hunk_header })
+        }
+    }
+
+    fn skip_header(lines: &mut Lines<'_>) {
+        // diff --git a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        // index ccccccc..ddddddd 100644
+        // --- a/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        // +++ b/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+
+        let line = lines.next().expect("line to be present");
+        assert!(line.starts_with(b"diff --git "));
+
+        let line = lines.next().expect("line to be present");
+        assert!(line.starts_with(b"index "));
+
+        let line = lines.next().expect("line to be present");
+        assert!(line.starts_with(b"--- "));
+
+        let line = lines.next().expect("line to be present");
+        assert!(line.starts_with(b"+++ "));
+    }
+
+    /// Parse diff hunk headers that conform to the unified diff hunk header format.
+    ///
+    /// The parser is very primitive and relies on the fact that `+18` and `-18` are both parsed as
+    /// `18`. This allows us to split the input on ` ` and `,` only.
+    ///
+    /// @@ -18,6 +18,7 @@ abc def ghi
+    /// @@ -{before_hunk_start},{before_hunk_len} +{after_hunk_start},{after_hunk_len} @@
+    fn parse_hunk_header(line: &[u8]) -> std::io::Result<HunkHeader> {
+        let line = line.strip_prefix(START_OF_HEADER).unwrap();
+
+        let parts: Vec<_> = line.split(|b| *b == b' ').collect();
+        let before_parts: Vec<_> = parts[0].split(|b| *b == b',').collect();
+        let after_parts: Vec<_> = parts[1].split(|b| *b == b',').collect();
+
+        let (before_hunk_start, before_hunk_len) = match before_parts[..] {
+            [before_hunk_start, before_hunk_len] => (parse_number(before_hunk_start), parse_number(before_hunk_len)),
+            [before_hunk_start] => (parse_number(before_hunk_start), 1),
+            _ => unreachable!(),
+        };
+
+        let (after_hunk_start, after_hunk_len) = match after_parts[..] {
+            [after_hunk_start, after_hunk_len] => (parse_number(after_hunk_start), parse_number(after_hunk_len)),
+            [after_hunk_start] => (parse_number(after_hunk_start), 1),
+            _ => unreachable!(),
+        };
+
+        let hunk_header = HunkHeader {
+            before_hunk_start: if before_hunk_len == 0 {
+                before_hunk_start
+            } else {
+                before_hunk_start - 1
+            },
+            before_hunk_len,
+            after_hunk_start: if after_hunk_len == 0 {
+                after_hunk_start
+            } else {
+                after_hunk_start - 1
+            },
+            after_hunk_len,
+        };
+
+        Ok(hunk_header)
+    }
+
+    fn parse_number(bytes: &[u8]) -> u32 {
+        bytes
+            .to_str()
+            .expect("to be a valid UTF-8 string")
+            .parse::<u32>()
+            .expect("to be a number")
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[cfg(not(feature = "blob-experimental"))]
 fn blob_changes(
-    odb: impl gix_object::Find + gix_object::FindHeader,
-    resource_cache: &mut gix_diff::blob::Platform,
+    worktree_path: PathBuf,
+    _odb: impl gix_object::Find + gix_object::FindHeader,
+    _resource_cache: &mut gix_diff::blob::Platform,
     oid: ObjectId,
     previous_oid: ObjectId,
-    file_path: &BStr,
-    previous_file_path: &BStr,
+    _file_path: &BStr,
+    _previous_file_path: &BStr,
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Result<Vec<Change>, Error> {
-    use std::ops::Range;
+    use std::{io::Read, process::Stdio};
 
-    /// Record all [`Change`]s to learn about additions, deletions and unchanged portions of a *Source File*.
-    struct ChangeRecorder {
-        last_seen_after_end: u32,
-        hunks: Vec<Change>,
-        total_number_of_lines: u32,
+    if oid == previous_oid {
+        return Ok(Vec::new());
     }
 
-    impl ChangeRecorder {
-        /// `total_number_of_lines` is used to fill in the last unchanged hunk if needed
-        /// so that the entire file is represented by [`Change`].
-        fn new(total_number_of_lines: u32) -> Self {
-            ChangeRecorder {
-                last_seen_after_end: 0,
-                hunks: Vec::new(),
-                total_number_of_lines,
-            }
-        }
-    }
-
-    impl gix_diff::blob::Sink for ChangeRecorder {
-        type Out = Vec<Change>;
-
-        fn process_change(&mut self, before: Range<u32>, after: Range<u32>) {
-            // This checks for unchanged hunks.
-            if after.start > self.last_seen_after_end {
-                self.hunks
-                    .push(Change::Unchanged(self.last_seen_after_end..after.start));
-            }
-
-            match (!before.is_empty(), !after.is_empty()) {
-                (_, true) => {
-                    self.hunks.push(Change::AddedOrReplaced(
-                        after.start..after.end,
-                        before.end - before.start,
-                    ));
+    let mut git_diff_cmd = std::process::Command::new("git");
+    git_diff_cmd
+        .current_dir(worktree_path)
+        .args([
+            "diff",
+            &format!(
+                "--diff-algorithm={}",
+                match diff_algorithm {
+                    gix_diff::blob::Algorithm::Histogram => "histogram",
+                    gix_diff::blob::Algorithm::Myers => "myers",
+                    gix_diff::blob::Algorithm::MyersMinimal => "minimal",
                 }
-                (true, false) => {
-                    self.hunks.push(Change::Deleted(after.start, before.end - before.start));
-                }
-                (false, false) => unreachable!("BUG: imara-diff provided a non-change"),
-            }
-            self.last_seen_after_end = after.end;
-        }
+            ),
+            "--unified=0",
+            &format!("{previous_oid}"),
+            &format!("{oid}"),
+        ])
+        .stdout(Stdio::piped());
+    let mut child = git_diff_cmd.spawn().expect("TODO");
 
-        fn finish(mut self) -> Self::Out {
-            if self.total_number_of_lines > self.last_seen_after_end {
-                self.hunks
-                    .push(Change::Unchanged(self.last_seen_after_end..self.total_number_of_lines));
-            }
-            self.hunks
-        }
+    if !child.wait().expect("TODO").success() {
+        panic!("Command {git_diff_cmd:?} failed");
     }
 
-    resource_cache.set_resource(
-        previous_oid,
-        gix_object::tree::EntryKind::Blob,
-        previous_file_path,
-        gix_diff::blob::ResourceKind::OldOrSource,
-        &odb,
-    )?;
-    resource_cache.set_resource(
-        oid,
-        gix_object::tree::EntryKind::Blob,
-        file_path,
-        gix_diff::blob::ResourceKind::NewOrDestination,
-        &odb,
-    )?;
+    let mut diff = Vec::new();
+    child
+        .stdout
+        .expect("to be present")
+        .read_to_end(&mut diff)
+        .expect("TODO");
 
-    let outcome = resource_cache.prepare_diff()?;
-    let input = gix_diff::blob::intern::InternedInput::new(
-        tokens_for_diffing(outcome.old.data.as_slice().unwrap_or_default()),
-        tokens_for_diffing(outcome.new.data.as_slice().unwrap_or_default()),
-    );
-    let number_of_lines_in_destination = input.after.len();
-    let change_recorder = ChangeRecorder::new(number_of_lines_in_destination as u32);
+    let baseline = baseline::Baseline::new(&diff);
 
-    let res = gix_diff::blob::diff(diff_algorithm, &input, change_recorder);
+    let mut last_seen_after_end = 0;
+    let changes = baseline.fold(Vec::new(), |mut hunks, hunk| {
+        use gix_diff::blob::unified_diff::HunkHeader;
+
+        let HunkHeader {
+            before_hunk_start: _,
+            before_hunk_len,
+            after_hunk_start,
+            after_hunk_len,
+        } = hunk.header;
+
+        // This checks for unchanged hunks.
+        if after_hunk_start > last_seen_after_end {
+            hunks.push(Change::Unchanged(last_seen_after_end..after_hunk_start));
+        }
+
+        match (before_hunk_len > 0, after_hunk_len > 0) {
+            (_, true) => {
+                hunks.push(Change::AddedOrReplaced(
+                    after_hunk_start..(after_hunk_start + after_hunk_len),
+                    before_hunk_len,
+                ));
+            }
+            (true, false) => {
+                hunks.push(Change::Deleted(after_hunk_start, before_hunk_len));
+            }
+            (false, false) => unreachable!("BUG: imara-diff provided a non-change"),
+        }
+
+        last_seen_after_end = after_hunk_start + after_hunk_len;
+
+        hunks
+    });
+
     stats.blobs_diffed += 1;
-    Ok(res)
+
+    Ok(changes)
 }
 
 #[allow(clippy::too_many_arguments)]
