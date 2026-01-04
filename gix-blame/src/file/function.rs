@@ -981,6 +981,7 @@ fn blob_changes(
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "blob-experimental")]
 fn blob_changes(
+    _worktree_path: PathBuf,
     odb: impl gix_object::Find + gix_object::FindHeader,
     resource_cache: &mut gix_diff::blob::Platform,
     oid: ObjectId,
