@@ -38,6 +38,7 @@ impl Repository {
         };
 
         let outcome = gix_blame::file(
+            self.workdir().expect("TODO").to_path_buf(),
             &self.objects,
             suspect.into(),
             cache,
