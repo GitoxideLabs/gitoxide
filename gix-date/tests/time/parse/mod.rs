@@ -65,7 +65,7 @@ fn git_rfc2822() {
 #[test]
 fn raw() -> gix_testtools::Result {
     assert_eq!(
-        gix_date::parse("1660874655 +0800", None).map_err(|e| Box::new(e.as_error().clone()) as Box<dyn std::error::Error + Send + Sync>)?,
+        gix_date::parse("1660874655 +0800", None)?,
         Time {
             seconds: 1660874655,
             offset: 28800,
@@ -73,7 +73,7 @@ fn raw() -> gix_testtools::Result {
     );
 
     assert_eq!(
-        gix_date::parse("1112911993 +0100", None).map_err(|e| Box::new(e.as_error().clone()) as Box<dyn std::error::Error + Send + Sync>)?,
+        gix_date::parse("1112911993 +0100", None)?,
         Time {
             seconds: 1112911993,
             offset: 3600,
@@ -81,7 +81,7 @@ fn raw() -> gix_testtools::Result {
     );
 
     assert_eq!(
-        gix_date::parse("1313584730 +051500", None).map_err(|e| Box::new(e.as_error().clone()) as Box<dyn std::error::Error + Send + Sync>)?,
+        gix_date::parse("1313584730 +051500", None)?,
         Time {
             seconds: 1313584730,
             offset: 18900,
@@ -90,7 +90,7 @@ fn raw() -> gix_testtools::Result {
     );
 
     assert_eq!(
-        gix_date::parse("1313584730 -0230", None).map_err(|e| Box::new(e.as_error().clone()) as Box<dyn std::error::Error + Send + Sync>)?,
+        gix_date::parse("1313584730 -0230", None)?,
         Time {
             seconds: 1313584730,
             offset: -150 * 60,

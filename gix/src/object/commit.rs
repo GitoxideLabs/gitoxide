@@ -11,7 +11,7 @@ mod error {
         #[error("The commit could not be decoded fully or partially")]
         Decode(#[from] gix_object::decode::Error),
         #[error("The commit date could not be parsed")]
-        ParseDate(gix_date::parse::Error),
+        ParseDate(#[from] gix_date::parse::ParseError),
         #[error("Expected object of type {}, but got {}", .expected, .actual)]
         ObjectKind {
             expected: gix_object::Kind,
@@ -76,9 +76,7 @@ impl<'repo> Commit<'repo> {
     ///
     /// For the time at which it was authored, refer to `.decode()?.author()?.time()`.
     pub fn time(&self) -> Result<gix_date::Time, Error> {
-        self.committer()?
-            .time()
-            .map_err(|e| Error::ParseDate(e.as_error().clone()))
+        Ok(self.committer()?.time()?)
     }
 
     /// Decode the entire commit object and return it for accessing all commit information.
