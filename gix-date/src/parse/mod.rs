@@ -17,7 +17,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::RelativeTimeConversion => write!(f, "Could not convert a duration into a date"),
-            Error::InvalidDateString { input } => write!(f, "Date string can not be parsed: {input}"),
+            Error::InvalidDateString { .. } => write!(f, "Date string can not be parsed"),
             Error::InvalidDate(_) => write!(f, "The heat-death of the universe happens before this date"),
             Error::MissingCurrentTime => write!(f, "Current time is missing but required to handle relative dates."),
         }
