@@ -5,7 +5,7 @@ use jiff::{civil::Date, fmt::rfc2822, tz::TimeZone, Zoned};
 use crate::parse::git::parse_git_date_format;
 use crate::parse::raw::parse_raw;
 use crate::{
-    parse::{relative, Error, ParseError},
+    parse::{relative, Error},
     time::format::{DEFAULT, GITOXIDE, ISO8601, ISO8601_STRICT, SHORT},
     OffsetInSeconds, SecondsSinceUnixEpoch, Time,
 };
@@ -71,7 +71,7 @@ use crate::{
 /// If `now` is October 27, 2023 at 10:00:00 UTC:
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
-pub fn parse(input: &str, now: Option<SystemTime>) -> std::result::Result<Time, ParseError> {
+pub fn parse(input: &str, now: Option<SystemTime>) -> exn::Result<Time, Error> {
     Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
@@ -97,7 +97,7 @@ pub fn parse(input: &str, now: Option<SystemTime>) -> std::result::Result<Time, 
         // Format::Raw
         val
     } else {
-        return Err(ParseError::new(Error::InvalidDateString { input: input.into() }))
+        exn::bail!(Error::InvalidDateString { input: input.into() })
     })
 }
 

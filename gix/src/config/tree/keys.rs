@@ -437,8 +437,8 @@ mod time {
                 .map_err(|_| gix_date::parse::Error::InvalidDateString {
                     input: value.to_string(),
                 })
-                .map_err(gix_date::parse::ParseError::from)?;
-            gix_date::parse(str_value, now)
+                .map_err(|e| gix_date::parse::ParseError::from_exn(exn::Exn::from(e)))?;
+            gix_date::parse(str_value, now).map_err(gix_date::parse::ParseError::from)
         }
     }
 }
@@ -529,7 +529,8 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            gix_date::parse(value.to_str()?, std::time::SystemTime::now().into())?;
+            gix_date::parse(value.to_str()?, std::time::SystemTime::now().into())
+                .map_err(gix_date::parse::ParseError::from)?;
             Ok(())
         }
     }

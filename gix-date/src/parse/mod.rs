@@ -4,52 +4,6 @@ use smallvec::SmallVec;
 
 use crate::Time;
 
-/// A newtype wrapper around `exn::Exn<Error>` that implements `std::error::Error`.
-#[derive(Debug)]
-pub struct ParseError(exn::Exn<Error>);
-
-impl ParseError {
-    /// Create a new ParseError from an Error.
-    pub(crate) fn new(err: Error) -> Self {
-        Self(exn::Exn::from(err))
-    }
-
-    /// Get a reference to the underlying error.
-    pub fn as_error(&self) -> &Error {
-        self.0.as_error()
-    }
-
-    /// Get a reference to the underlying Exn.
-    pub fn as_exn(&self) -> &exn::Exn<Error> {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for ParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // Return the underlying Error as the source
-        Some(self.0.as_error())
-    }
-}
-
-impl From<Error> for ParseError {
-    fn from(err: Error) -> Self {
-        Self::new(err)
-    }
-}
-
-impl From<exn::Exn<Error>> for ParseError {
-    fn from(exn: exn::Exn<Error>) -> Self {
-        Self(exn)
-    }
-}
-
 /// Errors that can occur when parsing dates.
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
@@ -77,6 +31,43 @@ impl std::error::Error for Error {
             Error::InvalidDate(err) => Some(err),
             _ => None,
         }
+    }
+}
+
+/// A wrapper around `exn::Exn<Error>` that implements `std::error::Error`.
+///
+/// This type is returned by functions that integrate with external APIs requiring `std::error::Error`,
+/// while internally using exn for context-aware error tracking.
+#[derive(Debug)]
+pub struct ParseError(exn::Exn<Error>);
+
+impl ParseError {
+    /// Create a ParseError from an exn error.
+    pub fn from_exn(exn: exn::Exn<Error>) -> Self {
+        Self(exn)
+    }
+
+    /// Get a reference to the underlying error.
+    pub fn as_error(&self) -> &Error {
+        self.0.as_error()
+    }
+}
+
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl std::error::Error for ParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_error())
+    }
+}
+
+impl From<exn::Exn<Error>> for ParseError {
+    fn from(exn: exn::Exn<Error>) -> Self {
+        Self(exn)
     }
 }
 
@@ -123,7 +114,7 @@ impl FromStr for Time {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         crate::parse_header(s)
             .ok_or_else(|| Error::InvalidDateString { input: s.into() })
-            .map_err(ParseError::from)
+            .map_err(|e| ParseError::from_exn(exn::Exn::from(e)))
     }
 }
 
