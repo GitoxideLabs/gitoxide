@@ -4,17 +4,34 @@ use smallvec::SmallVec;
 
 use crate::Time;
 
-#[derive(thiserror::Error, Debug, Clone)]
+/// Errors that can occur when parsing dates.
+#[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not convert a duration into a date")]
     RelativeTimeConversion,
-    #[error("Date string can not be parsed")]
     InvalidDateString { input: String },
-    #[error("The heat-death of the universe happens before this date")]
-    InvalidDate(#[from] std::num::TryFromIntError),
-    #[error("Current time is missing but required to handle relative dates.")]
+    InvalidDate(std::num::TryFromIntError),
     MissingCurrentTime,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::RelativeTimeConversion => write!(f, "Could not convert a duration into a date"),
+            Error::InvalidDateString { input } => write!(f, "Date string can not be parsed: {input}"),
+            Error::InvalidDate(err) => write!(f, "The heat-death of the universe happens before this date: {err}"),
+            Error::MissingCurrentTime => write!(f, "Current time is missing but required to handle relative dates."),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::InvalidDate(err) => Some(err),
+            _ => None,
+        }
+    }
 }
 
 /// A container for just enough bytes to hold the largest-possible [`time`](Time) instance.
