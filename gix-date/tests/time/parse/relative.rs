@@ -10,8 +10,9 @@ fn large_offsets() {
 
 #[test]
 fn large_offsets_do_not_panic() {
+    let result = gix_date::parse("9999999999 weeks ago", Some(std::time::UNIX_EPOCH));
     assert!(matches!(
-        gix_date::parse("9999999999 weeks ago", Some(std::time::UNIX_EPOCH)),
+        result.as_ref().map_err(|e| e.as_error()),
         Err(gix_date::parse::Error::RelativeTimeConversion)
     ));
 }

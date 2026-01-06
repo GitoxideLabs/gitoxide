@@ -19,6 +19,7 @@ pub enum Error {
     #[error("Could not parse time {:?} for revlog lookup.", .input)]
     Time {
         input: BString,
+        #[source]
         source: Option<gix_date::parse::Error>,
     },
     #[error("Sibling branches like 'upstream' or 'push' require a branch name with remote configuration, got {:?}", .name)]

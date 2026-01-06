@@ -19,7 +19,7 @@ mod _ref {
             Ok(Signature {
                 name: self.name.to_owned(),
                 email: self.email.to_owned(),
-                time: self.time()?,
+                time: self.time().map_err(|e| e.as_error().clone())?,
             })
         }
     }
@@ -58,7 +58,7 @@ mod _ref {
 
         /// Parse the `time` field for access to the passed time since unix epoch, and the time offset.
         /// The format is expected to be [raw](gix_date::parse_header()).
-        pub fn time(&self) -> Result<gix_date::Time, gix_date::parse::Error> {
+        pub fn time(&self) -> Result<gix_date::Time, exn::Exn<gix_date::parse::Error>> {
             self.time.parse()
         }
     }

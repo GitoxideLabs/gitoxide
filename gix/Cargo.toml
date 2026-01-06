@@ -377,6 +377,7 @@ gix-transport = { version = "^0.52.1", path = "../gix-transport", optional = tru
 # Just to get the progress-tree feature
 prodash = { version = "30.0.1", optional = true, features = ["progress-tree"] }
 signal-hook = { version = "0.4.1", default-features = false, optional = true }
+exn = "0.2.1"
 thiserror = "2.0.17"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",

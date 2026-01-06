@@ -1004,6 +1004,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "exn"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bad13781b9dd97d4489a74e38bb913254d2877840b0b8dece279193761f1d50f"
+
+[[package]]
 name = "expectrl"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1324,6 +1330,7 @@ dependencies = [
  "anyhow",
  "async-std",
  "document-features",
+ "exn",
  "gix",
  "gix-actor",
  "gix-archive",
@@ -1396,6 +1403,7 @@ version = "0.37.1"
 dependencies = [
  "bstr",
  "document-features",
+ "exn",
  "gix-date",
  "gix-hash",
  "gix-testtools",
@@ -1590,6 +1598,7 @@ version = "0.12.1"
 dependencies = [
  "bstr",
  "document-features",
+ "exn",
  "gix-hash",
  "gix-testtools",
  "itoa",
@@ -2217,6 +2226,7 @@ dependencies = [
  "bitflags 2.10.0",
  "bstr",
  "document-features",
+ "exn",
  "gix-commitgraph",
  "gix-date",
  "gix-hash",

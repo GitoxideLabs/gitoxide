@@ -72,10 +72,12 @@ impl Time {
 }
 
 impl FromStr for Time {
-    type Err = Error;
+    type Err = exn::Exn<Error>;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::parse_header(s).ok_or_else(|| Error::InvalidDateString { input: s.into() })
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        crate::parse_header(s)
+            .ok_or_else(|| Error::InvalidDateString { input: s.into() })
+            .map_err(exn::Exn::from)
     }
 }
 

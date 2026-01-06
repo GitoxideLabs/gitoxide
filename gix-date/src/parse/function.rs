@@ -71,7 +71,7 @@ use crate::{
 /// If `now` is October 27, 2023 at 10:00:00 UTC:
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
-pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Error> {
+pub fn parse(input: &str, now: Option<SystemTime>) -> std::result::Result<Time, exn::Exn<Error>> {
     Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
@@ -97,7 +97,7 @@ pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Error> {
         // Format::Raw
         val
     } else {
-        return Err(Error::InvalidDateString { input: input.into() });
+        exn::bail!(Error::InvalidDateString { input: input.into() })
     })
 }
 
@@ -168,7 +168,7 @@ pub fn parse_header(input: &str) -> Option<Time> {
 /// whose weekdays are inconsistent with the date. While the day-of-week
 /// still must be parsed, it is otherwise ignored. This seems to be
 /// consistent with how `git` behaves.
-fn strptime_relaxed(fmt: &str, input: &str) -> Result<Zoned, jiff::Error> {
+fn strptime_relaxed(fmt: &str, input: &str) -> std::result::Result<Zoned, jiff::Error> {
     let mut tm = jiff::fmt::strtime::parse(fmt, input)?;
     tm.set_weekday(None);
     tm.to_zoned()
@@ -176,7 +176,7 @@ fn strptime_relaxed(fmt: &str, input: &str) -> Result<Zoned, jiff::Error> {
 
 /// This is just like strptime_relaxed, except for RFC 2822 parsing.
 /// Namely, it permits the weekday to be inconsistent with the date.
-fn rfc2822_relaxed(input: &str) -> Result<Zoned, jiff::Error> {
+fn rfc2822_relaxed(input: &str) -> std::result::Result<Zoned, jiff::Error> {
     static P: rfc2822::DateTimeParser = rfc2822::DateTimeParser::new().relaxed_weekday(true);
     P.parse_zoned(input)
 }

@@ -439,7 +439,7 @@ where
                                 .and_then(|date| {
                                     gix_date::parse(date, None).map_err(|err| Error::Time {
                                         input: nav.into(),
-                                        source: err.into(),
+                                        source: Some(err.as_error().clone()),
                                     })
                                 })?;
                             delegate::ReflogLookup::Date(time)
@@ -466,7 +466,7 @@ where
                     .and_then(|date| {
                         gix_date::parse(date, Some(SystemTime::now())).map_err(|err| Error::Time {
                             input: nav.into(),
-                            source: err.into(),
+                            source: Some(err.as_error().clone()),
                         })
                     })?;
                 delegate

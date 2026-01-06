@@ -22,6 +22,7 @@ serde = ["dep:serde", "bstr/serde", "gix-date/serde"]
 gix-date = { version = "^0.12.1", path = "../gix-date" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 
+exn = "0.2.1"
 thiserror = "2.0.17"
 bstr = { version = "1.12.0", default-features = false, features = [
     "std",
