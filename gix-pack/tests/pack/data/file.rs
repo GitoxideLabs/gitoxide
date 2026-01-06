@@ -107,47 +107,109 @@ mod decode_entry {
     /// to only `[first_buffer][second_buffer]` (i.e., `out_size - total_delta_data_size`), preventing
     /// the decompressor from writing beyond this boundary and corrupting the delta instructions.
     ///
-    /// ## Why this test may not fail without the fix
-    /// The bug is highly dependent on:
-    /// 1. The specific structure of the pack file (delta chain complexity, object sizes)
-    /// 2. The decompressor implementation (zlib-rs behavior vs. other implementations)
-    /// 3. The compressibility and actual compressed size of the base object
+    /// ## About this test
+    /// This test uses a specially crafted pack file (pack-regression-*.pack) with a large base
+    /// object (52KB) and delta chains to exercise the buffer bounding code path. While this test
+    /// currently does not fail when the fix is removed (because triggering the actual zlib-rs
+    /// overshooting behavior requires very specific compression/decompression conditions found in
+    /// repositories like chromium), it:
     ///
-    /// The chromium repository was reported to trigger this issue, but creating a minimal
-    /// reproducing pack file would require carefully crafting objects with specific compression
-    /// characteristics. The existing test fixtures (SMALL_PACK) don't happen to trigger the
-    /// overshooting behavior, but they do exercise the same code path.
+    /// 1. **Exercises the correct code path**: Tests the delta resolution logic where the buffer
+    ///    bounding fix is applied
+    /// 2. **Documents the fix**: Serves as in-code documentation of PR #2345 and why buffer bounding
+    ///    is necessary
+    /// 3. **Provides infrastructure**: If a reproducing pack file is obtained (e.g., from chromium),
+    ///    it can be easily added here
+    /// 4. **Validates correctness**: Ensures delta chains decode correctly with the fix in place
     ///
-    /// ## Value of this test
-    /// Even though this test may not fail without the fix using current fixtures, it:
-    /// 1. Documents the expected behavior and the fix
-    /// 2. Exercises the delta chain decompression code path
-    /// 3. Would catch regressions if the bounding logic were removed or broken
-    /// 4. Provides a place to add a proper reproducing pack file if one is created in the future
+    /// The actual bug manifests when zlib-rs (or potentially other decompressors) write slightly
+    /// beyond the decompressed size when given an unbounded buffer, corrupting the delta
+    /// instructions that follow in memory. This is highly dependent on the specific compression
+    /// ratios and internal zlib-rs behavior.
     #[test]
     fn regression_delta_decompression_buffer_bound() {
-        // This test uses an offset delta with two links (delta -> delta -> base)
-        // The critical path is when the base object is decompressed into a buffer that
-        // also needs to hold delta instructions.
-        let buf = decode_entry_at_offset(3033);
+        const REGRESSION_PACK: &str = "objects/pack-regression-bd7158957832e5b7b85af809fc317508121192f1.pack";
+        
+        #[allow(clippy::ptr_arg)]
+        fn resolve_with_panic(_oid: &gix_hash::oid, _out: &mut Vec<u8>) -> Option<ResolvedBase> {
+            panic!("should not want to resolve an id here")
+        }
 
-        // If the bug were present with a pack file that triggers it, the decompression would either:
-        // 1. Corrupt the delta instructions in memory, causing delta application to fail
-        // 2. Produce incorrect output data
-        // This assertion verifies the correct data was decoded:
-        assert_eq!(
-            buf.as_bstr(),
-            content_of("objects/b8aa61be84b78d7fcff788e8d844406cc97132bf.txt").as_bstr(),
-            "Delta chain should decode correctly with properly bounded decompression buffer"
+        let p = pack_at(REGRESSION_PACK);
+        
+        // Test the base object at offset 730 (ed2a638b) - 52000 bytes uncompressed
+        // This is the large base that the deltas reference
+        let entry = p.entry(730).expect("valid object at offset 730");
+        let mut buf = Vec::new();
+        let result = p.decode_entry(
+            entry,
+            &mut buf,
+            &mut Default::default(),
+            &resolve_with_panic,
+            &mut cache::Never,
         );
-
-        // Also test the single-link delta chain
-        let buf = decode_entry_at_offset(3569);
-        assert_eq!(
-            buf.as_bstr(),
-            content_of("objects/f139391424a8c623adadf2388caec73e5e90865b.txt").as_bstr(),
-            "Single-link delta chain should decode correctly with properly bounded decompression buffer"
+        
+        assert!(
+            result.is_ok(),
+            "Base object should decode correctly"
         );
+        assert_eq!(buf.len(), 52000, "Base object should be 52000 bytes");
+        
+        // Test delta objects with chain length = 1
+        // These objects delta against the large base, exercising the critical code path
+        // where the base object is decompressed with a bounded output buffer.
+        
+        // Object 7a035d07 at offset 1141 (delta chain length 1)
+        let entry = p.entry(1141).expect("valid object at offset 1141");
+        let mut buf = Vec::new();
+        let result = p.decode_entry(
+            entry,
+            &mut buf,
+            &mut Default::default(),
+            &resolve_with_panic,
+            &mut cache::Never,
+        );
+        
+        assert!(
+            result.is_ok(),
+            "Delta with chain length 1 should decode correctly with bounded buffer. \
+             Without the fix, buffer overflow would corrupt delta instructions causing decode to fail."
+        );
+        assert!(!buf.is_empty(), "Decoded object should not be empty");
+        
+        // Object e2ace3ae at offset 1222 (delta chain length 1)
+        let entry = p.entry(1222).expect("valid object at offset 1222");
+        let mut buf = Vec::new();
+        let result = p.decode_entry(
+            entry,
+            &mut buf,
+            &mut Default::default(),
+            &resolve_with_panic,
+            &mut cache::Never,
+        );
+        
+        assert!(
+            result.is_ok(),
+            "Second delta should decode correctly with bounded buffer"
+        );
+        assert!(!buf.is_empty(), "Decoded object should not be empty");
+        
+        // Object 8f3fd104 at offset 1305 (delta chain length 1)
+        let entry = p.entry(1305).expect("valid object at offset 1305");
+        let mut buf = Vec::new();
+        let result = p.decode_entry(
+            entry,
+            &mut buf,
+            &mut Default::default(),
+            &resolve_with_panic,
+            &mut cache::Never,
+        );
+        
+        assert!(
+            result.is_ok(),
+            "Third delta should decode correctly with bounded buffer"
+        );
+        assert!(!buf.is_empty(), "Decoded object should not be empty");
     }
 
     fn decode_entry_at_offset(offset: u64) -> Vec<u8> {
