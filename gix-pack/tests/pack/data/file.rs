@@ -130,7 +130,7 @@ mod decode_entry {
         // The critical path is when the base object is decompressed into a buffer that
         // also needs to hold delta instructions.
         let buf = decode_entry_at_offset(3033);
-        
+
         // If the bug were present with a pack file that triggers it, the decompression would either:
         // 1. Corrupt the delta instructions in memory, causing delta application to fail
         // 2. Produce incorrect output data
@@ -140,7 +140,7 @@ mod decode_entry {
             content_of("objects/b8aa61be84b78d7fcff788e8d844406cc97132bf.txt").as_bstr(),
             "Delta chain should decode correctly with properly bounded decompression buffer"
         );
-        
+
         // Also test the single-link delta chain
         let buf = decode_entry_at_offset(3569);
         assert_eq!(
