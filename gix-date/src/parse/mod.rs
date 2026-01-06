@@ -4,16 +4,19 @@ use smallvec::SmallVec;
 
 use crate::Time;
 
-#[derive(thiserror::Error, Debug, Clone)]
+#[derive(Debug, Clone, snafu::Snafu)]
 #[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not convert a duration into a date")]
+    #[snafu(display("Could not convert a duration into a date"))]
     RelativeTimeConversion,
-    #[error("Date string can not be parsed")]
+    #[snafu(display("Date string can not be parsed"))]
     InvalidDateString { input: String },
-    #[error("The heat-death of the universe happens before this date")]
-    InvalidDate(#[from] std::num::TryFromIntError),
-    #[error("Current time is missing but required to handle relative dates.")]
+    #[snafu(display("The heat-death of the universe happens before this date"))]
+    InvalidDate {
+        #[snafu(source)]
+        source: std::num::TryFromIntError,
+    },
+    #[snafu(display("Current time is missing but required to handle relative dates."))]
     MissingCurrentTime,
 }
 
