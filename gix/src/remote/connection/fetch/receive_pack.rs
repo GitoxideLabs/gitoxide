@@ -1,7 +1,7 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_odb::store::RefreshMode;
-use gix_protocol::fetch::{negotiate, Arguments};
+use gix_protocol::fetch::{negotiate, refmap, Arguments, Shallow};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
@@ -77,7 +77,7 @@ where
         P::SubProgress: 'static,
     {
         let ref_map = &self.ref_map;
-        if ref_map.mappings.is_empty() && !ref_map.remote_refs.is_empty() {
+        if ref_map.mappings.is_empty() && !ref_map.remote_refs.is_empty() && self.additional_wants.is_empty() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
             return Err(Error::NoMapping {
@@ -98,6 +98,12 @@ where
             });
         }
 
+        let filter_argument = self
+            .filter
+            .as_ref()
+            .map(crate::remote::fetch::ObjectFilter::to_argument_string)
+            .filter(|_| self.additional_wants.is_empty());
+
         let fetch_options = gix_protocol::fetch::Options {
             shallow_file: repo.shallow_file(),
             shallow: &self.shallow,
@@ -109,6 +115,7 @@ where
                 .map(|val| Clone::REJECT_SHALLOW.enrich_error(val))
                 .transpose()?
                 .unwrap_or(false),
+            filter: filter_argument.as_deref(),
         };
         let context = gix_protocol::fetch::Context {
             handshake: &mut handshake,
@@ -147,6 +154,7 @@ where
             tags: con.remote.fetch_tags,
             negotiator,
             open_options: repo.options.clone(),
+            additional_wants: &self.additional_wants,
         };
 
         let write_pack_options = gix_pack::bundle::write::Options {
@@ -248,11 +256,12 @@ struct Negotiate<'a, 'b, 'c> {
     tags: gix_protocol::fetch::Tags,
     negotiator: Box<dyn gix_negotiate::Negotiator>,
     open_options: crate::open::Options,
+    additional_wants: &'a [gix_hash::ObjectId],
 }
 
 impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
     fn mark_complete_and_common_ref(&mut self) -> Result<negotiate::Action, negotiate::Error> {
-        negotiate::mark_complete_and_common_ref(
+        let action = negotiate::mark_complete_and_common_ref(
             &self.objects,
             self.refs,
             {
@@ -274,18 +283,71 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
             self.ref_map,
             self.shallow,
             negotiate::make_refmapping_ignore_predicate(self.tags, self.ref_map),
-        )
+        )?;
+
+        if self.additional_wants.is_empty() {
+            return Ok(action);
+        }
+
+        Ok(match action {
+            negotiate::Action::MustNegotiate {
+                remote_ref_target_known,
+            } => negotiate::Action::MustNegotiate {
+                remote_ref_target_known,
+            },
+            negotiate::Action::NoChange | negotiate::Action::SkipToRefUpdate => negotiate::Action::MustNegotiate {
+                remote_ref_target_known: std::iter::repeat_n(true, self.ref_map.mappings.len()).collect(),
+            },
+        })
     }
 
     fn add_wants(&mut self, arguments: &mut Arguments, remote_ref_target_known: &[bool]) -> bool {
-        negotiate::add_wants(
-            self.objects,
-            arguments,
-            self.ref_map,
-            remote_ref_target_known,
-            self.shallow,
-            negotiate::make_refmapping_ignore_predicate(self.tags, self.ref_map),
-        )
+        if self.additional_wants.is_empty() {
+            let mut has_wants = negotiate::add_wants(
+                self.objects,
+                arguments,
+                self.ref_map,
+                remote_ref_target_known,
+                self.shallow,
+                negotiate::make_refmapping_ignore_predicate(self.tags, self.ref_map),
+            );
+
+            for want in self.additional_wants {
+                arguments.want(want);
+                has_wants = true;
+            }
+
+            return has_wants;
+        }
+
+        let mut has_wants = false;
+        let mapping_is_ignored = negotiate::make_refmapping_ignore_predicate(self.tags, self.ref_map);
+        let is_shallow = !matches!(self.shallow, Shallow::NoChange);
+        for (mapping, known) in self.ref_map.mappings.iter().zip(remote_ref_target_known) {
+            if !is_shallow && *known {
+                continue;
+            }
+            if mapping_is_ignored(mapping) {
+                continue;
+            }
+
+            if !arguments.can_use_ref_in_want() || matches!(mapping.remote, refmap::Source::ObjectId(_)) {
+                if let Some(id) = mapping.remote.as_id() {
+                    arguments.want(id);
+                    has_wants = true;
+                }
+            } else if let Some(name) = mapping.remote.as_name() {
+                arguments.want_ref(name);
+                has_wants = true;
+            }
+        }
+
+        for want in self.additional_wants {
+            arguments.want(want);
+            has_wants = true;
+        }
+
+        has_wants
     }
 
     fn one_round(
@@ -294,12 +356,24 @@ impl gix_protocol::fetch::Negotiate for Negotiate<'_, '_, '_> {
         arguments: &mut Arguments,
         previous_response: Option<&gix_protocol::fetch::Response>,
     ) -> Result<(negotiate::Round, bool), negotiate::Error> {
-        negotiate::one_round(
-            self.negotiator.deref_mut(),
-            &mut *self.graph,
-            state,
-            arguments,
-            previous_response,
-        )
+        if self.additional_wants.is_empty() {
+            return negotiate::one_round(
+                self.negotiator.deref_mut(),
+                &mut *self.graph,
+                state,
+                arguments,
+                previous_response,
+            );
+        }
+
+        Ok((
+            negotiate::Round {
+                haves_sent: 0,
+                in_vain: 0,
+                haves_to_send: 0,
+                previous_response_had_at_least_one_in_common: false,
+            },
+            true,
+        ))
     }
 }
