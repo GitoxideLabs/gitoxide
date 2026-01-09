@@ -57,7 +57,7 @@ impl Curl {
         self.handle = Some(handle);
         self.req = req;
         self.res = res;
-        err_that_brought_thread_down.into()
+        err_that_brought_thread_down
     }
 
     fn make_request(
