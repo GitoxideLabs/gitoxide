@@ -128,18 +128,19 @@ impl Default for Options<'_> {
 }
 
 /// The error returned by the [`describe()`][function::describe()] function.
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("The parents of commit {} could not be added to graph during traversal", oid.to_hex())]
-    InsertParentsToGraph {
-        #[source]
-        err: crate::graph::insert_parents::Error,
-        oid: gix_hash::ObjectId,
-    },
-    #[error("A commit could not be decoded during traversal")]
-    Decode(#[from] gix_object::decode::Error),
+pub type Error = Simple;
+
+/// A simple error type for describe operations.
+#[derive(Debug)]
+pub struct Simple(pub String);
+
+impl std::fmt::Display for Simple {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
+
+impl std::error::Error for Simple {}
 
 pub(crate) mod function {
     use std::{borrow::Cow, cmp::Ordering};
@@ -147,7 +148,7 @@ pub(crate) mod function {
     use bstr::BStr;
     use gix_hash::oid;
 
-    use super::{Error, Outcome};
+    use super::{Error, Simple, Outcome};
     use crate::{
         describe::{CommitTime, Flags, Options, MAX_CANDIDATES},
         Graph, PriorityQueue,
@@ -320,7 +321,12 @@ pub(crate) mod function {
                 &mut |_parent_id, flags| *flags |= commit_flags,
                 first_parent,
             )
-            .map_err(|err| Error::InsertParentsToGraph { err, oid: commit })?;
+            .map_err(|_| {
+                Simple(format!(
+                    "could not insert parents of commit {} into graph",
+                    commit.to_hex()
+                ))
+            })?;
         Ok(())
     }
 

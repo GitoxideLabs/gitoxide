@@ -58,7 +58,8 @@ fn followed_by_zero_is_peeling_to_commit() {
 #[test]
 fn explicitly_positive_numbers_are_invalid() {
     let err = try_parse("@^+1").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::SignedNumber {input} if input == "+1"));
+    assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"+1".as_ref()));
+    assert!(err.message.contains("positive numbers are invalid"));
 }
 
 #[test]
@@ -181,11 +182,12 @@ fn empty_braces_deref_a_tag() {
 #[test]
 fn invalid_object_type() {
     let err = try_parse("@^{invalid}").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::InvalidObject {input} if input == "invalid"));
+    assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"invalid".as_ref()));
+    assert!(err.message.contains("cannot peel"));
 
     let err = try_parse("@^{Commit}").unwrap_err();
     assert!(
-        matches!(err, spec::parse::Error::InvalidObject {input} if input == "Commit"),
+        err.input.as_ref().map(|i| i.as_ref()) == Some(b"Commit".as_ref()) && err.message.contains("cannot peel"),
         "these types are case sensitive"
     );
 }
@@ -203,32 +205,45 @@ fn invalid_caret_without_previous_refname() {
 
     for revspec in ["^^^HEAD", "^^HEAD"] {
         let err = try_parse(revspec).unwrap_err();
-        assert!(matches!(err, spec::parse::Error::UnconsumedInput {input} if input == "HEAD"));
+        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"HEAD".as_ref()));
+        assert!(err.message.contains("unconsumed input"));
     }
 }
 
 #[test]
 fn incomplete_escaped_braces_in_regex_are_invalid() {
     let err = try_parse(r"@^{/a\{1}}").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnconsumedInput {input} if input == "}"));
+    assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"}".as_ref()));
+    assert!(err.message.contains("unconsumed input"));
 
     let err = try_parse(r"@^{/a{1\}}").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnclosedBracePair {input} if input == r"{/a{1\}}"));
+    assert!(
+        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{/a{1\}}".as_ref())
+            && err.message.contains("unclosed brace")
+    );
 }
 
 #[test]
 fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
     let err = try_parse(r#"@^{/!hello}"#).unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnspecifiedRegexModifier {regex} if regex == "!hello"));
+    assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"!hello".as_ref()));
+    assert!(err.message.contains("need one character after"));
 }
 
 #[test]
 fn bad_escapes_can_cause_brace_mismatch() {
     let err = try_parse(r"@^{\}").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnclosedBracePair {input} if input == r"{\}"));
+    assert!(
+        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{\}".as_ref())
+            && err.message.contains("unclosed brace")
+    );
 
     let err = try_parse(r"@^{{\}}").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnclosedBracePair {input} if input == r"{{\}}"));
+    // The raw string r"{{\}}" contains actual backslashes, so the input would be r"{{\}}"
+    assert!(
+        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{{\}}".as_ref())
+            && err.message.contains("unclosed brace")
+    );
 }
 
 #[test]

@@ -38,7 +38,6 @@ gix-trace = { version = "^0.1.17", path = "../gix-trace", optional = true }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 bitflags = { version = "2", optional = true }
-thiserror = "2.0.17"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 document-features = { version = "0.2.1", optional = true }
 
