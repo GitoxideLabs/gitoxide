@@ -22,8 +22,52 @@ fn compute_hash() {
 }
 
 #[test]
+#[cfg(feature = "sha256")]
+fn compute_hash_sha256() {
+    let hk = gix_hash::Kind::Sha256;
+    assert_eq!(
+        gix_object::compute_hash(hk, gix_object::Kind::Blob, &[]).expect("empty hash doesn’t collide"),
+        gix_hash::ObjectId::empty_blob(hk)
+    );
+    assert_eq!(
+        gix_object::compute_hash(hk, gix_object::Kind::Tree, &[]).expect("empty hash doesn’t collide"),
+        gix_hash::ObjectId::empty_tree(hk)
+    );
+}
+
+#[test]
 fn compute_stream_hash() {
     let hk = gix_hash::Kind::Sha1;
+    assert_eq!(
+        gix_object::compute_stream_hash(
+            hk,
+            gix_object::Kind::Blob,
+            &mut &[][..],
+            0,
+            &mut gix_features::progress::Discard,
+            &AtomicBool::default()
+        )
+        .expect("in-memory works"),
+        gix_hash::ObjectId::empty_blob(hk)
+    );
+    assert_eq!(
+        gix_object::compute_stream_hash(
+            hk,
+            gix_object::Kind::Tree,
+            &mut &[][..],
+            0,
+            &mut gix_features::progress::Discard,
+            &AtomicBool::default()
+        )
+        .expect("in-memory works"),
+        gix_hash::ObjectId::empty_tree(hk)
+    );
+}
+
+#[test]
+#[cfg(feature = "sha256")]
+fn compute_stream_hash_sha256() {
+    let hk = gix_hash::Kind::Sha256;
     assert_eq!(
         gix_object::compute_stream_hash(
             hk,
@@ -78,11 +122,22 @@ fn fixture_name(kind: &str, path: &str) -> Vec<u8> {
 }
 
 #[test]
+#[cfg(not(feature = "sha256"))]
 fn size_in_memory() {
     let actual = std::mem::size_of::<gix_object::Object>();
     assert!(
         actual <= 272,
         "{actual} <= 272: Prevent unexpected growth of what should be lightweight objects"
+    );
+}
+
+#[test]
+#[cfg(feature = "sha256")]
+fn size_in_memory() {
+    let actual = std::mem::size_of::<gix_object::Object>();
+    assert!(
+        actual <= 288,
+        "{actual} <= 288: Prevent unexpected growth of what should be lightweight objects"
     );
 }
 
