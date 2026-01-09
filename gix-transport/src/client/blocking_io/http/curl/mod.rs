@@ -21,27 +21,7 @@ pub struct Options {
 /// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
 ///
 /// It can be used for downcasting errors, which are boxed to hide the actual implementation.
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Curl(#[from] curl::Error),
-    #[error(transparent)]
-    Redirect(#[from] http::redirect::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error(transparent)]
-    Authenticate(#[from] gix_credentials::protocol::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Curl(err) => curl_is_spurious(err),
-            _ => false,
-        }
-    }
-}
+pub type Error = crate::Error;
 
 pub(crate) fn curl_is_spurious(err: &curl::Error) -> bool {
     err.is_couldnt_connect()

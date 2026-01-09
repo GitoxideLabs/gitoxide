@@ -12,29 +12,7 @@ use crate::client::blocking_io::http::{
 };
 
 /// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error("Request configuration failed")]
-    ConfigureRequest(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    Redirect(#[from] redirect::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::Reqwest(err) => {
-                err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error())
-            }
-            _ => false,
-        }
-    }
-}
+pub type Error = crate::Error;
 
 impl Default for Remote {
     fn default() -> Self {
@@ -122,7 +100,7 @@ impl Default for Remote {
                 if let Some(ref mut request_options) = config.backend.as_ref().and_then(|backend| backend.lock().ok()) {
                     if let Some(options) = request_options.downcast_mut::<super::Options>() {
                         if let Some(configure_request) = &mut options.configure_request {
-                            configure_request(&mut req)?;
+                            configure_request(&mut req).map_err(|e| Error::ConfigureRequest(e.to_string()))?;
                         }
                     }
                 }
@@ -215,9 +193,7 @@ impl Remote {
             .expect("handler thread should never panic")
             .expect_err("something should have gone wrong with curl (we join on error only)");
         *self = Remote::default();
-        http::Error::InitHttpClient {
-            source: Box::new(err_that_brought_thread_down),
-        }
+        http::Error::InitHttpClient(err_that_brought_thread_down.to_string())
     }
 
     fn make_request(

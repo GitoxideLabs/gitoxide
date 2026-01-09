@@ -280,11 +280,9 @@ impl<H: Http> Transport<H> {
                 name.eq_ignore_ascii_case("content-type") && value.trim() == wanted_content_type
             })
         }) {
-            return Err(client::Error::Http(Error::Detail {
-                description: format!(
-                    "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
-                ),
-            }));
+            return Err(client::Error::HttpDetail(format!(
+                "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
+            )));
         }
         Ok(())
     }
@@ -391,13 +389,11 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
 
         if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
             if announced_service != service.as_str().as_bytes() {
-                return Err(client::Error::Http(Error::Detail {
-                    description: format!(
-                        "Expected to see service {:?}, but got {:?}",
-                        service.as_str(),
-                        announced_service
-                    ),
-                }));
+                return Err(client::Error::HttpDetail(format!(
+                    "Expected to see service {:?}, but got {:?}",
+                    service.as_str(),
+                    announced_service
+                )));
             }
 
             line_reader.as_read().read_to_end(&mut Vec::new())?;

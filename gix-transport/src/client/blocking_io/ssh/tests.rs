@@ -205,7 +205,7 @@ mod program_kind {
         fn simple_cannot_handle_any_arguments() {
             assert!(matches!(
                 try_call(ProgramKind::Simple, "ssh://user@host:42/p", Protocol::V2),
-                Err(ssh::invocation::Error::Unsupported { .. })
+                Err(ssh::invocation::Error::SshUnsupported { .. })
             ));
             assert_eq!(
                 call_args(ProgramKind::Simple, "ssh://user@host/p", Protocol::V2),

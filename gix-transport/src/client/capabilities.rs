@@ -4,24 +4,6 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::client;
 use crate::Protocol;
 
-/// The error used in [`Capabilities::from_bytes()`] and [`Capabilities::from_lines()`].
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("Capabilities were missing entirely as there was no 0 byte")]
-    MissingDelimitingNullByte,
-    #[error("there was not a single capability behind the delimiter")]
-    NoCapabilities,
-    #[error("a version line was expected, but none was retrieved")]
-    MissingVersionLine,
-    #[error("expected 'version X', got {0:?}")]
-    MalformattedVersionLine(BString),
-    #[error("Got unsupported version {actual:?}, expected {}", *desired as u8)]
-    UnsupportedVersion { desired: Protocol, actual: BString },
-    #[error("An IO error occurred while reading V2 lines")]
-    Io(#[from] std::io::Error),
-}
-
 /// A structure to represent multiple [capabilities](Capability) or features supported by the server.
 ///
 /// ### Deviation
@@ -82,10 +64,10 @@ impl Capabilities {
     /// Parse capabilities from the given `bytes`.
     ///
     /// Useful in case they are encoded within a `ref` behind a null byte.
-    pub fn from_bytes(bytes: &[u8]) -> Result<(Capabilities, usize), Error> {
-        let delimiter_pos = bytes.find_byte(0).ok_or(Error::MissingDelimitingNullByte)?;
+    pub fn from_bytes(bytes: &[u8]) -> Result<(Capabilities, usize), crate::Error> {
+        let delimiter_pos = bytes.find_byte(0).ok_or(crate::Error::MissingDelimitingNullByte)?;
         if delimiter_pos + 1 == bytes.len() {
-            return Err(Error::NoCapabilities);
+            return Err(crate::Error::NoCapabilities);
         }
         let capabilities = &bytes[delimiter_pos + 1..];
         Ok((
@@ -103,19 +85,19 @@ impl Capabilities {
     /// Useful for parsing capabilities from a data sent from a server, and to avoid having to deal with
     /// blocking and async traits for as long as possible. There is no value in parsing a few bytes
     /// in a non-blocking fashion.
-    pub fn from_lines(lines_buf: BString) -> Result<Capabilities, Error> {
+    pub fn from_lines(lines_buf: BString) -> Result<Capabilities, crate::Error> {
         let mut lines = <_ as bstr::ByteSlice>::lines(lines_buf.as_slice().trim());
-        let version_line = lines.next().ok_or(Error::MissingVersionLine)?;
+        let version_line = lines.next().ok_or(crate::Error::MissingVersionLine)?;
         let (name, value) = version_line.split_at(
             version_line
                 .find(b" ")
-                .ok_or_else(|| Error::MalformattedVersionLine(version_line.to_owned().into()))?,
+                .ok_or_else(|| crate::Error::MalformattedVersionLine(version_line.to_owned().into()))?,
         );
         if name != b"version" {
-            return Err(Error::MalformattedVersionLine(version_line.to_owned().into()));
+            return Err(crate::Error::MalformattedVersionLine(version_line.to_owned().into()));
         }
         if value != b" 2" {
-            return Err(Error::UnsupportedVersion {
+            return Err(crate::Error::UnsupportedVersion {
                 desired: Protocol::V2,
                 actual: value.to_owned().into(),
             });

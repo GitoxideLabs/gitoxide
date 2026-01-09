@@ -210,8 +210,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
     ) -> Result<SetServiceResponse<'_>, client::Error> {
         let (mut cmd, ssh_kind, cmd_name) = match &self.ssh_cmd {
             Some((command, kind)) => (
-                kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
-                    .map_err(client::Error::SshInvocation)?
+                kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)?
                     .stderr(Stdio::piped()),
                 Some(*kind),
                 Cow::Owned(command.to_owned()),
@@ -246,7 +245,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         gix_features::trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand");
         let mut child = cmd.spawn().map_err(|err| client::Error::InvokeProgram {
             source: err,
-            command: cmd_name.into_owned(),
+            command: cmd_name.into_owned().to_owned(),
         })?;
         let stdout: Box<dyn std::io::Read + Send> = match ssh_kind {
             Some(ssh_kind) => Box::new(supervise_stderr(

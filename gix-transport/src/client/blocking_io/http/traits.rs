@@ -1,39 +1,7 @@
 use crate::client::WriteMode;
 
 /// The error used by the [Http] trait.
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("Could not initialize the http client")]
-    InitHttpClient {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-    #[error("{description}")]
-    Detail { description: String },
-    #[error("An IO error occurred while uploading the body of a POST request")]
-    PostBody(#[from] std::io::Error),
-}
-
-impl crate::IsSpuriousError for Error {
-    fn is_spurious(&self) -> bool {
-        match self {
-            Error::PostBody(err) => err.is_spurious(),
-            #[cfg(any(feature = "http-client-reqwest", feature = "http-client-curl"))]
-            Error::InitHttpClient { source } => {
-                #[cfg(feature = "http-client-curl")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::curl::Error>() {
-                    return err.is_spurious();
-                }
-                #[cfg(feature = "http-client-reqwest")]
-                if let Some(err) = source.downcast_ref::<crate::client::blocking_io::http::reqwest::remote::Error>() {
-                    return err.is_spurious();
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-}
+pub type Error = crate::Error;
 
 /// The return value of [`Http::get()`].
 pub struct GetResponse<H, B> {
