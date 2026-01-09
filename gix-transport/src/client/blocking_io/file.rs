@@ -245,7 +245,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         gix_features::trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand");
         let mut child = cmd.spawn().map_err(|err| client::Error::InvokeProgram {
             source: err,
-            command: cmd_name.into_owned().to_owned(),
+            command: cmd_name.into_owned(),
         })?;
         let stdout: Box<dyn std::io::Read + Send> = match ssh_kind {
             Some(ssh_kind) => Box::new(supervise_stderr(
