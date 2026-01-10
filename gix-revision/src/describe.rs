@@ -127,35 +127,24 @@ impl Default for Options<'_> {
     }
 }
 
-/// The error returned by the [`describe()`][function::describe()] function.
-pub type Error = Simple;
-
-/// A simple error type for describe operations.
-#[derive(Debug)]
-pub struct Simple(pub String);
-
-impl std::fmt::Display for Simple {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Simple {}
+/// The error returned by the [`describe()`](function::describe()) function.
+pub type Error = gix_error::Message;
 
 pub(crate) mod function {
     use std::{borrow::Cow, cmp::Ordering};
 
     use bstr::BStr;
+    use gix_error::{message, Exn, ResultExt};
     use gix_hash::oid;
 
-    use super::{Error, Simple, Outcome};
+    use super::{Error, Outcome};
     use crate::{
         describe::{CommitTime, Flags, Options, MAX_CANDIDATES},
         Graph, PriorityQueue,
     };
 
     /// Given a `commit` id, traverse the commit `graph` and collect candidate names from the `name_by_oid` mapping to produce
-    /// an `Outcome`, which converted [`into_format()`][Outcome::into_format()] will produce a typical `git describe` string.
+    /// an `Outcome`, which converted [`into_format()`](Outcome::into_format()) will produce a typical `git describe` string.
     ///
     /// Note that the `name_by_oid` map is returned in the [`Outcome`], which can be forcefully returned even if there was no matching
     /// candidate by setting `fallback_to_oid` to true.
@@ -168,7 +157,7 @@ pub(crate) mod function {
             fallback_to_oid,
             first_parent,
         }: Options<'name>,
-    ) -> Result<Option<Outcome<'name>>, Error> {
+    ) -> Result<Option<Outcome<'name>>, Exn<Error>> {
         let _span = gix_trace::coarse!(
             "gix_revision::describe()",
             commit = %commit,
@@ -310,7 +299,7 @@ pub(crate) mod function {
         commit: gix_hash::ObjectId,
         commit_flags: Flags,
         first_parent: bool,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Exn<Error>> {
         graph
             .insert_parents(
                 &commit,
@@ -321,12 +310,7 @@ pub(crate) mod function {
                 &mut |_parent_id, flags| *flags |= commit_flags,
                 first_parent,
             )
-            .map_err(|_| {
-                Simple(format!(
-                    "could not insert parents of commit {} into graph",
-                    commit.to_hex()
-                ))
-            })?;
+            .or_raise(|| message!("could not insert parents of commit {} into graph", commit.to_hex()))?;
         Ok(())
     }
 
@@ -335,7 +319,7 @@ pub(crate) mod function {
         graph: &mut Graph<'_, '_, Flags>,
         best_candidate: &mut Candidate<'_>,
         first_parent: bool,
-    ) -> Result<u32, Error> {
+    ) -> Result<u32, Exn<Error>> {
         let mut commits_seen = 0;
         while let Some(commit) = queue.pop_value() {
             commits_seen += 1;

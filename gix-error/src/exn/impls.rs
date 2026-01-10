@@ -13,15 +13,36 @@
 // limitations under the License.
 
 use std::fmt;
+use std::fmt::Formatter;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::panic::Location;
 
-/// An exception type that can hold an error tree and additional context.
+/// An error that merely says that something is wrong.
+/// It's the default type for [Exn], indicating that this is about the error chain,
+/// not about this specific error.
+#[derive(Debug)]
+pub struct Something;
+
+impl fmt::Display for Something {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("Something went wrong")
+    }
+}
+
+impl std::error::Error for Something {}
+
+/// An exception type that can hold an [error tree](Exn::from_iter) and the call site.
 ///
 /// While an error chain, a list, is automatically created when [raise](Exn::raise)
 /// and friends are invoked, one can also use [`Exn::from_iter`] to create an error
 /// that has multiple causes.
-pub struct Exn<E: std::error::Error + Send + Sync + 'static> {
+///
+/// # `Exn` == `Exn<Something>`
+///
+/// `Exn` act's like `Box<dyn std::error::Error + Send + Sync + 'static>`, but with the capability
+/// to store a tree of errors along with their *call sites*.
+pub struct Exn<E: std::error::Error + Send + Sync + 'static = Something> {
     // trade one more indirection for less stack size
     frame: Box<Frame>,
     phantom: PhantomData<E>,
@@ -42,31 +63,43 @@ impl<E: std::error::Error + Send + Sync + 'static> Exn<E> {
     ///
     /// See also [`ErrorExt::raise`](crate::ErrorExt) for a fluent way to convert an error into an `Exn` instance.
     ///
+    /// Note that **sources of `error` are degenerated to their string representation** and all type information is erased.
+    ///
     /// [source chain of the error]: std::error::Error::source
     #[track_caller]
     pub fn new(error: E) -> Self {
-        struct SourceError(String);
+        /// A way to keep all information of errors returned by `source()` chains.
+        struct SourceError {
+            display: String,
+            debug: String,
+            alt_debug: String,
+        }
 
         impl fmt::Debug for SourceError {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt::Debug::fmt(&self.0, f)
+                let dbg = if f.alternate() { &self.alt_debug } else { &self.debug };
+                f.write_str(dbg)
             }
         }
 
         impl fmt::Display for SourceError {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt::Display::fmt(&self.0, f)
+                f.write_str(&self.display)
             }
         }
 
         impl std::error::Error for SourceError {}
 
-        fn walk(error: &dyn std::error::Error, location: &'static Location<'static>) -> Vec<Frame> {
+        fn walk_sources(error: &dyn std::error::Error, location: &'static Location<'static>) -> Vec<Frame> {
             if let Some(source) = error.source() {
                 let children = vec![Frame {
-                    error: Box::new(SourceError(source.to_string())),
+                    error: Box::new(SourceError {
+                        display: source.to_string(),
+                        debug: format!("{:?}", source),
+                        alt_debug: format!("{:#?}", source),
+                    }),
                     location,
-                    children: walk(source, location),
+                    children: walk_sources(source, location),
                 }];
                 children
             } else {
@@ -75,7 +108,7 @@ impl<E: std::error::Error + Send + Sync + 'static> Exn<E> {
         }
 
         let location = Location::caller();
-        let children = walk(&error, location);
+        let children = walk_sources(&error, location);
         let frame = Frame {
             error: Box::new(error),
             location,
@@ -89,6 +122,8 @@ impl<E: std::error::Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Create a new exception with the given error and children.
+    ///
+    /// It's no error if `children` is empty.
     #[track_caller]
     pub fn from_iter<T, I>(children: I, err: E) -> Self
     where
@@ -112,6 +147,19 @@ impl<E: std::error::Error + Send + Sync + 'static> Exn<E> {
         new_exn
     }
 
+    /// Use the current exception the head of a chain, adding `err` to its children.
+    #[track_caller]
+    pub fn chain<T: std::error::Error + Send + Sync + 'static>(mut self, err: impl Into<Exn<T>>) -> Exn<E> {
+        let err = err.into();
+        self.frame.children.push(*err.frame);
+        self
+    }
+
+    /// Raise a new [`Something`] exception; this will make the current exception a child [`Something`].
+    pub fn something(self) -> Exn<Something> {
+        self.raise(Something)
+    }
+
     /// Return the current exception.
     pub fn as_error(&self) -> &E {
         self.frame
@@ -130,9 +178,25 @@ impl<E: std::error::Error + Send + Sync + 'static> Exn<E> {
         }
     }
 
+    /// Turn ourselves into a type that implements [`std::error::Error`].
+    pub fn into_error(self) -> crate::Error {
+        self.into()
+    }
+
     /// Return the underlying exception frame.
     pub fn as_frame(&self) -> &Frame {
         &self.frame
+    }
+}
+
+impl<E> Deref for Exn<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Target = E;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_error()
     }
 }
 
@@ -148,7 +212,7 @@ pub struct Frame {
 
 impl Frame {
     /// Return the error as a reference to [`std::error::Error`].
-    pub fn as_error(&self) -> &dyn std::error::Error {
+    pub fn as_error(&self) -> &(dyn std::error::Error + 'static) {
         &*self.error
     }
 
@@ -160,5 +224,23 @@ impl Frame {
     /// Return a slice of the children of the exception.
     pub fn children(&self) -> &[Frame] {
         &self.children
+    }
+}
+
+impl<E> From<Exn<E>> for Box<Frame>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(err: Exn<E>) -> Self {
+        err.frame
+    }
+}
+
+impl<E> From<Exn<E>> for Frame
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(err: Exn<E>) -> Self {
+        *err.frame
     }
 }

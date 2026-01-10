@@ -1,7 +1,5 @@
-use std::collections::HashSet;
-
 use gix_hash::ObjectId;
-use gix_revision::spec::parse;
+use std::collections::HashSet;
 
 use crate::{bstr::BStr, revision::Spec, Repository};
 
@@ -35,8 +33,13 @@ impl<'repo> Spec<'repo> {
     pub fn from_bstr<'a>(spec: impl Into<&'a BStr>, repo: &'repo Repository, opts: Options) -> Result<Self, Error> {
         let mut delegate = Delegate::new(repo, opts);
         match gix_revision::spec::parse(spec.into(), &mut delegate) {
-            Err(parse::Error::Delegate) => Err(delegate.into_err()),
-            Err(err) => Err(err.into()),
+            Err(err) => {
+                if let Some(delegate_err) = delegate.into_delayed_errors() {
+                    Err(err.chain(delegate_err).into_error().into())
+                } else {
+                    Err(err.into_error().into())
+                }
+            }
             Ok(()) => delegate.into_rev_spec(),
         }
     }
@@ -54,7 +57,8 @@ struct Delegate<'repo> {
     kind: Option<gix_revision::spec::Kind>,
 
     opts: Options,
-    err: Vec<Error>,
+    /// Keeps track of errors that are supposed to be returned later.
+    delayed_errors: Vec<Error>,
     /// The ambiguous prefix obtained during a call to `disambiguate_prefix()`.
     prefix: [Option<gix_hash::Prefix>; 2],
     /// If true, we didn't try to do any other transformation which might have helped with disambiguation.

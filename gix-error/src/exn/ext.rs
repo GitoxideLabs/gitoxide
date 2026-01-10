@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::exn::Exn;
+use std::error::Error;
 
 /// A trait bound of the supported error type of [`Exn`].
 pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
@@ -23,6 +24,15 @@ pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
         Self: Sized,
     {
         Exn::new(self)
+    }
+
+    /// Raise this error as a new exception, with type erasure.
+    #[track_caller]
+    fn raise_something(self) -> Exn
+    where
+        Self: Sized,
+    {
+        Exn::new(self).something()
     }
 }
 
@@ -35,6 +45,12 @@ pub trait OptionExt {
 
     /// Construct a new [`Exn`] on the `None` variant.
     fn ok_or_raise<A, F>(self, err: F) -> Result<Self::Some, Exn<A>>
+    where
+        A: std::error::Error + Send + Sync + 'static,
+        F: FnOnce() -> A;
+
+    /// Construct a new [`Exn`] on the `None` variant, with type erasure.
+    fn ok_or_raise_something<A, F>(self, err: F) -> Result<Self::Some, Exn>
     where
         A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A;
@@ -54,6 +70,15 @@ impl<T> OptionExt for Option<T> {
             None => Err(Exn::new(err())),
         }
     }
+
+    #[track_caller]
+    fn ok_or_raise_something<A, F>(self, err: F) -> Result<T, Exn>
+    where
+        A: std::error::Error + Send + Sync + 'static,
+        F: FnOnce() -> A,
+    {
+        self.ok_or_raise(err).map_err(Exn::something)
+    }
 }
 
 /// An extension trait for [`Result`] to provide context information on [`Exn`]s.
@@ -68,6 +93,19 @@ pub trait ResultExt {
     ///
     /// Apply [`Exn::raise`] on the `Err` variant, refer to it for more information.
     fn or_raise<A, F>(self, err: F) -> Result<Self::Success, Exn<A>>
+    where
+        A: std::error::Error + Send + Sync + 'static,
+        F: FnOnce() -> A;
+
+    /// Raise something inside the [`Result`], providing no additional error context.
+    ///
+    /// Apply [`Exn::something`] on the `Err` variant, refer to it for more information.
+    fn or_something(self) -> Result<Self::Success, Exn>;
+
+    /// Raise a new exception on the [`Exn`] inside the [`Result`], and type-erase the result.
+    ///
+    /// Apply [`Exn::raise`] and [`Exn::something`] on the `Err` variant, refer to it for more information.
+    fn or_raise_something<A, F>(self, err: F) -> Result<Self::Success, Exn>
     where
         A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A;
@@ -91,6 +129,23 @@ where
             Err(e) => Err(Exn::new(e).raise(err())),
         }
     }
+
+    #[track_caller]
+    fn or_something(self) -> Result<Self::Success, Exn> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Exn::new(e).something()),
+        }
+    }
+
+    #[track_caller]
+    fn or_raise_something<A, F>(self, err: F) -> Result<Self::Success, Exn>
+    where
+        A: Error + Send + Sync + 'static,
+        F: FnOnce() -> A,
+    {
+        self.or_raise(err).map_err(Exn::something)
+    }
 }
 
 impl<T, E> ResultExt for std::result::Result<T, Exn<E>>
@@ -110,5 +165,22 @@ where
             Ok(v) => Ok(v),
             Err(e) => Err(e.raise(err())),
         }
+    }
+
+    #[track_caller]
+    fn or_something(self) -> Result<Self::Success, Exn> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(e) => Err(e.something()),
+        }
+    }
+
+    #[track_caller]
+    fn or_raise_something<A, F>(self, err: F) -> Result<Self::Success, Exn>
+    where
+        A: Error + Send + Sync + 'static,
+        F: FnOnce() -> A,
+    {
+        self.or_raise(err).map_err(Exn::something)
     }
 }

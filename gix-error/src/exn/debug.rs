@@ -32,14 +32,16 @@ impl fmt::Debug for Frame {
 
 fn write_exn(f: &mut Formatter<'_>, frame: &Frame, level: usize, prefix: &str) -> fmt::Result {
     write!(f, "{}", frame.as_error())?;
-    write_location(f, frame)?;
+    if !f.alternate() {
+        write_location(f, frame)?;
+    }
 
     let children = frame.children();
     let children_len = children.len();
 
     for (i, child) in children.iter().enumerate() {
         write!(f, "\n{prefix}|")?;
-        write!(f, "\n{prefix}|-> ")?;
+        write!(f, "\n{prefix}└─ ")?;
 
         let child_child_len = child.children().len();
         if level == 0 && children_len == 1 && child_child_len == 1 {

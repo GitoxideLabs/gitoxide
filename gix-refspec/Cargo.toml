@@ -15,6 +15,7 @@ rust-version = "1.82"
 doctest = false
 
 [dependencies]
+gix-error = { version = "0.0.0", path = "../gix-error" }
 gix-revision = { version = "^0.39.0", path = "../gix-revision", default-features = false }
 gix-validate = { version = "^0.10.1", path = "../gix-validate" }
 gix-hash = { version = "^0.21.2", path = "../gix-hash" }

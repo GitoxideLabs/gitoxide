@@ -1,4 +1,5 @@
-/// The error returned by [`spec::parse()`][crate::spec::parse()].
+use gix_error::Exn;
+/// The error returned by [`spec::parse()`](crate::spec::parse()).
 pub use gix_error::ParseError as Error;
 
 ///
@@ -14,7 +15,7 @@ pub trait Delegate: delegate::Revision + delegate::Navigate + delegate::Kind {
     /// It can be used as a marker to finalize internal data structures.
     ///
     /// Note that it will not be called if there is unconsumed input.
-    fn done(&mut self);
+    fn done(&mut self) -> Result<(), Exn>;
 }
 
 pub(crate) mod function;

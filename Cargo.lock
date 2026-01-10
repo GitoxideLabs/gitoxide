@@ -2272,6 +2272,7 @@ name = "gix-refspec"
 version = "0.35.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-glob",
  "gix-hash",
  "gix-revision",
@@ -2299,6 +2300,7 @@ dependencies = [
  "gix-revwalk",
  "gix-testtools",
  "gix-trace",
+ "insta",
  "permutohedron",
  "serde",
 ]

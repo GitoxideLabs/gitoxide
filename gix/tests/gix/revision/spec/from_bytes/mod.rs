@@ -146,8 +146,23 @@ fn access_blob_through_tree() {
         "we capture tree-paths"
     );
 
+    let err = parse_spec("0000000000cdc:missing", &repo).unwrap_err();
+    // TODO: the error should resolve to the debug tree.
+    insta::assert_debug_snapshot!(err, @r#"
+    Error {
+        source: delegate.peel_until(Path("missing")) failed, at /Users/byron/dev/github.com/GitoxideLabs/gitoxide/gix-revision/src/spec/parse/function.rs:687:22
+        |
+        |-> Something went wrong, at gix/src/revision/spec/parse/delegate/mod.rs:269:9
+        |
+        |-> Something went wrong, at /Users/byron/dev/github.com/GitoxideLabs/gitoxide/gix/src/revision/spec/parse/mod.rs:38:29
+            |
+            |-> Something went wrong, at /Users/byron/dev/github.com/GitoxideLabs/gitoxide/gix/src/revision/spec/parse/mod.rs:38:29
+                |
+                |-> Could not find path "missing" in tree 0000000000c of parent object 0000000000c, at /Users/byron/dev/github.com/GitoxideLabs/gitoxide/gix/src/revision/spec/parse/mod.rs:38:29,
+    }
+    "#);
     assert_eq!(
-        parse_spec("0000000000cdc:missing", &repo).unwrap_err().to_string(),
+        err.to_string(),
         "Could not find path \"missing\" in tree 0000000000c of parent object 0000000000c"
     );
 }

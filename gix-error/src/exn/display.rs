@@ -14,9 +14,15 @@
 
 use std::fmt;
 
-use crate::exn::Exn;
+use crate::exn::{Exn, Frame};
 
 impl<E: std::error::Error + Send + Sync + 'static> fmt::Display for Exn<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_error())
+    }
+}
+
+impl fmt::Display for Frame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_error())
     }

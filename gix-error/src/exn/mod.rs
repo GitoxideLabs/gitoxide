@@ -23,5 +23,4 @@ mod impls;
 mod macros;
 
 pub use self::ext::{ErrorExt, OptionExt, ResultExt};
-pub use self::impls::Exn;
-pub use self::impls::Frame;
+pub use self::impls::{Exn, Frame, Something};
