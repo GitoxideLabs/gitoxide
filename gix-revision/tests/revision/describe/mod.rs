@@ -1,10 +1,10 @@
-use std::{borrow::Cow, path::PathBuf};
-
+use gix_error::Exn;
 use gix_object::bstr::ByteSlice;
 use gix_revision::{
     describe,
     describe::{Error, Outcome},
 };
+use std::{borrow::Cow, path::PathBuf};
 
 use crate::hex_to_id;
 
@@ -13,8 +13,11 @@ mod format;
 fn run_test(
     transform_odb: impl FnOnce(gix_odb::Handle) -> gix_odb::Handle,
     options: impl Fn(gix_hash::ObjectId) -> gix_revision::describe::Options<'static>,
-    run_assertions: impl Fn(Result<Option<Outcome<'static>>, Error>, gix_hash::ObjectId) -> crate::Result,
-) -> crate::Result {
+    run_assertions: impl Fn(
+        Result<Option<Outcome<'static>>, Exn<Error>>,
+        gix_hash::ObjectId,
+    ) -> Result<(), gix_error::Error>,
+) -> Result<(), gix_error::Error> {
     let store = odb_at(".");
     let store = transform_odb(store);
     let commit_id = hex_to_id("01ec18a3ebf2855708ad3c9d244306bc1fae3e9b");
@@ -32,7 +35,7 @@ fn run_test(
 }
 
 #[test]
-fn option_none_if_no_tag_found() -> crate::Result {
+fn option_none_if_no_tag_found() -> Result<(), gix_error::Error> {
     run_test(
         std::convert::identity,
         |_| Default::default(),
@@ -44,7 +47,7 @@ fn option_none_if_no_tag_found() -> crate::Result {
 }
 
 #[test]
-fn fallback_if_configured_in_options_but_no_candidate_or_names() -> crate::Result {
+fn fallback_if_configured_in_options_but_no_candidate_or_names() -> Result<(), gix_error::Error> {
     run_test(
         std::convert::identity,
         |_| describe::Options {
@@ -66,7 +69,7 @@ fn fallback_if_configured_in_options_but_no_candidate_or_names() -> crate::Resul
 }
 
 #[test]
-fn fallback_if_configured_in_options_and_max_candidates_zero() -> crate::Result {
+fn fallback_if_configured_in_options_and_max_candidates_zero() -> Result<(), gix_error::Error> {
     run_test(
         std::convert::identity,
         |_| describe::Options {
@@ -86,7 +89,7 @@ fn fallback_if_configured_in_options_and_max_candidates_zero() -> crate::Result 
 }
 
 #[test]
-fn not_enough_candidates() -> crate::Result {
+fn not_enough_candidates() -> Result<(), gix_error::Error> {
     let name = Cow::Borrowed(b"at-c5".as_bstr());
     run_test(
         std::convert::identity,
@@ -118,7 +121,7 @@ fn not_enough_candidates() -> crate::Result {
 }
 
 #[test]
-fn typical_usecases() -> crate::Result {
+fn typical_usecases() -> Result<(), gix_error::Error> {
     let name = Cow::Borrowed(b"main".as_bstr());
     run_test(
         std::convert::identity,
@@ -198,7 +201,7 @@ fn typical_usecases() -> crate::Result {
 }
 
 #[test]
-fn shallow_yields_no_result_if_provided_refs_are_in_truncated_part_of_history() -> crate::Result {
+fn shallow_yields_no_result_if_provided_refs_are_in_truncated_part_of_history() -> Result<(), gix_error::Error> {
     run_test(
         |_| odb_at("shallow-1-clone"),
         |_| describe::Options {
@@ -223,7 +226,7 @@ fn shallow_yields_no_result_if_provided_refs_are_in_truncated_part_of_history() 
 }
 
 #[test]
-fn shallow_yields_result_if_refs_are_available() -> crate::Result {
+fn shallow_yields_result_if_refs_are_available() -> Result<(), gix_error::Error> {
     let name = Cow::Borrowed(b"at-c5".as_bstr());
     run_test(
         |_| odb_at("shallow-2-clone"),

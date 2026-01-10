@@ -1,4 +1,4 @@
-/// The error returned by [`spec::parse()`][crate::spec::parse()].
+/// The error returned by [`spec::parse()`](crate::spec::parse()).
 pub use gix_error::ParseError as Error;
 
 ///

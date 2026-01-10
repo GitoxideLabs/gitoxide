@@ -148,7 +148,7 @@ pub struct Frame {
 
 impl Frame {
     /// Return the error as a reference to [`std::error::Error`].
-    pub fn as_error(&self) -> &dyn std::error::Error {
+    pub fn as_error(&self) -> &(dyn std::error::Error + 'static) {
         &*self.error
     }
 
@@ -160,5 +160,14 @@ impl Frame {
     /// Return a slice of the children of the exception.
     pub fn children(&self) -> &[Frame] {
         &self.children
+    }
+}
+
+impl<E> From<Exn<E>> for Box<Frame>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn from(err: Exn<E>) -> Self {
+        err.frame
     }
 }
