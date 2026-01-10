@@ -2471,7 +2471,6 @@ dependencies = [
  "futures-lite",
  "gix-command",
  "gix-credentials",
- "gix-error",
  "gix-features",
  "gix-hash",
  "gix-pack",

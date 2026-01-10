@@ -86,7 +86,6 @@ gix-sec = { version = "^0.12.2", path = "../gix-sec" }
 gix-packetline = { version = "^0.20.0", path = "../gix-packetline" }
 gix-credentials = { version = "^0.34.1", path = "../gix-credentials", optional = true }
 gix-quote = { version = "^0.6.1", path = "../gix-quote" }
-gix-error = { version = "^0.0.0", path = "../gix-error" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "std",

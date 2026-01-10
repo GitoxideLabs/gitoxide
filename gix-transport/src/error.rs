@@ -109,6 +109,12 @@ pub enum Error {
     CompiledWithoutHttp(gix_url::Scheme),
     /// Connection failed with a nested error.
     Connection(String),
+    /// A curl error occurred.
+    #[cfg(feature = "http-client-curl")]
+    Curl(curl::Error),
+    /// A reqwest error occurred.
+    #[cfg(feature = "http-client-reqwest")]
+    Reqwest(reqwest::Error),
 }
 
 impl fmt::Display for Error {
@@ -174,6 +180,10 @@ impl fmt::Display for Error {
                 )
             }
             Error::Connection(msg) => write!(f, "connection failed: {msg}"),
+            #[cfg(feature = "http-client-curl")]
+            Error::Curl(err) => write!(f, "curl error: {err}"),
+            #[cfg(feature = "http-client-reqwest")]
+            Error::Reqwest(err) => write!(f, "reqwest error: {err}"),
         }
     }
 }
@@ -187,6 +197,10 @@ impl std::error::Error for Error {
             Error::InvokeProgram { source, .. } => Some(source),
             Error::PostBody(err) => Some(err),
             Error::ReadPostBody(err) => Some(err),
+            #[cfg(feature = "http-client-curl")]
+            Error::Curl(err) => Some(err),
+            #[cfg(feature = "http-client-reqwest")]
+            Error::Reqwest(err) => Some(err),
             _ => None,
         }
     }
@@ -199,7 +213,12 @@ impl crate::IsSpuriousError for Error {
             Error::PostBody(err) => err.is_spurious(),
             Error::ReadPostBody(err) => err.is_spurious(),
             Error::InvokeProgram { source, .. } => source.is_spurious(),
-            Error::Connection(_) => true, // Connection errors are generally retry-able
+            #[cfg(feature = "http-client-curl")]
+            Error::Curl(err) => crate::client::blocking_io::http::curl::curl_is_spurious(err),
+            #[cfg(feature = "http-client-reqwest")]
+            Error::Reqwest(err) => {
+                err.is_timeout() || err.is_connect() || err.status().is_some_and(|status| status.is_server_error())
+            }
             _ => false,
         }
     }
@@ -232,14 +251,14 @@ impl From<gix_packetline::decode::Error> for Error {
 #[cfg(feature = "http-client-curl")]
 impl From<curl::Error> for Error {
     fn from(err: curl::Error) -> Self {
-        Error::Connection(err.to_string())
+        Error::Curl(err)
     }
 }
 
 #[cfg(feature = "http-client-reqwest")]
 impl From<reqwest::Error> for Error {
     fn from(err: reqwest::Error) -> Self {
-        Error::Connection(err.to_string())
+        Error::Reqwest(err)
     }
 }
 
