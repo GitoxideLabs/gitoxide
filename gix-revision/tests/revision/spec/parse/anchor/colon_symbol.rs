@@ -1,5 +1,3 @@
-use gix_revision::spec;
-
 use crate::spec::parse::{parse, try_parse};
 
 #[test]
@@ -105,7 +103,8 @@ fn various_valid_index_lookups_by_path_and_stage() {
 fn empty_top_level_regex_are_invalid() {
     let err = try_parse(":/").unwrap_err();
     assert!(
-        err.message.contains("colon-slash must be followed by a regular expression"),
+        err.message
+            .contains("colon-slash must be followed by a regular expression"),
         "git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't"
     );
 }
@@ -121,7 +120,8 @@ fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
 fn needs_suffix() {
     let err = try_parse(":").unwrap_err();
     assert!(
-        err.message.contains("colon must be followed by either slash and regex or path"),
+        err.message
+            .contains("colon must be followed by either slash and regex or path"),
         "git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't"
     );
 }

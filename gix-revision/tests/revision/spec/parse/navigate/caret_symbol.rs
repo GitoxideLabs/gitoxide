@@ -1,4 +1,4 @@
-use gix_revision::{spec, spec::parse::delegate::Traversal};
+use gix_revision::spec::parse::delegate::Traversal;
 
 use crate::spec::parse::{parse, try_parse, PeelToOwned as PeelTo};
 
@@ -218,8 +218,7 @@ fn incomplete_escaped_braces_in_regex_are_invalid() {
 
     let err = try_parse(r"@^{/a{1\}}").unwrap_err();
     assert!(
-        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{/a{1\}}".as_ref())
-            && err.message.contains("unclosed brace")
+        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{/a{1\}}".as_ref()) && err.message.contains("unclosed brace")
     );
 }
 
@@ -233,16 +232,12 @@ fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
 #[test]
 fn bad_escapes_can_cause_brace_mismatch() {
     let err = try_parse(r"@^{\}").unwrap_err();
-    assert!(
-        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{\}".as_ref())
-            && err.message.contains("unclosed brace")
-    );
+    assert!(err.input.as_ref().map(|i| i.as_ref()) == Some(br"{\}".as_ref()) && err.message.contains("unclosed brace"));
 
     let err = try_parse(r"@^{{\}}").unwrap_err();
     // The raw string r"{{\}}" contains actual backslashes, so the input would be r"{{\}}"
     assert!(
-        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{{\}}".as_ref())
-            && err.message.contains("unclosed brace")
+        err.input.as_ref().map(|i| i.as_ref()) == Some(br"{{\}}".as_ref()) && err.message.contains("unclosed brace")
     );
 }
 

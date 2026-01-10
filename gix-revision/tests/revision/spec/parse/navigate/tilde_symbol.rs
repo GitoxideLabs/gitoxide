@@ -1,4 +1,4 @@
-use gix_revision::{spec, spec::parse::delegate::Traversal};
+use gix_revision::spec::parse::delegate::Traversal;
 
 use crate::spec::parse::{parse, try_parse};
 

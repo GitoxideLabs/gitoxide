@@ -1,5 +1,3 @@
-use gix_revision::spec;
-
 use crate::spec::parse::{parse, try_parse};
 
 #[test]
@@ -91,10 +89,7 @@ fn reflog_by_date_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{42 +0030}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.input.as_ref().map(|i| i.as_ref()),
-            Some(full_name.as_bytes())
-        );
+        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
         assert!(err.message.contains("reflog entries require a ref name"));
     }
 }
@@ -141,10 +136,7 @@ fn reflog_by_entry_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.input.as_ref().map(|i| i.as_ref()),
-            Some(full_name.as_bytes())
-        );
+        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
         assert!(err.message.contains("reflog entries require a ref name"));
     }
 }
@@ -191,10 +183,7 @@ fn sibling_branch_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(
-            err.input.as_ref().map(|i| i.as_ref()),
-            Some(full_name.as_bytes())
-        );
+        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
         assert!(err.message.contains("sibling branches"));
     }
 }
@@ -204,7 +193,9 @@ fn nth_checked_out_branch_for_refname_is_invalid() {
     let err = try_parse("r1@{-1}").unwrap_err();
     assert!(
         err.input.as_ref().map(|i| i.as_ref()) == Some(b"-1".as_ref())
-            && err.message.contains("reference name must be followed by positive numbers"),
+            && err
+                .message
+                .contains("reference name must be followed by positive numbers"),
         "its undefined how to handle negative numbers and specified ref names"
     );
 }

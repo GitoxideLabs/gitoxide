@@ -1,5 +1,3 @@
-use gix_revision::spec;
-
 use crate::spec::parse::{try_parse, try_parse_opts, Options};
 
 #[test]
