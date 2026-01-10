@@ -378,19 +378,3 @@ fn to_curl_ssl_version(vers: SslVersion) -> curl::easy::SslVersion {
         SslVersion::TlsV1_3 => Tlsv13,
     }
 }
-
-impl From<Error> for http::Error {
-    fn from(err: Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
-}
-
-impl From<curl::Error> for http::Error {
-    fn from(err: curl::Error) -> Self {
-        http::Error::Detail {
-            description: err.to_string(),
-        }
-    }
-}

@@ -82,5 +82,8 @@ mod traits {
 }
 pub use traits::IsSpuriousError;
 
+mod error;
+pub use error::Error;
+
 ///
 pub mod client;

@@ -179,23 +179,7 @@ pub mod connect {
     use crate::client::git;
 
     /// The error used in [`connect()`].
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error("An IO error occurred when connecting to the server")]
-        Io(#[from] std::io::Error),
-        #[error("Could not parse {host:?} as virtual host with format <host>[:port]")]
-        VirtualHostInvalid { host: String },
-    }
-
-    impl crate::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
-            match self {
-                Error::Io(err) => err.is_spurious(),
-                _ => false,
-            }
-        }
-    }
+    pub type Error = crate::Error;
 
     fn parse_host(input: String) -> Result<(String, Option<u16>), Error> {
         let mut tokens = input.splitn(2, ':');
@@ -203,7 +187,7 @@ pub mod connect {
             (Some(host), None) => (host.to_owned(), None),
             (Some(host), Some(port)) => (
                 host.to_owned(),
-                Some(port.parse().map_err(|_| Error::VirtualHostInvalid { host: input })?),
+                Some(port.parse().map_err(|_| crate::Error::VirtualHostInvalid { host: input })?),
             ),
             _ => unreachable!("we expect at least one token, the original string"),
         })

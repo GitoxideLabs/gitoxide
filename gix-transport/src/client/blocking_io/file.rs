@@ -210,8 +210,7 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
     ) -> Result<SetServiceResponse<'_>, client::Error> {
         let (mut cmd, ssh_kind, cmd_name) = match &self.ssh_cmd {
             Some((command, kind)) => (
-                kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)
-                    .map_err(client::Error::SshInvocation)?
+                kind.prepare_invocation(command, &self.url, self.desired_version, self.ssh_disallow_shell)?
                     .stderr(Stdio::piped()),
                 Some(*kind),
                 Cow::Owned(command.to_owned()),

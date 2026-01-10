@@ -8,16 +8,7 @@ use gix_url::{ArgumentSafety::*, Url};
 use crate::{client::blocking_io::file::SpawnProcessOnDemand, Protocol};
 
 /// The error used in [`connect()`].
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("The scheme in \"{}\" is not usable for an ssh connection", .0.to_bstring())]
-    UnsupportedScheme(gix_url::Url),
-    #[error("Host name '{host}' could be mistaken for a command-line argument")]
-    AmbiguousHostName { host: String },
-}
-
-impl crate::IsSpuriousError for Error {}
+pub type Error = crate::Error;
 
 /// The kind of SSH programs we have built-in support for.
 ///
@@ -40,24 +31,8 @@ mod program_kind;
 
 ///
 pub mod invocation {
-    use std::ffi::OsString;
-
     /// The error returned when producing ssh invocation arguments based on a selected invocation kind.
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error("Username '{user}' could be mistaken for a command-line argument")]
-        AmbiguousUserName { user: String },
-        #[error("Host name '{host}' could be mistaken for a command-line argument")]
-        AmbiguousHostName { host: String },
-        #[error("The 'Simple' ssh variant doesn't support {function}")]
-        Unsupported {
-            /// The simple command that should have been invoked.
-            command: OsString,
-            /// The function that was unsupported
-            function: &'static str,
-        },
-    }
+    pub type Error = crate::Error;
 }
 
 ///
@@ -109,7 +84,7 @@ pub fn connect(
     trace: bool,
 ) -> Result<SpawnProcessOnDemand, Error> {
     if url.scheme != gix_url::Scheme::Ssh || url.host().is_none() {
-        return Err(Error::UnsupportedScheme(url));
+        return Err(Error::UnsupportedScheme(url.scheme));
     }
     let ssh_cmd = options.ssh_command();
     let kind = determine_client_kind(options.kind, ssh_cmd, &url, options.disallow_shell)?;

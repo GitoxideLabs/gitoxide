@@ -54,7 +54,7 @@ impl ProgramKind {
             }
             ProgramKind::Simple => {
                 if url.port.is_some() {
-                    return Err(ssh::invocation::Error::Unsupported {
+                    return Err(ssh::invocation::Error::SshUnsupported {
                         command: ssh_cmd.into(),
                         function: "setting the port",
                     });
