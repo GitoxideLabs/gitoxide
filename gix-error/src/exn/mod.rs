@@ -16,12 +16,9 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(missing_docs)]
 
-mod debug;
-mod display;
 mod ext;
 mod impls;
 mod macros;
 
 pub use self::ext::{ErrorExt, OptionExt, ResultExt};
-pub use self::impls::Exn;
-pub use self::impls::Frame;
+pub use self::impls::{Exn, Frame, Something, Untyped};

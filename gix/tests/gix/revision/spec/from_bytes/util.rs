@@ -115,7 +115,7 @@ static BASELINE: LazyLock<HashMap<PathBuf, HashMap<BString, Option<gix_revision:
 pub fn parse_spec_no_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> Result<gix::revision::Spec<'a>, gix::revision::spec::parse::Error> {
+) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
     parse_spec_no_baseline_opts(spec, repo, Default::default())
 }
 
@@ -130,7 +130,7 @@ enum BaselineExpectation {
 pub fn parse_spec_better_than_baseline<'a>(
     spec: &str,
     repo: &'a gix::Repository,
-) -> Result<gix::revision::Spec<'a>, gix::revision::spec::parse::Error> {
+) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, Default::default());
     compare_with_baseline(&res, repo, spec, BaselineExpectation::GitFailsWeSucceed);
     res
@@ -140,7 +140,7 @@ pub fn parse_spec_no_baseline_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> Result<gix::revision::Spec<'a>, gix::revision::spec::parse::Error> {
+) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
     gix::revision::Spec::from_bstr(spec, repo, opts)
 }
 
@@ -148,23 +148,20 @@ pub fn parse_spec_opts<'a>(
     spec: &str,
     repo: &'a gix::Repository,
     opts: gix::revision::spec::parse::Options,
-) -> Result<gix::revision::Spec<'a>, gix::revision::spec::parse::Error> {
+) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = gix::revision::Spec::from_bstr(spec, repo, opts);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
-pub fn rev_parse<'a>(
-    spec: &str,
-    repo: &'a gix::Repository,
-) -> Result<gix::revision::Spec<'a>, gix::revision::spec::parse::Error> {
+pub fn rev_parse<'a>(spec: &str, repo: &'a gix::Repository) -> Result<gix::revision::Spec<'a>, gix_error::Error> {
     let res = repo.rev_parse(spec);
     compare_with_baseline(&res, repo, spec, BaselineExpectation::Same);
     res
 }
 
 fn compare_with_baseline(
-    res: &Result<gix::revision::Spec<'_>, gix::revision::spec::parse::Error>,
+    res: &Result<gix::revision::Spec<'_>, gix_error::Error>,
     repo: &gix::Repository,
     spec: &str,
     expectation: BaselineExpectation,
@@ -189,10 +186,7 @@ fn compare_with_baseline(
     }
 }
 
-pub fn parse_spec(
-    spec: impl AsRef<str>,
-    repo: &gix::Repository,
-) -> Result<gix::revision::Spec<'_>, gix::revision::spec::parse::Error> {
+pub fn parse_spec(spec: impl AsRef<str>, repo: &gix::Repository) -> Result<gix::revision::Spec<'_>, gix_error::Error> {
     parse_spec_opts(spec.as_ref(), repo, Default::default())
 }
 

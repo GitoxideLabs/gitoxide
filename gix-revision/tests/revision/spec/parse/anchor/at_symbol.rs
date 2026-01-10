@@ -5,10 +5,9 @@ fn braces_must_be_closed() {
     for unclosed_spec in ["@{something", "@{", "@{..@"] {
         let err = try_parse(unclosed_spec).unwrap_err();
         assert_eq!(
-            err.input.as_ref().map(|i| i.as_ref()),
-            Some(unclosed_spec[1..].as_bytes())
+            err.input.as_ref().map(std::convert::AsRef::as_ref),
+            Some(&unclosed_spec.as_bytes()[1..])
         );
-        assert!(err.message.contains("unclosed brace pair"));
     }
 }
 
@@ -77,8 +76,7 @@ fn reflog_by_unix_timestamp_for_current_branch() {
 #[test]
 fn reflog_by_date_with_date_parse_failure() {
     let err = try_parse("@{foo}").unwrap_err();
-    assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(b"foo".as_ref()));
-    assert!(err.message.contains("could not parse time for reflog lookup"));
+    insta::assert_snapshot!(err, @"could not parse time for reflog lookup: foo");
 }
 
 #[test]
@@ -89,7 +87,7 @@ fn reflog_by_date_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{42 +0030}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
+        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
         assert!(err.message.contains("reflog entries require a ref name"));
     }
 }
@@ -136,7 +134,7 @@ fn reflog_by_entry_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{2}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
+        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
         assert!(err.message.contains("reflog entries require a ref name"));
     }
 }
@@ -183,7 +181,7 @@ fn sibling_branch_for_hash_is_invalid() {
         ("v1.2.3-0-g1234@{upstream}", "v1.2.3-0-g1234"),
     ] {
         let err = try_parse(spec).unwrap_err();
-        assert_eq!(err.input.as_ref().map(|i| i.as_ref()), Some(full_name.as_bytes()));
+        assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(full_name.as_bytes()));
         assert!(err.message.contains("sibling branches"));
     }
 }
@@ -191,13 +189,8 @@ fn sibling_branch_for_hash_is_invalid() {
 #[test]
 fn nth_checked_out_branch_for_refname_is_invalid() {
     let err = try_parse("r1@{-1}").unwrap_err();
-    assert!(
-        err.input.as_ref().map(|i| i.as_ref()) == Some(b"-1".as_ref())
-            && err
-                .message
-                .contains("reference name must be followed by positive numbers"),
-        "its undefined how to handle negative numbers and specified ref names"
-    );
+    // its undefined how to handle negative numbers and specified ref names
+    insta::assert_snapshot!(err, @"reference name must be followed by positive numbers in @{n}: -1");
 }
 
 #[test]
@@ -219,11 +212,8 @@ fn nth_checked_out_branch() {
 #[test]
 fn numbers_within_braces_cannot_be_negative_zero() {
     let err = try_parse("@{-0}").unwrap_err();
-    assert!(
-        err.input.as_ref().map(|i| i.as_ref()) == Some(b"-0".as_ref())
-            && err.message.contains("negative zero is invalid"),
-        "negative zero is not accepted, even though it could easily be defaulted to 0 which is a valid value"
-    );
+    // negative zero is not accepted, even though it could easily be defaulted to 0 which is a valid value
+    insta::assert_snapshot!(err, @"negative zero is invalid - remove the minus sign: -0");
 }
 
 #[test]

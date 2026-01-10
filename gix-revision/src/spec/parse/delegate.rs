@@ -1,4 +1,5 @@
 use bstr::BStr;
+use gix_error::Exn;
 
 /// Usually the first methods to call when parsing a rev-spec to set an anchoring revision (which is typically a `Commit` object).
 /// Methods can be called multiple time to either try input or to parse another rev-spec that is part of a range.
@@ -11,22 +12,22 @@ pub trait Revision {
     /// Resolve `name` as reference which might not be a valid reference name. The name may be partial like `main` or full like
     /// `refs/heads/main` solely depending on the users input.
     /// Symbolic referenced should be followed till their object, but objects **must not yet** be peeled.
-    fn find_ref(&mut self, name: &BStr) -> Option<()>;
+    fn find_ref(&mut self, name: &BStr) -> Result<(), Exn>;
 
     /// An object prefix to disambiguate, returning `None` if it is ambiguous or wasn't found at all.
     ///
     /// If `hint` is set, it should be used to disambiguate multiple objects with the same prefix.
-    fn disambiguate_prefix(&mut self, prefix: gix_hash::Prefix, hint: Option<PrefixHint<'_>>) -> Option<()>;
+    fn disambiguate_prefix(&mut self, prefix: gix_hash::Prefix, hint: Option<PrefixHint<'_>>) -> Result<(), Exn>;
 
     /// Lookup the reflog of the previously set reference, or dereference `HEAD` to its reference
     /// to obtain the ref name (as opposed to `HEAD` itself).
     /// If there is no such reflog entry, return `None`.
-    fn reflog(&mut self, query: ReflogLookup) -> Option<()>;
+    fn reflog(&mut self, query: ReflogLookup) -> Result<(), Exn>;
 
     /// When looking at `HEAD`, `branch_no` is the non-null checkout in the path, e.g. `1` means the last branch checked out,
     /// `2` is the one before that.
     /// Return `None` if there is no branch as the checkout history (via the reflog) isn't long enough.
-    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Option<()>;
+    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<(), Exn>;
 
     /// Lookup the previously set branch or dereference `HEAD` to its reference to use its name to lookup the sibling branch of `kind`
     /// in the configuration (typically in `refs/remotes/…`). The sibling branches are always local tracking branches.
@@ -34,7 +35,7 @@ pub trait Revision {
     /// of `refs/heads/`.
     /// Note that the caller isn't aware if the previously set reference is a branch or not and might call this method even though no reference
     /// is known.
-    fn sibling_branch(&mut self, kind: SiblingBranch) -> Option<()>;
+    fn sibling_branch(&mut self, kind: SiblingBranch) -> Result<(), Exn>;
 }
 
 /// Combine one or more specs into a range of multiple.
@@ -48,16 +49,16 @@ pub trait Kind {
     /// and no second specification is provided.
     ///
     /// Note that the method can be called even if other invariants are not fulfilled, treat these as errors.
-    fn kind(&mut self, kind: crate::spec::Kind) -> Option<()>;
+    fn kind(&mut self, kind: crate::spec::Kind) -> Result<(), Exn>;
 }
 
 /// Once an anchor is set one can adjust it using traversal methods.
 pub trait Navigate {
     /// Adjust the current revision to traverse the graph according to `kind`.
-    fn traverse(&mut self, kind: Traversal) -> Option<()>;
+    fn traverse(&mut self, kind: Traversal) -> Result<(), Exn>;
 
     /// Peel the current object until it reached `kind` or `None` if the chain does not contain such object.
-    fn peel_until(&mut self, kind: PeelTo<'_>) -> Option<()>;
+    fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn>;
 
     /// Find the first revision/commit whose message matches the given `regex` (which is never empty).
     /// to see how it should be matched.
@@ -65,7 +66,7 @@ pub trait Navigate {
     ///
     /// If no revision is known yet, find the _youngest_ matching commit from _any_ reference, including `HEAD`.
     /// Otherwise, only find commits reachable from the currently set revision.
-    fn find(&mut self, regex: &BStr, negated: bool) -> Option<()>;
+    fn find(&mut self, regex: &BStr, negated: bool) -> Result<(), Exn>;
 
     /// Look up the given `path` at the given `stage` in the index returning its blob id,
     /// or return `None` if it doesn't exist at this `stage`.
@@ -74,7 +75,7 @@ pub trait Navigate {
     /// * `stage` ranges from 0 to 2, with 0 being the base, 1 being ours, 2 being theirs.
     /// * `path` without prefix is relative to the root of the repository, while prefixes like `./` and `../` make it
     ///   relative to the current working directory.
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Option<()>;
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn>;
 }
 
 /// A hint to make disambiguation when looking up prefixes possible.

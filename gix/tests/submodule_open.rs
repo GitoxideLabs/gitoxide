@@ -39,6 +39,7 @@ fn on_nested_symlink() -> gix_testtools::Result {
     Ok(())
 }
 
+#[cfg(feature = "status")]
 fn p(path: &str) -> &std::path::Path {
     std::path::Path::new(path)
 }

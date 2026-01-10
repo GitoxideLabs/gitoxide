@@ -145,7 +145,7 @@ pub use gix_utils as utils;
 pub use gix_validate as validate;
 pub use hash::{oid, ObjectId};
 
-pub use gix_error::Exn;
+pub use gix_error::{Error, Exn};
 
 pub mod interrupt;
 

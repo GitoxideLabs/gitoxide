@@ -154,11 +154,12 @@ fn paint_down_to_common(
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<(ObjectId, GenThenTime)>, Error> {
     let mut queue = PriorityQueue::<GenThenTime, ObjectId>::new();
-    graph.get_or_insert_full_commit(first, |commit| {
-        commit.data |= Flags::COMMIT1;
-        queue.insert(GenThenTime::from(&*commit), first);
-    })
-    .map_err(|_| Simple("could not insert commit into graph"))?;
+    graph
+        .get_or_insert_full_commit(first, |commit| {
+            commit.data |= Flags::COMMIT1;
+            queue.insert(GenThenTime::from(&*commit), first);
+        })
+        .map_err(|_| Simple("could not insert commit into graph"))?;
 
     for other in others {
         graph

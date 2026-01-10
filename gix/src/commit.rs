@@ -33,10 +33,10 @@ impl From<std::convert::Infallible> for Error {
 ///
 #[cfg(feature = "revision")]
 pub mod describe {
-    use std::borrow::Cow;
-
+    use gix_error::Exn;
     use gix_hash::ObjectId;
     use gix_hashtable::HashMap;
+    use std::borrow::Cow;
 
     use crate::{bstr::BStr, ext::ObjectIdExt, Repository};
 
@@ -84,7 +84,7 @@ pub mod describe {
         #[error(transparent)]
         OpenCache(#[from] crate::repository::commit_graph_if_enabled::Error),
         #[error(transparent)]
-        Describe(#[from] gix_revision::describe::Error),
+        Describe(#[from] Box<gix_revision::describe::Error>),
         #[error("Could not produce an unambiguous shortened id for formatting.")]
         ShortId(#[from] crate::id::shorten::Error),
         #[error(transparent)]
@@ -244,7 +244,8 @@ pub mod describe {
                     first_parent: self.first_parent,
                     max_candidates: self.max_candidates,
                 },
-            )?;
+            )
+            .map_err(Exn::into_box)?;
 
             Ok(outcome.map(|outcome| Resolution {
                 outcome,
