@@ -15,12 +15,19 @@ bitflags::bitflags! {
 }
 
 /// The error returned by the [`merge_base()`][function::merge_base()] function.
-#[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("A commit could not be inserted into the graph")]
-    InsertCommit(#[from] gix_revwalk::graph::get_or_insert_default::Error),
+pub type Error = Simple;
+
+/// A simple error type for merge base operations.
+#[derive(Debug)]
+pub struct Simple(pub &'static str);
+
+impl std::fmt::Display for Simple {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
 }
+
+impl std::error::Error for Simple {}
 
 pub(crate) mod function;
 

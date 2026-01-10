@@ -20,7 +20,7 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> Result<(), Error
     if let Some(b'^') = input.first() {
         input = next(input).1;
         let kind = spec::Kind::ExcludeReachable;
-        delegate.kind(kind).ok_or(Error::Delegate)?;
+        delegate.kind(kind).ok_or_else(|| Error::new("delegate did not indicate success"))?;
         prev_kind = kind.into();
     }
 
@@ -33,23 +33,23 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> Result<(), Error
         return if input.is_empty() {
             Ok(())
         } else {
-            Err(Error::UnconsumedInput { input: input.into() })
+            Err(Error::new_with_input("unconsumed input", input))
         };
     }
     if let Some((rest, kind)) = try_range(input) {
         if let Some(prev_kind) = prev_kind {
-            return Err(Error::KindSetTwice { prev_kind, kind });
+            return Err(Error::new(format!("cannot set spec kind more than once (was {prev_kind:?}, now {kind:?})")));
         }
         if !found_revision {
-            delegate.find_ref("HEAD".into()).ok_or(Error::Delegate)?;
+            delegate.find_ref("HEAD".into()).ok_or_else(|| Error::new("delegate did not indicate success"))?;
         }
-        delegate.kind(kind).ok_or(Error::Delegate)?;
+        delegate.kind(kind).ok_or_else(|| Error::new("delegate did not indicate success"))?;
         (input, found_revision) = {
             let remainder = revision(rest.as_bstr(), &mut delegate)?;
             (remainder, remainder != rest)
         };
         if !found_revision {
-            delegate.find_ref("HEAD".into()).ok_or(Error::Delegate)?;
+            delegate.find_ref("HEAD".into()).ok_or_else(|| Error::new("delegate did not indicate success"))?;
         }
     }
 
@@ -57,7 +57,7 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> Result<(), Error
         delegate.done();
         Ok(())
     } else {
-        Err(Error::UnconsumedInput { input: input.into() })
+        Err(Error::new_with_input("unconsumed input", input))
     }
 }
 
@@ -296,7 +296,7 @@ fn parens(input: &[u8]) -> Result<Option<InsideParensRestConsumed<'_>>, Error> {
             return Ok(Some((inner, input[idx + 1..].as_bstr(), idx + 1)));
         }
     }
-    Err(Error::UnclosedBracePair { input: input.into() })
+    Err(Error::new_with_input("unclosed brace pair", input))
 }
 
 fn try_parse<T: FromStr + PartialEq + Default>(input: &BStr) -> Result<Option<T>, Error> {
@@ -306,7 +306,7 @@ fn try_parse<T: FromStr + PartialEq + Default>(input: &BStr) -> Result<Option<T>
         .and_then(|n| {
             n.parse().ok().map(|n| {
                 if n == T::default() && input[0] == b'-' {
-                    return Err(Error::NegativeZero { input: input.into() });
+                    return Err(Error::new_with_input("negative zero is invalid - remove the minus sign", input));
                 }
                 Ok(n)
             })
@@ -320,15 +320,16 @@ where
 {
     use delegate::{Navigate, Revision};
     fn consume_all(res: Option<()>) -> Result<&'static BStr, Error> {
-        res.ok_or(Error::Delegate).map(|_| "".into())
+        res.ok_or_else(|| Error::new("delegate did not indicate success"))
+            .map(|_| "".into())
     }
     match input.as_bytes() {
-        [b':'] => return Err(Error::MissingColonSuffix),
-        [b':', b'/'] => return Err(Error::EmptyTopLevelRegex),
+        [b':'] => return Err(Error::new("colon must be followed by either slash and regex or path to lookup in HEAD tree")),
+        [b':', b'/'] => return Err(Error::new("colon-slash must be followed by a regular expression")),
         [b':', b'/', regex @ ..] => {
             let (regex, negated) = parse_regex_prefix(regex.as_bstr())?;
             if regex.is_empty() {
-                return Err(Error::UnconsumedInput { input: input.into() });
+                return Err(Error::new_with_input("unconsumed input", input));
             }
             return consume_all(delegate.find(regex, negated));
         }
@@ -382,7 +383,7 @@ where
     let mut sep = sep_pos.map(|pos| input[pos]);
     let mut has_ref_or_implied_name = name.is_empty();
     if name.is_empty() && sep == Some(b'@') && sep_pos.and_then(|pos| input.get(pos + 1)) != Some(&b'{') {
-        delegate.find_ref("HEAD".into()).ok_or(Error::Delegate)?;
+        delegate.find_ref("HEAD".into()).ok_or_else(|| Error::new("delegate did not indicate success"))?;
         sep_pos = sep_pos.map(|pos| pos + 1);
         sep = match sep_pos.and_then(|pos| input.get(pos).copied()) {
             None => return Ok("".into()),
@@ -408,14 +409,17 @@ where
                     }
                 })
             })
-            .ok_or(Error::Delegate)?;
+            .ok_or_else(|| Error::new("delegate did not indicate success"))?;
     }
 
     input = {
         if let Some(b'@') = sep {
             let past_sep = input[sep_pos.map_or(input.len(), |pos| pos + 1)..].as_bstr();
-            let (nav, rest, _consumed) = parens(past_sep)?.ok_or_else(|| Error::AtNeedsCurlyBrackets {
-                input: input[sep_pos.unwrap_or(input.len())..].into(),
+            let (nav, rest, _consumed) = parens(past_sep)?.ok_or_else(|| {
+                Error::new_with_input(
+                    "@ character must be standalone or followed by {<content>}",
+                    &input[sep_pos.unwrap_or(input.len())..],
+                )
             })?;
             let nav = nav.as_ref();
             if let Some(n) = try_parse::<isize>(nav)? {
@@ -423,62 +427,60 @@ where
                     if name.is_empty() {
                         delegate
                             .nth_checked_out_branch(n.unsigned_abs())
-                            .ok_or(Error::Delegate)?;
+                            .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                     } else {
-                        return Err(Error::RefnameNeedsPositiveReflogEntries { nav: nav.into() });
+                        return Err(Error::new_with_input(
+                            "reference name must be followed by positive numbers in @{n}",
+                            nav,
+                        ));
                     }
                 } else if has_ref_or_implied_name {
                     delegate
                         .reflog(if n >= 100000000 {
                             let time = nav
                                 .to_str()
-                                .map_err(|_| Error::Time {
-                                    input: nav.into(),
-                                    source: None,
-                                })
+                                .map_err(|_| Error::new_with_input("could not parse time for reflog lookup", nav))
                                 .and_then(|date| {
-                                    gix_date::parse(date, None).map_err(|err| Error::Time {
-                                        input: nav.into(),
-                                        source: Some(err.into_box()),
+                                    gix_date::parse(date, None).map_err(|_| {
+                                        Error::new_with_input("could not parse time for reflog lookup", nav)
                                     })
                                 })?;
                             delegate::ReflogLookup::Date(time)
                         } else {
                             delegate::ReflogLookup::Entry(n.try_into().expect("non-negative isize fits usize"))
                         })
-                        .ok_or(Error::Delegate)?;
+                        .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                 } else {
-                    return Err(Error::ReflogLookupNeedsRefName { name: (*name).into() });
+                    return Err(Error::new_with_input("reflog entries require a ref name", *name));
                 }
             } else if let Some(kind) = SiblingBranch::parse(nav) {
                 if has_ref_or_implied_name {
-                    delegate.sibling_branch(kind).ok_or(Error::Delegate)
+                    delegate.sibling_branch(kind).ok_or_else(|| Error::new("delegate did not indicate success"))
                 } else {
-                    Err(Error::SiblingBranchNeedsBranchName { name: (*name).into() })
+                    Err(Error::new_with_input(
+                        "sibling branches like 'upstream' or 'push' require a branch name with remote configuration",
+                        *name,
+                    ))
                 }?;
             } else if has_ref_or_implied_name {
                 let time = nav
                     .to_str()
-                    .map_err(|_| Error::Time {
-                        input: nav.into(),
-                        source: None,
-                    })
+                    .map_err(|_| Error::new_with_input("could not parse time for reflog lookup", nav))
                     .and_then(|date| {
-                        gix_date::parse(date, Some(SystemTime::now())).map_err(|err| Error::Time {
-                            input: nav.into(),
-                            source: Some(err.into_box()),
+                        gix_date::parse(date, Some(SystemTime::now())).map_err(|_| {
+                            Error::new_with_input("could not parse time for reflog lookup", nav)
                         })
                     })?;
                 delegate
                     .reflog(delegate::ReflogLookup::Date(time))
-                    .ok_or(Error::Delegate)?;
+                    .ok_or_else(|| Error::new("delegate did not indicate success"))?;
             } else {
-                return Err(Error::ReflogLookupNeedsRefName { name: (*name).into() });
+                return Err(Error::new_with_input("reflog entries require a ref name", *name));
             }
             rest
         } else {
             if sep_pos == Some(0) && sep == Some(b'~') {
-                return Err(Error::MissingTildeAnchor);
+                return Err(Error::new("tilde needs to follow an anchor, like @~"));
             }
             input[sep_pos.unwrap_or(input.len())..].as_bstr()
         }
@@ -505,7 +507,7 @@ where
                 if number != 0 {
                     delegate
                         .traverse(delegate::Traversal::NthAncestor(number))
-                        .ok_or(Error::Delegate)?;
+                        .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                 }
                 cursor += consumed;
             }
@@ -520,26 +522,27 @@ where
                             .traverse(delegate::Traversal::NthParent(
                                 number
                                     .checked_mul(-1)
-                                    .ok_or_else(|| Error::InvalidNumber {
-                                        input: past_sep.expect("present").into(),
+                                    .ok_or_else(|| {
+                                        Error::new_with_input(
+                                            "could not parse number",
+                                            past_sep.expect("present"),
+                                        )
                                     })?
                                     .try_into()
                                     .expect("non-negative"),
                             ))
-                            .ok_or(Error::Delegate)?;
-                        delegate.kind(spec::Kind::RangeBetween).ok_or(Error::Delegate)?;
+                            .ok_or_else(|| Error::new("delegate did not indicate success"))?;
+                        delegate.kind(spec::Kind::RangeBetween).ok_or_else(|| Error::new("delegate did not indicate success"))?;
                         if let Some((prefix, hint)) = delegate.last_prefix.take() {
                             match hint {
                                 Some(hint) => delegate.disambiguate_prefix(prefix, hint.to_ref().into()),
                                 None => delegate.disambiguate_prefix(prefix, None),
                             }
-                            .ok_or(Error::Delegate)?;
+                            .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                         } else if let Some(name) = delegate.last_ref.take() {
-                            delegate.find_ref(name.as_bstr()).ok_or(Error::Delegate)?;
+                            delegate.find_ref(name.as_bstr()).ok_or_else(|| Error::new("delegate did not indicate success"))?;
                         } else {
-                            return Err(Error::UnconsumedInput {
-                                input: input[cursor..].into(),
-                            });
+                            return Err(Error::new_with_input("unconsumed input", &input[cursor..]));
                         }
                         delegate.done();
                         cursor += consumed;
@@ -551,7 +554,7 @@ where
                             number.try_into().expect("positive number"),
                         ))
                     }
-                    .ok_or(Error::Delegate)?;
+                    .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                     cursor += consumed;
                 } else if let Some((kind, _rest, consumed)) =
                     past_sep.and_then(|past_sep| parens(past_sep).transpose()).transpose()?
@@ -567,35 +570,35 @@ where
                         regex if regex.starts_with(b"/") => {
                             let (regex, negated) = parse_regex_prefix(regex[1..].as_bstr())?;
                             if !regex.is_empty() {
-                                delegate.find(regex, negated).ok_or(Error::Delegate)?;
+                                delegate.find(regex, negated).ok_or_else(|| Error::new("delegate did not indicate success"))?;
                             }
                             continue;
                         }
-                        invalid => return Err(Error::InvalidObject { input: invalid.into() }),
+                        invalid => return Err(Error::new_with_input("cannot peel to unknown target", invalid)),
                     };
-                    delegate.peel_until(target).ok_or(Error::Delegate)?;
+                    delegate.peel_until(target).ok_or_else(|| Error::new("delegate did not indicate success"))?;
                 } else if past_sep.and_then(<[_]>::first) == Some(&b'!') {
                     delegate
                         .kind(spec::Kind::ExcludeReachableFromParents)
-                        .ok_or(Error::Delegate)?;
+                        .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                     delegate.done();
                     return Ok(input[cursor + 1..].as_bstr());
                 } else if past_sep.and_then(<[_]>::first) == Some(&b'@') {
                     delegate
                         .kind(spec::Kind::IncludeReachableFromParents)
-                        .ok_or(Error::Delegate)?;
+                        .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                     delegate.done();
                     return Ok(input[cursor + 1..].as_bstr());
                 } else {
                     delegate
                         .traverse(delegate::Traversal::NthParent(1))
-                        .ok_or(Error::Delegate)?;
+                        .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                 }
             }
             b':' => {
                 delegate
                     .peel_until(delegate::PeelTo::Path(input[cursor..].as_bstr()))
-                    .ok_or(Error::Delegate)?;
+                    .ok_or_else(|| Error::new("delegate did not indicate success"))?;
                 return Ok("".into());
             }
             _ => return Ok(input[cursor - 1..].as_bstr()),
@@ -608,7 +611,12 @@ fn parse_regex_prefix(regex: &BStr) -> Result<(&BStr, bool), Error> {
     Ok(match regex.strip_prefix(b"!") {
         Some(regex) if regex.first() == Some(&b'!') => (regex.as_bstr(), false),
         Some(regex) if regex.first() == Some(&b'-') => (regex[1..].as_bstr(), true),
-        Some(_regex) => return Err(Error::UnspecifiedRegexModifier { regex: regex.into() }),
+        Some(_regex) => {
+            return Err(Error::new_with_input(
+                "need one character after /!, typically -",
+                regex,
+            ))
+        }
         None => (regex, false),
     })
 }
@@ -616,21 +624,27 @@ fn parse_regex_prefix(regex: &BStr) -> Result<(&BStr, bool), Error> {
 fn try_parse_usize(input: &BStr) -> Result<Option<(usize, usize)>, Error> {
     let mut bytes = input.iter().peekable();
     if bytes.peek().filter(|&&&b| b == b'-' || b == b'+').is_some() {
-        return Err(Error::SignedNumber { input: input.into() });
+        return Err(Error::new_with_input(
+            "negative or explicitly positive numbers are invalid here",
+            input,
+        ));
     }
     let num_digits = bytes.take_while(|b| b.is_ascii_digit()).count();
     if num_digits == 0 {
         return Ok(None);
     }
     let input = &input[..num_digits];
-    let number = try_parse(input)?.ok_or_else(|| Error::InvalidNumber { input: input.into() })?;
+    let number = try_parse(input)?.ok_or_else(|| Error::new_with_input("could not parse number", input))?;
     Ok(Some((number, num_digits)))
 }
 
 fn try_parse_isize(input: &BStr) -> Result<Option<(isize, bool, usize)>, Error> {
     let mut bytes = input.iter().peekable();
     if bytes.peek().filter(|&&&b| b == b'+').is_some() {
-        return Err(Error::SignedNumber { input: input.into() });
+        return Err(Error::new_with_input(
+            "explicitly positive numbers are invalid here",
+            input,
+        ));
     }
     let negative = bytes.peek() == Some(&&b'-');
     let num_digits = bytes.take_while(|b| b.is_ascii_digit() || *b == &b'-').count();
@@ -640,7 +654,7 @@ fn try_parse_isize(input: &BStr) -> Result<Option<(isize, bool, usize)>, Error> 
         return Ok(Some((-1, negative, num_digits)));
     }
     let input = &input[..num_digits];
-    let number = try_parse(input)?.ok_or_else(|| Error::InvalidNumber { input: input.into() })?;
+    let number = try_parse(input)?.ok_or_else(|| Error::new_with_input("could not parse number", input))?;
     Ok(Some((number, negative, num_digits)))
 }
 
