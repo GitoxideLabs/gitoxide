@@ -10,10 +10,12 @@ fn large_offsets() {
 
 #[test]
 fn large_offsets_do_not_panic() {
-    assert!(matches!(
-        gix_date::parse("9999999999 weeks ago", Some(std::time::UNIX_EPOCH)),
-        Err(gix_date::parse::Error::RelativeTimeConversion)
-    ));
+    assert_eq!(
+        gix_date::parse("9999999999 weeks ago", Some(std::time::UNIX_EPOCH))
+            .unwrap_err()
+            .to_string(),
+        "Couldn't parse span from 'week 9999999999'"
+    );
 }
 
 #[test]

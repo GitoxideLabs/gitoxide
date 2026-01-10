@@ -311,6 +311,7 @@ blame-experimental = ["blame", "gix-blame/blob-experimental"]
 
 
 [dependencies]
+gix-error = { version = "0.0.0", path = "../gix-error" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 gix-fs = { version = "^0.18.2", path = "../gix-fs" }
 gix-ref = { version = "^0.57.0", path = "../gix-ref" }

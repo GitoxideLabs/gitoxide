@@ -1,21 +1,7 @@
 use std::str::FromStr;
 
+use crate::{Error, Time};
 use smallvec::SmallVec;
-
-use crate::Time;
-
-#[derive(thiserror::Error, Debug, Clone)]
-#[allow(missing_docs)]
-pub enum Error {
-    #[error("Could not convert a duration into a date")]
-    RelativeTimeConversion,
-    #[error("Date string can not be parsed")]
-    InvalidDateString { input: String },
-    #[error("The heat-death of the universe happens before this date")]
-    InvalidDate(#[from] std::num::TryFromIntError),
-    #[error("Current time is missing but required to handle relative dates.")]
-    MissingCurrentTime,
-}
 
 /// A container for just enough bytes to hold the largest-possible [`time`](Time) instance.
 /// It's used in conjunction with
@@ -58,7 +44,7 @@ impl FromStr for Time {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        crate::parse_header(s).ok_or_else(|| Error::InvalidDateString { input: s.into() })
+        crate::parse_header(s).ok_or_else(|| Error::new_with_input("invalid time", s))
     }
 }
 

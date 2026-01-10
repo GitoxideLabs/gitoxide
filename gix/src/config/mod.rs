@@ -451,7 +451,7 @@ pub mod remote {
 ///
 pub mod time {
     /// The error produced when failing to parse time from configuration.
-    pub type Error = super::key::Error<gix_date::parse::Error, 't', 'i'>;
+    pub type Error = super::key::Error<gix_date::Error, 't', 'i'>;
 }
 
 ///

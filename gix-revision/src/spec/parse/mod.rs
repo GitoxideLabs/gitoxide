@@ -1,6 +1,5 @@
-use bstr::BString;
-
 use crate::spec;
+use bstr::BString;
 
 /// The error returned by [`spec::parse()`][crate::spec::parse()].
 #[derive(Debug, thiserror::Error)]
@@ -19,7 +18,7 @@ pub enum Error {
     #[error("Could not parse time {:?} for revlog lookup.", .input)]
     Time {
         input: BString,
-        source: Option<gix_date::parse::Error>,
+        source: Option<Box<gix_date::Error>>,
     },
     #[error("Sibling branches like 'upstream' or 'push' require a branch name with remote configuration, got {:?}", .name)]
     SiblingBranchNeedsBranchName { name: BString },

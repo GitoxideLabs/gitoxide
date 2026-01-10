@@ -409,8 +409,6 @@ mod workers {
 }
 
 mod time {
-    use std::borrow::Cow;
-
     use crate::{
         bstr::{BStr, ByteSlice},
         config::tree::{
@@ -418,6 +416,8 @@ mod time {
             Section,
         },
     };
+    use gix_error::Exn;
+    use std::borrow::Cow;
 
     impl Time {
         /// Create a new instance.
@@ -430,14 +430,11 @@ mod time {
             &self,
             value: Cow<'_, BStr>,
             now: Option<std::time::SystemTime>,
-        ) -> Result<gix_date::Time, gix_date::parse::Error> {
+        ) -> Result<gix_date::Time, Exn<gix_date::Error>> {
             gix_date::parse(
-                value
-                    .as_ref()
-                    .to_str()
-                    .map_err(|_| gix_date::parse::Error::InvalidDateString {
-                        input: value.to_string(),
-                    })?,
+                value.as_ref().to_str().map_err(|_| {
+                    gix_date::Error::new_with_input("UTF8 conversion failed", value.clone().into_owned())
+                })?,
                 now,
             )
         }
@@ -530,7 +527,7 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            gix_date::parse(value.to_str()?, std::time::SystemTime::now().into())?;
+            gix_date::parse(value.to_str()?, std::time::SystemTime::now().into()).map_err(gix_error::Exn::into_box)?;
             Ok(())
         }
     }

@@ -398,7 +398,9 @@ fn since() -> gix_testtools::Result {
         gix_blame::Options {
             diff_algorithm: gix_diff::blob::Algorithm::Histogram,
             ranges: BlameRanges::default(),
-            since: Some(gix_date::parse("2025-01-31", None)?),
+            since: Some(
+                gix_date::parse("2025-01-31", None).expect("TODO: should be able to to retrieve inner from Exn"),
+            ),
             rewrites: Some(gix_diff::Rewrites::default()),
             debug_track_path: false,
         },

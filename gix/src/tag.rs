@@ -13,7 +13,7 @@ mod error {
         #[error(transparent)]
         ReferenceEdit(#[from] crate::reference::edit::Error),
         #[error(transparent)]
-        DateParseError(#[from] gix_date::parse::Error),
+        DateParseError(#[from] gix_date::Error),
     }
 }
 pub use error::Error;

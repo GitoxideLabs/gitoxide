@@ -229,6 +229,7 @@ members = [
     "gix-trace",
     "gix-commitgraph",
     "gix-chunk",
+    "gix-error",
     "gix-quote",
     "gix-object",
     "gix-glob",

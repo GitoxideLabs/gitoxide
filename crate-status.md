@@ -572,8 +572,12 @@ A mechanism to associate metadata with any object, and keep revisions of it usin
      - note that it's less critical to support it as `gitoxide` allows access but prevents untrusted configuration to become effective.
 
 ### gix-date
-* [ ] parse git dates
-* [ ] serialize `Time`
+* [x] parse git dates
+* [x] serialize `Time`
+
+### gix-error
+
+A basic crate for comon error types and utilities, changed as needed to replace `thiserror`.
 
 ### gix-credentials
 * [x] launch git credentials helpers with a given action

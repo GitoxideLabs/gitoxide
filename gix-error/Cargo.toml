@@ -1,0 +1,19 @@
+lints.workspace = true
+
+[package]
+name = "gix-error"
+version = "0.0.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "A crate of the gitoxide project to provide common errors and error-handling utilities"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+include = ["src/**/*", "LICENSE-*"]
+rust-version = "1.82"
+
+[dependencies]
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+insta = "1.46.0"
+

@@ -19,11 +19,11 @@ doctest = false
 serde = ["dep:serde", "bstr/serde"]
 
 [dependencies]
+gix-error = { version = "0.0.0", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 itoa = "1.0.17"
 jiff = "0.2.17"
-thiserror = "2.0.17"
 # TODO: used for quick and easy `TimeBacking: std::io::Write` implementation, but could make that `Copy`
 #       and remove this dep with custom impl
 smallvec = { version = "1.15.1", features = ["write"] }
