@@ -74,6 +74,7 @@ check:
     cargo check -p gix-hash --no-default-features --features sha256
     cargo check -p gix-object --all-features
     cargo check -p gix-object --features verbose-object-parsing-errors
+    cargo check -p gix-object --features sha256
     cargo check -p gix-attributes --features serde
     cargo check -p gix-glob --features serde
     cargo check -p gix-worktree --features serde
@@ -162,6 +163,7 @@ unit-tests:
     cargo nextest run -p gix-hash --no-default-features --features sha256 --no-fail-fast # TODO: make this actually work by removing 'sha1' from default features.
     cargo nextest run -p gix-object --no-fail-fast
     cargo nextest run -p gix-object --features verbose-object-parsing-errors --no-fail-fast
+    cargo nextest run -p gix-object --features sha256 --no-fail-fast
     cargo nextest run -p gix-tempfile --features signals --no-fail-fast
     cargo nextest run -p gix-features --all-features --no-fail-fast
     cargo nextest run -p gix-ref-tests --all-features --no-fail-fast
