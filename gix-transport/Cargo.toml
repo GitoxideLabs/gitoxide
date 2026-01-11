@@ -107,7 +107,7 @@ pin-project-lite = { version = "0.2.6", optional = true }
 base64 = { version = "0.22.1", optional = true }
 
 # for http-client-curl. Additional configuration should be performed on higher levels of the dependency tree.
-curl = { version = "0.4", optional = true }
+curl = { version = "0.4", optional = true, default-features = false }
 
 # for http-client-reqwest
 # all but the 'default-tls' feature
