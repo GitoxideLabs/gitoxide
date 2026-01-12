@@ -1752,6 +1752,7 @@ dependencies = [
 name = "gix-error"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "bstr",
  "insta",
 ]

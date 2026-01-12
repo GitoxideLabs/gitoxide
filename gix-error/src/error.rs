@@ -11,6 +11,14 @@ impl Error {
         }
         current.as_error_send_sync()
     }
+
+    /// Return the inner frame.
+    #[cfg(feature = "anyhow")]
+    pub(crate) fn into_frame(self) -> Box<exn::Frame> {
+        match self.inner {
+            Inner::ExnAsError(frame) | Inner::Exn(frame) => frame,
+        }
+    }
     //
     // /// Return an iterator over all sources, i.e. the linear chain.
     // pub fn iter_sources(&self) -> ErrorIter<'_> {

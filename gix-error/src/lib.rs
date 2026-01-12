@@ -13,6 +13,12 @@
 /// A result type to hide the [Exn] error wrapper.
 mod exn;
 
+#[cfg(feature = "anyhow")]
+mod anyhow;
+
+#[cfg(feature = "anyhow")]
+pub use self::anyhow::IntoAnyhow;
+
 pub use exn::{ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
 
 /// An error type that wraps an inner type-erased boxed `std::error::Error` or an `Exn` frame.
