@@ -19,7 +19,7 @@ struct ChainedFrameError {
 impl ChainedFrameError {
     /// Create a chain from a frame by walking the first-child path.
     fn from_frame(frame: &Frame) -> Self {
-        let message = format!("{}", frame.as_error());
+        let message = frame.as_error().to_string();
         let debug = format!("{:?}", frame.as_error());
         
         // Create the source chain by following the first child
@@ -134,7 +134,6 @@ mod tests {
         assert!(error_chain.contains("TestError1: top error"));
         
         // Check that sources are accessible - should have all three levels
-        use std::error::Error;
         let mut source = anyhow_err.source();
         assert!(source.is_some(), "Should have first source");
         
