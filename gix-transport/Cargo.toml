@@ -31,7 +31,11 @@ http-client = [
 ## If used in conjunction with other blocking implementations like `http-client-reqwest`, this one takes precedence.
 http-client-curl = ["curl", "http-client"]
 ## Implies `http-client-curl` and enables `rustls` for creating `https://` connections.
+## If used in conjunction with `http-client-curl-openssl`, this feature will take precedence.
 http-client-curl-rust-tls = ["http-client-curl", "curl/rustls"]
+## Implies `http-client-curl` and enables `ssl` for creating `https://` connections.
+## If used in conjunction with `http-client-curl-rust-tls`, the `rust-tls` feature will take precedence.
+http-client-curl-openssl = ["http-client-curl", "curl/ssl"]
 ## Implies `http-client` and adds support for http and https transports using the blocking version of `reqwest`.
 http-client-reqwest = ["reqwest", "http-client"]
 ## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `rustls` crate.
