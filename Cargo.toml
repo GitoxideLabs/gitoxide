@@ -37,7 +37,12 @@ default = ["max"]
 ##
 ## As fast as possible, tracing, with TUI progress, progress line rendering with autoconfiguration, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
 ## Can be amended with the `http-client-curl-rustls` feature to avoid `openssl` as backend.
-max = ["max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl"]
+##
+## ### Note
+##
+## When used in conjunction with `http-client-curl-rustls`, the `openssl` crates will still be compiled, but won't be used. To bypass this, disable
+## default dependencies and specify the features yourself.
+max = ["max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
 
 ## Like `max`, but only Rust is allowed.
 ##
@@ -54,7 +59,7 @@ max-control = ["tracing", "fast", "pretty-cli", "gitoxide-core-tools", "prodash-
 ## All the good stuff, with less fanciness for smaller binaries.
 ##
 ## As fast as possible, progress line rendering, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output.
-lean = ["fast", "tracing", "pretty-cli", "http-client-curl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
+lean = ["fast", "tracing", "pretty-cli", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
 
 ## The smallest possible build, best suitable for small single-core machines.
 ##
@@ -140,6 +145,8 @@ gitoxide-core-blocking-client = ["gitoxide-core/blocking-client"]
 http-client-curl = ["gix/blocking-http-transport-curl"]
 ## Implies `http-client-curl` and configures `curl` to use the `rust-tls` backend.
 http-client-curl-rustls = ["gix/blocking-http-transport-curl-rustls"]
+## Implies `http-client-curl` and configures `curl` to use the `openssl` backend.
+http-client-curl-openssl = ["gix/blocking-http-transport-curl-openssl"]
 ## Support synchronous 'http' and 'https' transports (e.g. for clone, fetch and push) using **reqwest**.
 http-client-reqwest = ["gix/blocking-http-transport-reqwest-rust-tls"]
 

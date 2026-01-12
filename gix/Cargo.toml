@@ -190,9 +190,15 @@ blocking-http-transport-curl = [
     "gix-transport/http-client-curl",
 ]
 ## Stacks with `blocking-http-transport-curl` and also enables the `rustls` backend to avoid `openssl`.
+## This feature takes precedence over `http-client-curl-rust-ssl`.
 blocking-http-transport-curl-rustls = [
     "blocking-http-transport-curl",
     "gix-transport/http-client-curl-rust-tls",
+]
+## Stacks with `blocking-http-transport-curl` and also enables the `openssl` backend.
+blocking-http-transport-curl-openssl = [
+    "blocking-http-transport-curl",
+    "gix-transport/http-client-curl-openssl",
 ]
 ## Stacks with `blocking-network-client` to provide support for HTTP/S using **reqwest**, and implies blocking networking as a whole, making the `https://` transport available.
 blocking-http-transport-reqwest = [
