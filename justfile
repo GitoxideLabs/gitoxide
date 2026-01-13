@@ -106,6 +106,7 @@ check:
     cargo check -p gix-features --features zlib
     cargo check -p gix-features --features cache-efficiency-debug
     cargo check -p gix-commitgraph --all-features
+    cargo check -p gix-commitgraph --features sha256
     cargo check -p gix-config-value --all-features
     cargo check -p gix-config --all-features
     cargo check -p gix-diff --no-default-features
