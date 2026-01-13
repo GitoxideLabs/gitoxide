@@ -174,4 +174,21 @@ impl Kind {
     pub const fn empty_tree(&self) -> ObjectId {
         ObjectId::empty_tree(*self)
     }
+
+    /// Return a list of available hash kinds.
+    #[inline]
+    pub const fn all() -> &'static [Self] {
+        #[cfg(all(feature = "sha1", not(feature = "sha256")))]
+        {
+            &[Self::Sha1]
+        }
+        #[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+        {
+            &[Self::Sha256]
+        }
+        #[cfg(all(feature = "sha1", feature = "sha256"))]
+        {
+            &[Self::Sha1, Self::Sha256]
+        }
+    }
 }
