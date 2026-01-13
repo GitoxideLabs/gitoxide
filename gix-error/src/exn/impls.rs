@@ -168,6 +168,18 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     pub fn as_frame(&self) -> &Frame {
         &self.frame
     }
+
+    /// Iterate over all frames in breadth-first order. The first frame is this instance,
+    /// followed by all of its children.
+    pub fn iter(&self) -> impl Iterator<Item = &Frame> {
+        self.as_frame().iter()
+    }
+
+    /// Iterate over all frames and find one that downcasts into error of type `T`.
+    /// Note that the search includes this instance as ell.
+    pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
+        self.iter().find_map(|e| e.downcast())
+    }
 }
 
 impl<E> Deref for Exn<E>
