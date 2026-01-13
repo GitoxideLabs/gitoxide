@@ -1,3 +1,5 @@
+use crate::Error;
+
 impl crate::Repository {
     /// Create a graph data-structure capable of accelerating graph traversals and storing state of type `T` with each commit
     /// it encountered.
@@ -24,8 +26,8 @@ impl crate::Repository {
     ///
     /// Note that [`revision_graph()`][crate::Repository::revision_graph()] should be preferred for general purpose walks that don't
     /// rely on the actual commit cache to be present, while leveraging the commit-graph if possible.
-    pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph, gix_commitgraph::init::Error> {
-        gix_commitgraph::at(self.objects.store_ref().path().join("info"))
+    pub fn commit_graph(&self) -> Result<gix_commitgraph::Graph, Error> {
+        gix_commitgraph::at(self.objects.store_ref().path().join("info")).map_err(Into::into)
     }
 
     /// Return a newly opened commit-graph if it is available *and* enabled in the Git configuration.
@@ -37,9 +39,9 @@ impl crate::Repository {
             .may_use_commit_graph()?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))
             .transpose()
-            .or_else(|err| match err {
-                gix_commitgraph::init::Error::Io { err, .. } if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                _ => Err(err),
+            .or_else(|err| match err.downcast_any_ref::<std::io::Error>() {
+                Some(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                _ => Err(err.into_error()),
             })?)
     }
 }
