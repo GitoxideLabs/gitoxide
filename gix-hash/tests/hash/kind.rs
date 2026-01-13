@@ -103,3 +103,21 @@ fn longest_sha1_and_sha256() {
     let longest = Kind::longest();
     assert_eq!(longest, Kind::Sha256);
 }
+
+#[test]
+#[cfg(all(feature = "sha1", not(feature = "sha256")))]
+fn all() {
+    assert_eq!(Kind::all(), &[Kind::Sha1]);
+}
+
+#[test]
+#[cfg(all(not(feature = "sha1"), feature = "sha256"))]
+fn all() {
+    assert_eq!(Kind::all(), &[Kind::Sha256]);
+}
+
+#[test]
+#[cfg(all(feature = "sha1", feature = "sha256"))]
+fn all() {
+    assert_eq!(Kind::all(), &[Kind::Sha1, Kind::Sha256]);
+}
