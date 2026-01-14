@@ -324,3 +324,112 @@ fn check_prefix(index: &gix_index::State, prefix: &str, expected: &[&str]) {
         "{prefix:?}"
     );
 }
+
+#[test]
+fn path_is_directory() {
+    let file = Fixture::Loose("ignore-case-realistic").open();
+
+    // Test that directories containing entries are detected
+    assert!(
+        file.path_is_directory("tests".into()),
+        "tests is a directory containing entries"
+    );
+    assert!(
+        file.path_is_directory("tests/snapshots".into()),
+        "tests/snapshots is a directory containing entries"
+    );
+    assert!(
+        file.path_is_directory("tests/snapshots/porcelain".into()),
+        "tests/snapshots/porcelain is a directory"
+    );
+    assert!(
+        file.path_is_directory("tests/tools".into()),
+        "tests/tools is a directory"
+    );
+
+    // Test that non-existent directories return false
+    assert!(
+        !file.path_is_directory("nonexistent".into()),
+        "nonexistent is not a directory"
+    );
+    assert!(!file.path_is_directory("z".into()), "z is not a directory");
+    assert!(
+        !file.path_is_directory("test".into()),
+        "test is not a directory (tests is)"
+    );
+
+    // Test that files are not directories
+    assert!(
+        !file.path_is_directory("tests/utilities.sh".into()),
+        "tests/utilities.sh is a file, not a directory"
+    );
+
+    // Test that partial directory names don't match
+    assert!(!file.path_is_directory("".into()), "empty path is not a directory");
+}
+
+#[test]
+fn path_is_directory_icase() {
+    let file = Fixture::Loose("ignore-case-realistic").open();
+    let icase = file.prepare_icase_backing();
+
+    // Test case-sensitive matching
+    assert!(
+        file.path_is_directory_icase("tests".into(), false, &icase),
+        "tests is a directory (case-sensitive)"
+    );
+    assert!(
+        file.path_is_directory_icase("tests/tools".into(), false, &icase),
+        "tests/tools is a directory (case-sensitive)"
+    );
+
+    // Test case-insensitive matching
+    assert!(
+        file.path_is_directory_icase("TESTS".into(), true, &icase),
+        "TESTS is a directory (case-insensitive, matches 'tests')"
+    );
+    assert!(
+        file.path_is_directory_icase("tests/TOOLS".into(), true, &icase),
+        "tests/TOOLS is a directory (case-insensitive, matches 'tests/tools')"
+    );
+    assert!(
+        file.path_is_directory_icase("TESTS/SNAPSHOTS".into(), true, &icase),
+        "TESTS/SNAPSHOTS is a directory (case-insensitive)"
+    );
+
+    // Test that non-existent paths return false even with icase
+    assert!(
+        !file.path_is_directory_icase("nonexistent".into(), true, &icase),
+        "nonexistent is not a directory even with icase"
+    );
+    assert!(
+        !file.path_is_directory_icase("Z".into(), true, &icase),
+        "Z is not a directory even with icase"
+    );
+}
+
+#[test]
+fn path_is_directory_icase_with_clashes() {
+    let file = icase_fixture();
+    let icase = file.prepare_icase_backing();
+
+    // Test directory detection with case clashes
+    assert!(
+        file.path_is_directory_icase("D".into(), false, &icase),
+        "D is a directory (case-sensitive)"
+    );
+    assert!(
+        file.path_is_directory_icase("d".into(), true, &icase),
+        "d matches D directory (case-insensitive)"
+    );
+
+    // Test that files aren't detected as directories
+    assert!(
+        !file.path_is_directory_icase("X".into(), false, &icase),
+        "X is a file, not a directory"
+    );
+    assert!(
+        !file.path_is_directory_icase("x".into(), false, &icase),
+        "x is a symlink, not a directory"
+    );
+}
