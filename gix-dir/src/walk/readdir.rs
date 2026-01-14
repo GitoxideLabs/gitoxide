@@ -98,7 +98,7 @@ pub(super) fn recursive(
                 state,
             )?;
             prevent_collapse |= subdir_prevent_collapse;
-            if action != Action::Continue {
+            if action.is_break() {
                 return Ok((action, prevent_collapse));
             }
         } else {
@@ -117,7 +117,7 @@ pub(super) fn recursive(
             }
             if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
                 let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
-                if action != Action::Continue {
+                if action.is_break() {
                     return Ok((action, prevent_collapse));
                 }
             }
@@ -258,7 +258,7 @@ impl Mark {
                 state
                     .on_hold
                     .push(EntryRef::from_outcome(Cow::Borrowed(dir_rela_path), empty_info).into_owned());
-                Action::Continue
+                std::ops::ControlFlow::Continue(())
             } else {
                 emit_entry(Cow::Borrowed(dir_rela_path), empty_info, None, opts, out, delegate)
             }
@@ -282,11 +282,11 @@ impl Mark {
         for entry in state.on_hold.drain(self.start_index..) {
             let info = classify::Outcome::from(&entry);
             let action = emit_entry(Cow::Owned(entry.rela_path), info, None, opts, out, delegate);
-            if action != Action::Continue {
+            if action.is_break() {
                 return action;
             }
         }
-        Action::Continue
+        std::ops::ControlFlow::Continue(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -371,9 +371,9 @@ impl Mark {
                 filter_dir_pathspec(dir_info.pathspec_match)
             });
         let mut removed_without_emitting = 0;
-        let mut action = Action::Continue;
+        let mut action = std::ops::ControlFlow::Continue(());
         for entry in state.on_hold.drain(self.start_index..) {
-            if action != Action::Continue {
+            if action.is_break() {
                 removed_without_emitting += 1;
                 continue;
             }

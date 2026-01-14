@@ -1314,7 +1314,7 @@ mod util {
             &to,
             |change| -> Result<_, Infallible> {
                 out.push(change.into_owned());
-                Ok(gix_diff::index::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             },
             options.map(|rewrites| gix_diff::index::RewriteOptions {
                 rewrites,

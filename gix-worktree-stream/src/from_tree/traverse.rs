@@ -59,11 +59,11 @@ where
 
     fn handle_entry(&mut self, entry: &tree::EntryRef<'_>) -> Result<Action, Error> {
         if !entry.mode.is_blob_or_symlink() {
-            return Ok(Action::Continue);
+            return Ok(std::ops::ControlFlow::Continue(true));
         }
         (self.fetch_attributes)(self.path.as_ref(), entry.mode, &mut self.attrs)?;
         if self.ignore_state().is_set() {
-            return Ok(Action::Continue);
+            return Ok(std::ops::ControlFlow::Continue(true));
         }
         self.objects.find(entry.oid, &mut self.buf)?;
 
@@ -98,7 +98,7 @@ where
                 unreachable!("we forbade it")
             }
         }
-        Ok(Action::Continue)
+        Ok(std::ops::ControlFlow::Continue(true))
     }
 }
 
@@ -135,11 +135,11 @@ where
     fn visit_tree(&mut self, entry: &tree::EntryRef<'_>) -> Action {
         if let Err(err) = (self.fetch_attributes)(self.path.as_ref(), entry.mode, &mut self.attrs) {
             *self.err.lock() = Some(err);
-            Action::Cancel
+            std::ops::ControlFlow::Break(())
         } else if self.ignore_state().is_set() {
-            Action::Skip
+            std::ops::ControlFlow::Continue(false)
         } else {
-            Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
     }
 
@@ -148,7 +148,7 @@ where
             Ok(action) => action,
             Err(err) => {
                 *self.err.lock() = Some(err);
-                Action::Cancel
+                std::ops::ControlFlow::Break(())
             }
         }
     }

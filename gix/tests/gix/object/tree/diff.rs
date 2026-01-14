@@ -41,7 +41,7 @@ fn changes_against_tree_modified() -> crate::Result {
 
                     if matches!(entry_mode.kind(), EntryKind::Tree) {
                         i += 1;
-                        return Ok(Default::default());
+                        return Ok(std::ops::ControlFlow::Continue(()));
                     }
 
                     assert_eq!(previous_id.object().unwrap().data.as_bstr(), expected_previous_data);
@@ -76,7 +76,7 @@ fn changes_against_tree_modified() -> crate::Result {
             .expect("infallible");
 
             i += 1;
-            Ok(Default::default())
+            Ok(std::ops::ControlFlow::Continue(()))
         })?;
     assert_eq!(i, 3);
 
@@ -189,7 +189,7 @@ mod track_rewrites {
                     let v = expected.remove(location);
                     assert_eq!(v, Some((source_location, similarity)));
                 }
-                Ok(Default::default())
+                Ok(std::ops::ControlFlow::Continue(()))
             })?;
 
         assert_eq!(expected, HashMap::new());

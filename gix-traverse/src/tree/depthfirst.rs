@@ -31,7 +31,7 @@ pub(super) mod function {
     use gix_object::{FindExt, TreeRefIter};
 
     use super::{Error, State};
-    use crate::tree::{visit::Action, Visit};
+    use crate::tree::Visit;
 
     /// A depth-first traversal of the `root` tree, that preserves the natural order of a tree while immediately descending
     /// into sub-trees.
@@ -81,9 +81,9 @@ pub(super) mod function {
                             let res = delegate.visit_tree(&entry);
                             delegate.pop_path_component();
                             match res {
-                                Action::Continue => {}
-                                Action::Cancel => break 'outer,
-                                Action::Skip => continue,
+                                std::ops::ControlFlow::Continue(true) => {}
+                                std::ops::ControlFlow::Break(()) => break 'outer,
+                                std::ops::ControlFlow::Continue(false) => continue,
                             }
 
                             delegate.push_back_tracked_path_component("".into());
@@ -98,7 +98,7 @@ pub(super) mod function {
                             continue 'outer;
                         } else {
                             delegate.push_path_component(entry.filename);
-                            if let Action::Cancel = delegate.visit_nontree(&entry) {
+                            if let std::ops::ControlFlow::Break(()) = delegate.visit_nontree(&entry) {
                                 break 'outer;
                             }
                             delegate.pop_path_component();

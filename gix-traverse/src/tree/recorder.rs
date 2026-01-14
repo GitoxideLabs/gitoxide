@@ -138,11 +138,11 @@ impl Visit for Recorder {
 
     fn visit_tree(&mut self, entry: &tree::EntryRef<'_>) -> Action {
         self.records.push(Entry::new(entry, self.path_clone()));
-        Action::Continue
+        std::ops::ControlFlow::Continue(true)
     }
 
     fn visit_nontree(&mut self, entry: &tree::EntryRef<'_>) -> Action {
         self.records.push(Entry::new(entry, self.path_clone()));
-        Action::Continue
+        std::ops::ControlFlow::Continue(true)
     }
 }

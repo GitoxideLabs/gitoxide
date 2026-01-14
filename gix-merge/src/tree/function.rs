@@ -91,7 +91,7 @@ where
             objects,
             |change| -> Result<_, Infallible> {
                 track(change, &mut our_changes);
-                Ok(gix_diff::tree_with_rewrites::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             },
             gix_diff::tree_with_rewrites::Options {
                 location: Some(Location::Path),
@@ -116,7 +116,7 @@ where
             objects,
             |change| -> Result<_, Infallible> {
                 track(change, &mut their_changes);
-                Ok(gix_diff::tree_with_rewrites::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             },
             gix_diff::tree_with_rewrites::Options {
                 location: Some(Location::Path),

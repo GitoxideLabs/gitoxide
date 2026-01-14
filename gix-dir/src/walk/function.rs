@@ -118,7 +118,7 @@ pub fn walk(
         &mut out,
         &mut state,
     )?;
-    if action != Action::Cancel {
+    if action.is_continue() {
         state.emit_remaining(may_collapse, options, &mut out, delegate);
         assert_eq!(state.on_hold.len(), 0, "BUG: after emission, on hold must be empty");
     }
@@ -199,7 +199,7 @@ pub(super) fn emit_entry(
         || !emit_pruned
             && (info.status.is_pruned() || info.pathspec_match.is_none_or(|m| m == entry::PathspecMatch::Excluded))
     {
-        return Action::Continue;
+        return std::ops::ControlFlow::Continue(());
     }
 
     out.returned_entries += 1;

@@ -174,6 +174,6 @@ impl Visit for Recorder {
                 path: self.path_clone(),
             },
         });
-        visit::Action::Continue
+        std::ops::ControlFlow::Continue(())
     }
 }

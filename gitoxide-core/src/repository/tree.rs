@@ -93,7 +93,7 @@ mod entries {
 
         fn visit_tree(&mut self, _entry: &EntryRef<'_>) -> Action {
             self.stats.num_trees += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
 
         fn visit_nontree(&mut self, entry: &EntryRef<'_>) -> Action {
@@ -115,7 +115,7 @@ mod entries {
                 Link => self.stats.num_links += 1,
                 Tree => unreachable!("BUG"),
             }
-            Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
     }
 }

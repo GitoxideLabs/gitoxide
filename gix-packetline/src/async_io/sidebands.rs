@@ -290,20 +290,14 @@ where
                                         }
                                         BandRef::Progress(d) => {
                                             let text = TextRef::from(d).0;
-                                            match handle_progress(false, text) {
-                                                ProgressAction::Continue => {}
-                                                ProgressAction::Interrupt => {
-                                                    return Poll::Ready(Err(io::Error::other("interrupted by user")))
-                                                }
+                                            if handle_progress(false, text).is_break() {
+                                                return Poll::Ready(Err(io::Error::other("interrupted by user")));
                                             }
                                         }
                                         BandRef::Error(d) => {
                                             let text = TextRef::from(d).0;
-                                            match handle_progress(true, text) {
-                                                ProgressAction::Continue => {}
-                                                ProgressAction::Interrupt => {
-                                                    return Poll::Ready(Err(io::Error::other("interrupted by user")))
-                                                }
+                                            if handle_progress(true, text).is_break() {
+                                                return Poll::Ready(Err(io::Error::other("interrupted by user")));
                                             }
                                         }
                                     }

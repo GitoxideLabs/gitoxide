@@ -272,7 +272,7 @@ pub(super) mod function {
                                     }
                                 }
                             }
-                            gix_diff::tree::visit::Action::Continue
+                            std::ops::ControlFlow::Continue(())
                         },
                         &mut ctx.resource_cache,
                         &objects,
@@ -402,9 +402,9 @@ pub(super) mod function {
                 }
 
                 if self.should_interrupt.load(Ordering::Relaxed) {
-                    Action::Cancel
+                    std::ops::ControlFlow::Break(())
                 } else {
-                    Action::Continue
+                    std::ops::ControlFlow::Continue(())
                 }
             }
         }

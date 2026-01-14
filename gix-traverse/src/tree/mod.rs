@@ -25,13 +25,13 @@ pub trait Visit {
     fn pop_path_component(&mut self);
 
     /// Observe a tree entry that is a tree and return an instruction whether to continue or not.
-    /// [`Action::Skip`][visit::Action::Skip] can be used to prevent traversing it, for example if it's known to the caller already.
+    /// [std::ops::ControlFlow::Break] can be used to prevent traversing it, for example if it's known to the caller already.
     ///
     /// The implementation may use the current path to learn where in the tree the change is located.
     fn visit_tree(&mut self, entry: &gix_object::tree::EntryRef<'_>) -> visit::Action;
 
     /// Observe a tree entry that is NO tree and return an instruction whether to continue or not.
-    /// [`Action::Skip`][visit::Action::Skip] has no effect here.
+    /// [std::ops::ControlFlow::Break] has no effect here.
     ///
     /// The implementation may use the current path to learn where in the tree the change is located.
     fn visit_nontree(&mut self, entry: &gix_object::tree::EntryRef<'_>) -> visit::Action;
@@ -52,23 +52,12 @@ pub struct Recorder {
 
 ///
 pub mod visit {
-    /// What to do after an entry was [recorded][super::Visit::visit_tree()].
-    #[derive(Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
-    pub enum Action {
-        /// Continue the traversal of entries.
-        Continue,
-        /// Stop the traversal of entries, making this the last call to [`visit_(tree|nontree)(…)`][super::Visit::visit_nontree()].
-        Cancel,
-        /// Don't dive into the entry, skipping children effectively. Only useful in [`visit_tree(…)`][super::Visit::visit_tree()].
-        Skip,
-    }
-
-    impl Action {
-        /// Returns true if this action means to stop the traversal.
-        pub fn cancelled(&self) -> bool {
-            matches!(self, Action::Cancel)
-        }
-    }
+    /// What to do after an entry was [recorded](super::Visit::visit_tree()).
+    ///
+    /// Use [`std::ops::ControlFlow::Break`] to stop the traversal of entries, making this the last call to [`visit_(tree|nontree)(…)`](super::Visit::visit_nontree()).
+    /// Use [`std::ops::ControlFlow::Continue`] with `true` to continue the traversal and descend into tree entries.
+    /// Use [`std::ops::ControlFlow::Continue`] with `false` to skip descending into the entry (only useful in [`visit_tree(…)`](super::Visit::visit_tree())).
+    pub type Action = std::ops::ControlFlow<(), bool>;
 }
 
 ///

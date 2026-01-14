@@ -401,7 +401,7 @@ fn clone_v1() -> crate::Result {
             sb.deref()
                 .borrow_mut()
                 .push(std::str::from_utf8(data).expect("valid utf8").to_owned());
-            ProgressAction::Continue
+            std::ops::ControlFlow::Continue(())
         }
     })));
     let mut pack = Vec::new();
@@ -635,7 +635,7 @@ Git-Protocol: version=2
             sb.deref()
                 .borrow_mut()
                 .push(std::str::from_utf8(data).expect("valid utf8").to_owned());
-            ProgressAction::Continue
+            std::ops::ControlFlow::Continue(())
         }
     })));
 

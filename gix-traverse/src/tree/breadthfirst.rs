@@ -69,23 +69,22 @@ pub(super) mod function {
             for entry in tree {
                 let entry = entry?;
                 if entry.mode.is_tree() {
-                    use crate::tree::visit::Action::*;
                     delegate.push_path_component(entry.filename);
                     let action = delegate.visit_tree(&entry);
                     match action {
-                        Skip => {}
-                        Continue => {
+                        std::ops::ControlFlow::Continue(false) => {}
+                        std::ops::ControlFlow::Continue(true) => {
                             delegate.pop_path_component();
                             delegate.push_back_tracked_path_component(entry.filename);
                             state.next.push_back(entry.oid.to_owned());
                         }
-                        Cancel => {
+                        std::ops::ControlFlow::Break(()) => {
                             return Err(Error::Cancelled);
                         }
                     }
                 } else {
                     delegate.push_path_component(entry.filename);
-                    if delegate.visit_nontree(&entry).cancelled() {
+                    if delegate.visit_nontree(&entry).is_break() {
                         return Err(Error::Cancelled);
                     }
                 }

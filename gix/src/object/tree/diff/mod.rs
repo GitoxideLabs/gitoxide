@@ -3,14 +3,10 @@ use gix_diff::tree;
 use crate::{bstr::BStr, Id, Tree};
 
 /// Returned by the `for_each` function to control flow.
-#[derive(Default, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
-pub enum Action {
-    /// Continue the traversal of changes.
-    #[default]
-    Continue,
-    /// Stop the traversal of changes and stop calling this function.
-    Cancel,
-}
+///
+/// Use [`std::ops::ControlFlow::Continue`] to continue the traversal of changes.
+/// Use [`std::ops::ControlFlow::Break`] to stop the traversal of changes and stop calling this function.
+pub type Action = std::ops::ControlFlow<()>;
 
 pub use gix_diff::tree_with_rewrites::Change as ChangeDetached;
 
@@ -210,7 +206,7 @@ impl Platform<'_, '_> {
             }
 
             resource_cache.clear_resource_cache_keep_allocation();
-            Ok::<_, std::convert::Infallible>(Action::Continue)
+            Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
         })?;
 
         Ok(Stats {

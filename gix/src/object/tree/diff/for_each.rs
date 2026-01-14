@@ -83,8 +83,8 @@ impl<'old> Platform<'_, 'old> {
             &repo.objects,
             |change| {
                 for_each(Change::from_change_ref(change, repo, other.repo)).map(|action| match action {
-                    Action::Continue => gix_diff::tree_with_rewrites::Action::Continue,
-                    Action::Cancel => gix_diff::tree_with_rewrites::Action::Cancel,
+                    std::ops::ControlFlow::Continue(()) => std::ops::ControlFlow::Continue(()),
+                    std::ops::ControlFlow::Break(()) => std::ops::ControlFlow::Break(()),
                 })
             },
             opts,
