@@ -118,11 +118,11 @@ where
             },
         };
         match visit(change) {
-            Ok(Action::Cancel) => crate::tree::visit::Action::Cancel,
-            Ok(Action::Continue) => crate::tree::visit::Action::Continue,
+            Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
+            Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
             Err(err) => {
                 *stored_err = Some(err);
-                crate::tree::visit::Action::Cancel
+                std::ops::ControlFlow::Break(())
             }
         }
     }
@@ -157,11 +157,11 @@ where
                         },
                     };
                     match (self.visit)(change) {
-                        Ok(Action::Cancel) => crate::tree::visit::Action::Cancel,
-                        Ok(Action::Continue) => crate::tree::visit::Action::Continue,
+                        Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
+                        Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
                         Err(err) => {
                             self.err = Some(err);
-                            crate::tree::visit::Action::Cancel
+                            std::ops::ControlFlow::Break(())
                         }
                     }
                 }
@@ -205,7 +205,7 @@ where
         match self.tracked.as_mut() {
             Some(tracked) => tracked
                 .try_push_change(change, self.recorder.path())
-                .map_or(crate::tree::visit::Action::Continue, |change| {
+                .map_or(std::ops::ControlFlow::Continue(()), |change| {
                     Self::emit_change(change, self.recorder.path(), &mut self.visit, &mut self.err)
                 }),
             None => Self::emit_change(change, self.recorder.path(), &mut self.visit, &mut self.err),
@@ -259,7 +259,7 @@ mod tree_to_changes {
         }
 
         fn visit_tree(&mut self, _entry: &EntryRef<'_>) -> gix_traverse::tree::visit::Action {
-            gix_traverse::tree::visit::Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
 
         fn visit_nontree(&mut self, entry: &EntryRef<'_>) -> gix_traverse::tree::visit::Action {
@@ -274,7 +274,7 @@ mod tree_to_changes {
                     self.recorder.path(),
                 );
             }
-            gix_traverse::tree::visit::Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
     }
 }

@@ -1,3 +1,4 @@
+use gix_error::{bail, message, ErrorExt, Exn};
 use gix_object::bstr::{BStr, BString};
 use gix_revision::{
     spec,
@@ -82,26 +83,30 @@ impl Recorder {
     }
 }
 
-fn set_val<T: std::fmt::Debug>(fn_name: &str, store: &mut [Option<T>; 2], val: T) -> Option<()> {
+fn set_val<T: std::fmt::Debug>(fn_name: &str, store: &mut [Option<T>; 2], val: T) -> Result<(), Exn> {
     for entry in store.iter_mut() {
         if entry.is_none() {
             *entry = Some(val);
-            return Some(());
+            return Ok(());
         }
     }
     panic!("called {fn_name}() more than twice with '{val:?}'");
 }
 
 impl delegate::Revision for Recorder {
-    fn find_ref(&mut self, input: &BStr) -> Option<()> {
+    fn find_ref(&mut self, input: &BStr) -> Result<(), Exn> {
         self.called(Call::FindRef);
         set_val("find_ref", &mut self.find_ref, input.into())
     }
 
-    fn disambiguate_prefix(&mut self, input: gix_hash::Prefix, hint: Option<delegate::PrefixHint<'_>>) -> Option<()> {
+    fn disambiguate_prefix(
+        &mut self,
+        input: gix_hash::Prefix,
+        hint: Option<delegate::PrefixHint<'_>>,
+    ) -> Result<(), Exn> {
         self.called(Call::DisambiguatePrefix);
         if self.opts.reject_prefix {
-            return None;
+            bail!(message!("disambiguate_prefix rejected").erased());
         }
         set_val("disambiguate_prefix", &mut self.prefix, input)?;
         if let Some(hint) = hint {
@@ -117,10 +122,10 @@ impl delegate::Revision for Recorder {
                 },
             )?;
         }
-        Some(())
+        Ok(())
     }
 
-    fn reflog(&mut self, entry: delegate::ReflogLookup) -> Option<()> {
+    fn reflog(&mut self, entry: delegate::ReflogLookup) -> Result<(), Exn> {
         self.called(Call::Reflog);
         set_val(
             "current_branch_reflog",
@@ -136,26 +141,26 @@ impl delegate::Revision for Recorder {
         )
     }
 
-    fn nth_checked_out_branch(&mut self, branch: usize) -> Option<()> {
+    fn nth_checked_out_branch(&mut self, branch: usize) -> Result<(), Exn> {
         assert_ne!(branch, 0);
         self.called(Call::NthCheckedOutBranch);
         set_val("nth_checked_out_branch", &mut self.nth_checked_out_branch, branch)
     }
 
-    fn sibling_branch(&mut self, kind: delegate::SiblingBranch) -> Option<()> {
+    fn sibling_branch(&mut self, kind: delegate::SiblingBranch) -> Result<(), Exn> {
         self.called(Call::SiblingBranch);
         set_val("sibling_branch", &mut self.sibling_branch, format!("{kind:?}"))
     }
 }
 
 impl delegate::Navigate for Recorder {
-    fn traverse(&mut self, kind: delegate::Traversal) -> Option<()> {
+    fn traverse(&mut self, kind: delegate::Traversal) -> Result<(), Exn> {
         self.called(Call::Traverse);
         self.traversal.push(kind);
-        Some(())
+        Ok(())
     }
 
-    fn peel_until(&mut self, kind: delegate::PeelTo) -> Option<()> {
+    fn peel_until(&mut self, kind: delegate::PeelTo) -> Result<(), Exn> {
         self.called(Call::PeelUntil);
         self.peel_to.push(match kind {
             delegate::PeelTo::ObjectKind(kind) => PeelToOwned::ObjectKind(kind),
@@ -163,40 +168,41 @@ impl delegate::Navigate for Recorder {
             delegate::PeelTo::Path(path) => PeelToOwned::Path(path.into()),
             delegate::PeelTo::RecursiveTagObject => PeelToOwned::RecursiveTagObject,
         });
-        Some(())
+        Ok(())
     }
 
-    fn find(&mut self, regex: &BStr, negated: bool) -> Option<()> {
+    fn find(&mut self, regex: &BStr, negated: bool) -> Result<(), Exn> {
         self.called(Call::Find);
         self.patterns.push((regex.into(), negated));
-        Some(())
+        Ok(())
     }
 
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Option<()> {
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn> {
         self.called(Call::IndexLookup);
         self.index_lookups.push((path.into(), stage));
-        Some(())
+        Ok(())
     }
 }
 
 impl delegate::Kind for Recorder {
-    fn kind(&mut self, kind: spec::Kind) -> Option<()> {
+    fn kind(&mut self, kind: spec::Kind) -> Result<(), Exn> {
         self.called(Call::Kind);
         if self.opts.reject_kind {
-            return None;
+            bail!(message!("kind() was rejected").erased());
         }
         if self.kind.is_none() {
             self.kind = Some(kind);
         } else if !self.opts.no_internal_assertions {
             panic!("called kind more than once with '{kind:?}'");
         }
-        Some(())
+        Ok(())
     }
 }
 
 impl Delegate for Recorder {
-    fn done(&mut self) {
+    fn done(&mut self) -> Result<(), Exn> {
         self.done = true;
+        Ok(())
     }
 }
 
@@ -204,11 +210,11 @@ fn parse(spec: &str) -> Recorder {
     try_parse_opts(spec, Options::default()).unwrap()
 }
 
-fn try_parse(spec: &str) -> Result<Recorder, spec::parse::Error> {
+fn try_parse(spec: &str) -> Result<Recorder, Exn<spec::parse::Error>> {
     try_parse_opts(spec, Default::default())
 }
 
-fn try_parse_opts(spec: &str, options: Options) -> Result<Recorder, spec::parse::Error> {
+fn try_parse_opts(spec: &str, options: Options) -> Result<Recorder, Exn<spec::parse::Error>> {
     let mut rec = Recorder::with(options);
     spec::parse(spec.into(), &mut rec)?;
     Ok(rec)

@@ -224,10 +224,12 @@ where
                     inner: std::io::BufWriter::with_capacity(512 * 1024, file),
                     progress: bytes,
                 };
-                bytes_written += std::io::copy(&mut read, &mut write)?;
+                let actual_bytes = std::io::copy(&mut read, &mut write)?;
+                bytes_written += actual_bytes;
                 entry::finalize_entry(
                     delayed.entry,
                     write.inner.into_inner().map_err(std::io::IntoInnerError::into_error)?,
+                    actual_bytes,
                     set_executable_after_creation,
                 )?;
                 delayed_files += 1;

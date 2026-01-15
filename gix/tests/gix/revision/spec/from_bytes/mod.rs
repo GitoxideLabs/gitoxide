@@ -61,19 +61,25 @@ mod index {
             "index paths (that are present) are captured"
         );
 
+        let err = parse_spec(":1:file", &repo).unwrap_err();
+        insta::assert_debug_snapshot!(err, @r#"
+        Couldn't find index 'file' stage 1
+        |
+        └─ Path "file" did not exist in index at stage 1. It does exist at stage 0. It exists on disk
+        "#);
         assert_eq!(
-            parse_spec(":1:file", &repo).unwrap_err().to_string(),
+            err.probable_cause().to_string(),
             "Path \"file\" did not exist in index at stage 1. It does exist at stage 0. It exists on disk",
         );
 
         assert_eq!(
-            parse_spec(":5:file", &repo).unwrap_err().to_string(),
+            parse_spec(":5:file", &repo).unwrap_err().probable_cause().to_string(),
             "Path \"5:file\" did not exist in index at stage 0. It does not exist on disk",
             "invalid stage ids are interpreted as part of the filename"
         );
 
         assert_eq!(
-            parse_spec(":foo", &repo).unwrap_err().to_string(),
+            parse_spec(":foo", &repo).unwrap_err().probable_cause().to_string(),
             "Path \"foo\" did not exist in index at stage 0. It does not exist on disk",
         );
     }
@@ -112,11 +118,21 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             Spec::from_id(hex_to_id("e32851d29feb48953c6f40b2e06d630a3c49608a").attach(&repo)),
             "we are able to return objects even though they are 'bad' when trying to decode them, like git",
         );
+        let err = parse_spec("e328^{object}", &repo).unwrap_err();
         assert_eq!(
-            format!("{:?}", parse_spec("e328^{object}", &repo).unwrap_err()),
-            r#"FindObject(Find(Loose(Decode(ObjectHeader(InvalidObjectKind { kind: "bad" })))))"#,
+            format!("{:?}", err.probable_cause()),
+            r#"InvalidObjectKind { kind: "bad" }"#,
             "Now we enforce the object to exist and be valid, as ultimately it wants to match with a certain type"
         );
+        insta::assert_debug_snapshot!(err, @r#"
+        delegate.peel_until(ValidObject) failed: {object}
+        |
+        └─ An error occurred while obtaining an object from the loose object store
+        |
+        └─ The object header contained an unknown object kind.
+        |
+        └─ Unknown object kind: "bad"
+        "#);
     }
 
     {
@@ -125,10 +141,18 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
             parse_spec("cafea", &repo).unwrap(),
             Spec::from_id(hex_to_id("cafea31147e840161a1860c50af999917ae1536b").attach(&repo))
         );
-        assert_eq!(
-            &format!("{:?}", parse_spec("cafea^{object}", &repo).unwrap_err())[..65],
-            r#"FindObject(Find(Loose(DecompressFile { source: Inflate(DataError)"#
-        );
+        let err = parse_spec("cafea^{object}", &repo).unwrap_err();
+        insta::assert_snapshot!(format!("{err:#?}").replace('\\', "/").replace("windows", "unix"), @r"
+        delegate.peel_until(ValidObject) failed: {object}
+        |
+        └─ An error occurred while obtaining an object from the loose object store
+        |
+        └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/2990428670-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
+        |
+        └─ Could not decode zip stream, status was 'Invalid input data'
+        |
+        └─ Invalid input data
+        ");
     }
 }
 
@@ -146,8 +170,14 @@ fn access_blob_through_tree() {
         "we capture tree-paths"
     );
 
+    let err = parse_spec("0000000000cdc:missing", &repo).unwrap_err();
+    insta::assert_debug_snapshot!(err, @r#"
+    delegate.peel_until(Path("missing")) failed
+    |
+    └─ Could not find path "missing" in tree 0000000000c of parent object 0000000000c
+    "#);
     assert_eq!(
-        parse_spec("0000000000cdc:missing", &repo).unwrap_err().to_string(),
+        err.probable_cause().to_string(),
         "Could not find path \"missing\" in tree 0000000000c of parent object 0000000000c"
     );
 }
@@ -156,10 +186,22 @@ fn access_blob_through_tree() {
 fn invalid_head() {
     let repo = repo("invalid-head").unwrap();
     let err = parse_spec("HEAD:file", &repo).unwrap_err();
-    assert_eq!(err.to_string(), "Could not peel 'HEAD' to obtain its target");
+    insta::assert_debug_snapshot!(err, @r#"
+    delegate.peel_until(Path("file")) failed
+    |
+    └─ Could not peel 'HEAD' to obtain its target
+        |
+        └─ Could not follow a single level of a symbolic reference
+        |   |
+        |   └─ The ref partially named "refs/heads/main" could not be found
+        |
+        └─ Couldn't get object at internal index 0
+    "#);
 
     let err = parse_spec("HEAD", &repo).unwrap_err();
-    assert_eq!(err.to_string(), "The rev-spec is malformed and misses a ref name");
+    // The head couldn't be peeled, and there is nothing left to consume, but no
+    // object was resolved.
+    insta::assert_debug_snapshot!(err, @"The rev-spec is malformed and misses a ref name");
 }
 
 #[test]

@@ -27,6 +27,7 @@ merge_base = ["dep:gix-trace", "dep:bitflags"]
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde"]
 
 [dependencies]
+gix-error = { version = "0.0.0", path = "../gix-error" }
 gix-hash = { version = "^0.21.2", path = "../gix-hash" }
 gix-object = { version = "^0.54.1", path = "../gix-object" }
 gix-date = { version = "^0.12.1", path = "../gix-date" }
@@ -37,11 +38,11 @@ gix-trace = { version = "^0.1.17", path = "../gix-trace", optional = true }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 bitflags = { version = "2", optional = true }
-thiserror = "2.0.17"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 document-features = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
+insta = "1.46.0"
 gix-odb = { path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }
 permutohedron = "0.2.4"

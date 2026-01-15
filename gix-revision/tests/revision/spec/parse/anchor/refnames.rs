@@ -35,10 +35,7 @@ fn at_in_ranges_is_allowed() {
 #[test]
 fn strange_revspecs_do_not_panic() {
     let err = try_parse(".@.").unwrap_err();
-    assert!(matches!(
-        err,
-        gix_revision::spec::parse::Error::AtNeedsCurlyBrackets { input } if input == "@."
-    ));
+    insta::assert_snapshot!(err, @"@ character must be standalone or followed by {<content>}: @.");
 }
 
 #[test]

@@ -48,7 +48,7 @@ fn dirwalk_api_and_icase_support() {
             last_pos += 1;
 
             let entry = file
-                .entry_closest_to_directory(dir)
+                .entry_closest_to_directory_or_directory(dir)
                 .unwrap_or_else(|| panic!("didn't find {dir}"));
             assert!(
                 entry.path(&file).starts_with(dir),
@@ -57,11 +57,73 @@ fn dirwalk_api_and_icase_support() {
 
             let dir_upper: BString = dir.to_ascii_uppercase().into();
             let other_entry = file
-                .entry_closest_to_directory_icase(dir_upper.as_bstr(), true, &icase)
+                .entry_closest_to_directory_or_directory_icase(dir_upper.as_bstr(), true, &icase)
                 .unwrap_or_else(|| panic!("didn't find upper-cased {dir_upper}"));
             assert_eq!(other_entry, entry, "the first entry is always the same, no matter what kind of search is conducted (as there are no clashes/ambiguities here)");
         }
     }
+}
+
+#[test]
+fn entry_closest_to_directory_or_directory_with_submodule() {
+    let file = Fixture::Generated("v2_all_file_kinds").open();
+
+    assert!(
+        file.entry_closest_to_directory_or_directory("d".into()).is_some(),
+        "this is a directory"
+    );
+    assert!(
+        file.entry_closest_to_directory_or_directory("sub".into()).is_some(),
+        "this is a checked in repository, a directory itself"
+    );
+    assert!(
+        file.entry_closest_to_directory_or_directory("sub-worktree".into())
+            .is_some(),
+        "a submodule that is officially registered, absolutely the same as 'sub' in the index."
+    );
+    assert!(
+        file.entry_closest_to_directory_or_directory("a".into()).is_none(),
+        "'a' is a file, and we ask for a directory"
+    );
+}
+
+#[test]
+fn entry_closest_to_directory_or_directory_icase_with_submodule() {
+    let file = Fixture::Generated("v2_all_file_kinds").open();
+    let icase = file.prepare_icase_backing();
+
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("D".into(), true, &icase)
+            .is_some(),
+        "this is a directory"
+    );
+    assert!(file
+        .entry_closest_to_directory_or_directory_icase("D".into(), false, &icase)
+        .is_none());
+
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("SuB".into(), true, &icase)
+            .is_some(),
+        "this is a checked in repository, a directory itself"
+    );
+    assert!(file
+        .entry_closest_to_directory_or_directory_icase("SuB".into(), false, &icase)
+        .is_none());
+
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("SUB-worktree".into(), true, &icase)
+            .is_some(),
+        "a submodule that is officially registered, absolutely the same as 'sub' in the index."
+    );
+    assert!(file
+        .entry_closest_to_directory_or_directory_icase("SUB-worktree".into(), false, &icase)
+        .is_none());
+
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("A".into(), true, &icase)
+            .is_none(),
+        "'a' is a file, and we ask for a directory"
+    );
 }
 
 #[test]
@@ -85,7 +147,7 @@ fn ignorecase_clashes_and_order() {
             last_pos += 1;
 
             let entry = file
-                .entry_closest_to_directory(dir)
+                .entry_closest_to_directory_or_directory(dir)
                 .unwrap_or_else(|| panic!("didn't find {dir}"));
             assert!(
                 entry.path(&file).starts_with(dir),
@@ -110,16 +172,16 @@ fn ignorecase_clashes_and_order() {
     );
 
     assert!(
-        file.entry_closest_to_directory("d".into()).is_none(),
+        file.entry_closest_to_directory_or_directory("d".into()).is_none(),
         "this is a file, and this directory search isn't case-sensitive"
     );
-    let entry = file.entry_closest_to_directory("D".into());
+    let entry = file.entry_closest_to_directory_or_directory("D".into());
     assert_eq!(
         entry.map(|e| e.path(&file)).expect("present"),
         "D/B",
         "this is a directory, indeed, we find the first file in it"
     );
-    let entry_icase = file.entry_closest_to_directory_icase("d".into(), true, &icase);
+    let entry_icase = file.entry_closest_to_directory_or_directory_icase("d".into(), true, &icase);
     assert_eq!(
         entry_icase, entry,
         "case-insensitive searches don't confuse directories and files, so `d` finds `D`, the directory."
@@ -322,5 +384,171 @@ fn check_prefix(index: &gix_index::State, prefix: &str, expected: &[&str]) {
             .collect::<Vec<_>>(),
         expected,
         "{prefix:?}"
+    );
+}
+
+#[test]
+fn path_is_directory_with_submodule() {
+    let file = Fixture::Generated("v2_all_file_kinds").open();
+
+    assert!(file.path_is_directory("sub-worktree".into()), "a submodule worktree");
+    assert!(file.path_is_directory("d".into()), "a single-letter directory");
+    assert!(
+        file.path_is_directory("sub".into()),
+        "this is the parent repository, and it was added as well"
+    );
+    assert!(
+        !file.path_is_directory("su".into()),
+        "just a sub-string of the directory which doesn't match"
+    );
+    assert!(
+        !file.path_is_directory("a".into()),
+        "a one-letter file isn't a directory"
+    );
+}
+
+#[test]
+fn path_is_directory() {
+    let file = Fixture::Loose("ignore-case-realistic").open();
+
+    // Test that directories containing entries are detected
+    assert!(
+        file.path_is_directory("tests".into()),
+        "tests is a directory containing entries"
+    );
+    assert!(
+        file.path_is_directory("tests/snapshots".into()),
+        "tests/snapshots is a directory containing entries"
+    );
+    assert!(
+        file.path_is_directory("tests/snapshots/porcelain".into()),
+        "tests/snapshots/porcelain is a directory"
+    );
+    assert!(
+        file.path_is_directory("tests/tools".into()),
+        "tests/tools is a directory"
+    );
+
+    // Test that non-existent directories return false
+    assert!(
+        !file.path_is_directory("nonexistent".into()),
+        "nonexistent is not a directory"
+    );
+    assert!(!file.path_is_directory("z".into()), "z is not a directory");
+    assert!(
+        !file.path_is_directory("test".into()),
+        "test is not a directory (tests is)"
+    );
+
+    // Test that files are not directories
+    assert!(
+        !file.path_is_directory("tests/utilities.sh".into()),
+        "tests/utilities.sh is a file, not a directory"
+    );
+
+    // Test that partial directory names don't match
+    assert!(!file.path_is_directory("".into()), "empty path is not a directory");
+}
+
+#[test]
+fn path_is_directory_icase() {
+    let file = Fixture::Loose("ignore-case-realistic").open();
+    let icase = file.prepare_icase_backing();
+
+    // Test case-sensitive matching
+    assert!(
+        file.path_is_directory_icase("tests".into(), false, &icase),
+        "tests is a directory (case-sensitive)"
+    );
+    assert!(
+        file.path_is_directory_icase("tests/tools".into(), false, &icase),
+        "tests/tools is a directory (case-sensitive)"
+    );
+
+    // Test case-insensitive matching
+    assert!(
+        file.path_is_directory_icase("TESTS".into(), true, &icase),
+        "TESTS is a directory (case-insensitive, matches 'tests')"
+    );
+    assert!(
+        file.path_is_directory_icase("tests/TOOLS".into(), true, &icase),
+        "tests/TOOLS is a directory (case-insensitive, matches 'tests/tools')"
+    );
+    assert!(
+        file.path_is_directory_icase("TESTS/SNAPSHOTS".into(), true, &icase),
+        "TESTS/SNAPSHOTS is a directory (case-insensitive)"
+    );
+
+    // Test that non-existent paths return false even with icase
+    assert!(
+        !file.path_is_directory_icase("nonexistent".into(), true, &icase),
+        "nonexistent is not a directory even with icase"
+    );
+    assert!(
+        !file.path_is_directory_icase("Z".into(), true, &icase),
+        "Z is not a directory even with icase"
+    );
+}
+
+#[test]
+fn path_is_directory_icase_with_submodule() {
+    let file = Fixture::Generated("v2_all_file_kinds").open();
+    let icase = file.prepare_icase_backing();
+
+    assert!(
+        file.path_is_directory_icase("SUB-worktree".into(), true, &icase),
+        "a submodule worktree"
+    );
+    assert!(!file.path_is_directory_icase("SUB-worktree".into(), false, &icase));
+
+    assert!(
+        file.path_is_directory_icase("D".into(), true, &icase),
+        "a single-letter directory"
+    );
+    assert!(!file.path_is_directory_icase("D".into(), false, &icase));
+
+    assert!(
+        file.path_is_directory_icase("SuB".into(), true, &icase),
+        "this is the parent repository, and it was added as well"
+    );
+    assert!(!file.path_is_directory_icase("SuB".into(), false, &icase));
+
+    assert!(
+        !file.path_is_directory_icase("Su".into(), true, &icase),
+        "just a sub-string of the directory which doesn't match"
+    );
+    assert!(
+        !file.path_is_directory_icase("A".into(), true, &icase),
+        "a one-letter file isn't a directory"
+    );
+    assert!(
+        !file.path_is_directory_icase("a".into(), true, &icase),
+        "a one-letter file isn't a directory, even with correct case"
+    );
+}
+
+#[test]
+fn path_is_directory_icase_with_clashes() {
+    let file = icase_fixture();
+    let icase = file.prepare_icase_backing();
+
+    // Test directory detection with case clashes
+    assert!(
+        file.path_is_directory_icase("D".into(), false, &icase),
+        "D is a directory (case-sensitive)"
+    );
+    assert!(
+        file.path_is_directory_icase("d".into(), true, &icase),
+        "d matches D directory (case-insensitive)"
+    );
+
+    // Test that files aren't detected as directories
+    assert!(
+        !file.path_is_directory_icase("X".into(), false, &icase),
+        "X is a file, not a directory"
+    );
+    assert!(
+        !file.path_is_directory_icase("x".into(), false, &icase),
+        "x is a symlink, not a directory"
     );
 }

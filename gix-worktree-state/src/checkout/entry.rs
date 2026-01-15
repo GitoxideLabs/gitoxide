@@ -135,7 +135,7 @@ where
             };
 
             // For possibly existing, overwritten files, we must change the file mode explicitly.
-            finalize_entry(entry, file, set_executable_after_creation)?;
+            finalize_entry(entry, file, num_bytes as u64, set_executable_after_creation)?;
             num_bytes
         }
         gix_index::entry::Mode::SYMLINK => {
@@ -276,9 +276,12 @@ pub(crate) fn open_file(
 }
 
 /// Close `file` and store its stats in `entry`, possibly setting `file` executable.
+///
+/// `desired_bytes` is the amount of bytes Git thinks the file should have after writing.
 pub(crate) fn finalize_entry(
     entry: &mut gix_index::Entry,
     file: std::fs::File,
+    desired_bytes: u64,
     #[cfg_attr(windows, allow(unused_variables))] set_executable_after_creation: bool,
 ) -> Result<(), crate::checkout::Error> {
     // For possibly existing, overwritten files, we must change the file mode explicitly.
@@ -286,9 +289,18 @@ pub(crate) fn finalize_entry(
     if set_executable_after_creation {
         set_executable(&file)?;
     }
+
+    let md = &gix_index::fs::Metadata::from_file(&file)?;
+    // A last sanity check: if the file wasn't truncated upon opening, which is good in case something
+    // goes wrong during writing, not everything is lost, then after writing the file is smaller than it was
+    // before, it needs truncation. We do that here.
+    let needs_truncation = md.len() > desired_bytes;
+    if needs_truncation {
+        file.set_len(desired_bytes)?;
+    }
     // NOTE: we don't call `file.sync_all()` here knowing that some filesystems don't handle this well.
     //       revisit this once there is a bug to fix.
-    entry.stat = Stat::from_fs(&gix_index::fs::Metadata::from_file(&file)?)?;
+    entry.stat = Stat::from_fs(md)?;
     file.close()?;
     Ok(())
 }

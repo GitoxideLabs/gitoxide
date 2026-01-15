@@ -17,7 +17,7 @@ fn roundtrips() -> crate::Result {
                 end_of_index_entry: true,
             }),
         ),
-        (Generated("V2_empty"), only_tree_ext()),
+        (Generated("v2_empty"), only_tree_ext()),
         (Generated("v2_more_files"), only_tree_ext()),
         (Generated("v2_all_file_kinds"), only_tree_ext()),
     ];
@@ -128,7 +128,7 @@ fn state_comparisons_with_various_extension_configurations() {
         Loose("REUC"),
         Loose("UNTR-with-oids"),
         Loose("UNTR"),
-        Generated("V2_empty"),
+        Generated("v2_empty"),
         Generated("v2"),
         Generated("v2_more_files"),
         Generated("v2_all_file_kinds"),

@@ -22,6 +22,7 @@ serde = ["dep:serde", "gix-hash/serde", "bstr/serde"]
 [dependencies]
 gix-hash = { version = "^0.21.0", path = "../gix-hash" }
 gix-chunk = { version = "^0.4.12", path = "../gix-chunk" }
+gix-error = { version = "^0.0.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 memmap2 = "0.9.7"

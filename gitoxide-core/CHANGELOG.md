@@ -5,13 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.52.0 (2025-12-31)
+## Unreleased
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 4 commits contributed to the release over the course of 9 calendar days.
+ - 11 commits contributed to the release over the course of 9 calendar days.
  - 9 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +23,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Merge pull request #2346 from GitoxideLabs/release ([`c663b3f`](https://github.com/GitoxideLabs/gitoxide/commit/c663b3f05791db86d2e0a683e26e149f620bf2e4))
+    - Release gix-trace v0.1.17, gix-features v0.45.2, gix-command v0.6.5, gix-hash v0.21.2, gix-date v0.12.1, gix-actor v0.37.1, gix-object v0.54.1, gix-filter v0.24.1, gix-fs v0.18.2, gix-tempfile v20.0.1, gix-lock v20.0.1, gix-traverse v0.51.1, gix-index v0.45.1, gix-diff v0.57.1, gix-pack v0.64.1 ([`7be8f90`](https://github.com/GitoxideLabs/gitoxide/commit/7be8f9068ab875ca4123300ba08df9d32fd63941))
+    - Merge pull request #2341 from GitoxideLabs/dependabot/cargo/cargo-cf4a2135ae ([`d914d95`](https://github.com/GitoxideLabs/gitoxide/commit/d914d9533ed2243658d51ba05e68dd444b75a748))
+    - Enable the `fallible_unit` feature of `rusqlite` 0.38.0 ([`3fea8f6`](https://github.com/GitoxideLabs/gitoxide/commit/3fea8f6cbe1ee50e307056e51bd9b0303469c6b5))
+    - Revert explicit-casting `rusqlite` fix and its refactor ([`0d2fe18`](https://github.com/GitoxideLabs/gitoxide/commit/0d2fe18619135007e5934291e1c4eceef325413b))
+    - Refactor ([`09b7aa7`](https://github.com/GitoxideLabs/gitoxide/commit/09b7aa7ef8c473ea33680185b55cd7ccc117356d))
+    - Fix rusqlite 0.38.0 compatibility by casting usize/u64 to i64 ([`ee31a8f`](https://github.com/GitoxideLabs/gitoxide/commit/ee31a8f35ef6e2578b883545ee4da2a1cbaaeb57))
+    - Bump the cargo group across 1 directory with 51 updates ([`4edc5dd`](https://github.com/GitoxideLabs/gitoxide/commit/4edc5dda7ca39cc8249cb98dc39ca46c7d00eb44))
+    - Merge pull request #2333 from GitoxideLabs/improvements ([`9e1ba5e`](https://github.com/GitoxideLabs/gitoxide/commit/9e1ba5ee6b7e0e032f682097d48664a68891762d))
+    - Release gix-command v0.6.4, gix-credentials v0.34.1, gix-transport v0.52.1 ([`3bc0c47`](https://github.com/GitoxideLabs/gitoxide/commit/3bc0c472a8395e9634dd602839e208501f841c11))
+    - Merge pull request #2322 from GitoxideLabs/report ([`211b4fb`](https://github.com/GitoxideLabs/gitoxide/commit/211b4fb5a31792eda91191789f3656c217960986))
+</details>
+
+## 0.52.0 (2025-12-31)
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 5 commits contributed to the release over the course of 9 calendar days.
+ - 9 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-date v0.12.0, gix-actor v0.37.0, gix-features v0.45.1, gix-hash v0.21.1, gix-object v0.54.0, gix-filter v0.24.0, gix-fs v0.18.1, gix-revwalk v0.25.0, gix-traverse v0.51.0, gix-worktree-stream v0.26.0, gix-archive v0.26.0, gix-index v0.45.0, gix-worktree v0.46.0, gix-diff v0.57.0, gix-blame v0.7.0, gix-ref v0.57.0, gix-config v0.50.0, gix-credentials v0.34.0, gix-discover v0.45.0, gix-dir v0.19.0, gix-mailmap v0.29.0, gix-revision v0.39.0, gix-merge v0.10.0, gix-negotiate v0.25.0, gix-pack v0.64.0, gix-odb v0.74.0, gix-refspec v0.35.0, gix-transport v0.52.0, gix-protocol v0.55.0, gix-status v0.24.0, gix-submodule v0.24.0, gix-worktree-state v0.24.0, gix v0.77.0, gix-fsck v0.16.0, gitoxide-core v0.52.0, gitoxide v0.49.0, safety bump 32 crates ([`115e208`](https://github.com/GitoxideLabs/gitoxide/commit/115e208b7bc7a96024e64ea872f2731b5125a6e0))
     - Merge pull request #2307 from cruessler/add-feature-flag-to-binary ([`d602d7e`](https://github.com/GitoxideLabs/gitoxide/commit/d602d7e836071f1e9e3af44c33f01522dde5c417))
     - Refactor ([`d532bbf`](https://github.com/GitoxideLabs/gitoxide/commit/d532bbffab880ef253207a5e68a2ad39e7d1c9ac))
     - Add feature flag `blame-experimental` to `gix` ([`826effb`](https://github.com/GitoxideLabs/gitoxide/commit/826effb563e369f57b22a8418be2e9ea58fc4844))
@@ -30,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## 0.51.0 (2025-12-22)
+
+<csr-id-ab3cce472efc4f6469d99a0d3a425d58ac2140b9/>
+<csr-id-c26efb9e733cb33a38ef885eded915e17e61bd9c/>
 
 ### Refactor (BREAKING)
 
@@ -64,6 +99,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 ## 0.50.0 (2025-11-22)
+
+<csr-id-6f469a6fea59c88e6c69a5f94b0bc8a5977cb75b/>
+<csr-id-36c2be80e61a7a0ef637a5385e1960de13261984/>
+<csr-id-19a005135b91641a19a3a70fd714985ce1203333/>
+<csr-id-37ab03687a940c89131141b882e5ef1a7fef85be/>
+<csr-id-f05dfab881481de5de1d23e3266cad9c069f59c5/>
 
 ### New Features
 

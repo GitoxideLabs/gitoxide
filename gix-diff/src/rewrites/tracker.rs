@@ -342,7 +342,8 @@ impl<T: Change> Tracker<T> {
                     change: item.change,
                 },
                 None,
-            ) == Action::Cancel
+            )
+            .is_break()
             {
                 break;
             }
@@ -369,7 +370,10 @@ impl<T: Change> Tracker<T> {
         // https://github.com/git/git/blob/cc01bad4a9f566cf4453c7edd6b433851b0835e2/diffcore-rename.c#L350-L369
         // We would need a hashmap to be OK to not use the limit here, otherwise the performance is too bad.
         // This also means we don't find all renames if we hit the rename limit.
-        if self.match_pairs(cb, None /* by identity */, kind, out, diff_cache, objects, filter)? == Action::Cancel {
+        if self
+            .match_pairs(cb, None /* by identity */, kind, out, diff_cache, objects, filter)?
+            .is_break()
+        {
             return Ok(());
         }
         if needs_second_pass {
@@ -394,7 +398,7 @@ impl<T: Change> Tracker<T> {
                 }
             };
             if !is_limited {
-                self.match_pairs(cb, percentage, kind, out, diff_cache, objects, None)?;
+                let _ = self.match_pairs(cb, percentage, kind, out, diff_cache, objects, None)?;
             }
         }
         Ok(())
@@ -478,7 +482,7 @@ impl<T: Change> Tracker<T> {
                 gix_trace::warn!(
                     "Cancelled rename matching as there were too many iterations ({num_checks} > {max_checks})"
                 );
-                return Ok(Action::Cancel);
+                return Ok(std::ops::ControlFlow::Break(()));
             }
             let Some((src, src_idx)) = src else {
                 continue;
@@ -496,15 +500,15 @@ impl<T: Change> Tracker<T> {
             self.items[dest_idx].emitted = true;
             self.items[src_idx].emitted = true;
 
-            if res == Action::Cancel {
-                return Ok(Action::Cancel);
+            if res.is_break() {
+                return Ok(std::ops::ControlFlow::Break(()));
             }
 
             match relations {
                 Some((Relation::Parent(src), Relation::Parent(dst))) => {
                     let res = self.emit_child_renames_matching_identity(cb, kind, src, dst)?;
-                    if res == Action::Cancel {
-                        return Ok(Action::Cancel);
+                    if res.is_break() {
+                        return Ok(std::ops::ControlFlow::Break(()));
                     }
                 }
                 Some((Relation::ChildOfParent(src), Relation::ChildOfParent(dst))) => {
@@ -513,7 +517,7 @@ impl<T: Change> Tracker<T> {
                 _ => {}
             }
         }
-        Ok(Action::Continue)
+        Ok(std::ops::ControlFlow::Continue(()))
     }
 
     /// Emit the children of `src_parent_id` and `dst_parent_id` as pairs of exact matches, which are assumed
@@ -567,7 +571,7 @@ impl<T: Change> Tracker<T> {
                 src_item.emitted = true;
                 dst_item.emitted = true;
 
-                if res == Action::Cancel {
+                if res.is_break() {
                     return Ok(res);
                 }
             } else {
@@ -575,7 +579,7 @@ impl<T: Change> Tracker<T> {
                 break;
             }
         }
-        Ok(Action::Continue)
+        Ok(std::ops::ControlFlow::Continue(()))
     }
 
     /// Find directories with relation id that haven't been emitted yet and store them for lookup.
@@ -621,7 +625,7 @@ impl<T: Change> Tracker<T> {
             self.items[src_idx].emitted = true;
             self.items[dst_idx].emitted = true;
 
-            if res == Action::Cancel {
+            if res.is_break() {
                 return Ok(());
             }
         }

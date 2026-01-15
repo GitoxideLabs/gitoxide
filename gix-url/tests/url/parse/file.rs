@@ -25,6 +25,14 @@ fn file_path_without_protocol() -> crate::Result {
 }
 
 #[test]
+fn file_path_with_whitespace() -> crate::Result {
+    assert_url_roundtrip(
+        "/path/to/git with spaces ",
+        url_alternate(Scheme::File, None, None, None, b"/path/to/git with spaces "),
+    )
+}
+
+#[test]
 fn no_username_expansion_for_file_paths_without_protocol() -> crate::Result {
     assert_url_roundtrip(
         "~/path/to/git",

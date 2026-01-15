@@ -112,6 +112,17 @@ fn scp_like_with_absolute_path() -> crate::Result {
 }
 
 #[test]
+fn scp_like_with_absolute_path_with_whitespace() -> crate::Result {
+    let url = assert_url(
+        "host.xz:/path/to/git with space",
+        url_alternate(Scheme::Ssh, None, "host.xz", None, b"/path/to/git with space"),
+    )?
+    .to_bstring();
+    assert_eq!(url, "host.xz:/path/to/git with space");
+    Ok(())
+}
+
+#[test]
 fn scp_like_without_user_and_username_expansion_without_username() -> crate::Result {
     let url = assert_url(
         "host.xz:~/to/git",
@@ -162,6 +173,13 @@ fn scp_like_with_user_and_relative_path_keep_relative_path() -> crate::Result {
     )?
     .to_bstring();
     assert_eq!(url, "user@host.xz:../relative");
+
+    let url = assert_url(
+        "user@host.xz:../relative with space",
+        url_alternate(Scheme::Ssh, "user", "host.xz", None, b"../relative with space"),
+    )?
+    .to_bstring();
+    assert_eq!(url, "user@host.xz:../relative with space");
     Ok(())
 }
 

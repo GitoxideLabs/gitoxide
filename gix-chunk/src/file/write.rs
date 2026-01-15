@@ -60,7 +60,7 @@ mod write_chunk {
                     "BUG: expected to write {} bytes, but only wrote {} for chunk {:?}",
                     entry.offset.end,
                     self.written_bytes,
-                    std::str::from_utf8(&entry.kind)
+                    (&entry.kind)
                 );
             }
             self.written_bytes = 0;
@@ -87,7 +87,7 @@ impl Index {
         assert!(
             !self.chunks.iter().any(|e| e.kind == chunk),
             "BUG: must not add chunk of same kind twice: {:?}",
-            std::str::from_utf8(&chunk)
+            (&chunk)
         );
         self.chunks.push(Entry {
             kind: chunk,

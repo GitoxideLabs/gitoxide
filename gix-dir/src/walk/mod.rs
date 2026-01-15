@@ -5,14 +5,10 @@ use bstr::{BStr, BString};
 use crate::{entry, EntryRef};
 
 /// A type returned by the [`Delegate::emit()`] as passed to [`walk()`](function::walk()).
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-#[must_use]
-pub enum Action {
-    /// Continue the traversal as normal.
-    Continue,
-    /// Do not continue the traversal, but exit it.
-    Cancel,
-}
+///
+/// Use [`std::ops::ControlFlow::Continue`] to continue the traversal as normal.
+/// Use [`std::ops::ControlFlow::Break`] to exit the traversal.
+pub type Action = std::ops::ControlFlow<()>;
 
 /// Ready-made delegate implementations.
 pub mod delegate {
@@ -40,7 +36,7 @@ pub mod delegate {
     impl walk::Delegate for Collect {
         fn emit(&mut self, entry: EntryRef<'_>, dir_status: Option<entry::Status>) -> Action {
             self.unorded_entries.push((entry.to_owned(), dir_status));
-            walk::Action::Continue
+            std::ops::ControlFlow::Continue(())
         }
     }
 }

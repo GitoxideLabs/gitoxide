@@ -3,13 +3,10 @@ use crate::MAX_LINE_LEN;
 use crate::{PacketLineRef, U16_HEX_BYTES};
 
 /// Allow the read-progress handler to determine how to continue.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ProgressAction {
-    /// Continue reading the next progress if available.
-    Continue,
-    /// Abort all IO even if more would be available, claiming the operation was interrupted.
-    Interrupt,
-}
+///
+/// Use [`std::ops::ControlFlow::Continue`] to continue reading the next progress if available.
+/// Use [`std::ops::ControlFlow::Break`] to abort all IO even if more would be available, claiming the operation was interrupted.
+pub type ProgressAction = std::ops::ControlFlow<()>;
 
 #[cfg(any(feature = "blocking-io", feature = "async-io"))]
 pub(crate) type ExhaustiveOutcome<'a> = (

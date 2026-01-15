@@ -19,6 +19,8 @@ ln -s a c
 mkdir d
 (cd d && touch a b c)
 
+git submodule add ./sub sub-worktree
+
 git add .
 git update-index --chmod=+x b  # For Windows.
 git commit -m "init"

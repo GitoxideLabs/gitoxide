@@ -49,7 +49,7 @@ pub mod changes {
                 }
                 | Change::Modification { oid, entry_mode, .. } => {
                     if entry_mode.is_commit() {
-                        return Action::Continue;
+                        return std::ops::ControlFlow::Continue(());
                     }
                     let inserted = self.all_seen.insert(oid);
                     if inserted {
@@ -58,7 +58,7 @@ pub mod changes {
                 }
                 Change::Deletion { .. } => {}
             }
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         }
     }
 }
@@ -107,21 +107,21 @@ pub mod traverse {
         fn visit_tree(&mut self, entry: &EntryRef<'_>) -> Action {
             let inserted = self.all_seen.insert(entry.oid.to_owned());
             if inserted {
-                Action::Continue
+                std::ops::ControlFlow::Continue(true)
             } else {
-                Action::Skip
+                std::ops::ControlFlow::Continue(false)
             }
         }
 
         fn visit_nontree(&mut self, entry: &EntryRef<'_>) -> Action {
             if entry.mode.is_commit() {
-                return Action::Continue;
+                return std::ops::ControlFlow::Continue(true);
             }
             let inserted = self.all_seen.insert(entry.oid.to_owned());
             if inserted {
                 self.non_trees.push(entry.oid.to_owned());
             }
-            Action::Continue
+            std::ops::ControlFlow::Continue(true)
         }
     }
 }

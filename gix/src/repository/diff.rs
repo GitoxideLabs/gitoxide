@@ -71,7 +71,7 @@ impl Repository {
             &self.objects,
             |change| -> Result<_, std::convert::Infallible> {
                 out.push(change.into_owned());
-                Ok(gix_diff::tree_with_rewrites::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             },
             opts,
         )?;

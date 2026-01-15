@@ -116,7 +116,7 @@ mod visit {
 
         fn visit_tree(&mut self, _entry: &EntryRef<'_>) -> Action {
             self.num_trees += 1;
-            Action::Continue
+            Action::Continue(true)
         }
 
         fn visit_nontree(&mut self, entry: &EntryRef<'_>) -> Action {
@@ -134,7 +134,7 @@ mod visit {
                 Link => self.num_links += 1,
                 Tree => unreachable!("BUG"),
             }
-            Action::Continue
+            Action::Continue(true)
         }
     }
 }

@@ -1,11 +1,11 @@
-use gix_revision::{spec, spec::parse::delegate::Traversal};
+use gix_revision::spec::parse::delegate::Traversal;
 
 use crate::spec::parse::{parse, try_parse};
 
 #[test]
 fn without_anchor_is_invalid() {
-    let err = try_parse("~").unwrap_err();
-    assert!(matches!(err, spec::parse::Error::MissingTildeAnchor));
+    let err = try_parse("~").unwrap_err().into_inner();
+    assert!(err.message.contains("tilde needs to follow an anchor"));
 }
 
 #[test]

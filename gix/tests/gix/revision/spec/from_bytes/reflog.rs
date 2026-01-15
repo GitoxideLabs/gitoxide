@@ -22,7 +22,7 @@ fn nth_prior_checkout() {
     }
 
     assert_eq!(
-        parse_spec("@{-6}", &repo).unwrap_err().to_string(),
+        parse_spec("@{-6}", &repo).unwrap_err().probable_cause().to_string(),
         "HEAD has 5 prior checkouts and checkout number 6 is out of range"
     );
 }
@@ -32,7 +32,7 @@ fn by_index_unborn_head() {
     let repo = &repo("new").unwrap();
 
     assert_eq!(
-        parse_spec("@{1}", repo).unwrap_err().to_string(),
+        parse_spec("@{1}", repo).unwrap_err().probable_cause().to_string(),
         "Unborn heads do not have a reflog yet"
     );
 }
@@ -69,8 +69,11 @@ fn by_index() {
     }
 
     assert_eq!(
-        parse_spec("main@{12345}", repo).unwrap_err().to_string(),
-        "Reference \"refs/heads/main\" has 4 ref-log entries and entry number 12345 is out of range"
+        parse_spec("main@{12345}", repo)
+            .unwrap_err()
+            .probable_cause()
+            .to_string(),
+        "Reference 'refs/heads/main' has 4 ref-log entries and entry number 12345 is out of range"
     );
 }
 

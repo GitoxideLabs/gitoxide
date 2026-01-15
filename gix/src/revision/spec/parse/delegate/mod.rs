@@ -1,14 +1,12 @@
-use std::collections::HashSet;
-
-use gix_hash::ObjectId;
-use gix_revision::spec::{parse, parse::delegate};
-use smallvec::SmallVec;
-
-use super::{Delegate, Error, ObjectKindHint};
+use super::{error, Delegate, ObjectKindHint};
 use crate::{
     ext::{ObjectIdExt, ReferenceExt},
     Repository,
 };
+use gix_error::{message, ErrorExt, Exn, ResultExt};
+use gix_hash::ObjectId;
+use gix_revision::spec::{parse, parse::delegate};
+use smallvec::SmallVec;
 
 type Replacements = SmallVec<[(ObjectId, ObjectId); 1]>;
 
@@ -21,7 +19,7 @@ impl<'repo> Delegate<'repo> {
             ambiguous_objects: Default::default(),
             idx: 0,
             kind: None,
-            err: Vec::new(),
+            delayed_errors: Vec::new(),
             prefix: Default::default(),
             last_call_was_disambiguate_prefix: Default::default(),
             opts,
@@ -29,28 +27,40 @@ impl<'repo> Delegate<'repo> {
         }
     }
 
-    pub fn into_err(mut self) -> Error {
+    pub fn into_delayed_errors(mut self) -> Option<Exn> {
         let repo = self.repo;
-        for err in self
+        let mut delayed_errors = self.delayed_errors;
+        let mut ambiguous_errors: Vec<_> = self
             .ambiguous_objects
             .iter_mut()
             .zip(self.prefix)
             .filter_map(|(a, b)| a.take().filter(|candidates| candidates.len() > 1).zip(b))
-            .map(|(candidates, prefix)| Error::ambiguous(candidates, prefix, repo))
+            .map(|(candidates, prefix)| error::ambiguous(candidates, prefix, repo))
             .rev()
-        {
-            self.err.insert(0, err);
+            .map(|err| err.erased())
+            .collect();
+
+        match (ambiguous_errors.pop(), ambiguous_errors.pop()) {
+            (Some(one), None) => Some(one),
+            (Some(one), Some(two)) => {
+                Some(Exn::from_iter([one, two], message!("Both objects were ambiguous")).erased())
+            }
+            _ => (!delayed_errors.is_empty()).then(|| {
+                if delayed_errors.len() == 1 {
+                    delayed_errors.pop().expect("it's exactly one")
+                } else {
+                    Exn::from_iter(delayed_errors, message!("one or more delayed errors")).erased()
+                }
+            }),
         }
-        Error::from_errors(self.err)
     }
 
-    pub fn into_rev_spec(mut self) -> Result<crate::revision::Spec<'repo>, Error> {
+    pub fn into_rev_spec(mut self) -> Result<crate::revision::Spec<'repo>, gix_error::Error> {
         fn zero_or_one_objects_or_ambiguity_err(
-            mut candidates: [Option<HashSet<ObjectId>>; 2],
+            mut candidates: [Option<Vec<ObjectId>>; 2],
             prefix: [Option<gix_hash::Prefix>; 2],
-            mut errors: Vec<Error>,
             repo: &Repository,
-        ) -> Result<[Option<ObjectId>; 2], Error> {
+        ) -> Result<[Option<ObjectId>; 2], gix_error::Error> {
             let mut out = [None, None];
             for ((candidates, prefix), out) in candidates.iter_mut().zip(prefix).zip(out.iter_mut()) {
                 let candidates = candidates.take();
@@ -64,11 +74,10 @@ impl<'repo> Delegate<'repo> {
                             *out = candidates.into_iter().next();
                         }
                         _ => {
-                            errors.insert(
-                                0,
-                                Error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo),
-                            );
-                            return Err(Error::from_errors(errors));
+                            let err =
+                                error::ambiguous(candidates, prefix.expect("set when obtaining candidates"), repo)
+                                    .erased();
+                            return Err(err.into_error());
                         }
                     },
                 }
@@ -79,25 +88,30 @@ impl<'repo> Delegate<'repo> {
         fn kind_to_spec(
             kind: Option<gix_revision::spec::Kind>,
             [first, second]: [Option<ObjectId>; 2],
-        ) -> Result<gix_revision::Spec, Error> {
+        ) -> Result<gix_revision::Spec, gix_error::Error> {
+            pub fn malformed() -> gix_error::Error {
+                message!("The rev-spec is malformed and misses a ref name")
+                    .raise()
+                    .into_error()
+            }
             use gix_revision::spec::Kind::*;
             Ok(match kind.unwrap_or_default() {
-                IncludeReachable => gix_revision::Spec::Include(first.ok_or(Error::Malformed)?),
-                ExcludeReachable => gix_revision::Spec::Exclude(first.ok_or(Error::Malformed)?),
+                IncludeReachable => gix_revision::Spec::Include(first.ok_or_else(malformed)?),
+                ExcludeReachable => gix_revision::Spec::Exclude(first.ok_or_else(malformed)?),
                 RangeBetween => gix_revision::Spec::Range {
-                    from: first.ok_or(Error::Malformed)?,
-                    to: second.ok_or(Error::Malformed)?,
+                    from: first.ok_or_else(malformed)?,
+                    to: second.ok_or_else(malformed)?,
                 },
                 ReachableToMergeBase => gix_revision::Spec::Merge {
-                    theirs: first.ok_or(Error::Malformed)?,
-                    ours: second.ok_or(Error::Malformed)?,
+                    theirs: first.ok_or_else(malformed)?,
+                    ours: second.ok_or_else(malformed)?,
                 },
-                IncludeReachableFromParents => gix_revision::Spec::IncludeOnlyParents(first.ok_or(Error::Malformed)?),
-                ExcludeReachableFromParents => gix_revision::Spec::ExcludeParents(first.ok_or(Error::Malformed)?),
+                IncludeReachableFromParents => gix_revision::Spec::IncludeOnlyParents(first.ok_or_else(malformed)?),
+                ExcludeReachableFromParents => gix_revision::Spec::ExcludeParents(first.ok_or_else(malformed)?),
             })
         }
 
-        let range = zero_or_one_objects_or_ambiguity_err(self.objs, self.prefix, self.err, self.repo)?;
+        let range = zero_or_one_objects_or_ambiguity_err(self.objs, self.prefix, self.repo)?;
         Ok(crate::revision::Spec {
             path: self.paths[0].take().or(self.paths[1].take()),
             first_ref: self.refs[0].take(),
@@ -109,47 +123,55 @@ impl<'repo> Delegate<'repo> {
 }
 
 impl parse::Delegate for Delegate<'_> {
-    fn done(&mut self) {
-        self.follow_refs_to_objects_if_needed();
-        self.disambiguate_objects_by_fallback_hint(
+    fn done(&mut self) -> Result<(), Exn> {
+        self.follow_refs_to_objects_if_needed_delay_errors();
+        self.disambiguate_objects_by_fallback_hint_delay_errors(
             self.kind_implies_committish()
                 .then_some(ObjectKindHint::Committish)
                 .or(self.opts.object_kind_hint),
         );
+        // Never fail, let it be handled by the spec conversion.
+        Ok(())
     }
 }
 
 impl delegate::Kind for Delegate<'_> {
-    fn kind(&mut self, kind: gix_revision::spec::Kind) -> Option<()> {
+    fn kind(&mut self, kind: gix_revision::spec::Kind) -> Result<(), Exn> {
         use gix_revision::spec::Kind::*;
         self.kind = Some(kind);
 
         if self.kind_implies_committish() {
-            self.disambiguate_objects_by_fallback_hint(ObjectKindHint::Committish.into());
+            self.disambiguate_objects_by_fallback_hint_delay_errors(ObjectKindHint::Committish.into());
         }
         if matches!(kind, RangeBetween | ReachableToMergeBase) {
             self.idx += 1;
         }
 
-        Some(())
+        Ok(())
     }
 }
 
 impl Delegate<'_> {
+    fn has_delayed_err(&self) -> bool {
+        !self.delayed_errors.is_empty()
+    }
     fn kind_implies_committish(&self) -> bool {
         self.kind.unwrap_or(gix_revision::spec::Kind::IncludeReachable) != gix_revision::spec::Kind::IncludeReachable
     }
-    fn disambiguate_objects_by_fallback_hint(&mut self, hint: Option<ObjectKindHint>) {
-        fn require_object_kind(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<(), Error> {
-            let obj = repo.find_object(obj)?;
+
+    fn disambiguate_objects_by_fallback_hint_delay_errors(&mut self, hint: Option<ObjectKindHint>) {
+        fn require_object_kind(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<(), Exn> {
+            let obj = repo.find_object(obj).or_erased()?;
             if obj.kind == kind {
                 Ok(())
             } else {
-                Err(Error::ObjectKind {
-                    actual: obj.kind,
-                    expected: kind,
-                    oid: obj.id.attach(repo).shorten_or_id(),
-                })
+                Err(message!(
+                    "Object {oid} was a {actual}, but needed it to be a {expected}",
+                    actual = obj.kind,
+                    expected = kind,
+                    oid = obj.id.attach(repo).shorten_or_id(),
+                )
+                .erased())
             }
         }
 
@@ -185,38 +207,48 @@ impl Delegate<'_> {
                     None => return,
                 };
 
-                if errors.len() == objs.len() {
-                    self.err.extend(errors.into_iter().map(|(_, err)| err));
+                let disambiguation_failed = errors.len() == objs.len();
+                if disambiguation_failed {
+                    self.delayed_errors.extend(errors.into_iter().map(|(_, err)| err));
                 } else {
-                    for (obj, err) in errors {
-                        objs.remove(&obj);
-                        self.err.push(err);
+                    for (ambiguous_obj, err) in errors {
+                        if let Some(pos) = objs.iter().position(|obj| obj == &ambiguous_obj) {
+                            objs.remove(pos);
+                        }
+                        self.delayed_errors.push(err);
                     }
                 }
             }
         }
     }
-    fn follow_refs_to_objects_if_needed(&mut self) -> Option<()> {
+
+    fn follow_refs_to_objects_if_needed_delay_errors(&mut self) {
         let repo = self.repo;
         for (r, obj) in self.refs.iter().zip(self.objs.iter_mut()) {
             if let (Some(ref_), obj_opt @ None) = (r, obj) {
                 if let Some(id) = ref_.target.try_id().map(ToOwned::to_owned).or_else(|| {
                     match ref_.clone().attach(repo).peel_to_id() {
                         Err(err) => {
-                            self.err.push(Error::PeelToId {
-                                name: ref_.name.clone(),
-                                source: err,
-                            });
+                            self.delayed_errors.push(
+                                err.raise()
+                                    .raise(message!(
+                                        "Could not peel '{}' to obtain its target",
+                                        ref_.name.as_bstr()
+                                    ))
+                                    .erased(),
+                            );
                             None
                         }
                         Ok(id) => Some(id.detach()),
                     }
                 }) {
-                    obj_opt.get_or_insert_with(HashSet::default).insert(id);
+                    let objs = obj_opt.get_or_insert_with(Vec::new);
+                    if !objs.contains(&id) {
+                        objs.push(id);
+                    }
                 }
             }
         }
-        Some(())
     }
 
     fn unset_disambiguate_call(&mut self) {
@@ -224,33 +256,11 @@ impl Delegate<'_> {
     }
 }
 
-fn peel(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<ObjectId, Error> {
-    let mut obj = repo.find_object(obj)?;
-    obj = obj.peel_to_kind(kind)?;
+fn peel(repo: &Repository, obj: &gix_hash::oid, kind: gix_object::Kind) -> Result<ObjectId, Exn> {
+    let mut obj = repo.find_object(obj).or_erased()?;
+    obj = obj.peel_to_kind(kind).or_erased()?;
     debug_assert_eq!(obj.kind, kind, "bug in Object::peel_to_kind() which didn't deliver");
     Ok(obj.id)
-}
-
-fn handle_errors_and_replacements(
-    destination: &mut Vec<Error>,
-    objs: &mut HashSet<ObjectId>,
-    errors: Vec<(ObjectId, Error)>,
-    replacements: &mut Replacements,
-) -> Option<()> {
-    if errors.len() == objs.len() {
-        destination.extend(errors.into_iter().map(|(_, err)| err));
-        None
-    } else {
-        for (obj, err) in errors {
-            objs.remove(&obj);
-            destination.push(err);
-        }
-        for (find, replace) in replacements {
-            objs.remove(find);
-            objs.insert(*replace);
-        }
-        Some(())
-    }
 }
 
 mod navigate;

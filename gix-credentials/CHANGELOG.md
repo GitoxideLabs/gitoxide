@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 7 calendar days.
+ - 7 days passed between releases.
+ - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2346 from GitoxideLabs/release ([`c663b3f`](https://github.com/GitoxideLabs/gitoxide/commit/c663b3f05791db86d2e0a683e26e149f620bf2e4))
+    - Release gix-trace v0.1.17, gix-features v0.45.2, gix-command v0.6.5, gix-hash v0.21.2, gix-date v0.12.1, gix-actor v0.37.1, gix-object v0.54.1, gix-filter v0.24.1, gix-fs v0.18.2, gix-tempfile v20.0.1, gix-lock v20.0.1, gix-traverse v0.51.1, gix-index v0.45.1, gix-diff v0.57.1, gix-pack v0.64.1 ([`7be8f90`](https://github.com/GitoxideLabs/gitoxide/commit/7be8f9068ab875ca4123300ba08df9d32fd63941))
+    - Merge pull request #2333 from GitoxideLabs/improvements ([`9e1ba5e`](https://github.com/GitoxideLabs/gitoxide/commit/9e1ba5ee6b7e0e032f682097d48664a68891762d))
+</details>
+
 ## 0.34.1 (2026-01-02)
 
 A maintenance release without user-facing changes.
@@ -13,7 +36,7 @@ A maintenance release without user-facing changes.
 
 <csr-read-only-do-not-edit/>
 
- - 7 commits contributed to the release over the course of 1 calendar day.
+ - 8 commits contributed to the release over the course of 1 calendar day.
  - 1 day passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#2328](https://github.com/GitoxideLabs/gitoxide/issues/2328)
@@ -27,6 +50,7 @@ A maintenance release without user-facing changes.
  * **[#2328](https://github.com/GitoxideLabs/gitoxide/issues/2328)**
     - Update changelogs prior to `gix-transport` release ([`ae8c9d3`](https://github.com/GitoxideLabs/gitoxide/commit/ae8c9d3ff56a38f2cd92c6f5afa9e93434939fe0))
  * **Uncategorized**
+    - Release gix-command v0.6.4, gix-credentials v0.34.1, gix-transport v0.52.1 ([`3bc0c47`](https://github.com/GitoxideLabs/gitoxide/commit/3bc0c472a8395e9634dd602839e208501f841c11))
     - Merge pull request #2324 from EliahKagan/run-ci/cred-test-sh ([`0b1a7b7`](https://github.com/GitoxideLabs/gitoxide/commit/0b1a7b7914fe2bffdea2fd8628cabb7a6edbe262))
     - Adjust misleading `gix-credentials` shell script fixture shebangs ([`e7f5910`](https://github.com/GitoxideLabs/gitoxide/commit/e7f5910a7b90eb89f22325d0e87fd8669cf8e8ec))
     - Refactor now that `script_helper()` is shared ([`ca3225b`](https://github.com/GitoxideLabs/gitoxide/commit/ca3225bf8029bc7eac5f25386bd02cd6f6b45b7d))

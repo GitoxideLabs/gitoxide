@@ -89,21 +89,10 @@ impl Change {
 }
 
 /// What to do after a [Change] was [recorded](super::Visit::visit()).
-#[derive(Default, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
-pub enum Action {
-    /// Continue the traversal of changes.
-    #[default]
-    Continue,
-    /// Stop the traversal of changes, making this the last call to [visit(…)](super::Visit::visit()).
-    Cancel,
-}
-
-impl Action {
-    /// Returns true if this action means to stop the traversal.
-    pub fn cancelled(&self) -> bool {
-        matches!(self, Action::Cancel)
-    }
-}
+///
+/// Use [`std::ops::ControlFlow::Continue`] to continue the traversal of changes.
+/// Use [`std::ops::ControlFlow::Break`] to stop the traversal of changes, making this the last call to [visit(…)](super::Visit::visit()).
+pub type Action = std::ops::ControlFlow<()>;
 
 #[cfg(feature = "blob")]
 mod change_impls {

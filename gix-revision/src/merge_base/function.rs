@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
-use super::Error;
+use super::{Error, Simple};
 use crate::{merge_base::Flags, Graph, PriorityQueue};
 
 /// Given a commit at `first` id, traverse the commit `graph` and return all possible merge-base between it and `others`,
@@ -63,13 +63,15 @@ fn remove_redundant(
         let commit = graph.get_mut(id).expect("previously added");
         commit.data |= Flags::RESULT;
         for parent_id in commit.parents.clone() {
-            graph.get_or_insert_full_commit(parent_id, |parent| {
-                // prevent double-addition
-                if !parent.data.contains(Flags::STALE) {
-                    parent.data |= Flags::STALE;
-                    walk_start.push((parent_id, GenThenTime::from(&*parent)));
-                }
-            })?;
+            graph
+                .get_or_insert_full_commit(parent_id, |parent| {
+                    // prevent double-addition
+                    if !parent.data.contains(Flags::STALE) {
+                        parent.data |= Flags::STALE;
+                        walk_start.push((parent_id, GenThenTime::from(&*parent)));
+                    }
+                })
+                .map_err(|_| Simple("could not insert parent commit into graph"))?;
         }
     }
     walk_start.sort_by(|a, b| a.0.cmp(&b.0));
@@ -121,7 +123,8 @@ fn remove_redundant(
                             parent.data |= Flags::STALE;
                             stack.push((*parent_id, GenThenTime::from(&*parent)));
                         }
-                    })?
+                    })
+                    .map_err(|_| Simple("could not insert parent commit into graph"))?
                     .is_some()
                 {
                     break;
@@ -151,16 +154,20 @@ fn paint_down_to_common(
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
 ) -> Result<Vec<(ObjectId, GenThenTime)>, Error> {
     let mut queue = PriorityQueue::<GenThenTime, ObjectId>::new();
-    graph.get_or_insert_full_commit(first, |commit| {
-        commit.data |= Flags::COMMIT1;
-        queue.insert(GenThenTime::from(&*commit), first);
-    })?;
+    graph
+        .get_or_insert_full_commit(first, |commit| {
+            commit.data |= Flags::COMMIT1;
+            queue.insert(GenThenTime::from(&*commit), first);
+        })
+        .map_err(|_| Simple("could not insert commit into graph"))?;
 
     for other in others {
-        graph.get_or_insert_full_commit(*other, |commit| {
-            commit.data |= Flags::COMMIT2;
-            queue.insert(GenThenTime::from(&*commit), *other);
-        })?;
+        graph
+            .get_or_insert_full_commit(*other, |commit| {
+                commit.data |= Flags::COMMIT2;
+                queue.insert(GenThenTime::from(&*commit), *other);
+            })
+            .map_err(|_| Simple("could not insert commit into graph"))?;
     }
 
     let mut out = Vec::new();
@@ -180,12 +187,14 @@ fn paint_down_to_common(
         }
 
         for parent_id in commit.parents.clone() {
-            graph.get_or_insert_full_commit(parent_id, |parent| {
-                if (parent.data & flags_without_result) != flags_without_result {
-                    parent.data |= flags_without_result;
-                    queue.insert(GenThenTime::from(&*parent), parent_id);
-                }
-            })?;
+            graph
+                .get_or_insert_full_commit(parent_id, |parent| {
+                    if (parent.data & flags_without_result) != flags_without_result {
+                        parent.data |= flags_without_result;
+                        queue.insert(GenThenTime::from(&*parent), parent_id);
+                    }
+                })
+                .map_err(|_| Simple("could not insert parent commit into graph"))?;
         }
     }
 

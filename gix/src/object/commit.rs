@@ -11,7 +11,7 @@ mod error {
         #[error("The commit could not be decoded fully or partially")]
         Decode(#[from] gix_object::decode::Error),
         #[error("The commit date could not be parsed")]
-        ParseDate(#[from] gix_date::parse::Error),
+        ParseDate(#[from] gix_date::Error),
         #[error("Expected object of type {}, but got {}", .expected, .actual)]
         ObjectKind {
             expected: gix_object::Kind,

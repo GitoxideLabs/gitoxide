@@ -189,6 +189,6 @@ impl gix_dir::walk::Delegate for Collect {
         self.tx.send(item).ok();
         #[cfg(not(feature = "parallel"))]
         self.items.push(item);
-        gix_dir::walk::Action::Continue
+        std::ops::ControlFlow::Continue(())
     }
 }

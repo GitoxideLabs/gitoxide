@@ -388,20 +388,27 @@ fn resolve_file_type_with_index(
     // TODO(perf): multi-threaded hash-table so it's always used, even for case-sensitive lookups, just like Git does it.
     let (uptodate_kind, index_kind) = if let Some(accelerate) = ignore_case {
         match index.entry_by_path_icase(rela_path.as_bstr(), true, accelerate) {
-            None => {
-                icase_directory_to_kinds(index.entry_closest_to_directory_icase(rela_path.as_bstr(), true, accelerate))
-            }
+            None => icase_directory_to_kinds(index.entry_closest_to_directory_or_directory_icase(
+                rela_path.as_bstr(),
+                true,
+                accelerate,
+            )),
             Some(entry) => {
-                let icase_dir = index.entry_closest_to_directory_icase(rela_path.as_bstr(), true, accelerate);
-                let directory_matches_exactly = icase_dir.is_some_and(|dir| {
-                    let path = dir.path(index);
-                    let slash_idx = path.rfind_byte(b'/').expect("dir");
-                    path[..slash_idx].as_bstr() == rela_path
-                });
-                if directory_matches_exactly {
-                    icase_directory_to_kinds(icase_dir)
-                } else {
+                if entry.mode.is_submodule() || entry.mode.is_sparse() {
                     entry_to_kinds(entry)
+                } else {
+                    let icase_dir =
+                        index.entry_closest_to_directory_or_directory_icase(rela_path.as_bstr(), true, accelerate);
+                    let directory_matches_exactly = icase_dir.is_some_and(|dir| {
+                        let path = dir.path(index);
+                        let slash_idx = path.rfind_byte(b'/').expect("dir");
+                        path[..slash_idx].as_bstr() == rela_path
+                    });
+                    if directory_matches_exactly {
+                        icase_directory_to_kinds(icase_dir)
+                    } else {
+                        entry_to_kinds(entry)
+                    }
                 }
             }
         }

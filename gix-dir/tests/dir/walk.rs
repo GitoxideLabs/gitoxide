@@ -3339,10 +3339,10 @@ fn cancel_with_collection_does_not_fail() -> crate::Result {
     impl gix_dir::walk::Delegate for CancelDelegate {
         fn emit(&mut self, _entry: EntryRef<'_>, _collapsed_directory_status: Option<entry::Status>) -> walk::Action {
             if self.emits_left_until_cancel == 0 {
-                walk::Action::Cancel
+                std::ops::ControlFlow::Break(())
             } else {
                 self.emits_left_until_cancel -= 1;
-                walk::Action::Continue
+                std::ops::ControlFlow::Continue(())
             }
         }
     }

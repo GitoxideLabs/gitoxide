@@ -20,8 +20,14 @@ mod with_known_revision {
         assert_eq!(parse_spec("0000000000^{/x}", &repo).unwrap(), expected);
         assert_eq!(parse_spec("@^{/x}", &repo).unwrap(), expected, "ref names are resolved");
 
+        let err = parse_spec_no_baseline("@^{/.*x}", &repo).unwrap_err();
+        insta::assert_debug_snapshot!(err, @r#"
+        Delegate couldn't find '.*x' (negated: false)
+        |
+        └─ None of 1 commits from 0000000000e matched text ".*x"
+        "#);
         assert_eq!(
-            parse_spec_no_baseline("@^{/.*x}", &repo).unwrap_err().to_string(),
+            err.probable_cause().to_string(),
             "None of 1 commits from 0000000000e matched text \".*x\"",
             "regexes are not actually available for us, but git could do that"
         );
@@ -49,8 +55,14 @@ mod with_known_revision {
             expected,
             "we can use real regexes here"
         );
+        let err = parse_spec_no_baseline("@^{/^x}", &repo).unwrap_err();
+        insta::assert_debug_snapshot!(err, @r#"
+        Delegate couldn't find '^x' (negated: false)
+        |
+        └─ None of 1 commits from 0000000000e matched regex "^x"
+        "#);
         assert_eq!(
-            parse_spec_no_baseline("@^{/^x}", &repo).unwrap_err().to_string(),
+            err.probable_cause().to_string(),
             "None of 1 commits from 0000000000e matched regex \"^x\"",
         );
     }
@@ -83,8 +95,14 @@ mod find_youngest_matching_commit {
             Spec::from_id(hex_to_id("55e825ebe8fd2ff78cad3826afb696b96b576a7e").attach(&repo))
         );
 
+        let err = parse_spec_no_baseline(":/messa.e", &repo).unwrap_err();
+        insta::assert_debug_snapshot!(err, @r#"
+        Delegate couldn't find 'messa.e' (negated: false)
+        |
+        └─ None of 10 commits reached from all references matched text "messa.e"
+        "#);
         assert_eq!(
-            parse_spec_no_baseline(":/messa.e", &repo).unwrap_err().to_string(),
+            err.probable_cause().to_string(),
             "None of 10 commits reached from all references matched text \"messa.e\"",
             "regex definitely don't work as it's not compiled in"
         );
@@ -100,8 +118,14 @@ mod find_youngest_matching_commit {
             Spec::from_id(hex_to_id("ef80b4b77b167f326351c93284dc0eb00dd54ff4").attach(&repo))
         );
 
+        let err = parse_spec(":/not there", &repo).unwrap_err();
+        insta::assert_debug_snapshot!(err, @r#"
+        Delegate couldn't find 'not there' (negated: false)
+        |
+        └─ None of 10 commits reached from all references matched regex "not there"
+        "#);
         assert_eq!(
-            parse_spec(":/not there", &repo).unwrap_err().to_string(),
+            err.probable_cause().to_string(),
             "None of 10 commits reached from all references matched regex \"not there\""
         );
 

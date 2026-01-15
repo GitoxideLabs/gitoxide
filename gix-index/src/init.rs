@@ -175,9 +175,9 @@ pub mod from_tree {
 
         fn determine_action(&self) -> Action {
             if self.invalid_path.is_none() {
-                Action::Continue
+                std::ops::ControlFlow::Continue(true)
             } else {
-                Action::Cancel
+                std::ops::ControlFlow::Break(())
             }
         }
     }

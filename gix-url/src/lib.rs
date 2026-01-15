@@ -136,8 +136,8 @@ pub struct Url {
     pub port: Option<u16>,
     /// The path portion of the URL, usually the location of the git repository.
     ///
-    /// Unlike `user` and `password`, paths are stored and serialized in their original form
-    /// without percent-decoding or re-encoding (e.g., `%20` remains `%20`, not converted to space).
+    /// Paths are stored in decoded form: percent-encoded characters are decoded during parsing
+    /// and re-encoded during canonical serialization (e.g., `%20` becomes a space in this field).
     ///
     /// Path normalization during parsing:
     /// - SSH/Git schemes: Leading `/~` is stripped (e.g., `/~repo` becomes `~repo`)

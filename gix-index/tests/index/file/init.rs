@@ -37,7 +37,7 @@ mod from_state {
         let fixtures = [
             (Loose("extended-flags"), V3),
             (Generated("v2"), V2),
-            (Generated("V2_empty"), V2),
+            (Generated("v2_empty"), V2),
             (Generated("v2_more_files"), V2),
             (Generated("v2_all_file_kinds"), V2),
             (Generated("v4_more_files_IEOT"), V2),

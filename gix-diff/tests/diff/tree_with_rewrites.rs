@@ -1850,7 +1850,7 @@ mod util {
             &odb,
             |change| -> Result<_, Infallible> {
                 out.push(change.into_owned());
-                Ok(gix_diff::tree_with_rewrites::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             },
             options,
         )?;

@@ -182,7 +182,7 @@ pub fn spawn_tree_delta_threads<'scope>(
                                             }
                                         },
                                     }
-                                    Ok::<_, std::io::Error>(Default::default())
+                                    Ok::<_, std::io::Error>(std::ops::ControlFlow::Continue(()))
                                 })?;
                             out.push((commit_idx, files, lines));
                         }

@@ -649,7 +649,7 @@ fn tree_diff_without_rewrites_at_file_path(
         }
 
         fn visit(&mut self, change: gix_diff::tree::visit::Change) -> gix_diff::tree::visit::Action {
-            use gix_diff::tree::{visit, visit::Change::*};
+            use gix_diff::tree::visit::Change::*;
 
             if self.inner.path() == self.interesting_path {
                 self.change = Some(match change {
@@ -687,9 +687,9 @@ fn tree_diff_without_rewrites_at_file_path(
                     },
                 });
 
-                visit::Action::Cancel
+                std::ops::ControlFlow::Break(())
             } else {
-                visit::Action::Continue
+                std::ops::ControlFlow::Continue(())
             }
         }
     }
@@ -730,9 +730,9 @@ fn tree_diff_with_rewrites_at_file_path(
         |change_ref| -> Result<_, std::convert::Infallible> {
             if change_ref.location() == file_path {
                 change = Some(change_ref.into_owned());
-                Ok(gix_diff::tree_with_rewrites::Action::Cancel)
+                Ok(std::ops::ControlFlow::Break(()))
             } else {
-                Ok(gix_diff::tree_with_rewrites::Action::Continue)
+                Ok(std::ops::ControlFlow::Continue(()))
             }
         },
         options,

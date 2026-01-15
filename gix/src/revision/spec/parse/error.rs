@@ -1,8 +1,6 @@
-use std::collections::HashSet;
-
+use gix_error::message;
 use gix_hash::ObjectId;
 
-use super::Error;
 use crate::{bstr, bstr::BString, ext::ObjectIdExt, Repository};
 
 /// Additional information about candidates that caused ambiguity.
@@ -51,95 +49,76 @@ impl std::fmt::Display for CandidateInfo {
     }
 }
 
-impl Error {
-    pub(crate) fn ambiguous(candidates: HashSet<ObjectId>, prefix: gix_hash::Prefix, repo: &Repository) -> Self {
-        #[derive(PartialOrd, Ord, Eq, PartialEq, Copy, Clone)]
-        enum Order {
-            Tag,
-            Commit,
-            Tree,
-            Blob,
-            Invalid,
-        }
-        let candidates = {
-            let mut c: Vec<_> = candidates
-                .into_iter()
-                .map(|oid| {
-                    let obj = repo.find_object(oid);
-                    let order = match &obj {
-                        Err(_) => Order::Invalid,
-                        Ok(obj) => match obj.kind {
-                            gix_object::Kind::Tag => Order::Tag,
-                            gix_object::Kind::Commit => Order::Commit,
-                            gix_object::Kind::Tree => Order::Tree,
-                            gix_object::Kind::Blob => Order::Blob,
-                        },
-                    };
-                    (oid, obj, order)
-                })
-                .collect();
-            c.sort_by(|lhs, rhs| lhs.2.cmp(&rhs.2).then_with(|| lhs.0.cmp(&rhs.0)));
-            c
-        };
-        Error::AmbiguousPrefix {
-            prefix,
-            info: candidates
-                .into_iter()
-                .map(|(oid, find_result, _)| {
-                    let info = match find_result {
-                        Ok(obj) => match obj.kind {
-                            gix_object::Kind::Tree | gix_object::Kind::Blob => CandidateInfo::Object { kind: obj.kind },
-                            gix_object::Kind::Tag => {
-                                let tag = obj.to_tag_ref();
-                                CandidateInfo::Tag { name: tag.name.into() }
-                            }
-                            gix_object::Kind::Commit => {
-                                use bstr::ByteSlice;
-                                let commit = obj.to_commit_ref();
-                                let date = match commit.committer() {
-                                    Ok(signature) => signature.time.trim().to_owned(),
-                                    Err(_) => {
-                                        let committer = commit.committer;
-                                        let manually_parsed_best_effort = committer
-                                            .rfind_byte(b'>')
-                                            .map(|pos| committer[pos + 1..].trim().as_bstr().to_string());
-                                        manually_parsed_best_effort.unwrap_or_default()
-                                    }
-                                };
-                                CandidateInfo::Commit {
-                                    date,
-                                    title: commit.message().title.trim().into(),
-                                }
-                            }
-                        },
-                        Err(err) => CandidateInfo::FindError { source: err },
-                    };
-                    (oid.attach(repo).shorten().unwrap_or_else(|_| oid.into()), info)
-                })
-                .collect(),
-        }
+pub(crate) fn ambiguous(candidates: Vec<ObjectId>, prefix: gix_hash::Prefix, repo: &Repository) -> gix_error::Message {
+    #[derive(PartialOrd, Ord, Eq, PartialEq, Copy, Clone)]
+    enum Order {
+        Tag,
+        Commit,
+        Tree,
+        Blob,
+        Invalid,
     }
-
-    pub(crate) fn from_errors(errors: Vec<Self>) -> Self {
-        match errors.len() {
-            0 => unreachable!(
-                "BUG: cannot create something from nothing, must have recorded some errors to call from_errors()"
-            ),
-            1 => errors.into_iter().next().expect("one"),
-            _ => {
-                let mut it = errors.into_iter().rev();
-                let mut recent = Error::Multi {
-                    current: Box::new(it.next().expect("at least one error")),
-                    next: None,
+    let candidates = {
+        let mut c: Vec<_> = candidates
+            .into_iter()
+            .map(|oid| {
+                let obj = repo.find_object(oid);
+                let order = match &obj {
+                    Err(_) => Order::Invalid,
+                    Ok(obj) => match obj.kind {
+                        gix_object::Kind::Tag => Order::Tag,
+                        gix_object::Kind::Commit => Order::Commit,
+                        gix_object::Kind::Tree => Order::Tree,
+                        gix_object::Kind::Blob => Order::Blob,
+                    },
                 };
-                for err in it {
-                    recent = Error::Multi {
-                        current: Box::new(err),
-                        next: Some(Box::new(recent)),
+                (oid, obj, order)
+            })
+            .collect();
+        c.sort_by(|lhs, rhs| lhs.2.cmp(&rhs.2).then_with(|| lhs.0.cmp(&rhs.0)));
+        c
+    };
+    let info: Vec<_> = candidates
+        .into_iter()
+        .map(|(oid, find_result, _)| {
+            let info = match find_result {
+                Ok(obj) => match obj.kind {
+                    gix_object::Kind::Tree | gix_object::Kind::Blob => CandidateInfo::Object { kind: obj.kind },
+                    gix_object::Kind::Tag => {
+                        let tag = obj.to_tag_ref();
+                        CandidateInfo::Tag { name: tag.name.into() }
                     }
-                }
-                recent
-            }
-        }
-    }
+                    gix_object::Kind::Commit => {
+                        use bstr::ByteSlice;
+                        let commit = obj.to_commit_ref();
+                        let date = match commit.committer() {
+                            Ok(signature) => signature.time.trim().to_owned(),
+                            Err(_) => {
+                                let committer = commit.committer;
+                                let manually_parsed_best_effort = committer
+                                    .rfind_byte(b'>')
+                                    .map(|pos| committer[pos + 1..].trim().as_bstr().to_string());
+                                manually_parsed_best_effort.unwrap_or_default()
+                            }
+                        };
+                        CandidateInfo::Commit {
+                            date,
+                            title: commit.message().title.trim().into(),
+                        }
+                    }
+                },
+                Err(err) => CandidateInfo::FindError { source: err },
+            };
+            (oid.attach(repo).shorten().unwrap_or_else(|_| oid.into()), info)
+        })
+        .collect();
+    message!(
+        "Short id {prefix} is ambiguous. Candidates are:\n{info}",
+        prefix = prefix,
+        info = info
+            .iter()
+            .map(|(oid, info)| format!("\t{oid} {info}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }

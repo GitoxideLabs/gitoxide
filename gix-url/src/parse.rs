@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 
 use bstr::{BStr, BString, ByteSlice};
-use percent_encoding::percent_decode_str;
 
 use crate::Scheme;
 
@@ -125,7 +124,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     }
 
     // Normalize empty path to "/" for http/https URLs only
-    let path = if url.path.is_empty() && matches!(scheme, Scheme::Http | Scheme::Https) {
+    let path: BString = if url.path.is_empty() && matches!(scheme, Scheme::Http | Scheme::Https) {
         "/".into()
     } else if matches!(scheme, Scheme::Ssh | Scheme::Git) && url.path.starts_with("/~") {
         // For SSH and Git protocols, strip leading '/' from paths starting with '~'
@@ -135,11 +134,12 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         url.path.into()
     };
 
-    let user = url_user(&url, UrlKind::Url)?;
-    let password = url
-        .password
-        .map(|s| percent_decoded_utf8(s, UrlKind::Url))
-        .transpose()?;
+    let user = if url.username.is_empty() && url.password.is_none() {
+        None
+    } else {
+        Some(url.username)
+    };
+    let password = url.password;
     let port = url.port;
 
     // For SSH URLs, strip brackets from IPv6 addresses
@@ -179,17 +179,6 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     })
 }
 
-fn percent_decoded_utf8(s: &str, kind: UrlKind) -> Result<String, Error> {
-    Ok(percent_decode_str(s)
-        .decode_utf8()
-        .map_err(|err| Error::Utf8 {
-            url: s.into(),
-            kind,
-            source: err,
-        })?
-        .into_owned())
-}
-
 pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     let input = input_to_utf8(input, UrlKind::Scp)?;
 
@@ -220,11 +209,12 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     // e.g., "user@host:/~repo" -> path is "~repo", not "/~repo"
     let path = if path.starts_with("/~") { &path[1..] } else { path };
 
-    let user = url_user(&url, UrlKind::Scp)?;
-    let password = url
-        .password
-        .map(|s| percent_decoded_utf8(s, UrlKind::Scp))
-        .transpose()?;
+    let user = if url.username.is_empty() && url.password.is_none() {
+        None
+    } else {
+        Some(url.username)
+    };
+    let password = url.password;
     let port = url.port;
 
     // For SCP-like SSH URLs, strip brackets from IPv6 addresses
@@ -245,14 +235,6 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
         port,
         path: path.into(),
     })
-}
-
-fn url_user(url: &crate::simple_url::ParsedUrl<'_>, kind: UrlKind) -> Result<Option<String>, Error> {
-    if url.username.is_empty() && url.password.is_none() {
-        Ok(None)
-    } else {
-        Ok(Some(percent_decoded_utf8(url.username, kind)?))
-    }
 }
 
 pub(crate) fn file_url(input: &BStr, protocol_colon: usize) -> Result<crate::Url, Error> {
@@ -340,7 +322,7 @@ fn input_to_utf8(input: &BStr, kind: UrlKind) -> Result<&str, Error> {
     })
 }
 
-fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::simple_url::ParsedUrl<'_>), Error> {
+fn input_to_utf8_and_url(input: &BStr, kind: UrlKind) -> Result<(&str, crate::simple_url::ParsedUrl), Error> {
     let input = input_to_utf8(input, kind)?;
     crate::simple_url::ParsedUrl::parse(input)
         .map(|url| (input, url))

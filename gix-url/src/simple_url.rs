@@ -1,13 +1,15 @@
+use percent_encoding::percent_decode_str;
+
 /// A minimal URL parser that extracts only what we need for git URLs.
 /// This is a replacement for the `url` crate dependency.
 #[derive(Debug)]
-pub(crate) struct ParsedUrl<'a> {
-    pub scheme: String, // Owned to allow normalization to lowercase
-    pub username: &'a str,
-    pub password: Option<&'a str>,
-    pub host: Option<String>, // Owned to allow normalization to lowercase
+pub(crate) struct ParsedUrl {
+    pub scheme: String,           // Owned to allow normalization to lowercase
+    pub username: String,         // Owned to allow percent-decoding
+    pub password: Option<String>, // Owned to allow percent-decoding
+    pub host: Option<String>,     // Owned to allow normalization to lowercase
     pub port: Option<u16>,
-    pub path: &'a str,
+    pub path: String, // Owned to allow percent-decoding
 }
 
 /// Minimal parse error type to replace url::ParseError
@@ -30,10 +32,24 @@ fn is_valid_scheme_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'
 }
 
-impl<'a> ParsedUrl<'a> {
+/// Decode a percent-encoded string, returning an error if the result is not valid UTF-8.
+/// Returns the original string if it contains no percent-encoding.
+fn percent_decode(s: &str) -> Result<String, UrlParseError> {
+    percent_decode_str(s)
+        .decode_utf8()
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|_| UrlParseError::InvalidDomainCharacter)
+}
+
+impl ParsedUrl {
     /// Parse a URL string into its components.
     /// Expected format: scheme://[user[:password]@]host[:port]/path
-    pub(crate) fn parse(input: &'a str) -> Result<Self, UrlParseError> {
+    pub(crate) fn parse(input: &str) -> Result<Self, UrlParseError> {
+        // Validate that the entire URL doesn't contain any whitespace (per RFC 3986)
+        if input.chars().any(char::is_whitespace) {
+            return Err(UrlParseError::InvalidDomainCharacter);
+        }
+
         // Find scheme by looking for first ':'
         let first_colon = input.find(':').ok_or(UrlParseError::RelativeUrlWithoutBase)?;
         let scheme_str = &input[..first_colon];
@@ -57,36 +73,27 @@ impl<'a> ParsedUrl<'a> {
         let path_start = after_scheme.find('/').unwrap_or(after_scheme.len());
         let authority = &after_scheme[..path_start];
         let path = if path_start < after_scheme.len() {
-            let path = &after_scheme[path_start..];
-            // Validate path doesn't contain whitespace (per RFC 3986)
-            if path.chars().any(char::is_whitespace) {
-                return Err(UrlParseError::InvalidDomainCharacter);
-            }
-            path
+            percent_decode(&after_scheme[path_start..])?
         } else {
             // No path specified - leave empty (caller can default to / if needed)
-            ""
+            String::new()
         };
 
         // Parse authority: [user[:password]@]host[:port]
         let (username, password, host, port) = if let Some((user_info, host_port)) = authority.rsplit_once('@') {
             // Has user info
-            let (user, pass) = if let Some((user, pass_str)) = user_info.split_once(':') {
-                // Validate password doesn't contain whitespace (if non-empty)
-                if pass_str.chars().any(char::is_whitespace) {
-                    return Err(UrlParseError::InvalidDomainCharacter);
-                }
+            let (user, pass) = if let Some((user_str, pass_str)) = user_info.split_once(':') {
                 // Treat empty password as None
-                let pass = if pass_str.is_empty() { None } else { Some(pass_str) };
-                (user, pass)
+                let pass = if pass_str.is_empty() {
+                    None
+                } else {
+                    Some(percent_decode(pass_str)?)
+                };
+                (percent_decode(user_str)?, pass)
             } else {
-                (user_info, None)
+                // No password, just username
+                (percent_decode(user_info)?, None)
             };
-
-            // Validate username doesn't contain whitespace
-            if user.chars().any(char::is_whitespace) {
-                return Err(UrlParseError::InvalidDomainCharacter);
-            }
 
             let (h, p) = Self::parse_host_port(host_port)?;
             // If we have user info, we must have a host
@@ -97,7 +104,7 @@ impl<'a> ParsedUrl<'a> {
         } else {
             // No user info
             let (h, p) = Self::parse_host_port(authority)?;
-            ("", None, h, p)
+            (String::new(), None, h, p)
         };
 
         // Standard schemes (http, https, git, ssh) require a host
@@ -255,7 +262,7 @@ mod tests {
         let url = ParsedUrl::parse("http://user:pass@example.com/path").unwrap();
         assert_eq!(url.scheme, "http");
         assert_eq!(url.username, "user");
-        assert_eq!(url.password, Some("pass"));
+        assert_eq!(url.password.as_deref(), Some("pass"));
         assert_eq!(url.host.as_deref(), Some("example.com"));
         assert_eq!(url.path, "/path");
     }
@@ -292,5 +299,63 @@ mod tests {
     #[test]
     fn url_with_newline_in_host_is_rejected() {
         assert!(ParsedUrl::parse("http://has\na\nnewline").is_err());
+    }
+
+    #[test]
+    fn url_with_percent_encoded_username() {
+        let url = ParsedUrl::parse("http://user%20name@example.com/path").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.username, "user name");
+        assert_eq!(url.password, None);
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn url_with_percent_encoded_password() {
+        let url = ParsedUrl::parse("http://user:pass%20word@example.com/path").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.username, "user");
+        assert_eq!(url.password.as_deref(), Some("pass word"));
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn url_with_percent_encoded_username_and_password() {
+        let url = ParsedUrl::parse("http://user%20name:pass%20word@example.com/path").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.username, "user name");
+        assert_eq!(url.password.as_deref(), Some("pass word"));
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn url_with_special_chars_in_username() {
+        let url = ParsedUrl::parse("http://user%40name@example.com/path").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.username, "user@name");
+        assert_eq!(url.password, None);
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn url_with_special_chars_in_password() {
+        let url = ParsedUrl::parse("http://user:p%40ss%3Aword@example.com/path").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.username, "user");
+        assert_eq!(url.password.as_deref(), Some("p@ss:word"));
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn url_with_percent_encoded_path() {
+        let url = ParsedUrl::parse("http://example.com/path/with%20spaces/file").unwrap();
+        assert_eq!(url.scheme, "http");
+        assert_eq!(url.host.as_deref(), Some("example.com"));
+        assert_eq!(url.path, "/path/with spaces/file");
     }
 }

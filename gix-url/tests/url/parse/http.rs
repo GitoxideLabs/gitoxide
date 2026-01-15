@@ -143,16 +143,13 @@ fn https_with_ipv6_user_and_port() -> crate::Result {
 #[test]
 fn percent_encoded_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/path/with%20spaces/file".into())?;
-    assert_eq!(url.path, "/path/with%20spaces/file", "paths are not decoded");
+    assert_eq!(url.path, "/path/with spaces/file", "paths are now decoded");
     Ok(())
 }
 
 #[test]
 fn percent_encoded_international_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/caf%C3%A9".into())?;
-    assert_eq!(
-        url.path, "/caf%C3%A9",
-        "international characters remain encoded in path"
-    );
+    assert_eq!(url.path, "/café", "international characters are decoded in path");
     Ok(())
 }

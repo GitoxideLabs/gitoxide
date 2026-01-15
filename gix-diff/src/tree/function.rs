@@ -23,7 +23,7 @@ use crate::tree::{
 ///   by the delegate implementation which should be as specific as possible. Rename tracking can be computed on top of the changes
 ///   received by the `delegate`.
 /// * cycle checking is not performed, but can be performed in the delegate which can return
-///   [`tree::visit::Action::Cancel`](crate::tree::visit::Action::Cancel) to stop the traversal.
+///   [`std::ops::ControlFlow::Break`] to stop the traversal.
 ///
 /// [git_cmp_c]: https://github.com/git/git/blob/ef8ce8f3d4344fd3af049c17eeba5cd20d98b69f/tree-diff.c#L72-L88
 /// [git_cmp_rs]: https://github.com/GitoxideLabs/gitoxide/blob/795962b107d86f58b1f7c75006da256d19cc80ad/gix-object/src/tree/mod.rs#L263-L273
@@ -148,7 +148,7 @@ fn delete_entry_schedule_recursion(
             oid: entry.oid.to_owned(),
             relation,
         })
-        .cancelled();
+        .is_break();
     if is_cancelled {
         return Err(Error::Cancelled);
     }
@@ -180,7 +180,7 @@ fn add_entry_schedule_recursion(
             oid: entry.oid.to_owned(),
             relation,
         })
-        .cancelled()
+        .is_break()
     {
         return Err(Error::Cancelled);
     }
@@ -309,7 +309,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                         entry_mode: rhs.mode,
                         oid: rhs.oid.to_owned(),
                     })
-                    .cancelled()
+                    .is_break()
             {
                 return Err(Error::Cancelled);
             }
@@ -327,7 +327,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                     oid: lhs.oid.to_owned(),
                     relation: None,
                 })
-                .cancelled()
+                .is_break()
             {
                 return Err(Error::Cancelled);
             }
@@ -342,7 +342,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                     oid: rhs.oid.to_owned(),
                     relation,
                 })
-                .cancelled()
+                .is_break()
             {
                 return Err(Error::Cancelled);
             }
@@ -360,7 +360,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                     oid: lhs.oid.to_owned(),
                     relation,
                 })
-                .cancelled()
+                .is_break()
             {
                 return Err(Error::Cancelled);
             }
@@ -370,7 +370,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                     oid: rhs.oid.to_owned(),
                     relation: None,
                 })
-                .cancelled()
+                .is_break()
             {
                 return Err(Error::Cancelled);
             }
@@ -387,7 +387,7 @@ fn handle_lhs_and_rhs_with_equal_filenames(
                         entry_mode: rhs.mode,
                         oid: rhs.oid.to_owned(),
                     })
-                    .cancelled()
+                    .is_break()
             {
                 return Err(Error::Cancelled);
             }

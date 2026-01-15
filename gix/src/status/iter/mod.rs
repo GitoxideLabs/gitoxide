@@ -101,9 +101,9 @@ where
                                     let action = if tx.send(change.into_owned().into()).is_err()
                                         || should_interrupt.load(Ordering::Acquire)
                                     {
-                                        gix_diff::index::Action::Cancel
+                                        std::ops::ControlFlow::Break(())
                                     } else {
-                                        gix_diff::index::Action::Continue
+                                        std::ops::ControlFlow::Continue(())
                                     };
                                     Ok::<_, std::convert::Infallible>(action)
                                 },
@@ -177,9 +177,9 @@ where
                         |change, _, _| {
                             items.push(change.into_owned().into());
                             let action = if should_interrupt.load(Ordering::Acquire) {
-                                gix_diff::index::Action::Cancel
+                                std::ops::ControlFlow::Break(())
                             } else {
-                                gix_diff::index::Action::Continue
+                                std::ops::ControlFlow::Continue(())
                             };
                             Ok::<_, std::convert::Infallible>(action)
                         },

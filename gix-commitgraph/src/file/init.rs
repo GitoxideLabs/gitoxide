@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use bstr::ByteSlice;
+use gix_error::message;
 
 use crate::{
     file::{
@@ -41,9 +42,9 @@ pub enum Error {
     #[error("Unsupported commit-graph file version: {0}")]
     UnsupportedVersion(u8),
     #[error(transparent)]
-    ChunkFileDecode(#[from] gix_chunk::file::decode::Error),
+    ChunkFileQuery(#[from] gix_error::Message),
     #[error(transparent)]
-    MissingChunk(#[from] gix_chunk::file::index::offset_by_kind::Error),
+    ChunkFileDecode(#[from] gix_error::ParseError),
     #[error("Commit-graph chunk {:?} has invalid size: {msg}", .id.as_bstr())]
     InvalidChunkSize { id: ChunkId, msg: String },
 }
@@ -194,9 +195,10 @@ impl File {
         }
 
         if base_graph_count > 0 && base_graphs_list_offset.is_none() {
-            return Err(gix_chunk::file::index::offset_by_kind::Error {
-                kind: BASE_GRAPHS_LIST_CHUNK_ID,
-            }
+            return Err(message!(
+                "Chunk named {:?} was not found in chunk file index",
+                BASE_GRAPHS_LIST_CHUNK_ID.as_bstr()
+            )
             .into());
         }
 

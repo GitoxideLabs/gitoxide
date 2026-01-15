@@ -391,7 +391,7 @@ pub(crate) mod function {
         fn emit(&mut self, entry: EntryRef<'_>, collapsed_directory_status: Option<Status>) -> walk::Action {
             let res = self.inner.emit(entry, collapsed_directory_status);
             if gix::interrupt::is_triggered() {
-                return walk::Action::Cancel;
+                return std::ops::ControlFlow::Break(());
             }
             res
         }

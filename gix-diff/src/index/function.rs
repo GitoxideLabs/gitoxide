@@ -95,10 +95,10 @@ where
                 let (rhs_idx, rhs_path, rhs_entry) = rhs;
                 match lhs_path.cmp(rhs_path) {
                     Ordering::Less => match emit_deletion(lhs, &mut cb, tracker.as_mut())? {
-                        Action::Continue => {
+                        std::ops::ControlFlow::Continue(()) => {
                             lhs_storage = lhs_iter.next();
                         }
-                        Action::Cancel => return Ok(None),
+                        std::ops::ControlFlow::Break(()) => return Ok(None),
                     },
                     Ordering::Equal => {
                         if ignore_unmerged_and_intent_to_add(rhs) {
@@ -123,8 +123,8 @@ where
                             };
                             if let Some(change) = change {
                                 match cb(change).map_err(|err| Error::Callback(err.into()))? {
-                                    Action::Continue => {}
-                                    Action::Cancel => return Ok(None),
+                                    std::ops::ControlFlow::Continue(()) => {}
+                                    std::ops::ControlFlow::Break(()) => return Ok(None),
                                 }
                             }
                         }
@@ -132,22 +132,22 @@ where
                         rhs_storage = rhs_iter.next();
                     }
                     Ordering::Greater => match emit_addition(rhs, &mut cb, tracker.as_mut())? {
-                        Action::Continue => {
+                        std::ops::ControlFlow::Continue(()) => {
                             rhs_storage = rhs_iter.next();
                         }
-                        Action::Cancel => return Ok(None),
+                        std::ops::ControlFlow::Break(()) => return Ok(None),
                     },
                 }
             }
             (Some(lhs), None) => match emit_deletion(lhs, &mut cb, tracker.as_mut())? {
-                Action::Cancel => return Ok(None),
-                Action::Continue => {
+                std::ops::ControlFlow::Break(()) => return Ok(None),
+                std::ops::ControlFlow::Continue(()) => {
                     lhs_storage = lhs_iter.next();
                 }
             },
             (None, Some(rhs)) => match emit_addition(rhs, &mut cb, tracker.as_mut())? {
-                Action::Cancel => return Ok(None),
-                Action::Continue => {
+                std::ops::ControlFlow::Break(()) => return Ok(None),
+                std::ops::ControlFlow::Continue(()) => {
                     rhs_storage = rhs_iter.next();
                 }
             },
@@ -180,11 +180,11 @@ where
                     dst.change
                 };
                 match cb(change) {
-                    Ok(Action::Continue) => crate::tree::visit::Action::Continue,
-                    Ok(Action::Cancel) => crate::tree::visit::Action::Cancel,
+                    Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
+                    Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
                     Err(err) => {
                         cb_err = Some(Error::Callback(err.into()));
-                        crate::tree::visit::Action::Cancel
+                        std::ops::ControlFlow::Break(())
                     }
                 }
             },
@@ -239,7 +239,7 @@ where
         None => change,
         Some(tracker) => match tracker.try_push_change(change, path) {
             Some(change) => change,
-            None => return Ok(Action::Continue),
+            None => return Ok(std::ops::ControlFlow::Continue(())),
         },
     };
 
@@ -255,7 +255,7 @@ where
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     if ignore_unmerged_and_intent_to_add((idx, path, entry)) {
-        return Ok(Action::Continue);
+        return Ok(std::ops::ControlFlow::Continue(()));
     }
 
     let change = ChangeRef::Addition {
@@ -269,7 +269,7 @@ where
         None => change,
         Some(tracker) => match tracker.try_push_change(change, path) {
             Some(change) => change,
-            None => return Ok(Action::Continue),
+            None => return Ok(std::ops::ControlFlow::Continue(())),
         },
     };
 

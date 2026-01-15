@@ -66,7 +66,7 @@ fn v2_with_single_entry_tree_and_eoie_ext() {
 }
 #[test]
 fn v2_empty() {
-    let file = file("V2_empty");
+    let file = file("v2_empty");
     assert_eq!(file.version(), Version::V2);
     assert_eq!(file.entries().len(), 0);
     let tree = file.tree().unwrap();

@@ -207,6 +207,21 @@ impl Fixture {
             suspect: head_id,
         })
     }
+
+    fn blame_file(
+        &mut self,
+        source_file_name: &bstr::BStr,
+        options: gix_blame::Options,
+    ) -> Result<gix_blame::Outcome, gix_blame::Error> {
+        gix_blame::file(
+            &self.odb,
+            self.suspect,
+            None,
+            &mut self.resource_cache,
+            source_file_name,
+            options,
+        )
+    }
 }
 
 macro_rules! mktest {
@@ -398,7 +413,9 @@ fn since() -> gix_testtools::Result {
         gix_blame::Options {
             diff_algorithm: gix_diff::blob::Algorithm::Histogram,
             ranges: BlameRanges::default(),
-            since: Some(gix_date::parse("2025-01-31", None)?),
+            since: Some(
+                gix_date::parse("2025-01-31", None).expect("TODO: should be able to to retrieve inner from Exn"),
+            ),
             rewrites: Some(gix_diff::Rewrites::default()),
             debug_track_path: false,
         },
@@ -579,6 +596,36 @@ mod rename_tracking {
 
         let git_dir = worktree_path.join(".git");
         let baseline = Baseline::collect(git_dir.join("after-rename.baseline"), source_file_name.into())?;
+
+        pretty_assertions::assert_eq!(lines_blamed, baseline);
+
+        Ok(())
+    }
+
+    #[test]
+    fn rename_and_change_in_merge_commit() -> gix_testtools::Result {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_rename_tracking_repo.sh")?;
+
+        let mut fixture = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
+        let source_file_name = "change-and-renamed.txt";
+
+        let lines_blamed = fixture
+            .blame_file(
+                source_file_name.into(),
+                gix_blame::Options {
+                    diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+                    ranges: BlameRanges::default(),
+                    since: None,
+                    rewrites: Some(gix_diff::Rewrites::default()),
+                    debug_track_path: false,
+                },
+            )?
+            .entries;
+
+        assert_eq!(lines_blamed.len(), 4);
+
+        let git_dir = worktree_path.join(".git");
+        let baseline = Baseline::collect(git_dir.join("change-and-renamed.baseline"), source_file_name.into())?;
 
         pretty_assertions::assert_eq!(lines_blamed, baseline);
 

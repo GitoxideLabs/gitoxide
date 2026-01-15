@@ -5,16 +5,13 @@ use std::{
 
 use gix_features::progress::DynNestedProgress;
 
+use crate::fetch::{
+    negotiate, Arguments, Context, Error, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags,
+};
 #[cfg(feature = "async-client")]
 use crate::transport::client::async_io::{ExtendedBufRead, HandleProgress, Transport};
 #[cfg(feature = "blocking-client")]
 use crate::transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Transport};
-use crate::{
-    fetch::{
-        negotiate, Arguments, Context, Error, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags,
-    },
-    transport::packetline::read::ProgressAction,
-};
 
 /// Perform one fetch operation, relying on a `transport`.
 /// `negotiate` is used to run the negotiation of objects that should be contained in the pack, *if* one is to be received.
@@ -263,9 +260,9 @@ fn setup_remote_progress<'a>(
         move |is_err: bool, data: &[u8]| {
             crate::RemoteProgress::translate_to_progress(is_err, data, &mut remote_progress);
             if should_interrupt.load(Ordering::Relaxed) {
-                ProgressAction::Interrupt
+                std::ops::ControlFlow::Break(())
             } else {
-                ProgressAction::Continue
+                std::ops::ControlFlow::Continue(())
             }
         }
     }) as HandleProgress<'a>));

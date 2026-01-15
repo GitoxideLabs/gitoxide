@@ -178,7 +178,7 @@ pub mod is_dirty {
                     crate::status::tree_index::TrackRenames::Disabled,
                     |_, _, _| {
                         index_is_dirty = true;
-                        Ok::<_, Infallible>(gix_diff::index::Action::Cancel)
+                        Ok::<_, Infallible>(std::ops::ControlFlow::Break(()))
                     },
                 )?;
                 if index_is_dirty {

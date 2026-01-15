@@ -1,1 +1,4 @@
-Error: The ref partially named "foobar" could not be found
+Error: couldn't parse revision: foobar
+
+Caused by:
+    The ref partially named "foobar" could not be found

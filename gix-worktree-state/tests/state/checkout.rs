@@ -710,3 +710,38 @@ fn setup_filter_pipeline(opts: &mut gix_filter::pipeline::Options) {
         required: true,
     }];
 }
+
+#[test]
+fn checkout_truncates_existing_longer_files() -> crate::Result {
+    let mut opts = opts_from_probe();
+    opts.overwrite_existing = false;
+    opts.destination_is_initially_empty = false;
+
+    // Use existing fixture and modify one file to be longer
+    let (_source_tree, destination, _index, _outcome) = checkout_index_in_tmp_dir_opts(
+        opts.clone(),
+        "make_mixed_without_submodules_and_symlinks",
+        None,
+        |_| true,
+        |dest| {
+            // Create a longer version of the "executable" file before checkout
+            let file_path = dest.join("executable");
+            std::fs::create_dir_all(dest)?;
+            std::fs::write(
+                &file_path,
+                b"This is much longer content that should be truncated to match git's version",
+            )?;
+            Ok(())
+        },
+    )?;
+
+    let file_path = destination.path().join("executable");
+    let final_content = std::fs::read(&file_path)?;
+    assert_eq!(
+        final_content[..].as_bstr(),
+        "content",
+        "File content should match git's version"
+    );
+
+    Ok(())
+}

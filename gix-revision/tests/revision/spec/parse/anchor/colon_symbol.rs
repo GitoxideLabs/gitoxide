@@ -1,5 +1,3 @@
-use gix_revision::spec;
-
 use crate::spec::parse::{parse, try_parse};
 
 #[test]
@@ -104,25 +102,22 @@ fn various_valid_index_lookups_by_path_and_stage() {
 #[test]
 fn empty_top_level_regex_are_invalid() {
     let err = try_parse(":/").unwrap_err();
-    assert!(
-        matches!(err, spec::parse::Error::EmptyTopLevelRegex),
-        "git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't"
-    );
+    // git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't
+    insta::assert_snapshot!(err, @"':/' must be followed by a regular expression");
 }
 
 #[test]
 fn regex_with_empty_exclamation_mark_prefix_is_invalid() {
     let err = try_parse(r#":/!hello"#).unwrap_err();
-    assert!(matches!(err, spec::parse::Error::UnspecifiedRegexModifier {regex} if regex == "!hello"));
+    assert_eq!(err.input.as_ref().map(AsRef::as_ref), Some(b"!hello".as_ref()));
+    insta::assert_snapshot!(err, @"need one character after /!, typically -: !hello");
 }
 
 #[test]
 fn needs_suffix() {
     let err = try_parse(":").unwrap_err();
-    assert!(
-        matches!(err, spec::parse::Error::MissingColonSuffix),
-        "git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't"
-    );
+    // git also can't do it, finds nothing instead. It could be the youngest commit in theory, but isn't
+    insta::assert_snapshot!(err, @"':' must be followed by either slash and regex or path to lookup in HEAD tree");
 }
 
 #[test]

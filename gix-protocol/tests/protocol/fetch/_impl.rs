@@ -11,8 +11,6 @@ pub enum RefsAction {
 }
 
 mod fetch_fn {
-    use std::borrow::Cow;
-
     use gix_features::progress::NestedProgress;
     use gix_protocol::{
         credentials,
@@ -24,6 +22,8 @@ mod fetch_fn {
     #[cfg(feature = "blocking-client")]
     use gix_transport::client::blocking_io::{ExtendedBufRead, HandleProgress, Transport};
     use maybe_async::maybe_async;
+    use std::borrow::Cow;
+    use std::ops::ControlFlow;
 
     use super::{Action, Delegate, RefsAction};
     use crate::fetch::Error;
@@ -202,7 +202,7 @@ mod fetch_fn {
             let mut remote_progress = progress.add_child("remote");
             move |is_err: bool, data: &[u8]| {
                 gix_protocol::RemoteProgress::translate_to_progress(is_err, data, &mut remote_progress);
-                gix_transport::packetline::read::ProgressAction::Continue
+                ControlFlow::Continue(())
             }
         }) as HandleProgress<'a>));
     }

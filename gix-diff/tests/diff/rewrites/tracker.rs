@@ -8,7 +8,7 @@ use gix_diff::{
         },
         Copies, CopySource,
     },
-    tree::visit::{Action, Relation},
+    tree::visit::Relation,
     Rewrites,
 };
 use gix_object::tree::EntryKind;
@@ -58,7 +58,7 @@ fn rename_by_id() -> crate::Result {
                 }
             );
             assert_eq!(dst.location, "c");
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         });
         assert_eq!(
             out,
@@ -107,7 +107,7 @@ fn copy_by_similarity_reports_limit_if_encountered() -> crate::Result {
                 _ => panic!("too many emissions"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         odb,
     );
@@ -182,7 +182,7 @@ fn copy_by_id() -> crate::Result {
                     _ => panic!("too many emissions"),
                 }
                 calls += 1;
-                Action::Continue
+                std::ops::ControlFlow::Continue(())
             },
             odb,
         );
@@ -255,7 +255,7 @@ fn copy_by_id_search_in_all_sources() -> crate::Result {
                     _ => panic!("too many emissions"),
                 }
                 calls += 1;
-                Action::Continue
+                std::ops::ControlFlow::Continue(())
             },
             odb,
             [(
@@ -343,7 +343,7 @@ fn copy_by_50_percent_similarity() -> crate::Result {
                 _ => panic!("too many emissions"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         odb,
     );
@@ -398,7 +398,7 @@ fn copy_by_id_in_additions_only() -> crate::Result {
                 _ => panic!("too many emissions"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         odb,
     );
@@ -443,7 +443,7 @@ fn rename_by_similarity_reports_limit_if_encountered() -> crate::Result {
                 _ => panic!("too many elements emitted"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         odb,
     );
@@ -513,7 +513,7 @@ fn rename_by_50_percent_similarity() -> crate::Result {
                 _ => panic!("too many elements emitted"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         odb,
     );
@@ -625,7 +625,7 @@ fn directory_renames_by_id_can_fail_gracefully() -> crate::Result {
                 _ => unreachable!("Should have expected emission call {calls}"),
             }
             calls += 1;
-            Action::Continue
+            std::ops::ControlFlow::Continue(())
         },
         &odb,
     );
@@ -735,7 +735,7 @@ fn simple_directory_rename_by_id() -> crate::Result {
             _ => unreachable!("Should have expected emission call {calls}"),
         }
         calls += 1;
-        Action::Continue
+        std::ops::ControlFlow::Continue(())
     });
     assert_eq!(
         out,
@@ -762,7 +762,7 @@ fn remove_only() -> crate::Result {
         assert_eq!(src, None, "there is just a single deletion, no pair");
         assert_eq!(dst.location, "a");
         assert_eq!(dst.change.kind, ChangeKind::Deletion);
-        Action::Continue
+        std::ops::ControlFlow::Continue(())
     });
     assert_eq!(out, Default::default());
     assert!(called);
@@ -783,7 +783,7 @@ fn add_only() -> crate::Result {
         assert!(src.is_none(), "there is just a single addition, no pair");
         assert_eq!(dst.location, "a");
         assert_eq!(dst.change.kind, ChangeKind::Addition);
-        Action::Continue
+        std::ops::ControlFlow::Continue(())
     });
     assert_eq!(out, Default::default());
     Ok(())

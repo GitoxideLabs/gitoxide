@@ -9,12 +9,13 @@ use gix::{
             Delegate,
         },
     },
+    Exn,
 };
 
 pub fn explain(spec: std::ffi::OsString, mut out: impl std::io::Write) -> anyhow::Result<()> {
     let mut explain = Explain::new(&mut out);
     let spec = gix::path::os_str_into_bstr(&spec)?;
-    gix::revision::plumbing::spec::parse(spec, &mut explain)?;
+    gix::revision::plumbing::spec::parse(spec, &mut explain).map_err(gix::Error::from)?;
     if let Some(err) = explain.err {
         bail!(err);
     }
@@ -41,9 +42,10 @@ impl<'a> Explain<'a> {
             err: None,
         }
     }
-    fn prefix(&mut self) -> Option<()> {
+    fn prefix(&mut self) -> Result<(), Exn> {
         self.call += 1;
-        write!(self.out, "{:02}. ", self.call).ok()
+        write!(self.out, "{:02}. ", self.call).ok();
+        Ok(())
     }
     fn revision_name(&self) -> BString {
         self.ref_name.clone().unwrap_or_else(|| {
@@ -56,13 +58,18 @@ impl<'a> Explain<'a> {
 }
 
 impl delegate::Revision for Explain<'_> {
-    fn find_ref(&mut self, name: &BStr) -> Option<()> {
+    fn find_ref(&mut self, name: &BStr) -> Result<(), Exn> {
         self.prefix()?;
         self.ref_name = Some(name.into());
-        writeln!(self.out, "Lookup the '{name}' reference").ok()
+        writeln!(self.out, "Lookup the '{name}' reference").ok();
+        Ok(())
     }
 
-    fn disambiguate_prefix(&mut self, prefix: gix::hash::Prefix, hint: Option<delegate::PrefixHint<'_>>) -> Option<()> {
+    fn disambiguate_prefix(
+        &mut self,
+        prefix: gix::hash::Prefix,
+        hint: Option<delegate::PrefixHint<'_>>,
+    ) -> Result<(), Exn> {
         self.prefix()?;
         self.oid_prefix = Some(prefix);
         writeln!(
@@ -76,10 +83,11 @@ impl delegate::Revision for Explain<'_> {
                     format!("commit {generation} generations in future of reference {ref_name:?}"),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 
-    fn reflog(&mut self, query: ReflogLookup) -> Option<()> {
+    fn reflog(&mut self, query: ReflogLookup) -> Result<(), Exn> {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let ref_name: &BStr = self.ref_name.as_ref().map_or_else(|| "HEAD".into(), AsRef::as_ref);
@@ -92,16 +100,18 @@ impl delegate::Revision for Explain<'_> {
                 ref_name
             )
             .ok(),
-        }
+        };
+        Ok(())
     }
 
-    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Option<()> {
+    fn nth_checked_out_branch(&mut self, branch_no: usize) -> Result<(), Exn> {
         self.prefix()?;
         self.has_implicit_anchor = true;
-        writeln!(self.out, "Find the {branch_no}th checked-out branch of 'HEAD'").ok()
+        writeln!(self.out, "Find the {branch_no}th checked-out branch of 'HEAD'").ok();
+        Ok(())
     }
 
-    fn sibling_branch(&mut self, kind: SiblingBranch) -> Option<()> {
+    fn sibling_branch(&mut self, kind: SiblingBranch) -> Result<(), Exn> {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let ref_info = match self.ref_name.as_ref() {
@@ -117,12 +127,13 @@ impl delegate::Revision for Explain<'_> {
             },
             ref_info
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 }
 
 impl delegate::Navigate for Explain<'_> {
-    fn traverse(&mut self, kind: Traversal) -> Option<()> {
+    fn traverse(&mut self, kind: Traversal) -> Result<(), Exn> {
         self.prefix()?;
         let name = self.revision_name();
         writeln!(
@@ -133,10 +144,11 @@ impl delegate::Navigate for Explain<'_> {
                 Traversal::NthParent(no) => format!("Select the {no}. parent of revision named '{name}'"),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 
-    fn peel_until(&mut self, kind: PeelTo<'_>) -> Option<()> {
+    fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn> {
         self.prefix()?;
         writeln!(
             self.out,
@@ -148,10 +160,11 @@ impl delegate::Navigate for Explain<'_> {
                 PeelTo::Path(path) => format!("Lookup the object at '{path}' from the current tree-ish"),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 
-    fn find(&mut self, regex: &BStr, negated: bool) -> Option<()> {
+    fn find(&mut self, regex: &BStr, negated: bool) -> Result<(), Exn> {
         self.prefix()?;
         self.has_implicit_anchor = true;
         let negate_text = if negated { "does not match" } else { "matches" };
@@ -172,10 +185,11 @@ impl delegate::Navigate for Explain<'_> {
                 ),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 
-    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Option<()> {
+    fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn> {
         self.prefix()?;
         self.has_implicit_anchor = true;
         writeln!(
@@ -190,12 +204,13 @@ impl delegate::Navigate for Explain<'_> {
                 _ => unreachable!("BUG: parser assures of that"),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 }
 
 impl delegate::Kind for Explain<'_> {
-    fn kind(&mut self, kind: spec::Kind) -> Option<()> {
+    fn kind(&mut self, kind: spec::Kind) -> Result<(), Exn> {
         self.prefix()?;
         self.call = 0;
         writeln!(
@@ -211,14 +226,16 @@ impl delegate::Kind for Explain<'_> {
                     unreachable!("BUG: 'single' mode is implied but cannot be set explicitly"),
             }
         )
-        .ok()
+        .ok();
+        Ok(())
     }
 }
 
 impl Delegate for Explain<'_> {
-    fn done(&mut self) {
+    fn done(&mut self) -> Result<(), Exn> {
         if !self.has_implicit_anchor && self.ref_name.is_none() && self.oid_prefix.is_none() {
             self.err = Some("Incomplete specification lacks its anchor, like a reference or object name".into());
         }
+        Ok(())
     }
 }
