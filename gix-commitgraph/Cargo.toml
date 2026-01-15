@@ -16,6 +16,8 @@ rust-version = "1.82"
 doctest = false
 
 [features]
+## Support for SHA256 hashes and digests.
+sha256 = ["gix-hash/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`
 serde = ["dep:serde", "gix-hash/serde", "bstr/serde"]
 
