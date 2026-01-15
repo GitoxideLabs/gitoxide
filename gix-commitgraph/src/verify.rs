@@ -79,7 +79,7 @@ impl Graph {
         mut processor: impl FnMut(&file::Commit<'_>) -> Result<(), E>,
     ) -> Result<Outcome, Error<E>>
     where
-        E: std::error::Error + 'static,
+        E: std::error::Error + Send + Sync + 'static,
     {
         if self.files.len() > 256 {
             // A file in a split chain can only have up to 255 base files.

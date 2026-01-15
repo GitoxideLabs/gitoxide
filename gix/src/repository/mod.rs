@@ -388,7 +388,7 @@ pub mod commit_graph_if_enabled {
         #[error(transparent)]
         ConfigBoolean(#[from] crate::config::boolean::Error),
         #[error(transparent)]
-        OpenCommitGraph(#[from] gix_commitgraph::init::Error),
+        OpenCommitGraph(#[from] crate::Error),
     }
 }
 

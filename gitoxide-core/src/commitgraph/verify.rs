@@ -22,10 +22,10 @@ impl Default for Context<Vec<u8>, Vec<u8>> {
 pub(crate) mod function {
     use std::{io, path::Path};
 
+    use crate::OutputFormat;
     use anyhow::{Context as AnyhowContext, Result};
     use gix::commitgraph::{verify::Outcome, Graph};
-
-    use crate::OutputFormat;
+    use gix::Exn;
 
     pub fn verify<W1, W2>(
         path: impl AsRef<Path>,
@@ -39,7 +39,9 @@ pub(crate) mod function {
         W1: io::Write,
         W2: io::Write,
     {
-        let g = Graph::at(path.as_ref()).with_context(|| "Could not open commit graph")?;
+        let g = Graph::at(path.as_ref())
+            .map_err(Exn::into_error)
+            .with_context(|| "Could not open commit graph")?;
 
         #[allow(clippy::unnecessary_wraps, unknown_lints)]
         fn noop_processor(_commit: &gix::commitgraph::file::Commit<'_>) -> std::result::Result<(), std::fmt::Error> {
