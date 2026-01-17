@@ -39,6 +39,7 @@ pub fn blame_file(
     let cache: Option<gix::commitgraph::Graph> = repo.commit_graph_if_enabled()?;
     let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
     let outcome = gix::blame::file(
+        repo.workdir().expect("TODO").to_path_buf(),
         &repo.objects,
         suspect,
         cache,
