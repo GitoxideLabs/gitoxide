@@ -123,8 +123,23 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
 
     /// Erase the type of this instance and turn it into a bare `Exn`.
     pub fn erased(self) -> Exn {
+        let untyped_frame = {
+            let Frame {
+                error,
+                location,
+                children,
+            } = *self.frame;
+            // Unfortunately, we have to double-box here.
+            // TODO: figure out tricks to make this unnecessary.
+            let error = Untyped(error);
+            Frame {
+                error: Box::new(error),
+                location,
+                children,
+            }
+        };
         Exn {
-            frame: self.frame,
+            frame: Box::new(untyped_frame),
             phantom: Default::default(),
         }
     }
