@@ -6,13 +6,13 @@ impl Error {
     /// Return the error that is most likely the root cause, based on heuristics.
     /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
     pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
-        let root = self.inner.as_frame();
+        let root = self.inner.frame();
         root.probable_cause().unwrap_or(root).error()
     }
 
     /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
     pub fn iter_frames(&self) -> impl Iterator<Item = &exn::Frame> + '_ {
-        self.inner.as_frame().iter()
+        self.inner.frame().iter()
     }
 }
 
@@ -22,7 +22,7 @@ pub(super) enum Inner {
 }
 
 impl Inner {
-    fn as_frame(&self) -> &exn::Frame {
+    fn frame(&self) -> &exn::Frame {
         match self {
             Inner::ExnAsError(f) | Inner::Exn(f) => f,
         }
