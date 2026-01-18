@@ -15,6 +15,7 @@
 use std::error::Error;
 use std::fmt;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::panic::Location;
 
 use crate::Exn;
@@ -90,7 +91,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         new_exn
     }
 
-    /// Use the current exception the head of a chain, adding `err` as its children.
+    /// Use the current exception as the head of a chain, adding `err` to its children.
     #[track_caller]
     pub fn chain<T: Error + Send + Sync + 'static>(mut self, err: impl Into<Exn<T>>) -> Exn<E> {
         let err = err.into();
@@ -171,6 +172,8 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Turn ourselves into a top-level [Error] that implements [`std::error::Error`].
+    ///
+    /// [Error]: crate::Error
     pub fn into_error(self) -> crate::Error {
         self.into()
     }
