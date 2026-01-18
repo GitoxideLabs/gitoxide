@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::exn::Exn;
-use std::error::Error;
 
 /// A trait bound of the supported error type of [`Exn`].
 pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
@@ -37,7 +36,7 @@ pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
 
     /// Raise this error as a new exception, with `sources` as causes.
     #[track_caller]
-    fn raise_iter<T, I>(self, sources: I) -> Exn<Self>
+    fn raise_all<T, I>(self, sources: I) -> Exn<Self>
     where
         Self: Sized,
         T: std::error::Error + Send + Sync + 'static,
@@ -123,7 +122,7 @@ pub trait ResultExt {
         F: FnOnce() -> A;
 }
 
-impl<T, E> ResultExt for std::result::Result<T, E>
+impl<T, E> ResultExt for Result<T, E>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
@@ -153,14 +152,14 @@ where
     #[track_caller]
     fn or_raise_erased<A, F>(self, err: F) -> Result<Self::Success, Exn>
     where
-        A: Error + Send + Sync + 'static,
+        A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A,
     {
         self.or_raise(err).map_err(Exn::erased)
     }
 }
 
-impl<T, E> ResultExt for std::result::Result<T, Exn<E>>
+impl<T, E> ResultExt for Result<T, Exn<E>>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
@@ -190,7 +189,7 @@ where
     #[track_caller]
     fn or_raise_erased<A, F>(self, err: F) -> Result<Self::Success, Exn>
     where
-        A: Error + Send + Sync + 'static,
+        A: std::error::Error + Send + Sync + 'static,
         F: FnOnce() -> A,
     {
         self.or_raise(err).map_err(Exn::erased)

@@ -480,7 +480,7 @@ where
                     }
                 })
             })
-            .ok_or_else(|| Error::new_with_input("couldn't parse revision", input).raise_iter(errors))?;
+            .ok_or_else(|| Error::new_with_input("couldn't parse revision", input).raise_all(errors))?;
     }
 
     input = {

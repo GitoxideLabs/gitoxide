@@ -130,7 +130,7 @@ fn resolve_revspec(
             // We extract the error from the tree to learn the name, and treat it as file.
             let not_found = err
                 .iter_frames()
-                .find_map(|f| f.downcast::<gix::refs::file::find::existing::Error>());
+                .find_map(|f| f.error().downcast_ref::<gix::refs::file::find::existing::Error>());
             if let Some(gix::refs::file::find::existing::Error::NotFound { name }) = not_found {
                 let root = repo.workdir().map(ToOwned::to_owned);
                 let name = gix::path::os_string_into_bstring(name.into())?;

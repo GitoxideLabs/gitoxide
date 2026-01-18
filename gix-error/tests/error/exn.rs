@@ -118,9 +118,9 @@ fn raise_chain() {
 }
 
 #[test]
-fn raise_iter() {
-    let e = Error("Top").raise_iter(
-        (1..5).map(|idx| message!("E{}", idx).raise_iter((0..idx).map(|sidx| message!("E{}-{}", idx, sidx)))),
+fn raise_all() {
+    let e = Error("Top").raise_all(
+        (1..5).map(|idx| message!("E{}", idx).raise_all((0..idx).map(|sidx| message!("E{}-{}", idx, sidx)))),
     );
     insta::assert_debug_snapshot!(e, @r"
     Top
@@ -257,7 +257,7 @@ fn raise_iter() {
     |
     └─ Message("SE2")
     "#);
-    let _this_should_compile = Error("Top-untyped").raise_iter((1..5).map(|idx| message!("E{}", idx).raise_erased()));
+    let _this_should_compile = Error("Top-untyped").raise_all((1..5).map(|idx| message!("E{}", idx).raise_erased()));
 
     assert_eq!(
         e.into_error().probable_cause().to_string(),
@@ -381,7 +381,7 @@ fn error_tree() {
     ]
     "#);
 
-    let new_e = Error("E-New").raise_iter(err.drain_children());
+    let new_e = Error("E-New").raise_all(err.drain_children());
     insta::assert_debug_snapshot!(new_e, @r"
     E-New
     |

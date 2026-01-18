@@ -192,7 +192,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// Iterate over all frames and find one that downcasts into error of type `T`.
     /// Note that the search includes this instance as well.
     pub fn downcast_any_ref<T: Error + 'static>(&self) -> Option<&T> {
-        self.iter().find_map(|e| e.downcast())
+        self.iter().find_map(|e| e.error.downcast_ref())
     }
 }
 
@@ -305,11 +305,6 @@ impl Frame {
     /// Return the error as a reference to [`Error`].
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
         &*self.error
-    }
-
-    /// Try to downcast this error into the exact type T, or return `None`
-    pub fn downcast<T: Error + 'static>(&self) -> Option<&T> {
-        self.error.downcast_ref()
     }
 
     /// Return the source code location where this exception frame was created.
