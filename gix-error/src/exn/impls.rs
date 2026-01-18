@@ -193,6 +193,17 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 }
 
+impl<E> Deref for Exn<E>
+where
+    E: Error + Send + Sync + 'static,
+{
+    type Target = E;
+
+    fn deref(&self) -> &Self::Target {
+        self.error()
+    }
+}
+
 impl<E: Error + Send + Sync + 'static> fmt::Debug for Exn<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_frame_recursive(f, self.frame(), "", ErrorMode::Display, TreeMode::Linearize)
