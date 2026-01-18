@@ -44,7 +44,7 @@ pub trait ErrorExt: std::error::Error + Send + Sync + 'static {
         I: IntoIterator,
         I::Item: Into<Exn<T>>,
     {
-        Exn::from_iter(sources, self)
+        Exn::raise_all(sources, self)
     }
 }
 

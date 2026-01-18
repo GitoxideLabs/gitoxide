@@ -43,13 +43,13 @@ impl<'repo> Delegate<'repo> {
         match (ambiguous_errors.pop(), ambiguous_errors.pop()) {
             (Some(one), None) => Some(one),
             (Some(one), Some(two)) => {
-                Some(Exn::from_iter([one, two], message!("Both objects were ambiguous")).erased())
+                Some(Exn::raise_all([one, two], message!("Both objects were ambiguous")).erased())
             }
             _ => (!delayed_errors.is_empty()).then(|| {
                 if delayed_errors.len() == 1 {
                     delayed_errors.pop().expect("it's exactly one")
                 } else {
-                    Exn::from_iter(delayed_errors, message!("one or more delayed errors")).erased()
+                    Exn::raise_all(delayed_errors, message!("one or more delayed errors")).erased()
                 }
             }),
         }

@@ -24,10 +24,10 @@ pub use impls::{Frame, Something, Untyped};
 
 mod macros;
 
-/// An exception type that can hold an [error tree](Exn::from_iter) and the call site.
+/// An exception type that can hold an [error tree](Exn::raise_all) and the call site.
 ///
 /// While an error chain, a list, is automatically created when [raise](Exn::raise)
-/// and friends are invoked, one can also use [`Exn::from_iter`] to create an error
+/// and friends are invoked, one can also use [`Exn::raise_all`] to create an error
 /// that has multiple causes.
 ///
 /// # Warning: `source()` information is stringified and type-erased

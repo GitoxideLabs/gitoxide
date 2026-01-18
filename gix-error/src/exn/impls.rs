@@ -69,10 +69,8 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Create a new exception with the given error and children.
-    ///
-    /// It's no error if `children` is empty.
     #[track_caller]
-    pub fn from_iter<T, I>(children: I, err: E) -> Self
+    pub fn raise_all<T, I>(children: I, err: E) -> Self
     where
         T: Error + Send + Sync + 'static,
         I: IntoIterator,
