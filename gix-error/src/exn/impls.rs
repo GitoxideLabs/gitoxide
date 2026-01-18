@@ -146,7 +146,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Return the current exception.
-    pub fn as_error(&self) -> &E {
+    pub fn error(&self) -> &E {
         self.frame
             .error
             .downcast_ref()
@@ -178,14 +178,14 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     }
 
     /// Return the underlying exception frame.
-    pub fn as_frame(&self) -> &Frame {
+    pub fn frame(&self) -> &Frame {
         &self.frame
     }
 
     /// Iterate over all frames in breadth-first order. The first frame is this instance,
     /// followed by all of its children.
     pub fn iter(&self) -> impl Iterator<Item = &Frame> {
-        self.as_frame().iter()
+        self.frame().iter()
     }
 
     /// Iterate over all frames and find one that downcasts into error of type `T`.
@@ -202,13 +202,13 @@ where
     type Target = E;
 
     fn deref(&self) -> &Self::Target {
-        self.as_error()
+        self.error()
     }
 }
 
 impl<E: Error + Send + Sync + 'static> fmt::Debug for Exn<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write_frame_recursive(f, self.as_frame(), "", ErrorMode::Display, TreeMode::Linearize)
+        write_frame_recursive(f, self.frame(), "", ErrorMode::Display, TreeMode::Linearize)
     }
 }
 

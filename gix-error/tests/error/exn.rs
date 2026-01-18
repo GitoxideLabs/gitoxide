@@ -364,7 +364,7 @@ fn error_tree() {
         |
         └─ E7, at gix-error/tests/error/main.rs:22:30
     ");
-    insta::assert_debug_snapshot!(err.as_frame().iter().map(ToString::to_string).collect::<Vec<_>>(), @r#"
+    insta::assert_debug_snapshot!(err.frame().iter().map(ToString::to_string).collect::<Vec<_>>(), @r#"
     [
         "E6",
         "E5",
