@@ -39,7 +39,7 @@ impl<'repo> Spec<'repo> {
             Err(mut err) => {
                 if let Some(delegate_err) = delegate.into_delayed_errors() {
                     let sources: Vec<_> = err.drain_children().collect();
-                    Err(err.chain(delegate_err.chain_iter(sources)).into_error())
+                    Err(err.chain(delegate_err.chain_all(sources)).into_error())
                 } else {
                     Err(err.into_error())
                 }

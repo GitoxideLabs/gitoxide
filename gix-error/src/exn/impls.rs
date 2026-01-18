@@ -101,7 +101,7 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
 
     /// Use the current exception the head of a chain, adding `errors` to its children.
     #[track_caller]
-    pub fn chain_iter<T, I>(mut self, errors: I) -> Exn<E>
+    pub fn chain_all<T, I>(mut self, errors: I) -> Exn<E>
     where
         T: Error + Send + Sync + 'static,
         I: IntoIterator,

@@ -185,7 +185,7 @@ fn raise_iter() {
         └─ E4-3, at gix-error/tests/error/exn.rs:123:47
     ");
 
-    let e = e.chain_iter((1..3).map(|idx| message!("SE{}", idx)));
+    let e = e.chain_all((1..3).map(|idx| message!("SE{}", idx)));
     insta::assert_debug_snapshot!(e, @r"
     Top
     |
