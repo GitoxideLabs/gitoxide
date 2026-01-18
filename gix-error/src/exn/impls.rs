@@ -14,9 +14,7 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fmt::Formatter;
 use std::marker::PhantomData;
-use std::ops::Deref;
 use std::panic::Location;
 
 use crate::Exn;
@@ -196,13 +194,13 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
 }
 
 impl<E: Error + Send + Sync + 'static> fmt::Debug for Exn<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_frame_recursive(f, self.frame(), "", ErrorMode::Display, TreeMode::Linearize)
     }
 }
 
 impl fmt::Debug for Frame {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write_frame_recursive(f, self, "", ErrorMode::Display, TreeMode::Linearize)
     }
 }
@@ -220,7 +218,7 @@ enum TreeMode {
 }
 
 fn write_frame_recursive(
-    f: &mut Formatter<'_>,
+    f: &mut fmt::Formatter<'_>,
     frame: &Frame,
     prefix: &str,
     err_mode: ErrorMode,
@@ -244,9 +242,8 @@ fn write_frame_recursive(
         write!(f, "\n{prefix}└─ ")?;
 
         let child_child_len = child.children().len();
-        let may_linerarize_chain =
-            matches!(tree_mode, TreeMode::Linearize) && children_len == 1 && child_child_len == 1;
-        if may_linerarize_chain {
+        let may_linearize_chain = matches!(tree_mode, TreeMode::Linearize) && children_len == 1 && child_child_len == 1;
+        if may_linearize_chain {
             write_frame_recursive(f, child, prefix, err_mode, tree_mode)?;
         } else if cidx < children_len - 1 {
             write_frame_recursive(f, child, &format!("{prefix}|   "), err_mode, tree_mode)?;
@@ -258,14 +255,14 @@ fn write_frame_recursive(
     Ok(())
 }
 
-fn write_location(f: &mut Formatter<'_>, exn: &Frame) -> fmt::Result {
+fn write_location(f: &mut fmt::Formatter<'_>, exn: &Frame) -> fmt::Result {
     let location = exn.location();
     write!(f, ", at {}:{}:{}", location.file(), location.line(), location.column())
 }
 
 impl<E: Error + Send + Sync + 'static> fmt::Display for Exn<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        std::fmt::Display::fmt(&self.frame, f)
+        fmt::Display::fmt(&self.frame, f)
     }
 }
 
@@ -438,14 +435,14 @@ impl From<Frame> for Exn {
 pub struct Untyped(Box<dyn Error + Send + Sync + 'static>);
 
 impl fmt::Display for Untyped {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        std::fmt::Display::fmt(&self.0, f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
 impl fmt::Debug for Untyped {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
     }
 }
 
@@ -455,14 +452,14 @@ impl Error for Untyped {}
 pub struct Something;
 
 impl fmt::Display for Something {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Something went wrong")
     }
 }
 
 impl fmt::Debug for Something {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        std::fmt::Display::fmt(&self, f)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self, f)
     }
 }
 
