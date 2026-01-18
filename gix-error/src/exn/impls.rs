@@ -92,6 +92,14 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         new_exn
     }
 
+    /// Use the current exception the head of a chain, adding `err` as its children.
+    #[track_caller]
+    pub fn chain<T: Error + Send + Sync + 'static>(mut self, err: impl Into<Exn<T>>) -> Exn<E> {
+        let err = err.into();
+        self.frame.children.push(*err.frame);
+        self
+    }
+
     /// Use the current exception the head of a chain, adding `errors` to its children.
     #[track_caller]
     pub fn chain_iter<T, I>(mut self, errors: I) -> Exn<E>
@@ -112,14 +120,6 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// This is useful if one wants to re-organise errors, and the error layout is well known.
     pub fn drain_children(&mut self) -> impl Iterator<Item = Exn> + '_ {
         self.frame.children.drain(..).map(Exn::from)
-    }
-
-    /// Use the current exception the head of a chain, adding all `err` to its children.
-    #[track_caller]
-    pub fn chain<T: Error + Send + Sync + 'static>(mut self, err: impl Into<Exn<T>>) -> Exn<E> {
-        let err = err.into();
-        self.frame.children.push(*err.frame);
-        self
     }
 
     /// Erase the type of this instance and turn it into a bare `Exn`.
