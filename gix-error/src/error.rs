@@ -61,11 +61,7 @@ impl std::error::Error for Error {
     /// Return the first source of an [Exn] error, or the source of a boxed error.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.inner {
-            Inner::ExnAsError(frame) | Inner::Exn(frame) => {
-                frame.children().first().map(|f| {
-                    f.error() as &(dyn std::error::Error + 'static)
-                })
-            }
+            Inner::ExnAsError(frame) | Inner::Exn(frame) => frame.children().first().map(|f| f.error() as _),
         }
     }
 }
