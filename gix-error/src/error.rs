@@ -7,7 +7,7 @@ impl Error {
     /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
     pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
         let root = self.inner.as_frame();
-        root.probable_cause().unwrap_or(root).as_error()
+        root.probable_cause().unwrap_or(root).error()
     }
 
     /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
@@ -42,7 +42,7 @@ impl Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.inner {
-            Inner::ExnAsError(err) => std::fmt::Display::fmt(err.as_error(), f),
+            Inner::ExnAsError(err) => std::fmt::Display::fmt(err.error(), f),
             Inner::Exn(frame) => std::fmt::Display::fmt(frame, f),
         }
     }
@@ -51,7 +51,7 @@ impl std::fmt::Display for Error {
 impl std::fmt::Debug for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.inner {
-            Inner::ExnAsError(err) => std::fmt::Debug::fmt(err.as_error(), f),
+            Inner::ExnAsError(err) => std::fmt::Debug::fmt(err.error(), f),
             Inner::Exn(frame) => std::fmt::Debug::fmt(frame, f),
         }
     }
@@ -62,7 +62,9 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match &self.inner {
             Inner::ExnAsError(frame) | Inner::Exn(frame) => {
-                frame.children().first().map(exn::Frame::as_error_no_send_sync)
+                frame.children().first().map(|f| {
+                    f.error() as &(dyn std::error::Error + 'static)
+                })
             }
         }
     }

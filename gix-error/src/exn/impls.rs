@@ -239,9 +239,9 @@ fn write_frame_recursive(
     tree_mode: TreeMode,
 ) -> fmt::Result {
     match err_mode {
-        ErrorMode::Display => fmt::Display::fmt(frame.as_error(), f),
+        ErrorMode::Display => fmt::Display::fmt(frame.error(), f),
         ErrorMode::Debug => {
-            write!(f, "{:?}", frame.as_error())
+            write!(f, "{:?}", frame.error())
         }
     }?;
     if !f.alternate() {
@@ -286,7 +286,7 @@ impl fmt::Display for Frame {
             // Avoid printing alternate versions of the debug info, keep it in one line, also print the tree.
             write_frame_recursive(f, self, "", ErrorMode::Debug, TreeMode::Verbatim)
         } else {
-            fmt::Display::fmt(self.as_error(), f)
+            fmt::Display::fmt(self.error(), f)
         }
     }
 }
@@ -303,7 +303,7 @@ pub struct Frame {
 
 impl Frame {
     /// Return the error as a reference to [`Error`].
-    pub fn as_error(&self) -> &(dyn Error + Send + Sync + 'static) {
+    pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
         &*self.error
     }
 
@@ -320,13 +320,6 @@ impl Frame {
     /// Return a slice of the children of the exception.
     pub fn children(&self) -> &[Frame] {
         &self.children
-    }
-}
-
-impl Frame {
-    /// Return the error as a reference to [`Error`].
-    pub(crate) fn as_error_no_send_sync(&self) -> &(dyn Error + 'static) {
-        &*self.error
     }
 }
 
