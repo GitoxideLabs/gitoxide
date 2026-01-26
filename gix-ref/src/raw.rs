@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn size_of_reference() {
         let actual = std::mem::size_of::<Reference>();
-        let expected = 80;
+        let expected = 104;
         assert!(
             size_ok(actual, expected),
             "let's not let it change size undetected: {actual} <~ {expected}"

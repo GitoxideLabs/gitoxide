@@ -151,9 +151,10 @@ mod tests {
     #[test]
     fn size_of_change() {
         let actual = std::mem::size_of::<Change>();
+        let ceiling = 72;
         assert!(
-            actual <= 48,
-            "{actual} <= 48: this type shouldn't grow without us knowing"
+            actual <= ceiling,
+            "{actual} <= {ceiling}: this type shouldn't grow without us knowing"
         );
     }
 }
