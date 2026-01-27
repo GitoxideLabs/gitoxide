@@ -1,6 +1,6 @@
-use std::io::Write;
-
+use gix_error::{message, ResultExt};
 use gix_object::{bstr::BStr, FindExt};
+use std::io::Write;
 
 use crate::{entry, entry::Error, protocol, AdditionalEntry, SharedErrorSlot, Stream};
 
@@ -102,10 +102,7 @@ where
         attrs,
         objects: objects.clone(),
         fetch_attributes: move |a: &BStr, b: gix_object::tree::EntryMode, c: &mut gix_attributes::search::Outcome| {
-            attributes(a, b, c).map_err(|err| Error::Attributes {
-                source: Box::new(err),
-                path: a.to_owned(),
-            })
+            attributes(a, b, c).or_raise(|| message!("Could not query attributes for path \"{a}\""))
         },
         path_deque: Default::default(),
         path: Default::default(),
