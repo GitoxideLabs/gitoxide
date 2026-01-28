@@ -247,7 +247,7 @@ enum DirectoryRoot {
     StandaloneTest,
 }
 
-/// Don't add a suffix to the archive name as `args` are platform dependent, none-deterministic,
+/// Don't add a suffix to the archive name as `args` are platform dependent, non-deterministic,
 /// or otherwise don't influence the content of the archive.
 /// Note that this also means that `args` won't be used to control the hash of the archive itself.
 #[derive(Copy, Clone)]
@@ -416,7 +416,7 @@ pub fn copy_recursively_into_existing_dir(src_dir: impl AsRef<Path>, dst_dir: im
     Ok(())
 }
 
-/// Like `scripted_fixture_read_only()`], but passes `args` to `script_name`.
+/// Like [`scripted_fixture_read_only()`], but passes `args` to `script_name`.
 pub fn scripted_fixture_read_only_with_args(
     script_name: impl AsRef<Path>,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -470,6 +470,13 @@ fn scripted_fixture_read_only_with_args_inner(
         gix_tempfile::signal::handler::Mode::DeleteTempfilesOnTerminationAndRestoreDefaultBehaviour,
     );
 
+    let gix_test_hash = env::var_os("GIX_TEST_HASH")
+        .and_then(|os_string| os_string.into_string().ok())
+        .unwrap_or_default();
+    let hash_kind = gix_hash::Kind::from_str(&gix_test_hash).unwrap_or_default();
+
+    eprintln!("Using hash '{hash_kind}' when determining which fixture to use or recreate");
+
     let script_location = script_name.as_ref();
     let script_path = fixture_path_inner(script_location, root);
 
@@ -477,7 +484,12 @@ fn scripted_fixture_read_only_with_args_inner(
     let args: Vec<String> = args.into_iter().map(Into::into).collect();
     let script_identity = {
         let mut map = SCRIPT_IDENTITY.lock();
-        map.entry(args.iter().fold(script_path.clone(), |p, a| p.join(a)))
+        let init = if hash_kind == gix_hash::Kind::Sha1 {
+            script_path.clone()
+        } else {
+            script_path.clone().join(hash_kind.to_string())
+        };
+        map.entry(args.iter().fold(init, |p, a| p.join(a)))
             .or_insert_with(|| {
                 let crc_value = crc::Crc::<u32>::new(&crc::CRC_32_CKSUM);
                 let mut crc_digest = crc_value.digest();
@@ -509,8 +521,13 @@ fn scripted_fixture_read_only_with_args_inner(
                 }
                 ArgsInHash::No => "".into(),
             };
+            let potential_hash_suffix = if hash_kind == gix_hash::Kind::Sha1 {
+                "".into()
+            } else {
+                format!("_{hash_kind}")
+            };
             Path::new("generated-archives").join(format!(
-                "{}{suffix}.tar{}",
+                "{}{suffix}{potential_hash_suffix}.tar{}",
                 script_basename.to_str().expect("valid UTF-8"),
                 if cfg!(feature = "xz") { ".xz" } else { "" }
             ))
@@ -519,14 +536,12 @@ fn scripted_fixture_read_only_with_args_inner(
     );
     let (force_run, script_result_directory) = destination_dir.map_or_else(
         || {
-            let dir = fixture_path_inner(
-                Path::new("generated-do-not-edit").join(script_basename).join(format!(
-                    "{}-{}",
-                    script_identity,
-                    family_name()
-                )),
-                root,
-            );
+            let mut path = Path::new("generated-do-not-edit").join(script_basename);
+            if hash_kind != gix_hash::Kind::Sha1 {
+                path = path.join(hash_kind.to_string());
+            }
+            path = path.join(format!("{}-{}", script_identity, family_name()));
+            let dir = fixture_path_inner(path, root);
             (false, dir)
         },
         |d| (true, d.to_owned()),
@@ -588,13 +603,13 @@ fn scripted_fixture_read_only_with_args_inner(
                 }
                 let script_absolute_path = env::current_dir()?.join(script_path);
                 let mut cmd = std::process::Command::new(&script_absolute_path);
-                let output = match configure_command(&mut cmd, &args, &script_result_directory).output() {
+                let output = match configure_command(&mut cmd, hash_kind, &args, &script_result_directory).output() {
                     Ok(out) => out,
                     Err(err)
                     if err.kind() == std::io::ErrorKind::PermissionDenied || err.raw_os_error() == Some(193) /* windows */ =>
                         {
                             cmd = std::process::Command::new(bash_program());
-                            configure_command(cmd.arg(script_absolute_path), &args, &script_result_directory).output()?
+                            configure_command(cmd.arg(script_absolute_path), hash_kind, &args, &script_result_directory).output()?
                         }
                     Err(err) => return Err(err.into()),
                 };
@@ -625,6 +640,7 @@ const NULL_DEVICE: &str = "/dev/null";
 
 fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     cmd: &'a mut std::process::Command,
+    hash_kind: gix_hash::Kind,
     args: I,
     script_result_directory: &Path,
 ) -> &'a mut std::process::Command {
@@ -664,6 +680,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .env("GIT_CONFIG_VALUE_2", "main")
         .env("GIT_CONFIG_KEY_3", "protocol.file.allow")
         .env("GIT_CONFIG_VALUE_3", "always")
+        .env("GIT_DEFAULT_HASH", hash_kind.to_string())
 }
 
 /// Get the path attempted as a `bash` interpreter, for fixture scripts having no `#!` we can use.
@@ -1051,7 +1068,12 @@ mod tests {
         let mut cmd = std::process::Command::new(GIT_PROGRAM);
         cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
         cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
-        configure_command(&mut cmd, ["config", "-l", "--show-origin"], temp.path());
+        configure_command(
+            &mut cmd,
+            gix_hash::Kind::Sha1,
+            ["config", "-l", "--show-origin"],
+            temp.path(),
+        );
 
         let output = cmd.output().expect("can run git");
         let lines: Vec<_> = output

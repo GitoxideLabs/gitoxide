@@ -39,7 +39,7 @@ mod baseline;
 #[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<gix_revwalk::graph::Commit<gix_negotiate::Metadata>>();
-    let expected = 56;
+    let expected = 72;
     assert!(
         size_ok(actual, expected),
         "we may keep a lot of these, so let's not let them grow unnoticed: {actual} <~ {expected}"

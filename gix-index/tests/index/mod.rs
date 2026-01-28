@@ -27,7 +27,7 @@ pub fn loose_file_path(name: &str) -> PathBuf {
 #[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<gix_index::Entry>();
-    let expected = 80;
+    let expected = 96;
     assert!(
         size_ok(actual, expected),
         "the size of this structure should not change unexpectedly: {actual} <~ {expected}"

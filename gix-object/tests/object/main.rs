@@ -81,7 +81,7 @@ fn fixture_name(kind: &str, path: &str) -> Vec<u8> {
 fn size_in_memory() {
     let actual = std::mem::size_of::<gix_object::Object>();
     assert!(
-        actual <= 272,
+        actual <= 288,
         "{actual} <= 272: Prevent unexpected growth of what should be lightweight objects"
     );
 }
