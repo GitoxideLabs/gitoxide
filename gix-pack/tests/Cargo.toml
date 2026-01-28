@@ -6,7 +6,7 @@ version = "0.0.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
-description = "Please use `gix-<thiscrate>` instead ('git' -> 'gix')"
+description = "Tests for the gix-pack crate"
 edition = "2021"
 rust-version = "1.82"
 
