@@ -22,7 +22,7 @@ gix-features-parallel = ["gix-features/parallel"]
 gix-worktree = { path = "..", features = ["attributes"] }
 gix-index = { path = "../../gix-index" }
 gix-fs = { path = "../../gix-fs" }
-gix-hash = { path = "../../gix-hash" }
+gix-hash = { path = "../../gix-hash", features = ["sha256"] }
 gix-object = { path = "../../gix-object" }
 gix-glob = { path = "../../gix-glob" }
 gix-path = { path = "../../gix-path" }
