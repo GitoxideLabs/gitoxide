@@ -176,7 +176,8 @@ unit-tests:
     env GIX_TEST_HASH=sha256 cargo nextest run -p gix-pack --all-features --no-fail-fast
     cargo nextest run -p gix-pack-tests --features all-features --no-fail-fast
     cargo nextest run -p gix-pack-tests --features gix-features-parallel --no-fail-fast
-    cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
+    env GIX_TEST_HASH=sha1 cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
+    env GIX_TEST_HASH=sha256 cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-packetline --features blocking-io,maybe-async/is_sync --test blocking-packetline --no-fail-fast
     cargo nextest run -p gix-packetline --features async-io --test async-packetline --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-curl,maybe-async/is_sync --no-fail-fast
