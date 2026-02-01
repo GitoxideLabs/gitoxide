@@ -25,11 +25,6 @@ pub enum Error {
         source: crate::bstr::Utf8Error,
         remote_name: crate::bstr::BString,
     },
-    #[error("Configuration value name {name:?} is invalid")]
-    ConfigValueName {
-        name: &'static str,
-        source: gix_config::parse::section::value_name::Error,
-    },
     #[error(transparent)]
     ConfigSectionHeader(#[from] gix_config::parse::section::header::Error),
     #[error(transparent)]
@@ -262,7 +257,7 @@ impl PrepareFetch {
         let filter_spec_to_save = self
             .filter
             .as_ref()
-            .map(crate::remote::fetch::ObjectFilter::to_argument_string);
+            .map(remote::fetch::ObjectFilter::to_argument_string);
         // The remote section just written to `.git/config`, kept around so we can
         // mirror it into the repository's in-memory config once we know which
         // repo handle survives.

@@ -59,13 +59,12 @@ pub(crate) mod function {
         let mut remote = crate::repository::remote::by_name_or_url(&repo, remote.as_deref())?;
         let mut wants = Vec::new();
         let mut fetch_refspecs = Vec::new();
-        let expected_hex_len = repo.object_hash().len_in_hex();
         for spec in ref_specs {
-            if spec.len() == expected_hex_len {
-                if let Ok(oid) = ObjectId::from_hex(spec.as_ref()) {
-                    wants.push(oid);
-                    continue;
-                }
+            if spec.len() == repo.object_hash().len_in_hex()
+                && let Ok(oid) = ObjectId::from_hex(spec.as_ref())
+            {
+                wants.push(oid);
+                continue;
             }
             fetch_refspecs.push(spec);
         }
