@@ -38,25 +38,16 @@ pub fn write_remote_to_local_config_file(
         while remote_section.remove("partialclonefilter").is_some() {}
         while remote_section.remove("promisor").is_some() {}
 
-        let partial_clone_filter = ValueName::try_from("partialclonefilter").map_err(|err| Error::ConfigValueName {
-            name: "partialclonefilter",
-            source: err,
-        })?;
-        remote_section.push(partial_clone_filter, Some(BStr::new(filter_spec)));
+        let partial_clone_filter = ValueName::try_from("partialclonefilter").expect("known to be valid");
+        remote_section.push(partial_clone_filter, Some(filter_spec.into()));
 
-        let promisor = ValueName::try_from("promisor").map_err(|err| Error::ConfigValueName {
-            name: "promisor",
-            source: err,
-        })?;
-        remote_section.push(promisor, Some(BStr::new("true")));
+        let promisor = ValueName::try_from("promisor").expect("known to be valid");
+        remote_section.push(promisor, Some("true".into()));
 
         let mut extensions_section = config.section_mut_or_create_new("extensions", None)?;
-        while extensions_section.remove("partialclone").is_some() {}
+        while extensions_section.remove("partialClone").is_some() {}
 
-        let partial_clone = ValueName::try_from("partialclone").map_err(|err| Error::ConfigValueName {
-            name: "partialclone",
-            source: err,
-        })?;
+        let partial_clone = ValueName::try_from("partialClone").expect("known to be valid");
         extensions_section.push(partial_clone, Some(remote_name.as_ref()));
     }
 
