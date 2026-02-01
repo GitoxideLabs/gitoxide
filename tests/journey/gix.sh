@@ -705,21 +705,17 @@ title "gix commit-graph"
 )
 
 if [[ "$kind" != "small" && "$kind" != "async" ]]; then
-# Testing repository -- TODO: Move to `GitoxideLabs` group eventually
+# Testing repository - local reproduction of https://github.com/staehle/gitoxide-testing
 testrepo_name="gitoxide-testing"
-testrepo_url="https://github.com/staehle/gitoxide-testing.git"
+# Path relative to tests/fixtures/ for use with jtt run-script
+testrepo_fixture_script="scripts/make_gitoxide_testing_repo.sh"
 # This repo has various tags with noted differences in README.md, all in form `vN`
 # `v5` is latest on main and should be the default cloned
 testrepo_v5_tag="v5"
-testrepo_v5_commit="6764049e6687f76f02ea3ca7c944b8cbd998edf8"
 testrepo_v4_tag="v4"
-testrepo_v4_commit="38395858a056b739ec09242115cd1c668986a594"
 testrepo_v3_tag="v3"
-testrepo_v3_commit="dea0993ab43e3b0e6d1931fe0c10a85537292930"
 testrepo_v2_tag="v2"
-testrepo_v2_commit="0ccb2debcbc3d1cac5756221cf823df14fef3094"
 testrepo_v1_tag="v1"
-testrepo_v1_commit="e60ef56eb63c866f290675e2f920792ca202054e"
 # This file exists in all versions, but with different content:
 testrepo_common_file_name="version.txt"
 # gix options:
@@ -735,6 +731,17 @@ title "gix clone (functional tests)"
     testworktree_path="${testrepo_name}-worktree"
 
     (sandbox
+      # Create/reuse the source repository using the fixture script (cached read-only)
+      testrepo_source=$("$jtt" run-script "$root/.." "$testrepo_fixture_script")
+      testrepo_url="file://${testrepo_source}"
+
+      # Resolve commit hashes from tags dynamically
+      testrepo_v5_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v5_tag})
+      testrepo_v4_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v4_tag})
+      testrepo_v3_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v3_tag})
+      testrepo_v2_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v2_tag})
+      testrepo_v1_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v1_tag})
+
       # Test blobless bare clone with --filter=blob:none
       it "creates a blobless (${gix_clone_blobless}) bare clone successfully" && {
         expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose clone --bare ${gix_clone_blobless} ${testrepo_url} ${testrepo_path}
@@ -797,7 +804,7 @@ title "gix clone (functional tests)"
             BARE_HEAD=$(cd ../${testrepo_path} && "$exe_plumbing" --no-verbose rev resolve HEAD)
             expect_run $SUCCESSFULLY test "$BARE_HEAD" != "$WORKTREE_HEAD"
           }
-          it "HEAD should match the tag ${testrepo_v4_tag}'s commit ${testrepo_v4_commit}" && {
+          it "HEAD should match the tag ${testrepo_v4_tag}'s commit" && {
             expect_run $SUCCESSFULLY test "$WORKTREE_HEAD" = "${testrepo_v4_commit}"
           }
 
@@ -883,6 +890,10 @@ title "gix clone (functional tests)"
     testrepo_path="${testrepo_name}-bare-bloblimit"
 
     (sandbox
+      # Create/reuse the source repository using the fixture script (cached read-only)
+      testrepo_source=$("$jtt" run-script "$root/.." "$testrepo_fixture_script")
+      testrepo_url="file://${testrepo_source}"
+
       # Test blob-limit (--filter=blob:limit=1024) bare clone
       it "creates a blob-limit (${gix_clone_limit}) bare clone successfully" && {
         expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose clone --bare ${gix_clone_limit} ${testrepo_url} ${testrepo_path}
