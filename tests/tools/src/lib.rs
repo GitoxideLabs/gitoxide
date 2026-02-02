@@ -470,7 +470,7 @@ fn scripted_fixture_read_only_with_args_inner(
         gix_tempfile::signal::handler::Mode::DeleteTempfilesOnTerminationAndRestoreDefaultBehaviour,
     );
 
-    let gix_test_hash = env::var_os("GIX_TEST_HASH")
+    let gix_test_hash = env::var_os("GIX_TEST_FIXTURE_HASH")
         .and_then(|os_string| os_string.into_string().ok())
         .unwrap_or_default();
     let hash_kind = gix_hash::Kind::from_str(&gix_test_hash).unwrap_or_default();
