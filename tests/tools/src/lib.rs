@@ -536,10 +536,9 @@ fn scripted_fixture_read_only_with_args_inner(
     );
     let (force_run, script_result_directory) = destination_dir.map_or_else(
         || {
-            let mut path = Path::new("generated-do-not-edit").join(script_basename);
-            if hash_kind != gix_hash::Kind::Sha1 {
-                path = path.join(hash_kind.to_string());
-            }
+            let mut path = Path::new("generated-do-not-edit")
+                .join(script_basename)
+                .join(hash_kind.to_string());
             path = path.join(format!("{}-{}", script_identity, family_name()));
             let dir = fixture_path_inner(path, root);
             (false, dir)
