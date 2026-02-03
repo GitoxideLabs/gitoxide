@@ -134,4 +134,94 @@ impl Repository {
             options,
         )
     }
+
+    /// Perform a directory walk configured with `options`, calling `for_each` for each entry. Use `patterns` to
+    /// further filter entries. `should_interrupt` is polled to see if an interrupt is requested, causing an
+    /// error to be returned instead.
+    ///
+    /// This is a convenience method that wraps [`dirwalk()`](Self::dirwalk) and provides a simpler interface
+    /// for processing entries via a closure rather than implementing the [`gix_dir::walk::Delegate`] trait.
+    ///
+    /// The `index` is used to determine if entries are tracked, and for excludes and attributes
+    /// lookup. Note that items will only count as tracked if they have the [`gix_index::entry::Flags::UPTODATE`]
+    /// flag set.
+    ///
+    /// The closure receives a [`dirwalk::for_each::Entry`] for each entry in the walk and should return
+    /// a [`gix_dir::walk::Action`] to control traversal flow:
+    /// - `std::ops::ControlFlow::Continue(())` to continue the traversal
+    /// - `std::ops::ControlFlow::Break(())` to stop the traversal
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use gix::dirwalk::for_each::Entry;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let repo = gix::discover(".")?;
+    /// let index = repo.index()?;
+    /// let options = repo.dirwalk_options()?;
+    ///
+    /// repo.dirwalk_for_each(
+    ///     &index,
+    ///     std::iter::empty::<&str>(),
+    ///     &Default::default(),
+    ///     options,
+    ///     |entry: Entry<'_>| -> Result<gix::dir::walk::Action, std::convert::Infallible> {
+    ///         println!("{}", entry.entry.rela_path);
+    ///         Ok(std::ops::ControlFlow::Continue(()))
+    ///     },
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dirwalk_for_each<E>(
+        &self,
+        index: &gix_index::State,
+        patterns: impl IntoIterator<Item = impl AsRef<BStr>>,
+        should_interrupt: &AtomicBool,
+        options: dirwalk::Options,
+        mut for_each: impl FnMut(dirwalk::for_each::Entry<'_>) -> Result<gix_dir::walk::Action, E>,
+    ) -> Result<dirwalk::Outcome<'_>, dirwalk::for_each::Error>
+    where
+        E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+    {
+        struct ForEachDelegate<F, E> {
+            for_each: F,
+            error: Option<E>,
+        }
+
+        impl<F, E> gix_dir::walk::Delegate for ForEachDelegate<F, E>
+        where
+            F: FnMut(dirwalk::for_each::Entry<'_>) -> Result<gix_dir::walk::Action, E>,
+        {
+            fn emit(
+                &mut self,
+                entry: gix_dir::EntryRef<'_>,
+                collapsed_directory_status: Option<gix_dir::entry::Status>,
+            ) -> gix_dir::walk::Action {
+                match (self.for_each)(dirwalk::for_each::Entry::new(entry, collapsed_directory_status)) {
+                    Ok(action) => action,
+                    Err(err) => {
+                        self.error = Some(err);
+                        std::ops::ControlFlow::Break(())
+                    }
+                }
+            }
+        }
+
+        let mut delegate = ForEachDelegate {
+            for_each: &mut for_each,
+            error: None,
+        };
+
+        match self.dirwalk(index, patterns, should_interrupt, options, &mut delegate) {
+            Ok(outcome) => {
+                if let Some(err) = delegate.error {
+                    Err(dirwalk::for_each::Error::ForEach(err.into()))
+                } else {
+                    Ok(outcome)
+                }
+            }
+            Err(err) => Err(dirwalk::for_each::Error::Dirwalk(err)),
+        }
+    }
 }

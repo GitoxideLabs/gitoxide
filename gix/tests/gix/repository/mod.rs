@@ -131,6 +131,91 @@ mod dirwalk {
         );
         Ok(())
     }
+
+    #[test]
+    fn for_each_closure() -> crate::Result {
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        let untracked_only = repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory);
+        let index = repo.index()?;
+
+        let mut entries = Vec::new();
+        repo.dirwalk_for_each(
+            &index,
+            None::<&str>,
+            &AtomicBool::default(),
+            untracked_only,
+            |entry: gix::dirwalk::for_each::Entry<'_>| {
+                entries.push((
+                    entry.entry.rela_path.to_string(),
+                    entry.entry.disk_kind.expect("kind is known"),
+                ));
+                Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Continue(()))
+            },
+        )?;
+
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let expected = [
+            ("all-untracked".to_string(), Repository),
+            ("bare-repo-with-index.git".to_string(), Directory),
+            ("bare.git".into(), Directory),
+            ("empty-core-excludes".into(), Repository),
+            ("non-bare-repo-without-index".into(), Repository),
+            ("non-bare-without-worktree".into(), Directory),
+            ("some".into(), Directory),
+            ("unborn".into(), Repository),
+        ];
+        assert_eq!(entries, expected, "for_each works the same as delegate");
+        Ok(())
+    }
+
+    #[test]
+    fn for_each_with_early_break() -> crate::Result {
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        let untracked_only = repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory);
+        let index = repo.index()?;
+
+        let mut count = 0;
+        repo.dirwalk_for_each(
+            &index,
+            None::<&str>,
+            &AtomicBool::default(),
+            untracked_only,
+            |_entry: gix::dirwalk::for_each::Entry<'_>| {
+                count += 1;
+                if count >= 3 {
+                    Ok::<_, std::convert::Infallible>(std::ops::ControlFlow::Break(()))
+                } else {
+                    Ok(std::ops::ControlFlow::Continue(()))
+                }
+            },
+        )?;
+
+        assert_eq!(count, 3, "walk stopped after 3 entries due to Break");
+        Ok(())
+    }
+
+    #[test]
+    fn for_each_with_error() -> crate::Result {
+        let repo = crate::named_repo("make_basic_repo.sh")?;
+        let untracked_only = repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory);
+        let index = repo.index()?;
+
+        let result = repo.dirwalk_for_each(
+            &index,
+            None::<&str>,
+            &AtomicBool::default(),
+            untracked_only,
+            |_entry: gix::dirwalk::for_each::Entry<'_>| Err(std::io::Error::other("test error")),
+        );
+
+        assert!(result.is_err(), "should propagate callback errors");
+        let err = result.err().expect("error");
+        assert!(
+            matches!(err, gix::dirwalk::for_each::Error::ForEach(_)),
+            "error should be ForEach variant"
+        );
+        Ok(())
+    }
 }
 
 #[test]

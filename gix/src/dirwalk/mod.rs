@@ -7,6 +7,8 @@ use crate::{config, AttributeStack, Pathspec};
 mod options;
 
 ///
+pub mod for_each;
+///
 pub mod iter;
 
 /// An iterator for entries in a directory walk.
