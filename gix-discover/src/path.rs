@@ -1,6 +1,18 @@
+use crate::{DOT_GIT_DIR, MODULES};
+use std::ffi::OsStr;
+use std::path::Path;
 use std::{io::Read, path::PathBuf};
 
-use crate::DOT_GIT_DIR;
+/// The kind of repository by looking exclusively at its `git_dir`.
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub enum RepositoryKind {
+    /// The repository resides in `.git/modules/`.
+    Submodule,
+    /// The repository resides in `.git/worktrees/`.
+    LinkedWorktree,
+    /// The repository is in a `.git` directory.
+    Common,
+}
 
 ///
 pub mod from_gitdir_file {
@@ -30,6 +42,34 @@ fn read_regular_file_content_with_size_limit(path: &std::path::Path) -> std::io:
     let mut buf = Vec::with_capacity(512);
     file.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+/// Guess the kind of repository by looking at its `git_dir` path and return it.
+/// Return `None` if `git_dir` isn't called `.git` or isn't within `.git/worktrees` or `.git/modules`, or if it's
+/// a `.git` suffix like in `foo.git`.
+/// The check for markers is case-sensitive under the assumption that nobody meddles with standard directories.
+pub fn repository_kind(git_dir: &Path) -> Option<RepositoryKind> {
+    if git_dir.file_name() == Some(OsStr::new(DOT_GIT_DIR)) {
+        return Some(RepositoryKind::Common);
+    }
+
+    let mut last_comp = None;
+    git_dir.components().rev().skip(1).any(|c| {
+        if c.as_os_str() == OsStr::new(DOT_GIT_DIR) {
+            true
+        } else {
+            last_comp = Some(c.as_os_str());
+            false
+        }
+    });
+    let last_comp = last_comp?;
+    if last_comp == OsStr::new(MODULES) {
+        RepositoryKind::Submodule.into()
+    } else if last_comp == OsStr::new("worktrees") {
+        RepositoryKind::LinkedWorktree.into()
+    } else {
+        None
+    }
 }
 
 /// Reads a plain path from a file that contains it as its only content, with trailing newlines trimmed.

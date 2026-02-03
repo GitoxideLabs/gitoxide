@@ -5,6 +5,128 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.18.0 (2026-01-23)
+
+### Bug Fixes (BREAKING)
+
+ - <csr-id-d6b9d97dac91db3714069928c89b16f515b3f226/> let `writable` fixture functions take `AsRef<Path>` just like the read functions.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release.
+ - 12 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2395 from GitoxideLabs/improvements ([`766ab10`](https://github.com/GitoxideLabs/gitoxide/commit/766ab10104c5f3a2edfe5550791a8d5e78479b3b))
+    - Let `writable` fixture functions take `AsRef<Path>` just like the read functions. ([`d6b9d97`](https://github.com/GitoxideLabs/gitoxide/commit/d6b9d97dac91db3714069928c89b16f515b3f226))
+    - Merge pull request #2393 from GitoxideLabs/report ([`f7d0975`](https://github.com/GitoxideLabs/gitoxide/commit/f7d09758d245aaa89409e39bb6ba1ed6b7118ea5))
+    - Release gix-error v0.0.0, gix-date v0.13.0, gix-actor v0.38.0, gix-validate v0.11.0, gix-path v0.11.0, gix-features v0.46.0, gix-hash v0.22.0, gix-hashtable v0.12.0, gix-object v0.55.0, gix-glob v0.24.0, gix-attributes v0.30.0, gix-command v0.7.0, gix-packetline v0.21.0, gix-filter v0.25.0, gix-fs v0.19.0, gix-chunk v0.5.0, gix-commitgraph v0.32.0, gix-revwalk v0.26.0, gix-traverse v0.52.0, gix-worktree-stream v0.27.0, gix-archive v0.27.0, gix-tempfile v21.0.0, gix-lock v21.0.0, gix-index v0.46.0, gix-config-value v0.17.0, gix-pathspec v0.15.0, gix-ignore v0.19.0, gix-worktree v0.47.0, gix-diff v0.58.0, gix-blame v0.8.0, gix-ref v0.58.0, gix-sec v0.13.0, gix-config v0.51.0, gix-prompt v0.13.0, gix-url v0.35.0, gix-credentials v0.35.0, gix-discover v0.46.0, gix-dir v0.20.0, gix-mailmap v0.30.0, gix-revision v0.40.0, gix-merge v0.11.0, gix-negotiate v0.26.0, gix-pack v0.65.0, gix-odb v0.75.0, gix-refspec v0.36.0, gix-shallow v0.8.0, gix-transport v0.53.0, gix-protocol v0.56.0, gix-status v0.25.0, gix-submodule v0.25.0, gix-worktree-state v0.25.0, gix v0.78.0, gix-fsck v0.17.0, gitoxide-core v0.53.0, gitoxide v0.50.0, safety bump 50 crates ([`562e684`](https://github.com/GitoxideLabs/gitoxide/commit/562e684319fa649db6a96c0a22d64bbe3c11e9e6))
+</details>
+
+## 0.17.0 (2026-01-10)
+
+### Bug Fixes
+
+ - <csr-id-b24783accba4bdd39c0821564060a3b4f3745903/> Use `nul` instead of `NUL` on Windows
+   `NULL_DEVICE` is `/dev/null` except on Windows, where there are
+   several possible choices. Previously we were using `NUL` because
+   the more modern full path `\\.\NUL` is not supported by `git`.
+   
+   However, `git` also rejects `NUL`, when capitalized, on some
+   Windows systems. This can be observed on Windows 11 ARM64 builds.
+   In contrast, the lower-case `nul`, which Windows itself treats the
+   same as `NUL`, is always accepted by Git for Windows.
+   
+   Although it's not readily apparent why Git for Windows accepts
+   `NUL` on some Windows operating systems and/or platforms and not
+   others, the preferential treatment of `nul` (not extending to
+   `NUL`) can be seen in a few places in the Git for Windows source
+   code, including in `mingw_access` (`strcmp` is case-sensitive):
+
+### Other
+
+ - <csr-id-6f469a6fea59c88e6c69a5f94b0bc8a5977cb75b/> Remove `doc_auto_cfg` feature to fix docs.rs documentation.
+   It is part of `doc_cfg` feature since https://github.com/rust-lang/rust/pull/138907
+   
+   This fixes the docs.rs build
+
+### New Features (BREAKING)
+
+ - <csr-id-828e9035a40796f79650cf5e3becb8d8e5e29883/> Pattern parser in is now stateful to allow options for how to parse ignore patterns.
+   That way it can support settings and other state that affect parsing.
+   This affects various crates which are all marked as breaking now.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 38 commits contributed to the release.
+ - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Thanks Clippy
+
+<csr-read-only-do-not-edit/>
+
+[Clippy](https://github.com/rust-lang/rust-clippy) helped 1 time to make code idiomatic. 
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Merge pull request #2346 from GitoxideLabs/release ([`c663b3f`](https://github.com/GitoxideLabs/gitoxide/commit/c663b3f05791db86d2e0a683e26e149f620bf2e4))
+    - Release gix-trace v0.1.17, gix-features v0.45.2, gix-command v0.6.5, gix-hash v0.21.2, gix-date v0.12.1, gix-actor v0.37.1, gix-object v0.54.1, gix-filter v0.24.1, gix-fs v0.18.2, gix-tempfile v20.0.1, gix-lock v20.0.1, gix-traverse v0.51.1, gix-index v0.45.1, gix-diff v0.57.1, gix-pack v0.64.1 ([`7be8f90`](https://github.com/GitoxideLabs/gitoxide/commit/7be8f9068ab875ca4123300ba08df9d32fd63941))
+    - Merge pull request #2341 from GitoxideLabs/dependabot/cargo/cargo-cf4a2135ae ([`d914d95`](https://github.com/GitoxideLabs/gitoxide/commit/d914d9533ed2243658d51ba05e68dd444b75a748))
+    - Bump the cargo group across 1 directory with 51 updates ([`4edc5dd`](https://github.com/GitoxideLabs/gitoxide/commit/4edc5dda7ca39cc8249cb98dc39ca46c7d00eb44))
+    - Merge pull request #2322 from GitoxideLabs/report ([`211b4fb`](https://github.com/GitoxideLabs/gitoxide/commit/211b4fb5a31792eda91191789f3656c217960986))
+    - Release gix-date v0.12.0, gix-actor v0.37.0, gix-features v0.45.1, gix-hash v0.21.1, gix-object v0.54.0, gix-filter v0.24.0, gix-fs v0.18.1, gix-revwalk v0.25.0, gix-traverse v0.51.0, gix-worktree-stream v0.26.0, gix-archive v0.26.0, gix-index v0.45.0, gix-worktree v0.46.0, gix-diff v0.57.0, gix-blame v0.7.0, gix-ref v0.57.0, gix-config v0.50.0, gix-credentials v0.34.0, gix-discover v0.45.0, gix-dir v0.19.0, gix-mailmap v0.29.0, gix-revision v0.39.0, gix-merge v0.10.0, gix-negotiate v0.25.0, gix-pack v0.64.0, gix-odb v0.74.0, gix-refspec v0.35.0, gix-transport v0.52.0, gix-protocol v0.55.0, gix-status v0.24.0, gix-submodule v0.24.0, gix-worktree-state v0.24.0, gix v0.77.0, gix-fsck v0.16.0, gitoxide-core v0.52.0, gitoxide v0.49.0, safety bump 32 crates ([`115e208`](https://github.com/GitoxideLabs/gitoxide/commit/115e208b7bc7a96024e64ea872f2731b5125a6e0))
+    - Merge pull request #2299 from GitoxideLabs/report ([`d6c5b9d`](https://github.com/GitoxideLabs/gitoxide/commit/d6c5b9d7843c24663ffcf20bd756ea3eb747ca0a))
+    - Release gix-date v0.11.1, gix-actor v0.36.1, gix-trace v0.1.16, gix-features v0.45.0, gix-hash v0.21.0, gix-hashtable v0.11.0, gix-object v0.53.0, gix-glob v0.23.0, gix-attributes v0.29.0, gix-filter v0.23.0, gix-fs v0.18.0, gix-commitgraph v0.31.0, gix-revwalk v0.24.0, gix-traverse v0.50.0, gix-worktree-stream v0.25.0, gix-archive v0.25.0, gix-tempfile v20.0.0, gix-lock v20.0.0, gix-index v0.44.0, gix-config-value v0.16.0, gix-pathspec v0.14.0, gix-ignore v0.18.0, gix-worktree v0.45.0, gix-diff v0.56.0, gix-blame v0.6.0, gix-ref v0.56.0, gix-config v0.49.0, gix-prompt v0.12.0, gix-url v0.34.0, gix-credentials v0.33.0, gix-discover v0.44.0, gix-dir v0.18.0, gix-mailmap v0.28.1, gix-revision v0.38.0, gix-merge v0.9.0, gix-negotiate v0.24.0, gix-pack v0.63.0, gix-odb v0.73.0, gix-refspec v0.34.0, gix-shallow v0.7.0, gix-transport v0.51.0, gix-protocol v0.54.0, gix-status v0.23.0, gix-submodule v0.23.0, gix-worktree-state v0.23.0, gix v0.76.0, gix-fsck v0.15.0, gitoxide-core v0.51.0, gitoxide v0.48.0, safety bump 43 crates ([`21fecdf`](https://github.com/GitoxideLabs/gitoxide/commit/21fecdf928336ac5fa3dd1402f92e8200d8aff62))
+    - Merge pull request #2275 from GitoxideLabs/dependabot/cargo/cargo-92eaa62a2e ([`93dd630`](https://github.com/GitoxideLabs/gitoxide/commit/93dd630ca6a2a4622ca74d7eaff42ece2750b6c5))
+    - Bump the cargo group across 1 directory with 14 updates ([`703644c`](https://github.com/GitoxideLabs/gitoxide/commit/703644c8821aae161592d19495d3b3162133324f))
+    - Release gix-date v0.11.0, gix-actor v0.36.0, gix-path v0.10.22, gix-object v0.52.0, gix-packetline v0.20.0, gix-filter v0.22.0, gix-revwalk v0.23.0, gix-traverse v0.49.0, gix-worktree-stream v0.24.0, gix-archive v0.24.0, gix-index v0.43.0, gix-worktree v0.44.0, gix-diff v0.55.0, gix-blame v0.5.0, gix-ref v0.55.0, gix-config v0.48.0, gix-url v0.33.2, gix-credentials v0.32.0, gix-discover v0.43.0, gix-dir v0.17.0, gix-mailmap v0.28.0, gix-revision v0.37.0, gix-merge v0.8.0, gix-negotiate v0.23.0, gix-pack v0.62.0, gix-odb v0.72.0, gix-refspec v0.33.0, gix-transport v0.50.0, gix-protocol v0.53.0, gix-status v0.22.0, gix-submodule v0.22.0, gix-worktree-state v0.22.0, gix v0.75.0, gix-fsck v0.14.0, gitoxide-core v0.50.0, gitoxide v0.47.0, safety bump 32 crates ([`82ff92f`](https://github.com/GitoxideLabs/gitoxide/commit/82ff92fa943bad88dc7d5bfa100404de477a3608))
+    - Merge pull request #2230 from yuki0iq/doc_auto_cfg ([`fbf9c39`](https://github.com/GitoxideLabs/gitoxide/commit/fbf9c39c3ccd5e7879a2d7918aa157f7923cb8a5))
+    - Release gix-date v0.10.7, gix-actor v0.35.6, gix-trace v0.1.15, gix-features v0.44.1, gix-hash v0.20.1, gix-object v0.51.1, gix-glob v0.22.1, gix-attributes v0.28.1, gix-packetline-blocking v0.19.3, gix-commitgraph v0.30.1, gix-archive v0.23.1, gix-tempfile v19.0.1, gix-index v0.42.1, gix-config-value v0.15.3, gix-ignore v0.17.1, gix-worktree v0.43.1, gix-diff v0.54.1, gix-ref v0.54.1, gix-sec v0.12.2, gix-config v0.47.1, gix-url v0.33.1, gix-credentials v0.31.1, gix-mailmap v0.27.4, gix-revision v0.36.1, gix-pack v0.61.1, gix-odb v0.71.1, gix-packetline v0.19.3, gix-transport v0.49.1, gix-protocol v0.52.1, gix-status v0.21.1, gix v0.74.1 ([`bdcce5f`](https://github.com/GitoxideLabs/gitoxide/commit/bdcce5f2c6723ebe489dbe936a4656859ce1c2a5))
+    - Remove `doc_auto_cfg` feature to fix docs.rs documentation. ([`6f469a6`](https://github.com/GitoxideLabs/gitoxide/commit/6f469a6fea59c88e6c69a5f94b0bc8a5977cb75b))
+    - Merge pull request #2224 from GitoxideLabs/report ([`3313233`](https://github.com/GitoxideLabs/gitoxide/commit/3313233aa4e7009aed0ddf644f4271fd2a98e8d4))
+    - Release gix-date v0.10.6, gix-utils v0.3.1, gix-actor v0.35.5, gix-trace v0.1.14, gix-validate v0.10.1, gix-path v0.10.21, gix-features v0.44.0, gix-hash v0.20.0, gix-hashtable v0.10.0, gix-object v0.51.0, gix-glob v0.22.0, gix-quote v0.6.1, gix-attributes v0.28.0, gix-command v0.6.3, gix-packetline-blocking v0.19.2, gix-filter v0.21.0, gix-fs v0.17.0, gix-chunk v0.4.12, gix-commitgraph v0.30.0, gix-revwalk v0.22.0, gix-traverse v0.48.0, gix-worktree-stream v0.23.0, gix-archive v0.23.0, gix-bitmap v0.2.15, gix-tempfile v19.0.0, gix-lock v19.0.0, gix-index v0.42.0, gix-config-value v0.15.2, gix-pathspec v0.13.0, gix-ignore v0.17.0, gix-worktree v0.43.0, gix-diff v0.54.0, gix-blame v0.4.0, gix-ref v0.54.0, gix-sec v0.12.1, gix-config v0.47.0, gix-prompt v0.11.2, gix-url v0.33.0, gix-credentials v0.31.0, gix-discover v0.42.0, gix-dir v0.16.0, gix-mailmap v0.27.3, gix-revision v0.36.0, gix-merge v0.7.0, gix-negotiate v0.22.0, gix-pack v0.61.0, gix-odb v0.71.0, gix-refspec v0.32.0, gix-shallow v0.6.0, gix-packetline v0.19.2, gix-transport v0.49.0, gix-protocol v0.52.0, gix-status v0.21.0, gix-submodule v0.21.0, gix-worktree-state v0.21.0, gix v0.74.0, gix-fsck v0.13.0, gitoxide-core v0.49.0, gitoxide v0.46.0, safety bump 42 crates ([`89fb308`](https://github.com/GitoxideLabs/gitoxide/commit/89fb308f1283b404b55916304f7d161fbf13fe10))
+    - Merge pull request #2217 from GitoxideLabs/copilot/update-msrv-to-rust-1-82 ([`4da2927`](https://github.com/GitoxideLabs/gitoxide/commit/4da2927629c7ec95b96d62a387c61097e3fc71fa))
+    - Fixup Copilot commits and thank clippy ([`b188a7d`](https://github.com/GitoxideLabs/gitoxide/commit/b188a7d834979eaa940fd94ec269367cd922d16d))
+    - Update MSRV to 1.82 and replace once_cell with std equivalents ([`6cc8464`](https://github.com/GitoxideLabs/gitoxide/commit/6cc84641cb7be6f70468a90efaafcf142a6b8c4b))
+    - Merge pull request #2202 from GitoxideLabs/dependabot/cargo/cargo-4a7155215a ([`9365cc3`](https://github.com/GitoxideLabs/gitoxide/commit/9365cc3ae8ad92ba2703170ac2f9a1e4df2ac3be))
+    - Bump the cargo group across 1 directory with 64 updates ([`838ff95`](https://github.com/GitoxideLabs/gitoxide/commit/838ff95cca60c453bd97bd458ce31b384d00347e))
+    - Merge pull request #2115 from EliahKagan/run-ci/arm-windows ([`c2c8c2f`](https://github.com/GitoxideLabs/gitoxide/commit/c2c8c2fb13749b2f10d882cdbadafcb2e4c4dba3))
+    - Use `nul` instead of `NUL` on Windows ([`b24783a`](https://github.com/GitoxideLabs/gitoxide/commit/b24783accba4bdd39c0821564060a3b4f3745903))
+    - Merge pull request #2113 from GitoxideLabs/release ([`dc7343c`](https://github.com/GitoxideLabs/gitoxide/commit/dc7343c25ec6a62445e52694f7f0d3f95f31edef))
+    - Release gix-actor v0.35.4, gix-fs v0.16.1, gix-object v0.50.2, gix-ref v0.53.1 ([`79ba9d0`](https://github.com/GitoxideLabs/gitoxide/commit/79ba9d009ca7536fadfe27b4fa56d1460327c906))
+    - Merge pull request #2090 from GitoxideLabs/dependabot/cargo/cargo-f147714000 ([`473fe52`](https://github.com/GitoxideLabs/gitoxide/commit/473fe522e84569f77bf38294a412f0d13fa54d63))
+    - Bump the cargo group with 41 updates ([`428412c`](https://github.com/GitoxideLabs/gitoxide/commit/428412c9ff05caabb4f8714d5de769603e18a8f9))
+    - Merge pull request #2075 from GitoxideLabs/improvements ([`784c046`](https://github.com/GitoxideLabs/gitoxide/commit/784c0465bf87011fe7dbf71a590d3f9e6c8696a8))
+    - Release gix-date v0.10.3, gix-actor v0.35.2, gix-trace v0.1.13, gix-path v0.10.19, gix-features v0.43.0, gix-hash v0.19.0, gix-hashtable v0.9.0, gix-object v0.50.0, gix-glob v0.21.0, gix-attributes v0.27.0, gix-command v0.6.2, gix-packetline-blocking v0.19.1, gix-filter v0.20.0, gix-fs v0.16.0, gix-commitgraph v0.29.0, gix-revwalk v0.21.0, gix-traverse v0.47.0, gix-worktree-stream v0.22.0, gix-archive v0.22.0, gix-tempfile v18.0.0, gix-lock v18.0.0, gix-index v0.41.0, gix-config-value v0.15.1, gix-pathspec v0.12.0, gix-ignore v0.16.0, gix-worktree v0.42.0, gix-diff v0.53.0, gix-blame v0.3.0, gix-ref v0.53.0, gix-sec v0.12.0, gix-config v0.46.0, gix-prompt v0.11.1, gix-url v0.32.0, gix-credentials v0.30.0, gix-discover v0.41.0, gix-dir v0.15.0, gix-mailmap v0.27.2, gix-revision v0.35.0, gix-merge v0.6.0, gix-negotiate v0.21.0, gix-pack v0.60.0, gix-odb v0.70.0, gix-refspec v0.31.0, gix-shallow v0.5.0, gix-packetline v0.19.1, gix-transport v0.48.0, gix-protocol v0.51.0, gix-status v0.20.0, gix-submodule v0.20.0, gix-worktree-state v0.20.0, gix v0.73.0, gix-fsck v0.12.0, gitoxide-core v0.48.0, gitoxide v0.45.0, safety bump 43 crates ([`5a919c4`](https://github.com/GitoxideLabs/gitoxide/commit/5a919c48393020d47c7034946108577dd213b80a))
+    - Merge pull request #2033 from GitoxideLabs/dependabot/cargo/cargo-b72232998d ([`f8d7c0a`](https://github.com/GitoxideLabs/gitoxide/commit/f8d7c0ad8fa7745c973c6b87e7eee70831300207))
+    - Bump the cargo group with 56 updates ([`151e3a5`](https://github.com/GitoxideLabs/gitoxide/commit/151e3a5cca06444eea4c6a362649e66c831673d6))
+    - Merge pull request #2019 from GitoxideLabs/precious-opt-in ([`5f9de52`](https://github.com/GitoxideLabs/gitoxide/commit/5f9de52cf286163b503047b1ab3b51dfa093b4d4))
+    - Pattern parser in is now stateful to allow options for how to parse ignore patterns. ([`828e903`](https://github.com/GitoxideLabs/gitoxide/commit/828e9035a40796f79650cf5e3becb8d8e5e29883))
+    - Merge pull request #1992 from EliahKagan/run-ci/ouroboros ([`6acdc04`](https://github.com/GitoxideLabs/gitoxide/commit/6acdc040d880ebdef90f1cc4f1471b648de2afbe))
+    - Let `gix-testtools` use `gix-*` workspace crates ([`7e057f2`](https://github.com/GitoxideLabs/gitoxide/commit/7e057f2c73a70a2cd56bbc5484e6141feef2f014))
+    - Merge pull request #1975 from GitoxideLabs/improvements ([`28935a5`](https://github.com/GitoxideLabs/gitoxide/commit/28935a56ff91f1fc2c17a7d23b057cf7119144e9))
+    - Thanks clippy ([`dbf65c9`](https://github.com/GitoxideLabs/gitoxide/commit/dbf65c95644e6a134e7f9b75e7871479720b4deb))
+    - Merge pull request #1972 from GitoxideLabs/gix-testtools ([`d2f2333`](https://github.com/GitoxideLabs/gitoxide/commit/d2f2333271c4c7eac538203f43c41cb45df337df))
+</details>
+
 ## 0.16.1 (2025-04-27)
 
 ### Bug Fixes
@@ -16,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 1 commit contributed to the release.
+ - 2 commits contributed to the release.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -27,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-testtools v0.16.1 ([`48079a5`](https://github.com/GitoxideLabs/gitoxide/commit/48079a5f64703881d0939b5c5f3066596794ba8d))
     - Unify the dependency graph by choosing the right versions, upgrading to `gix-features 0.42` ([`9b12d50`](https://github.com/GitoxideLabs/gitoxide/commit/9b12d5007ca3ec98d061b6d2b94c7cdda4fcd3e4))
 </details>
 
@@ -196,14 +319,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    sense to enable this:
    
    - If automatically testing archive creation, or
-- As a way to check that all intended generated arhives are committed
-     (which is the motivating use case for this feature), or
-- If actually using CI to generate archives that will be uploaded
-     as artifacts, or
-- In unusual non-CI environments that are mis-detected as CI
-     (though that should usually be investigated and fixed, since some
-     software performs destructive operations more readily without
-     interactive checks when CI is detected).
 
 ### Bug Fixes
 
@@ -231,90 +346,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    falls back in an operating system specific manner:
    
    - Except on Windows, always fall back to `bash`, as before.
-- On Windows, run `git --exec-path` to find the `git-core`
-     directory. Then check if a `bash.exe` exists at the expected
-     location relative to that. In Git for Windows installations,
-     this will usually work. If so, use that path (with `..`
-     components resolved away).
-- On Windows, if a specific `bash.exe` is not found in that way,
-     then fall back to using the relative path `bash.exe`. This is to
-     preserve the ability to run `bash` on Windows systems where it
-     may have worked before even without `bash.exe` in an expected
-     location provided by a Git for Windows installation.
-- On most Windows systems, even if no WSL distribution is installed
-     and even if WSL itself is not set up, the `System32` directory
-     contains a `bash.exe` program associated with WSL. This program
-     attempts to use WSL to run `bash` in an installed distribution.
-     The `wsl.exe` program also provides this functionality and is
-     favored for this purpose, but the `bash.exe` program is still
-     present and is likely to remain for many years for compatibility.
-   
-     Even when this `bash` is usable, it is not suited for running
-     most shell scripts meant to operate on the native Windows system.
-     In particular, it is not suitable for running our fixture
-     scripts, which need to use the native `git` to prepare fixtures
-     to be used natively, among other requirements that would not be
-     satisfied with WSL (except when the tests are actually running in
-     WSL).
-   
-     Since some fixtures are `.gitignore`d because creating them on
-     the test system (rather than another system) is part of the test,
-     this has caused breakage in most Windows environments unless
-     `PATH` is modified -- either explicitly or by testing in an MSYS2
-     environment, such as the Git Bash environment -- whether or not
-     `GIX_TEST_IGNORE_ARCHIVES` is set. This was the cause of #1359.
-- Although using a Git Bash environment or otherwise adjusting the
-     path *currently* works, the reasons it works are subtle and rely
-     on non-guaranteed behavior of `std::process::Command` path search
-     that may change without warning.
-   
-     On Windows, processes are created by calling the `CreateProcessW`
-     API function. `CreateProcessW` is capable of performing a `PATH`
-     search, but this `PATH` search is not secure in most uses, since
-     it includes the current directory (and searches it before `PATH`
-     directories) unless `NoDefaultCurrentDirectoryInExePath` is set
-     in the caller's environment.
-   
-     While it is the most relevant to security, the CWD is not the
-     only location `CreateProcessW` searches before searching `PATH`
-     directories (and regardless of where, if anywhere, they may also
-     appear in `PATH`). Another such location is the `System32`
-     directory. This is to say that, even when another directory with
-     `bash.exe` precedes `System32` in `PATH`, an executable search
-     will still find the WSL-associated `bash.exe` in `System32`
-     unless it deviates from the algorithm `CreateProcessW` uses.
-   
-     To avoid including the CWD in the search, `std::process::Command`
-     performs its own path search, then passes the resolved path to
-     `CreateProcessW`. The path search it performs is currently almost
-     the same the algorithm `CreateProcessW` uses, other than not
-     automatically including the CWD. But there are some other subtle
-     differences.
-   
-     One such difference is that, when the `Command` instance is
-     configured to create a modified child environment (for example,
-     by `env` calls), the `PATH` for the child is searched early on.
-     This precedes a search of the `System32` directory. It is done
-     even if none of the customizations of the child environment
-     modify its `PATH`.
-   
-     This behavior is not guaranteed, and it may change at any time.
-     It is also the behavior we rely on inadvertently every time we
-     run `bash` on Windows with a `std::process::Command` instance
-     constructed by passing `bash` or `bash.exe` as the `program`
-     argument: it so happens that we are also customizing the child
-     environment, and due to implementation details in the Rust
-     standard library, this manages to find a non-WSL `bash` when
-     the tests are run in Git Bash, in GitHub Actions jobs, and in
-     some other cases.
-   
-     If in the future this is not done, or narrowed to be done only
-     when `PATH` is one of the environment variables customized for
-     the child process, then putting the directory with the desired
-     `bash.exe` earlier than the `System32` directory in `PATH` will
-     no longer prevent `std::proces::Command` from finding the
-     `bash.exe` in `System32` as `CreateProcessW` would and using it.
-     Then it would be nontrivial to run the test suite on Windows.
 1. This only modifies how test fixture scripts are run. It only
       affects the behavior of `gix-testtools`, and not of any other
       gitoxide crates such as `gix-command`. This is because:
@@ -332,6 +363,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
         Perl. (The fallback here does not examine leading `#!` lines.)
    
       - Although a `bash.exe` located at the usual place relative to
+        (but outside of) the `git-core` directory is usually suitable,
+        there may be scenarios where running an executable found this
+        way is not safe. Limiting it to `gix-testtools` pending
+        further research may help mitigate this risk.
+   - We know our test fixture scripts are all (at least currently)
+        `bash` scripts, and this seems likely for other software that
+        currently uses this functionality of `gix-testtools`. But
+        scripts that are run as hooks, or as custom commands, or
+        filters, etc., are often written in other languages, such as
+        Perl. (The fallback here does not examine leading `#!` lines.)
+   - Although a `bash.exe` located at the usual place relative to
         (but outside of) the `git-core` directory is usually suitable,
         there may be scenarios where running an executable found this
         way is not safe. Limiting it to `gix-testtools` pending
@@ -550,7 +592,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 </details>
 
 <csr-unknown>
-The usual reason for not generating archives on CI is that theywould not typically be preserved. Thus refraining from generatingthem on CI remains the default behavior.Like the GIX_TEST_IGNORE_ARCHIVES environment variable, the newvariable GIX_TEST_CREATE_ARCHIVES_EVEN_ON_CI is currentlyinterpreted as “true” based solely on its presence. This is to saythat is actual value is currently not examined.(The distinction between bash and bash.exe is only slightlysignificant: we check for the existence of the interpreter withoutinitially running it, and that check requires the full filename.It is called bash.exe elsewhere for consistency both with thechecked-for executable and for consistencey with how we run mostother programs on Windows, e.g., the git vs. git.exe.)This fixes #1359. That bug is not currently observed on CI, butthis change is verified to fix it on a local test system where itpreviously always occurred when running the test suite fromPowerShell in an unmodified environment. The fix applies both withGIX_TEST_IGNORE_ARCHIVES unset, in which case there are now nofailures, and with GIX_TEST_IGNORE_ARCHIVES=1, in which case thefailures are now limited to the 15 cases tracked in #1358.Previously, fixture scripts had been run on Windows with whateverbash was found in a PATH search, which had two problems:For references and other details, see #1359 and comments including:https://github.com/GitoxideLabs/gitoxide/issues/1359#issuecomment-2316614616On the approach of finding the Git for Windows bash.exe relativeto the git-core directory, see the GitPython pull requesthttps://github.com/gitpython-developers/GitPython/pull/1791, itscomments, and the implementation of the approach by @emanspeaks:https://github.com/gitpython-developers/GitPython/blob/f065d1fba422a528a133719350e027f1241273df/git/cmd.py#L398-L403Two possible future enhancements are not included in this commit:As in other runs of git by gix-testools, this callsgit.exe, letting std::process::Command do an executablesearch, but not trying any additional locations where Git isknown sometimes to be installed. This does not find git.exe inas many situations as gix_path::env::exe_invocation does.The reasons for not (or not quite yet) including that change are: Double the fixture lock timeoutThis increases the lock timeout used in gix-testtools from 3 min6 min. This seems to fix #1605. Unset other env vars related to GIT_DIR for fixturesThis removes other environment variables that have an effectconceptually related to GIT_DIR even when GIT_DIR is not set.Most of them change where git will look for files that areordinarily in a repository’s .git directory. In contrast,GIT_WORK_TREE changes where the working tree is found.These would rarely be set in the environment in which the tests arerun, but it makes sense to unset them for the same reason asunsetting GIT_DIR, which is already done.The new remove_env calls are roughly in the order in which thevariables they unset are listed in git(1).This deliberately does not attempt to unset every possibleenvironment variable that git(1) documents as affecting itsbehavior. This is for four reasons:However, this is not to say that all environment variables thatwould make sense to remove have necessarily been removed.The removed variables here differ from those removed for the gitinvocation in gix-path/src/env/git/mod.rs for two reasons: Append to preexisting MSYS env var even if ill-formedThe value of an environment variable as obtained by the facilitiesin std::env is not always well-formed Unicode. Specifically, onWindows the values of environment variables, like paths, arenatively UTF-16LE strings except that unpaired surrogate codepoints can also occur. An &OsStr on Windows may accordingly notquite be UTF-8.When the MSYS variable is absent, we treat this the same as whenit is present but empty. However, as described in #1574, an MSYSvariable that is present but whose value contains an unpairedsurrogate would also be replaced entirely, rather than appending toits old value.This changes that, to instead append, retaining whatever was thereeven if it was ill-formed Unicode.An alternative change could be to panic when the old value isill-formed Unicode. This commit allows and appends to the oldvalue, rather than panicking or keeping and documenting theprevious behavior of discarding the old value, because the appendedsequence  winsymlinks:nativestrict is effective at causingfixture scripts to attempt to create actual symlinks even ifthe preceding code point is an unpaired Unicode high surrogate. Omit other high-scoped config in fixturesIn addition to keeping fixture scripts from receiving global andsystem scope Git configuration variables, as was already done, thisalso omits configuration variables from high scopes similar to orabove the system scope, associated with the Git installation butseparate from the system scope.The main and possibly only case where this happens is the “unknown”scope associated with an Apple Git installation on macOS. This is afile usually located under /Library or /Applications.This is done by using GIT_CONFIG_NOSYSTEM, which suppresses boththe system scope and this separate “unknown” scope, instead of bysettng GIT_CONFIG_SYSTEM to a path like /dev/null. The latterapproach continues to be used to omit global scope config viaGIT_CONFIG_GLOBAL (as git recognized no GIT_CONFIG_NOGLOBAL). Omit system/global config in fixtures regardless of contentsThis uses the null device, /dev/null on Unix-like systems andNUL on Windows, as the value of GIT_CONFIG_SYSTEM andGIT_CONFIG_GLOBAL when gix-testtols runs test fixture shellscripts./dev/null is explicitly recommended for this purpose, whensetting those environment variables for the purpose of preventingconfiguration files from being read, in the Git documentation:On Windows, NUL is an analogue of /dev/null. Even in theunusual scenario that a \\?\ prefixed UNC path is used to createan actual file named NUL in the directory the fixture scriptoperates in, the relative path NUL still resolves to the nulldevice and not to that file.The previous behavior was to use a value of : on Unix-likesystems or - on Windows. But these were really just unusual butvalid paths, such that files of those names could exist in anylocation. git furthermore treats them as paths: a : is notspecial in these environment variables because they hold a singlepath rather than a list of paths, and a - is not special (forexample, it does not specify stdin) because it appears in anenvironment variable rather than a command-line argument.While : and - are unusual filenames, this code is used intesting, including of edge cases where unusual files may be used.So this change may make the test tools slightly more robust. Let gix_testtools::Env undo multiple changes to the same varPreviously, an Env instance would restore the original state ondrop if no more than one modification was made to any one variablethrough it, but would restore an intermediate state if the samevariable was ever set multiple times, unset multiple times, or bothset and unset in any order.The state it would restore for each variable was its stateimmediately before the most recent modification (through the Envinstance) that affected it, rather than its original state beforethe first time it was modified through that Env instance.This fixes that by undoing the changes in the opposite of the orderthey were made. assure archives are unique if their generator-scripts are called with arguments.Previously there was a race condition that would cause archives to be created either withor without arguments, depending on which test was run first.After its creation, they wouldn’t be looked at again as on disk they would already be availablein their usable form.<csr-unknown/>
+As a way to check that all intended generated arhives are committed(which is the motivating use case for this feature), orIf actually using CI to generate archives that will be uploadedas artifacts, orIn unusual non-CI environments that are mis-detected as CI(though that should usually be investigated and fixed, since somesoftware performs destructive operations more readily withoutinteractive checks when CI is detected).On Windows, run git --exec-path to find the git-coredirectory. Then check if a bash.exe exists at the expectedlocation relative to that. In Git for Windows installations,this will usually work. If so, use that path (with ..components resolved away).On Windows, if a specific bash.exe is not found in that way,then fall back to using the relative path bash.exe. This is topreserve the ability to run bash on Windows systems where itmay have worked before even without bash.exe in an expectedlocation provided by a Git for Windows installation.On most Windows systems, even if no WSL distribution is installedand even if WSL itself is not set up, the System32 directorycontains a bash.exe program associated with WSL. This programattempts to use WSL to run bash in an installed distribution.The wsl.exe program also provides this functionality and isfavored for this purpose, but the bash.exe program is stillpresent and is likely to remain for many years for compatibility.Even when this bash is usable, it is not suited for runningmost shell scripts meant to operate on the native Windows system.In particular, it is not suitable for running our fixturescripts, which need to use the native git to prepare fixturesto be used natively, among other requirements that would not besatisfied with WSL (except when the tests are actually running inWSL).Since some fixtures are .gitignored because creating them onthe test system (rather than another system) is part of the test,this has caused breakage in most Windows environments unlessPATH is modified – either explicitly or by testing in an MSYS2environment, such as the Git Bash environment – whether or notGIX_TEST_IGNORE_ARCHIVES is set. This was the cause of #1359.Although using a Git Bash environment or otherwise adjusting thepath currently works, the reasons it works are subtle and relyon non-guaranteed behavior of std::process::Command path searchthat may change without warning.On Windows, processes are created by calling the CreateProcessWAPI function. CreateProcessW is capable of performing a PATHsearch, but this PATH search is not secure in most uses, sinceit includes the current directory (and searches it before PATHdirectories) unless NoDefaultCurrentDirectoryInExePath is setin the caller’s environment.While it is the most relevant to security, the CWD is not theonly location CreateProcessW searches before searching PATHdirectories (and regardless of where, if anywhere, they may alsoappear in PATH). Another such location is the System32directory. This is to say that, even when another directory withbash.exe precedes System32 in PATH, an executable searchwill still find the WSL-associated bash.exe in System32unless it deviates from the algorithm CreateProcessW uses.To avoid including the CWD in the search, std::process::Commandperforms its own path search, then passes the resolved path toCreateProcessW. The path search it performs is currently almostthe same the algorithm CreateProcessW uses, other than notautomatically including the CWD. But there are some other subtledifferences.One such difference is that, when the Command instance isconfigured to create a modified child environment (for example,by env calls), the PATH for the child is searched early on.This precedes a search of the System32 directory. It is doneeven if none of the customizations of the child environmentmodify its PATH.This behavior is not guaranteed, and it may change at any time.It is also the behavior we rely on inadvertently every time werun bash on Windows with a std::process::Command instanceconstructed by passing bash or bash.exe as the programargument: it so happens that we are also customizing the childenvironment, and due to implementation details in the Ruststandard library, this manages to find a non-WSL bash whenthe tests are run in Git Bash, in GitHub Actions jobs, and insome other cases.If in the future this is not done, or narrowed to be done onlywhen PATH is one of the environment variables customized forthe child process, then putting the directory with the desiredbash.exe earlier than the System32 directory in PATH willno longer prevent std::proces::Command from finding thebash.exe in System32 as CreateProcessW would and using it.Then it would be nontrivial to run the test suite on Windows.<csr-unknown/>
 
 ## 0.15.0 (2024-06-23)
 

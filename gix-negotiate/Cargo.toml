@@ -21,7 +21,7 @@ gix-object = { version = "^0.55.0", path = "../gix-object" }
 gix-date = { version = "^0.13.0", path = "../gix-date" }
 gix-commitgraph = { version = "^0.32.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.26.0", path = "../gix-revwalk" }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 smallvec = "1.15.1"
 bitflags = "2"
 

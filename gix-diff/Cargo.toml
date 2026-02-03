@@ -39,6 +39,11 @@ wasm = ["dep:getrandom"]
 [lib]
 doctest = false
 
+[[bench]]
+name = "line-count"
+harness = false
+path = "./benches/line_count.rs"
+
 [dependencies]
 gix-index = { version = "^0.46.0", path = "../gix-index", optional = true }
 gix-pathspec = { version = "^0.15.0", path = "../gix-pathspec", optional = true }
@@ -54,14 +59,18 @@ gix-tempfile = { version = "^21.0.0", path = "../gix-tempfile", optional = true 
 gix-trace = { version = "^0.1.17", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.52.0", path = "../gix-traverse", optional = true }
 
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 imara-diff = { version = "0.1.8", optional = true }
 imara-diff-v2 = { version = "0.2.0", optional = true, package = "imara-diff" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
-getrandom = { version = "0.2.8", optional = true, default-features = false, features = ["js"] }
+getrandom = { version = "0.2.17", optional = true, default-features = false, features = ["js"] }
 bstr = { version = "1.12.0", default-features = false }
 
 document-features = { version = "0.2.0", optional = true }
+
+[dev-dependencies]
+criterion = "0.8.0"
+imara-diff-v2 = { version = "0.2.0", package = "imara-diff" }
 
 [package.metadata.docs.rs]
 all-features = true

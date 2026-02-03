@@ -23,7 +23,7 @@ mod error {
         #[error(transparent)]
         ChunkFileQuery(#[from] gix_error::Message),
         #[error(transparent)]
-        ChunkFileDecode(#[from] gix_error::ParseError),
+        ChunkFileDecode(#[from] gix_error::ValidationError),
         #[error("The multi-pack fan doesn't have the correct size of 256 * 4 bytes")]
         MultiPackFanSize,
         #[error(transparent)]

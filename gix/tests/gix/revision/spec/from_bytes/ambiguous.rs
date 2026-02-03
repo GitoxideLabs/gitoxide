@@ -55,7 +55,7 @@ fn fully_failed_disambiguation_still_yields_an_ambiguity_error() {
     "#);
 
     insta::assert_snapshot!(format!("{err:#}"), @r#"
-    ParseError { message: "delegate.peel_until(ObjectKind(Tag)) failed", input: Some("{tag}") }
+    ValidationError { message: "delegate.peel_until(ObjectKind(Tag)) failed", input: Some("{tag}") }
     |
     └─ Message("Short id 0000000000 is ambiguous. Candidates are:\n\t0000000000e commit 2005-04-07 \"a2onsxbvj\"\n\t0000000000c tree\n\t0000000000b blob")
         |

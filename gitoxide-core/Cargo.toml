@@ -61,7 +61,7 @@ gix-fsck = { version = "^0.17.0", path = "../gix-fsck" }
 gix-error-for-configuration-only = { package = "gix-error", version = "^0.0.0", path = "../gix-error", features = ["anyhow"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 anyhow = "1.0.100"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 bytesize = "2.3.1"
 tempfile = "3.24.0"
 
@@ -87,8 +87,8 @@ rusqlite = { version = "0.38.0", optional = true, features = ["bundled", "fallib
 
 # for 'corpus'
 parking_lot = { version = "0.12.4", optional = true }
-sysinfo = { version = "0.37.2", optional = true, default-features = false, features = ["system"] }
-serde_json = { version = "1.0.148", optional = true }
+sysinfo = { version = "0.38.0", optional = true, default-features = false, features = ["system"] }
+serde_json = { version = "1.0.149", optional = true }
 tracing-forest = { version = "0.2.0", features = ["serde"], optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 tracing = { version = "0.1.43", optional = true }

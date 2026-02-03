@@ -24,6 +24,7 @@ pub(crate) fn base_options(lossy: bool, lenient: bool) -> gix_config::file::init
     }
 }
 
+/// Also sets the default if it's not set!
 pub(crate) fn config_bool(
     config: &gix_config::File<'_>,
     key: &'static config::tree::keys::Boolean,
@@ -42,6 +43,24 @@ pub(crate) fn config_bool(
         .map_or(Ok(default), |res| key.enrich_error(res))
         .map_err(Error::from)
         .with_lenient_default(lenient)
+}
+
+pub(crate) fn config_bool_opt(
+    config: &gix_config::File<'_>,
+    key: &'static config::tree::keys::Boolean,
+    key_str: &str,
+    lenient: bool,
+) -> Result<Option<bool>, Error> {
+    use config::tree::Key;
+    debug_assert_eq!(
+        key_str,
+        key.logical_name(),
+        "BUG: key name and hardcoded name must match"
+    );
+    config
+        .boolean(key_str)
+        .map(|res| key.enrich_error(res).map_err(Error::from).with_lenient_default(lenient))
+        .transpose()
 }
 
 pub(crate) fn query_refupdates(

@@ -15,7 +15,7 @@ pub mod time;
 pub mod parse;
 pub use parse::function::{parse, parse_header};
 
-pub use gix_error::ParseError as Error;
+pub use gix_error::ValidationError as Error;
 
 /// A timestamp with timezone.
 #[derive(Default, PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]

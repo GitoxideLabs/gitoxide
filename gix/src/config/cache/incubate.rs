@@ -12,7 +12,7 @@ pub(crate) struct StageOne {
     pub git_dir_config: gix_config::File<'static>,
     pub buf: Vec<u8>,
 
-    pub is_bare: bool,
+    pub is_bare: Option<bool>,
     pub lossy: bool,
     pub object_hash: gix_hash::Kind,
     pub reflog: Option<gix_ref::store::WriteReflog>,
@@ -39,9 +39,7 @@ impl StageOne {
             lenient,
         )?;
 
-        // Note that we assume the repo is bare by default unless we are told otherwise. This is relevant if
-        // the repo doesn't have a configuration file.
-        let is_bare = util::config_bool(&config, &Core::BARE, "core.bare", true, lenient)?;
+        let is_bare = util::config_bool_opt(&config, &Core::BARE, "core.bare", lenient)?;
         let repo_format_version = config
             .integer("core.repositoryFormatVersion")
             .map(|version| Core::REPOSITORY_FORMAT_VERSION.try_into_usize(version))

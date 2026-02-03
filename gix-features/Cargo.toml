@@ -108,8 +108,8 @@ bytesize = { version = "2.3.1", optional = true }
 bytes = { version = "1.0.0", optional = true }
 
 # zlib module
-zlib-rs = { version = "0.5.5", optional = true }
-thiserror = { version = "2.0.17", optional = true }
+zlib-rs = { version = "0.6.0", optional = true }
+thiserror = { version = "2.0.18", optional = true }
 
 # Note: once_cell is kept for OnceCell type because std::sync::OnceLock::get_or_try_init() is not yet stable.
 # Once it's stabilized (tracking issue #109737), we can remove this dependency.
@@ -118,7 +118,7 @@ once_cell = { version = "1.21.3", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = { version = "0.2.178" }
+libc = { version = "0.2.180" }
 
 [dev-dependencies]
 bstr = { version = "1.12.0", default-features = false }

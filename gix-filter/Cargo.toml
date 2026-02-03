@@ -27,7 +27,7 @@ gix-attributes = { version = "^0.30.0", path = "../gix-attributes" }
 
 encoding_rs = "0.8.32"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 smallvec = "1.15.1"
 
 
@@ -36,4 +36,4 @@ gix-quote = { path = "../gix-quote" }
 gix-testtools = { path = "../tests/tools" }
 gix-worktree = { path = "../gix-worktree", default-features = false, features = ["attributes"] }
 
-serial_test = { version = "3.1.0", default-features = false }
+serial_test = { version = "3.3.1", default-features = false }

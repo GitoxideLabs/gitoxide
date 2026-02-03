@@ -43,7 +43,7 @@ fn lenient_parsing() -> gix_testtools::Result {
         let err = signature.write_to(&mut output).unwrap_err();
         assert_eq!(
             err.to_string(),
-            r"Signature name or email must not contain '<', '>' or \n",
+            format!(r"Signature name or email must not contain '<', '>' or \n: {expected_email}"),
             "this isn't roundtrippable as the name is technically incorrect - must not contain brackets"
         );
     }

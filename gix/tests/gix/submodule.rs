@@ -436,7 +436,7 @@ mod open {
             let sm_repo = sm.open()?.expect("initialized");
             assert_eq!(
                 sm_repo.kind(),
-                gix::repository::Kind::WorkTree { is_linked: false },
+                gix::repository::Kind::Common,
                 "old submodules aren't recognized as such because it would require reading a lot of additional data"
             );
             assert_eq!(

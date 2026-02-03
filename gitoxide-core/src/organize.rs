@@ -20,7 +20,14 @@ pub fn find_git_repository_workdirs(
     threads: Option<usize>,
 ) -> impl Iterator<Item = (PathBuf, gix::repository::Kind)> {
     progress.init(None, progress::count("filesystem items"));
-    fn is_repository(path: &Path) -> Option<gix::repository::Kind> {
+
+    #[derive(Debug, Clone, Copy)]
+    struct RepoInfo {
+        kind: gix::repository::Kind,
+        is_bare: bool,
+    }
+
+    fn is_repository(path: &Path) -> Option<RepoInfo> {
         // Can be git dir or worktree checkout (file)
         if path.file_name() != Some(OsStr::new(".git")) && path.extension() != Some(OsStr::new("git")) {
             return None;
@@ -28,17 +35,35 @@ pub fn find_git_repository_workdirs(
 
         if path.is_dir() {
             if path.join("HEAD").is_file() && path.join("config").is_file() {
-                gix::discover::is_git(path).ok().map(Into::into)
+                gix::discover::is_git(path).ok().map(|discovered_kind| {
+                    let is_bare = discovered_kind.is_bare();
+                    let kind = match discovered_kind {
+                        gix::discover::repository::Kind::PossiblyBare => gix::repository::Kind::Common,
+                        gix::discover::repository::Kind::WorkTree { linked_git_dir: None } => {
+                            gix::repository::Kind::Common
+                        }
+                        gix::discover::repository::Kind::WorkTree {
+                            linked_git_dir: Some(_),
+                        } => gix::repository::Kind::LinkedWorkTree,
+                        gix::discover::repository::Kind::WorkTreeGitDir { .. } => gix::repository::Kind::LinkedWorkTree,
+                        gix::discover::repository::Kind::Submodule { .. } => gix::repository::Kind::Submodule,
+                        gix::discover::repository::Kind::SubmoduleGitDir => gix::repository::Kind::Submodule,
+                    };
+                    RepoInfo { kind, is_bare }
+                })
             } else {
                 None
             }
         } else {
-            // git files are always worktrees
-            Some(gix::repository::Kind::WorkTree { is_linked: true })
+            // git files are always linked worktrees
+            Some(RepoInfo {
+                kind: gix::repository::Kind::LinkedWorkTree,
+                is_bare: false,
+            })
         }
     }
-    fn into_workdir(git_dir: PathBuf, kind: &gix::repository::Kind) -> PathBuf {
-        if matches!(kind, gix::repository::Kind::Bare) || gix::discover::is_bare(&git_dir) {
+    fn into_workdir(git_dir: PathBuf, info: &RepoInfo) -> PathBuf {
+        if info.is_bare {
             git_dir
         } else {
             git_dir.parent().expect("git is never in the root").to_owned()
@@ -47,7 +72,7 @@ pub fn find_git_repository_workdirs(
 
     #[derive(Debug, Default)]
     struct State {
-        kind: Option<gix::repository::Kind>,
+        info: Option<RepoInfo>,
     }
 
     let walk = jwalk::WalkDirGeneric::<((), State)>::new(root)
@@ -64,9 +89,9 @@ pub fn find_git_repository_workdirs(
         let mut found_bare_repo = false;
         for entry in siblings.iter_mut().flatten() {
             let path = entry.path();
-            if let Some(kind) = is_repository(&path) {
-                let is_bare = kind.is_bare();
-                entry.client_state = State { kind: kind.into() };
+            if let Some(info) = is_repository(&path) {
+                let is_bare = info.is_bare;
+                entry.client_state = State { info: info.into() };
                 entry.read_children_path = None;
 
                 found_any_repo = true;
@@ -76,7 +101,7 @@ pub fn find_git_repository_workdirs(
         // Only return paths which are repositories are further participating in the traversal
         // Don't let bare repositories cause siblings to be pruned.
         if found_any_repo && !found_bare_repo {
-            siblings.retain(|e| e.as_ref().map(|e| e.client_state.kind.is_some()).unwrap_or(false));
+            siblings.retain(|e| e.as_ref().map(|e| e.client_state.info.is_some()).unwrap_or(false));
         }
     })
     .into_iter()
@@ -84,9 +109,9 @@ pub fn find_git_repository_workdirs(
     .filter_map(Result::ok)
     .filter_map(|mut e| {
         e.client_state
-            .kind
+            .info
             .take()
-            .map(|kind| (into_workdir(e.path(), &kind), kind))
+            .map(|info| (into_workdir(e.path(), &info), info.kind))
     })
 }
 
@@ -108,7 +133,8 @@ fn handle(
     canonicalized_destination: &Path,
     progress: &mut impl Progress,
 ) -> anyhow::Result<()> {
-    if let gix::repository::Kind::WorkTree { is_linked: true } = kind {
+    // Skip linked worktrees - we only handle Common and Submodule kinds
+    if matches!(kind, gix::repository::Kind::LinkedWorkTree) {
         return Ok(());
     }
     fn to_relative(path: PathBuf) -> PathBuf {
@@ -173,13 +199,24 @@ fn handle(
             let mut path = gix_url::expand_path(None, url.path.as_bstr())?;
             match kind {
                 gix::repository::Kind::Submodule => {
-                    unreachable!("BUG: We should not try to relocated submodules and not find them the first place")
+                    unreachable!("BUG: We should not try to relocate submodules and not find them the first place")
                 }
-                gix::repository::Kind::Bare => path,
-                gix::repository::Kind::WorkTree { .. } => {
-                    if let Some(ext) = path.extension() {
-                        if ext == "git" {
-                            path.set_extension("");
+                gix::repository::Kind::LinkedWorkTree => {
+                    unreachable!("BUG: LinkedWorkTree should have been skipped earlier")
+                }
+                gix::repository::Kind::Common => {
+                    // For Common kind, check if it's bare
+                    let git_dir = if git_workdir.join(".git").is_dir() {
+                        git_workdir.join(".git")
+                    } else {
+                        git_workdir.to_owned()
+                    };
+                    if !gix::discover::is_bare(&git_dir) {
+                        // Non-bare repository - strip .git extension if present
+                        if let Some(ext) = path.extension() {
+                            if ext == "git" {
+                                path.set_extension("");
+                            }
                         }
                     }
                     path

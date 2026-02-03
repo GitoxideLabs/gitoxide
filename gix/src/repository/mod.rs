@@ -1,20 +1,17 @@
 //!
 #![allow(clippy::empty_docs)]
 
-/// The kind of repository.
+/// The kind of Git repository, focussing on the repository data itself, i.e. what's in `.git`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Kind {
+    /// An ordinary Git repository.
+    Common,
     /// A submodule worktree, whose `git` repository lives in `.git/modules/**/<name>` of the parent repository.
     ///
-    /// Note that 'old-form' submodule will register as `Worktree {is_linked: false}`.
+    /// Note that 'old-form' submodules (with a nested `.git` directory) are represented as [`Kind::Common`].
     Submodule,
-    /// A bare repository does not have a work tree, that is files on disk beyond the `git` repository itself.
-    Bare,
-    /// A `git` repository along with a checked out files in a work tree.
-    WorkTree {
-        /// If true, this is the git dir associated with this _linked_ worktree, otherwise it is a repository with _main_ worktree.
-        is_linked: bool,
-    },
+    /// A worktree, whose `git` repository lives in `.git/worktrees/**/<name>` of the parent repository.
+    LinkedWorkTree,
 }
 
 #[cfg(any(feature = "attributes", feature = "excludes"))]
@@ -44,7 +41,6 @@ mod impls;
 #[cfg(feature = "index")]
 mod index;
 pub(crate) mod init;
-mod kind;
 mod location;
 #[cfg(feature = "mailmap")]
 mod mailmap;

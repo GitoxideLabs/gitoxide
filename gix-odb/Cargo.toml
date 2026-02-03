@@ -31,7 +31,7 @@ gix-fs = { version = "^0.19.0", path = "../gix-fs" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 tempfile = "3.24.0"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 parking_lot = { version = "0.12.4" }
 arc-swap = "1.8.0"
 

@@ -18,7 +18,7 @@ doctest = false
 gix-command = { version = "^0.7.0", path = "../gix-command" }
 gix-config-value = { version = "^0.17.0", path = "../gix-config-value" }
 
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.2", features = ["termios"] }
@@ -26,7 +26,7 @@ parking_lot = "0.12.4"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
-serial_test = { version = "3.1.0", default-features = false }
+serial_test = { version = "3.3.1", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "macos"))'.dev-dependencies]
 expectrl = "0.7.0"

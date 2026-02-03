@@ -1,7 +1,7 @@
 use std::{str::FromStr, time::SystemTime};
 
 use crate::Error;
-use gix_error::{ensure, Exn, ParseError, ResultExt};
+use gix_error::{ensure, Exn, ResultExt, ValidationError};
 use jiff::{tz::TimeZone, Span, Timestamp, Zoned};
 
 fn parse_inner(input: &str) -> Option<Result<Span, Exn<Error>>> {
@@ -21,8 +21,8 @@ pub fn parse(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn<E
         // it would fail when converting from a negative signed integer
         // to an unsigned integer. This preserves that failure case even
         // though the code below handles it okay.
-        ensure!(!span.is_negative(), ParseError::new(""));
-        let now = now.ok_or(ParseError::new("Missing current time"))?;
+        ensure!(!span.is_negative(), ValidationError::new(""));
+        let now = now.ok_or(ValidationError::new("Missing current time"))?;
         let ts: Timestamp = Timestamp::try_from(now).or_raise(|| Error::new("Could not convert current time"))?;
         // N.B. This matches the behavior of this code when it was
         // written with `time`, but we might consider using the system

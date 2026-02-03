@@ -293,6 +293,7 @@ fn from_nonbare_parent_repo_set_workdir() -> gix_testtools::Result {
 
 fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
     assert_eq!(main_repo.is_bare(), should_be_bare);
+    assert_eq!(main_repo.kind(), gix::repository::Kind::Common);
     let mut baseline = Baseline::collect(
         main_repo
             .workdir()

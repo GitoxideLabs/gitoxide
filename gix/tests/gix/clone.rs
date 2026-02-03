@@ -770,6 +770,7 @@ fn clone_and_early_persist_without_receive() -> crate::Result {
     )?
     .persist();
     assert!(repo.is_bare(), "repo is now ours and remains");
+    assert_eq!(repo.kind(), gix::repository::Kind::Common);
     Ok(())
 }
 

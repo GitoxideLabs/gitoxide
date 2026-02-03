@@ -26,7 +26,7 @@
 //!
 //! ## Specialised types
 //!
-//! - [`ParseError`]
+//! - [`ValidationError`]
 //!    - like [`Message`], but can optionally store the input that caused the failure.
 //!
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
@@ -95,7 +95,7 @@ mod error;
 mod concrete;
 pub use concrete::chain::ChainedError;
 pub use concrete::message::{message, Message};
-pub use concrete::parse::ParseError;
+pub use concrete::validate::ValidationError;
 
 pub(crate) fn write_location(f: &mut std::fmt::Formatter<'_>, location: &std::panic::Location) -> std::fmt::Result {
     write!(f, ", at {}:{}", location.file(), location.line())

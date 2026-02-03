@@ -29,6 +29,6 @@ gix-pack = { path = "../../gix-pack" }
 gix-testtools = { path = "../../tests/tools" }
 gix-actor = { path = "../../gix-actor" }
 pretty_assertions = "1.0.0"
-filetime = "0.2.15"
+filetime = "0.2.27"
 maplit = "1.0.2"
 crossbeam-channel = "0.5.15"

@@ -256,7 +256,7 @@ impl ThreadSafeRepository {
         )?;
 
         // core.worktree might be used to overwrite the worktree directory
-        if !config.is_bare {
+        let worktree_dir_override_from_configuration = if !config.is_bare_but_assume_bare_if_unconfigured() {
             let mut key_source = None;
             fn assure_config_is_from_current_repo(
                 section: &gix_config::file::Metadata,
@@ -318,29 +318,26 @@ impl ThreadSafeRepository {
                     config::key::GenericErrorWithValue::from(&Core::WORKTREE),
                 )));
             }
-        }
+            true
+        } else {
+            false
+        };
 
         {
             let looks_like_standard_git_dir =
                 || refs.git_dir().file_name() == Some(OsStr::new(gix_discover::DOT_GIT_DIR));
             match worktree_dir {
-                None if !config.is_bare && looks_like_standard_git_dir() => {
+                None if !config.is_bare_but_assume_bare_if_unconfigured() && looks_like_standard_git_dir() => {
                     worktree_dir = Some(git_dir.parent().expect("parent is always available").to_owned());
                 }
                 Some(_) => {
                     // We may assume that the presence of a worktree-dir means it's not bare, but only if there
                     // is no configuration saying otherwise.
-                    // Thus, if we are here and the common-dir config claims it's bare and we have inferred a worktree anyway,
+                    // Thus, if we are here and the common-dir config claims it's bare, and we have inferred a worktree anyway,
                     // forget about it.
-                    if looks_like_standard_git_dir()
-                        && config
-                            .resolved
-                            .boolean_filter("core.bare", |md| md.source == gix_config::Source::Local)
-                            .transpose()
-                            .ok()
-                            .flatten()
-                            .is_some()
-                        && config.is_bare
+                    if !worktree_dir_override_from_configuration
+                        && refs.git_dir().ancestors().nth(1).and_then(|p| p.file_name()) != Some("worktrees".as_ref())
+                        && config.is_bare.unwrap_or_default()
                     {
                         worktree_dir = None;
                     }

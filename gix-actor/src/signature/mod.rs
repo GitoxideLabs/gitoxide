@@ -100,20 +100,6 @@ pub(crate) mod write {
 
     use crate::{Signature, SignatureRef};
 
-    /// The Error produced by [`Signature::write_to()`].
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub(crate) enum Error {
-        #[error(r"Signature name or email must not contain '<', '>' or \n")]
-        IllegalCharacter,
-    }
-
-    impl From<Error> for std::io::Error {
-        fn from(err: Error) -> Self {
-            std::io::Error::other(err)
-        }
-    }
-
     /// Output
     impl Signature {
         /// Serialize this instance to `out` in the git serialization format for actors.
@@ -130,12 +116,12 @@ pub(crate) mod write {
     impl SignatureRef<'_> {
         /// Serialize this instance to `out` in the git serialization format for actors.
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
-            out.write_all(validated_token(self.name)?)?;
+            out.write_all(validated_token(self.name).map_err(std::io::Error::other)?)?;
             out.write_all(b" ")?;
             out.write_all(b"<")?;
-            out.write_all(validated_token(self.email)?)?;
+            out.write_all(validated_token(self.email).map_err(std::io::Error::other)?)?;
             out.write_all(b"> ")?;
-            out.write_all(validated_token(self.time.into())?)
+            out.write_all(validated_token(self.time.into()).map_err(std::io::Error::other)?)
         }
         /// Computes the number of bytes necessary to serialize this signature
         pub fn size(&self) -> usize {
@@ -143,9 +129,12 @@ pub(crate) mod write {
         }
     }
 
-    pub(crate) fn validated_token(name: &BStr) -> Result<&BStr, Error> {
+    pub(crate) fn validated_token(name: &BStr) -> Result<&BStr, gix_error::ValidationError> {
         if name.find_byteset(b"<>\n").is_some() {
-            return Err(Error::IllegalCharacter);
+            return Err(gix_error::ValidationError::new_with_input(
+                "Signature name or email must not contain '<', '>' or \\n",
+                name,
+            ));
         }
         Ok(name)
     }

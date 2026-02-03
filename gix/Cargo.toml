@@ -201,6 +201,7 @@ blocking-http-transport-curl-openssl = [
     "gix-transport/http-client-curl-openssl",
 ]
 ## Stacks with `blocking-network-client` to provide support for HTTP/S using **reqwest**, and implies blocking networking as a whole, making the `https://` transport available.
+## Note that `reqwest`'s default features are not enabled, allowing custom configuration of e.g. the TLS backend by adding it as explicit dependency.
 blocking-http-transport-reqwest = [
     "blocking-network-client",
     "gix-transport/http-client-reqwest",
@@ -389,8 +390,8 @@ gix-transport = { version = "^0.53.0", path = "../gix-transport", optional = tru
 
 # Just to get the progress-tree feature
 prodash = { version = "31.0.0", optional = true, features = ["progress-tree"] }
-signal-hook = { version = "0.4.1", default-features = false, optional = true }
-thiserror = "2.0.17"
+signal-hook = { version = "0.4.3", default-features = false, optional = true }
+thiserror = "2.0.18"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",
 ] }
@@ -421,10 +422,10 @@ gix-testtools = { path = "../tests/tools" }
 is_ci = "1.1.1"
 anyhow = "1"
 walkdir = "2.3.2"
-serial_test = { version = "3.1.0", default-features = false }
+serial_test = { version = "3.3.1", default-features = false }
 async-std = { version = "1.12.0", features = ["attributes"] }
 termtree = "0.5.1"
-insta = "1.45.0"
+insta = "1.46.1"
 
 [package.metadata.docs.rs]
 features = [

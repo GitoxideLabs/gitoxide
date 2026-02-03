@@ -45,7 +45,9 @@ pub mod is_git {
 }
 
 mod is;
-pub use is::{bare as is_bare, git as is_git, submodule_git_dir as is_submodule_git_dir};
+#[allow(deprecated)]
+pub use is::submodule_git_dir as is_submodule_git_dir;
+pub use is::{bare as is_bare, git as is_git};
 
 ///
 pub mod upwards;

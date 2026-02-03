@@ -43,3 +43,25 @@ mod from_git_dir_file {
         Ok(file)
     }
 }
+
+#[test]
+fn repository_kind() {
+    use gix_discover::path::{repository_kind, RepositoryKind::*};
+    assert_eq!(repository_kind("hello".as_ref()), None);
+    assert_eq!(repository_kind(".git".as_ref()), Some(Common));
+    assert_eq!(repository_kind("foo/.git".as_ref()), Some(Common));
+    assert_eq!(
+        repository_kind("foo/other.git".as_ref()),
+        None,
+        "it makes no assumption beyond the standard name, nor does it consider suffixes"
+    );
+    assert_eq!(repository_kind(".git/modules".as_ref()), None);
+    assert_eq!(
+        repository_kind(".git/modules/actual-submodule".as_ref()),
+        Some(Submodule)
+    );
+    assert_eq!(
+        repository_kind(".git/worktrees/actual-worktree".as_ref()),
+        Some(LinkedWorktree)
+    );
+}

@@ -20,18 +20,18 @@ test = false
 ## Note that there is no default feature, as the application is supposed to opt-in via `gix-features` or using this crate directly.
 default = []
 
-## Implement `tracing` with `tracing-core`, which provides applications with valuable performance details if they opt-in to it.
+## Implement `tracing` with the `tracing` crate, which provides applications with valuable performance details if they opt-in to it.
 ##
 ## Note that this may have overhead as well, thus instrumentations should be used stategically, only providing coarse tracing by default and adding details
 ## only where needed while marking them with the appropriate level.
-tracing = ["dep:tracing-core"]
+tracing = ["dep:tracing"]
 
 ## If enabled, detailed tracing is also emitted, which can greatly increase insights but at a cost.
 tracing-detail = []
 
 
 [dependencies]
-tracing-core = { version = "0.1.36", optional = true }
+tracing = { version = "0.1.44", optional = true, default-features = false, features = ["std"] }
 
 document-features = { version = "0.2.0", optional = true }
 

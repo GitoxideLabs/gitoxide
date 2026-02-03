@@ -197,3 +197,10 @@ git init big-file-threshold
 (cd big-file-threshold
   git config core.bigFileThreshold 42
 )
+
+git init --bare bare-repo
+mkdir bare-link
+(cd bare-link
+  echo "gitdir: ../bare-repo" >.git
+  echo hi >file-ignored-by-status
+)

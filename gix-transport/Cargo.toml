@@ -99,7 +99,7 @@ bstr = { version = "1.12.0", default-features = false, features = [
     "std",
     "unicode",
 ] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 # for async-client
 async-trait = { version = "0.1.51", optional = true }

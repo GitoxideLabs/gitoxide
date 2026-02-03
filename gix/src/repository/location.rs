@@ -1,7 +1,6 @@
+use gix_path::realpath::MAX_SYMLINKS;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-
-use gix_path::realpath::MAX_SYMLINKS;
 
 use crate::bstr::BStr;
 
@@ -124,19 +123,13 @@ impl crate::Repository {
         Ok(current_dir.strip_prefix(&root).ok())
     }
 
-    /// Return the kind of repository, either bare or one with a work tree.
+    /// Return the kind of repository as measured by its Git directory location.
     pub fn kind(&self) -> crate::repository::Kind {
-        match self.worktree() {
-            Some(wt) => {
-                if gix_discover::is_submodule_git_dir(self.git_dir()) {
-                    crate::repository::Kind::Submodule
-                } else {
-                    crate::repository::Kind::WorkTree {
-                        is_linked: !wt.is_main(),
-                    }
-                }
-            }
-            None => crate::repository::Kind::Bare,
+        use gix_discover::path::RepositoryKind::*;
+        match gix_discover::path::repository_kind(self.git_dir()) {
+            None | Some(Common) => crate::repository::Kind::Common,
+            Some(Submodule) => crate::repository::Kind::Submodule,
+            Some(LinkedWorktree) => crate::repository::Kind::LinkedWorkTree,
         }
     }
 

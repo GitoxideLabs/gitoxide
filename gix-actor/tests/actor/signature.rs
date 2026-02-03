@@ -12,7 +12,7 @@ mod write_to {
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: IllegalCharacter })"
+                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"invalid < middlename\") } })"
             );
         }
 
@@ -25,7 +25,7 @@ mod write_to {
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: IllegalCharacter })"
+                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"server>.example.com\") } })"
             );
         }
 
@@ -38,7 +38,7 @@ mod write_to {
             };
             assert_eq!(
                 format!("{:?}", signature.write_to(&mut Vec::new())),
-                "Err(Custom { kind: Other, error: IllegalCharacter })"
+                "Err(Custom { kind: Other, error: ValidationError { message: \"Signature name or email must not contain '<', '>' or \\\\n\", input: Some(\"hello\\nnewline\") } })"
             );
         }
     }

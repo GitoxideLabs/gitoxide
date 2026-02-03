@@ -1,6 +1,7 @@
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
-use crate::{DOT_GIT_DIR, MODULES};
+use crate::path::RepositoryKind;
+use crate::DOT_GIT_DIR;
 
 /// Returns true if the given `git_dir` seems to be a bare repository.
 ///
@@ -10,18 +11,9 @@ pub fn bare(git_dir_candidate: &Path) -> bool {
 }
 
 /// Returns true if `git_dir` is located within a `.git/modules` directory, indicating it's a submodule clone.
+#[deprecated = "use path::repository_kind() instead"]
 pub fn submodule_git_dir(git_dir: &Path) -> bool {
-    let mut last_comp = None;
-    git_dir.file_name() != Some(OsStr::new(DOT_GIT_DIR))
-        && git_dir.components().rev().skip(1).any(|c| {
-            if c.as_os_str() == OsStr::new(DOT_GIT_DIR) {
-                true
-            } else {
-                last_comp = Some(c.as_os_str());
-                false
-            }
-        })
-        && last_comp == Some(OsStr::new(MODULES))
+    crate::path::repository_kind(git_dir).is_some_and(|kind| matches!(kind, RepositoryKind::Submodule))
 }
 
 /// What constitutes a valid git repository, returning the guessed repository kind
@@ -157,18 +149,12 @@ pub(crate) fn git_with_metadata(
             };
             if bare(conformed_git_dir.as_ref()) || conformed_git_dir.extension() == Some(OsStr::new("git")) {
                 crate::repository::Kind::PossiblyBare
-            } else if submodule_git_dir(conformed_git_dir.as_ref()) {
+            } else if crate::path::repository_kind(conformed_git_dir.as_ref())
+                .is_some_and(|kind| matches!(kind, RepositoryKind::Submodule))
+            {
                 crate::repository::Kind::SubmoduleGitDir
             } else if conformed_git_dir.file_name() == Some(OsStr::new(DOT_GIT_DIR)) {
                 crate::repository::Kind::WorkTree { linked_git_dir: None }
-            // } else if !bare_by_config(conformed_git_dir.as_ref())
-            //     .map_err(|err| crate::is_git::Error::Metadata {
-            //         source: err,
-            //         path: conformed_git_dir.join("config"),
-            //     })?
-            //     .ok_or(crate::is_git::Error::Inconclusive)?
-            // {
-            //     crate::repository::Kind::WorktreePossiblyInConfiguration
             } else {
                 crate::repository::Kind::PossiblyBare
             }

@@ -1,5 +1,5 @@
 use gix_error::bstr::ByteSlice;
-use gix_error::ParseError;
+use gix_error::ValidationError;
 use std::ops::Range;
 
 use crate::{file, file::index};
@@ -7,9 +7,9 @@ use crate::{file, file::index};
 impl file::Index {
     /// Provided a mapped file at the beginning via `data`, starting at `toc_offset` decode all chunk information to return
     /// an index with `num_chunks` chunks.
-    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> Result<Self, ParseError> {
+    pub fn from_bytes(data: &[u8], toc_offset: usize, num_chunks: u32) -> Result<Self, ValidationError> {
         if num_chunks == 0 {
-            return Err(ParseError::new(
+            return Err(ValidationError::new(
                 "Empty chunk indices are not allowed as the point of chunked files is to have chunks.",
             ));
         }

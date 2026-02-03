@@ -18,6 +18,11 @@ use crate::{
 
 /// Access
 impl Cache {
+    /// Returns `true` if the configuration value isn't set, so we assume bare for safety.
+    pub(crate) fn is_bare_but_assume_bare_if_unconfigured(&self) -> bool {
+        self.is_bare.unwrap_or(true)
+    }
+
     #[cfg(feature = "blob-diff")]
     pub(crate) fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};

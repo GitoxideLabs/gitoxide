@@ -1,6 +1,6 @@
 use gix_error::Exn;
 /// The error returned by [`spec::parse()`](crate::spec::parse()).
-pub use gix_error::ParseError as Error;
+pub use gix_error::ValidationError as Error;
 
 ///
 pub mod delegate;

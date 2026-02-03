@@ -6,7 +6,7 @@ mod bare {
         let tmp = tempfile::tempdir()?;
         let git_dir = tmp.path().join("bare.git");
         let repo = gix::init_bare(&git_dir)?;
-        assert_eq!(repo.kind(), gix::repository::Kind::Bare);
+        assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert!(
             repo.workdir().is_none(),
             "a worktree isn't present in bare repositories"
@@ -24,7 +24,7 @@ mod bare {
     fn init_into_empty_directory_uses_it_directly() -> crate::Result {
         let tmp = tempfile::tempdir()?;
         let repo = gix::init_bare(tmp.path())?;
-        assert_eq!(repo.kind(), gix::repository::Kind::Bare);
+        assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert!(
             repo.workdir().is_none(),
             "a worktree isn't present in bare repositories"
@@ -78,7 +78,7 @@ mod non_bare {
     fn init_into_empty_directory_creates_a_dot_git_dir() -> crate::Result {
         let tmp = tempfile::tempdir()?;
         let repo = gix::init(tmp.path())?;
-        assert_eq!(repo.kind(), gix::repository::Kind::WorkTree { is_linked: false });
+        assert_eq!(repo.kind(), gix::repository::Kind::Common);
         assert_eq!(repo.workdir(), Some(tmp.path()), "there is a work tree by default");
         assert_eq!(
             repo.git_dir(),

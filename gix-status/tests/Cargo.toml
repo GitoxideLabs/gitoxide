@@ -33,6 +33,6 @@ gix-object = { path = "../../gix-object" }
 gix-features = { path = "../../gix-features", features = ["parallel"] }
 gix-pathspec = { path = "../../gix-pathspec" }
 gix-worktree = { path = "../../gix-worktree" }
-filetime = "0.2.15"
+filetime = "0.2.27"
 bstr = { version = "1.12.0", default-features = false }
 pretty_assertions = "1.4.0"

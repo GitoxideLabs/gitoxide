@@ -21,14 +21,14 @@ gix-ref = { version = "^0.58.0", path = "../gix-ref" }
 gix-fs = { version = "^0.19.0", path = "../gix-fs" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 [target.'cfg(windows)'.dependencies]
 dunce = "1.0.3"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
-serial_test = { version = "3.1.0", default-features = false }
+serial_test = { version = "3.3.1", default-features = false }
 is_ci = "1.1.1"
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

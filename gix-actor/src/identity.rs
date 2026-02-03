@@ -43,10 +43,10 @@ mod write {
     impl IdentityRef<'_> {
         /// Serialize this instance to `out` in the git serialization format for signatures (but without timestamp).
         pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
-            out.write_all(validated_token(self.name)?)?;
+            out.write_all(validated_token(self.name).map_err(std::io::Error::other)?)?;
             out.write_all(b" ")?;
             out.write_all(b"<")?;
-            out.write_all(validated_token(self.email)?)?;
+            out.write_all(validated_token(self.email).map_err(std::io::Error::other)?)?;
             out.write_all(b">")
         }
     }
