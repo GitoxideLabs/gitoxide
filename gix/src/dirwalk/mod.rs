@@ -6,7 +6,7 @@ use crate::{config, AttributeStack, Pathspec};
 
 mod options;
 
-///
+/// Closure-based API for directory walking.
 pub mod for_each;
 ///
 pub mod iter;
