@@ -65,6 +65,7 @@ pub(super) mod function {
             .expect("exactly one pattern");
 
         let outcome = gix::blame::file(
+            repo.workdir().expect("TODO").to_path_buf(),
             &repo.objects,
             suspect,
             cache,

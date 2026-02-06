@@ -237,6 +237,7 @@ macro_rules! mktest {
             let source_file_name: gix_object::bstr::BString = format!("{}.txt", $case).into();
 
             let lines_blamed = gix_blame::file(
+                fixture_path()?,
                 &odb,
                 suspect,
                 None,
@@ -312,7 +313,6 @@ mktest!(
 ///
 /// Context: https://github.com/Byron/gitoxide/pull/1453#issuecomment-2371013904
 #[test]
-#[should_panic = "empty-lines-myers"]
 #[cfg(not(feature = "blob-experimental"))]
 fn diff_disparity_imara_diff_v1() {
     diff_disparity_base();
@@ -338,6 +338,7 @@ fn diff_disparity_base() {
         let source_file_name: gix_object::bstr::BString = format!("{case}.txt").into();
 
         let lines_blamed = gix_blame::file(
+            fixture_path().expect("TODO"),
             &odb,
             suspect,
             None,
@@ -375,6 +376,7 @@ fn file_that_was_added_in_two_branches() -> gix_testtools::Result {
 
     let source_file_name = "file-with-two-roots.txt";
     let lines_blamed = gix_blame::file(
+        worktree_path.clone(),
         &odb,
         suspect,
         None,
@@ -405,6 +407,7 @@ fn since() -> gix_testtools::Result {
     let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
     let lines_blamed = gix_blame::file(
+        fixture_path()?,
         &odb,
         suspect,
         None,
@@ -447,6 +450,7 @@ mod blame_ranges {
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
         let lines_blamed = gix_blame::file(
+            fixture_path()?,
             &odb,
             suspect,
             None,
@@ -490,6 +494,7 @@ mod blame_ranges {
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
         let lines_blamed = gix_blame::file(
+            fixture_path()?,
             &odb,
             suspect,
             None,
@@ -531,6 +536,7 @@ mod blame_ranges {
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
 
         let lines_blamed = gix_blame::file(
+            fixture_path()?,
             &odb,
             suspect,
             None,
@@ -577,6 +583,7 @@ mod rename_tracking {
 
         let source_file_name = "after-rename.txt";
         let lines_blamed = gix_blame::file(
+            worktree_path.clone(),
             &odb,
             suspect,
             None,
