@@ -4,7 +4,9 @@ use gix_testtools::size_ok;
 #[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<pack::data::input::Entry>();
-    let expected = 104;
+    let sha1 = 104;
+    let sha256_extra = 32;
+    let expected = sha1 + sha256_extra;
     assert!(
         size_ok(actual, expected),
         "let's keep the size in check as we have many of them: {actual} <~ {expected}"

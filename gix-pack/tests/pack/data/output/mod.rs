@@ -6,7 +6,9 @@ use gix_testtools::size_ok;
 #[test]
 fn size_of_entry() {
     let actual = std::mem::size_of::<output::Entry>();
-    let expected = 80;
+    let sha1 = 80;
+    let sha256_extra = 32;
+    let expected = sha1 + sha256_extra;
     assert!(
         size_ok(actual, expected),
         "The size of the structure shouldn't change unexpectedly: {actual} <~ {expected}"
@@ -16,7 +18,9 @@ fn size_of_entry() {
 #[test]
 fn size_of_count() {
     let actual = std::mem::size_of::<output::Count>();
-    let expected = 56;
+    let sha1 = 56;
+    let sha256_extra = 16;
+    let expected = sha1 + sha256_extra;
     assert!(
         size_ok(actual, expected),
         "The size of the structure shouldn't change unexpectedly: {actual} <~ {expected}"

@@ -2418,6 +2418,7 @@ dependencies = [
  "fs_extra",
  "gix-discover",
  "gix-fs",
+ "gix-hash",
  "gix-lock",
  "gix-tempfile",
  "gix-worktree",

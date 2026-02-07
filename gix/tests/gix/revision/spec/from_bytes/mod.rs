@@ -147,7 +147,7 @@ fn bad_objects_are_valid_until_they_are_actually_read_from_the_odb() {
         |
         └─ An error occurred while obtaining an object from the loose object store
         |
-        └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/2990428670-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
+        └─ decompression of loose object at 'tests/fixtures/generated-do-not-edit/make_rev_spec_parse_repos/sha1/2990428670-unix/blob.corrupt/objects/ca/fea31147e840161a1860c50af999917ae1536b' failed
         |
         └─ Could not decode zip stream, status was 'Invalid input data'
         |

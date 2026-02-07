@@ -65,6 +65,7 @@ gix-tempfile = { version = "^21.0.0", default-features = false, path = "../gix-t
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
+gix-hash = { version = "^0.22.0", path = "../gix-hash", features = ["sha256"] }
 
 [package.metadata.docs.rs]
 all-features = true

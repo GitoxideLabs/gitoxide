@@ -255,7 +255,9 @@ mod tests {
             }
 
             let actual = std::mem::size_of::<[Item<EntryWithDefault>; 7_500_000]>();
-            let expected = 840_000_000;
+            let sha1 = 840_000_000;
+            let sha256_extra = 120_000_000;
+            let expected = sha1 + sha256_extra;
             assert!(
                 size_ok(actual, expected),
                 "we don't want these to grow unnoticed: {actual} <~ {expected}"

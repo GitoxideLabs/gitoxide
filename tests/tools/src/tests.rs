@@ -44,7 +44,12 @@ fn configure_command_clears_external_config() {
     let mut cmd = std::process::Command::new(GIT_PROGRAM);
     cmd.env("GIT_CONFIG_SYSTEM", SCOPE_ENV_VALUE);
     cmd.env("GIT_CONFIG_GLOBAL", SCOPE_ENV_VALUE);
-    configure_command(&mut cmd, ["config", "-l", "--show-origin"], temp.path());
+    configure_command(
+        &mut cmd,
+        gix_hash::Kind::Sha1,
+        ["config", "-l", "--show-origin"],
+        temp.path(),
+    );
 
     let output = cmd.output().expect("can run git");
     let lines: Vec<_> = output

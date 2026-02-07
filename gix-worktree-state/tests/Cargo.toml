@@ -24,7 +24,7 @@ gix-object = { path = "../../gix-object" }
 gix-discover = { path = "../../gix-discover" }
 gix-filter = { path = "../../gix-filter" }
 gix-index = { path = "../../gix-index" }
-gix-hash = { path = "../../gix-hash" }
+gix-hash = { path = "../../gix-hash", features = ["sha256"] }
 gix-fs = { path = "../../gix-fs" }
 gix-features = { path = "../../gix-features" }
 gix-testtools = { path = "../../tests/tools" }

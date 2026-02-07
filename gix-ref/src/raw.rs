@@ -100,7 +100,9 @@ mod tests {
     #[test]
     fn size_of_reference() {
         let actual = std::mem::size_of::<Reference>();
-        let expected = 80;
+        let sha1 = 80;
+        let sha256_extra = 24;
+        let expected = sha1 + sha256_extra;
         assert!(
             size_ok(actual, expected),
             "let's not let it change size undetected: {actual} <~ {expected}"

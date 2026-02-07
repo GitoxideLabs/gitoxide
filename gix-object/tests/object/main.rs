@@ -80,9 +80,12 @@ fn fixture_name(kind: &str, path: &str) -> Vec<u8> {
 #[test]
 fn size_in_memory() {
     let actual = std::mem::size_of::<gix_object::Object>();
+    let sha1 = 272;
+    let sha256_extra = 16;
+    let expected = sha1 + sha256_extra;
     assert!(
-        actual <= 272,
-        "{actual} <= 272: Prevent unexpected growth of what should be lightweight objects"
+        actual <= expected,
+        "{actual} <= {expected}: Prevent unexpected growth of what should be lightweight objects"
     );
 }
 

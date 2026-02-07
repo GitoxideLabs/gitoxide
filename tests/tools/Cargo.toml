@@ -25,6 +25,7 @@ default = []
 xz = ["dep:xz2"]
 
 [dependencies]
+gix-hash = { version = "^0.22.0", path = "../../gix-hash" }
 gix-lock = { version = "^21.0.0", path = "../../gix-lock" }
 gix-discover = { version = "^0.46.0", path = "../../gix-discover" }
 gix-worktree = { version = "^0.47.0", path = "../../gix-worktree" }

@@ -33,6 +33,7 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
 gix-date = { path = "../gix-date" }
+gix-hash = { path = "../gix-hash", features = ["sha256"] }
 
 [package.metadata.docs.rs]
 all-features = true

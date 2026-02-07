@@ -29,7 +29,9 @@ mod into_iter {
     #[test]
     fn item_size() {
         let actual = std::mem::size_of::<Item>();
-        let expected = 264;
+        let sha1 = 264;
+        let sha256_extra = 56;
+        let expected = sha1 + sha256_extra;
         assert!(
             size_ok(actual, expected),
             "The size is the same as the one for the index-worktree-item: {actual} <~ {expected}"
@@ -303,7 +305,9 @@ mod index_worktree {
         #[test]
         fn item_size() {
             let actual = std::mem::size_of::<Item>();
-            let expected = 264;
+            let sha1 = 264;
+            let sha256_extra = 56;
+            let expected = sha1 + sha256_extra;
             assert!(
                 size_ok(actual, expected),
                 "The size is pretty huge and goes down ideally: {actual} <~ {expected}"

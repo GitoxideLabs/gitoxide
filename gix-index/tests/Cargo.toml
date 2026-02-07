@@ -24,6 +24,6 @@ gix-features = { path = "../../gix-features", features = ["progress"] }
 gix-testtools = { path = "../../tests/tools" }
 gix-odb = { path = "../../gix-odb" }
 gix-object = { path = "../../gix-object" }
-gix-hash = { path = "../../gix-hash" }
+gix-hash = { path = "../../gix-hash", features = ["sha256"] }
 filetime = "0.2.27"
 bstr = { version = "1.12.0", default-features = false }

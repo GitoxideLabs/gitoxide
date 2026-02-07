@@ -287,7 +287,7 @@ enum DirectoryRoot {
     StandaloneTest,
 }
 
-/// Don't add a suffix to the archive name as `args` are platform dependent, none-deterministic,
+/// Don't add a suffix to the archive name as `args` are platform dependent, non-deterministic,
 /// or otherwise don't influence the content of the archive.
 /// Note that this also means that `args` won't be used to control the hash of the archive itself.
 #[derive(Copy, Clone)]
@@ -508,7 +508,7 @@ pub fn copy_recursively_into_existing_dir(src_dir: impl AsRef<Path>, dst_dir: im
     Ok(())
 }
 
-/// Like `scripted_fixture_read_only()`], but passes `args` to `script_name`.
+/// Like [`scripted_fixture_read_only()`], but passes `args` to `script_name`.
 pub fn scripted_fixture_read_only_with_args(
     script_name: impl AsRef<Path>,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -870,19 +870,43 @@ pub fn scripted_fixture_writable_with_args_standalone_single_archive_with_post<T
 ///     Ok(())
 /// }
 /// ```
-pub fn rust_fixture_read_only<T, F>(name: &str, version: u32, make_fixture: F) -> Result<(PathBuf, T)>
+pub fn rust_fixture_read_only<T, F>(
+    name: &str,
+    version: u32,
+    make_fixture: F,
+    hash_kind: gix_hash::Kind,
+) -> Result<(PathBuf, T)>
 where
     F: FnOnce(FixtureState<'_>) -> PostResult<T>,
 {
-    rust_fixture_read_only_inner(name, version, make_fixture, None, DirectoryRoot::IntegrationTest)
+    rust_fixture_read_only_inner(
+        name,
+        version,
+        make_fixture,
+        None,
+        hash_kind,
+        DirectoryRoot::IntegrationTest,
+    )
 }
 
 /// Like [`rust_fixture_read_only()`], but does not prefix the fixture directory with `tests`.
-pub fn rust_fixture_read_only_standalone<T, F>(name: &str, version: u32, make_fixture: F) -> Result<(PathBuf, T)>
+pub fn rust_fixture_read_only_standalone<T, F>(
+    name: &str,
+    version: u32,
+    make_fixture: F,
+    hash_kind: gix_hash::Kind,
+) -> Result<(PathBuf, T)>
 where
     F: FnOnce(FixtureState<'_>) -> PostResult<T>,
 {
-    rust_fixture_read_only_inner(name, version, make_fixture, None, DirectoryRoot::StandaloneTest)
+    rust_fixture_read_only_inner(
+        name,
+        version,
+        make_fixture,
+        None,
+        hash_kind,
+        DirectoryRoot::StandaloneTest,
+    )
 }
 
 /// Execute a Rust closure in a directory, returning a writable temporary directory.
@@ -918,11 +942,19 @@ pub fn rust_fixture_writable<T, F>(
     version: u32,
     mode: Creation,
     make_fixture: F,
+    hash_kind: gix_hash::Kind,
 ) -> Result<(tempfile::TempDir, T)>
 where
     F: FnMut(FixtureState<'_>) -> PostResult<T>,
 {
-    rust_fixture_writable_inner(name, version, make_fixture, mode, DirectoryRoot::IntegrationTest)
+    rust_fixture_writable_inner(
+        name,
+        version,
+        make_fixture,
+        mode,
+        hash_kind,
+        DirectoryRoot::IntegrationTest,
+    )
 }
 
 /// Like [`rust_fixture_writable()`], but does not prefix the fixture directory with `tests`.
@@ -931,11 +963,19 @@ pub fn rust_fixture_writable_standalone<T, F>(
     version: u32,
     mode: Creation,
     make_fixture: F,
+    hash_kind: gix_hash::Kind,
 ) -> Result<(tempfile::TempDir, T)>
 where
     F: FnMut(FixtureState<'_>) -> PostResult<T>,
 {
-    rust_fixture_writable_inner(name, version, make_fixture, mode, DirectoryRoot::StandaloneTest)
+    rust_fixture_writable_inner(
+        name,
+        version,
+        make_fixture,
+        mode,
+        hash_kind,
+        DirectoryRoot::StandaloneTest,
+    )
 }
 
 fn rust_fixture_writable_inner<T, F>(
@@ -943,6 +983,7 @@ fn rust_fixture_writable_inner<T, F>(
     version: u32,
     mut make_fixture: F,
     mode: Creation,
+    hash_kind: gix_hash::Kind,
     root: DirectoryRoot,
 ) -> Result<(tempfile::TempDir, T)>
 where
@@ -951,13 +992,15 @@ where
     let dst = tempfile::TempDir::new()?;
     let res = match mode {
         Creation::CopyFromReadOnly => {
-            let (ro_dir, _res_ignored) = rust_fixture_read_only_inner(name, version, &mut make_fixture, None, root)?;
+            let (ro_dir, _res_ignored) =
+                rust_fixture_read_only_inner(name, version, &mut make_fixture, None, hash_kind, root)?;
             copy_recursively_into_existing_dir(ro_dir, dst.path())?;
             let res = make_fixture(FixtureState::Fresh(dst.path()))?;
             res
         }
         Creation::Execute => {
-            let (_, res) = rust_fixture_read_only_inner(name, version, make_fixture, Some(dst.path()), root)?;
+            let (_, res) =
+                rust_fixture_read_only_inner(name, version, make_fixture, Some(dst.path()), hash_kind, root)?;
             res
         }
     };
@@ -969,6 +1012,7 @@ fn rust_fixture_read_only_inner<T, F>(
     version: u32,
     make_fixture: F,
     destination_dir: Option<&Path>,
+    hash_kind: gix_hash::Kind,
     root: DirectoryRoot,
 ) -> Result<(PathBuf, T)>
 where
@@ -988,7 +1032,8 @@ where
         Path::new(ARCHIVE_DIR_NAME).join(format!("{archive_name}.{}", tar_extension())),
         root,
     );
-    let (force_run, script_result_directory) = force_and_dir(destination_dir, root, &archive_name, &script_identity);
+    let (force_run, script_result_directory) =
+        force_and_dir(destination_dir, root, &archive_name, hash_kind, &script_identity);
     let _marker = marker_if_needed(destination_dir, archive_name)?;
 
     run_fixture_generator_with_marker_handling(
@@ -1024,16 +1069,16 @@ fn force_and_dir(
     destination_dir: Option<&Path>,
     root: DirectoryRoot,
     archive_name: impl AsRef<Path>,
+    hash_kind: gix_hash::Kind,
     script_identity: &dyn std::fmt::Display,
 ) -> (bool, PathBuf) {
     destination_dir.map_or_else(
         || {
             let dir = fixture_path_inner(
-                Path::new("generated-do-not-edit").join(archive_name).join(format!(
-                    "{}-{}",
-                    script_identity,
-                    family_name()
-                )),
+                Path::new("generated-do-not-edit")
+                    .join(archive_name)
+                    .join(hash_kind.to_string())
+                    .join(format!("{}-{}", script_identity, family_name())),
                 root,
             );
             (false, dir)
@@ -1127,6 +1172,19 @@ where
         gix_tempfile::signal::handler::Mode::DeleteTempfilesOnTerminationAndRestoreDefaultBehaviour,
     );
 
+    let gix_test_hash = env::var_os("GIX_TEST_FIXTURE_HASH").and_then(|os_string| os_string.into_string().ok());
+    let hash_kind = match gix_test_hash {
+        Some(gix_test_hash) => gix_hash::Kind::from_str(&gix_test_hash).unwrap_or_else(|_| {
+            panic!(
+                "GIX_TEST_FIXTURE_HASH was set to {gix_test_hash} which is an invalid value. Valid values are {}. Exiting.",
+                gix_hash::Kind::all().iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(", ")
+            )
+        }),
+        None => gix_hash::Kind::default(),
+    };
+
+    eprintln!("Using hash '{hash_kind}' when determining which fixture to use or recreate");
+
     let script_location = script_name.as_ref();
     let script_path = fixture_path_inner(script_location, root);
 
@@ -1135,7 +1193,12 @@ where
     let post_version = post_process.as_ref().map(|(v, _)| *v);
     let script_identity = {
         let mut map = SCRIPT_IDENTITY.lock();
-        let key = args.iter().fold(script_path.clone(), |p, a| p.join(a));
+        let init = if hash_kind == gix_hash::Kind::Sha1 {
+            script_path.clone()
+        } else {
+            script_path.clone().join(hash_kind.to_string())
+        };
+        let key = args.iter().fold(init, |p, a| p.join(a));
         // Include post_version in the key if present
         let key = if let Some(v) = post_version {
             key.join(format!("post-v{v}"))
@@ -1178,15 +1241,21 @@ where
                 }
                 ArgsInHash::No => "".into(),
             };
+            let potential_hash_suffix = if hash_kind == gix_hash::Kind::Sha1 {
+                "".into()
+            } else {
+                format!("_{hash_kind}")
+            };
             Path::new(ARCHIVE_DIR_NAME).join(format!(
-                "{}{suffix}.{}",
+                "{}{suffix}{potential_hash_suffix}.{}",
                 script_basename.to_str().expect("valid UTF-8"),
                 tar_extension()
             ))
         },
         root,
     );
-    let (force_run, script_result_directory) = force_and_dir(destination_dir, root, script_basename, &script_identity);
+    let (force_run, script_result_directory) =
+        force_and_dir(destination_dir, root, script_basename, hash_kind, &script_identity);
     let _marker = marker_if_needed(destination_dir, script_basename)?;
 
     let script_identity_for_archive = match args_in_hash {
@@ -1205,14 +1274,14 @@ where
         |fixture_state| {
             if let FixtureState::Uninitialized(dir) = fixture_state {
                 let mut cmd = std::process::Command::new(&script_absolute_path);
-                let output = match configure_command(&mut cmd, &args, dir).output() {
+                let output = match configure_command(&mut cmd, hash_kind, &args, dir).output() {
                     Ok(out) => out,
                     Err(err)
                         if err.kind() == std::io::ErrorKind::PermissionDenied
                             || err.raw_os_error() == Some(193) /* windows */ =>
                     {
                         cmd = std::process::Command::new(bash_program());
-                        configure_command(cmd.arg(&script_absolute_path), &args, dir).output()?
+                        configure_command(cmd.arg(&script_absolute_path), hash_kind, &args, dir).output()?
                     }
                     Err(err) => return Err(err.into()),
                 };
@@ -1240,6 +1309,7 @@ const NULL_DEVICE: &str = "/dev/null";
 
 fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     cmd: &'a mut std::process::Command,
+    hash_kind: gix_hash::Kind,
     args: I,
     script_result_directory: &Path,
 ) -> &'a mut std::process::Command {
@@ -1279,6 +1349,7 @@ fn configure_command<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .env("GIT_CONFIG_VALUE_2", "main")
         .env("GIT_CONFIG_KEY_3", "protocol.file.allow")
         .env("GIT_CONFIG_VALUE_3", "always")
+        .env("GIT_DEFAULT_HASH", hash_kind.to_string())
 }
 
 /// Get the path attempted as a `bash` interpreter, for fixture scripts having no `#!` we can use.

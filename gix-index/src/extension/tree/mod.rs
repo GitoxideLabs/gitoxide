@@ -18,7 +18,9 @@ mod tests {
     #[test]
     fn size_of_tree() {
         let actual = std::mem::size_of::<crate::extension::Tree>();
-        let expected = 88;
+        let sha1 = 88;
+        let sha256_extra = 16;
+        let expected = sha1 + sha256_extra;
         assert!(
             size_ok(actual, expected),
             "the size of this structure should not change unexpectedly: {actual} <~ {expected}"
