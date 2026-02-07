@@ -15,7 +15,7 @@ name = "jtt"
 path = "src/main.rs"
 
 [lib]
-doctest = false
+doctest = true
 
 [features]
 default = []

@@ -40,7 +40,7 @@ mod update {
         let dir = gix_testtools::scripted_fixture_writable_with_args_single_archive(
             "make_fetch_repos.sh",
             [base_repo_path()],
-            gix_testtools::Creation::ExecuteScript,
+            gix_testtools::Creation::Execute,
         )
         .unwrap();
         let repo = gix::open_opts(dir.path().join(name), restricted()).unwrap();

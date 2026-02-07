@@ -16,7 +16,7 @@ pub fn fixture_path_rw_slow(name: &str) -> gix_testtools::tempfile::TempDir {
     let tmp = gix_testtools::scripted_fixture_writable_with_args_standalone_single_archive(
         std::path::Path::new(name).with_extension("sh"),
         None::<String>,
-        Creation::ExecuteScript,
+        Creation::Execute,
     )
     .expect("script works");
     tmp

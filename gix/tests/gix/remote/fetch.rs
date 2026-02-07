@@ -74,7 +74,7 @@ mod blocking_and_async_io {
             }]
             .into_iter()
             .chain(args.into_iter().map(Into::into)),
-            gix_testtools::Creation::ExecuteScript,
+            gix_testtools::Creation::Execute,
         )
         .unwrap();
         let repo = gix::open_opts(dir.path().join(name), crate::restricted())?;

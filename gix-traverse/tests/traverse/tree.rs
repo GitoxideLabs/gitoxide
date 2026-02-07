@@ -1,25 +1,20 @@
-fn db() -> crate::Result<gix_odb::Handle> {
-    named_db("make_traversal_repo_for_trees.sh")
-}
+use crate::hex_to_id;
+use crate::util::fixture_odb;
 
-fn named_db(name: &str) -> crate::Result<gix_odb::Handle> {
-    let dir = gix_testtools::scripted_fixture_read_only_standalone(name)?;
-    let db = gix_odb::at(dir.join(".git").join("objects"))?;
-    Ok(db)
+fn odb() -> crate::Result<gix_odb::Handle> {
+    fixture_odb("make_traversal_repo_for_trees.sh")
 }
 
 mod depthfirst {
     use gix_object::FindExt;
     use gix_traverse::{tree, tree::recorder::Location};
 
-    use crate::{
-        hex_to_id,
-        tree::{db, named_db},
-    };
+    use super::*;
+    use crate::util::fixture_odb;
 
     #[test]
     fn full_path_and_filename() -> crate::Result {
-        let db = db()?;
+        let db = odb()?;
         let mut state = gix_traverse::tree::depthfirst::State::default();
         let mut buf = state.pop_buf();
         let mut recorder = tree::Recorder::default();
@@ -165,7 +160,7 @@ mod depthfirst {
 
     #[test]
     fn more_difficult_fixture() -> crate::Result {
-        let db = named_db("make_traversal_repo_for_trees_depthfirst.sh")?;
+        let db = fixture_odb("make_traversal_repo_for_trees_depthfirst.sh")?;
         let mut state = gix_traverse::tree::depthfirst::State::default();
         let mut buf = state.pop_buf();
         let mut recorder = tree::Recorder::default();
@@ -237,11 +232,11 @@ mod breadthfirst {
     use gix_odb::pack::FindExt;
     use gix_traverse::{tree, tree::recorder::Location};
 
-    use crate::{hex_to_id, tree::db};
+    use super::*;
 
     #[test]
     fn full_path() -> crate::Result {
-        let db = db()?;
+        let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
         let mut commit = db
@@ -329,7 +324,7 @@ mod breadthfirst {
 
     #[test]
     fn filename_only() -> crate::Result<()> {
-        let db = db()?;
+        let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
         let mut commit = db
@@ -356,7 +351,7 @@ mod breadthfirst {
 
     #[test]
     fn no_location() -> crate::Result<()> {
-        let db = db()?;
+        let db = odb()?;
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
         let mut commit = db

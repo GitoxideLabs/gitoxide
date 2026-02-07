@@ -10,7 +10,7 @@ fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testt
         args.push("packed");
     }
     if writable {
-        gix_testtools::scripted_fixture_writable_with_args_standalone(name, args, Creation::ExecuteScript)
+        gix_testtools::scripted_fixture_writable_with_args_standalone(name, args, Creation::Execute)
             .map(|tmp| (tmp.path().to_owned(), tmp.into()))
     } else {
         gix_testtools::scripted_fixture_read_only_with_args_standalone(name, args).map(|p| (p, None))
