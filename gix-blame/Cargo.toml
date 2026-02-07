@@ -10,18 +10,13 @@ authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thi
 edition = "2021"
 rust-version = "1.82"
 
-[features]
-## An experimental use of the v0.2 branch of `imara-diff` to allow trying it out, and for writing tests against it more easily.
-## We will decide later how it should actually be exposed.
-blob-experimental = ["gix-diff/blob-experimental"]
-
 [dependencies]
 gix-error = { version = "^0.0.0", path = "../gix-error" }
 gix-commitgraph = { version = "^0.32.0", path = "../gix-commitgraph" }
 gix-revwalk = { version = "^0.26.0", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.17", path = "../gix-trace" }
 gix-date = { version = "^0.13.0", path = "../gix-date" }
-gix-diff = { version = "^0.58.0", path = "../gix-diff", default-features = false, features = ["blob"] }
+gix-diff = { version = "^0.58.0", path = "../gix-diff", default-features = false, features = ["blob", "blob-experimental"] }
 gix-object = { version = "^0.55.0", path = "../gix-object" }
 gix-hash = { version = "^0.22.0", path = "../gix-hash" }
 gix-worktree = { version = "^0.47.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }

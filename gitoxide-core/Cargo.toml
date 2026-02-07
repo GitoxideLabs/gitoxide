@@ -46,10 +46,6 @@ async-client = ["gix/async-network-client-async-std", "gix-transport-configurati
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
-#! ### Experimental
-## An experimental use of the v0.2 branch of `imara-diff` in `gix-diff` and `gix-blame`, to allow trying the new diff algorithm.
-blame-experimental = ["gix/blame-experimental"]
-
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.
 gix = { version = "^0.78.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk"] }

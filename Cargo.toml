@@ -155,11 +155,6 @@ http-client-reqwest = ["gix/blocking-http-transport-reqwest-rust-tls"]
 ## Use async client networking.
 gitoxide-core-async-client = ["gitoxide-core/async-client", "futures-lite"]
 
-#! ### Experimental Features
-#!
-## An experimental use of the v0.2 branch of `imara-diff` in `gix-diff` and `gix-blame`, to allow trying the new diff algorithm.
-blame-experimental = ["gitoxide-core/blame-experimental"]
-
 [dependencies]
 anyhow = "1.0.98"
 

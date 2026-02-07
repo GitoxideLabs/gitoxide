@@ -318,11 +318,6 @@ progress-tree = ["prodash/progress-tree"]
 ## Print debugging information about usage of object database caches, useful for tuning cache sizes.
 cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 
-#! #### Experimental Features
-## Use the v0.2 branch of `imara-diff` in `gix-diff` and `gix-blame`, to allow trying the new diff algorithm.
-blame-experimental = ["blame", "gix-blame/blob-experimental"]
-
-
 [dependencies]
 gix-error = { version = "^0.0.0", path = "../gix-error" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }

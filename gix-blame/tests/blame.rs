@@ -307,28 +307,16 @@ mktest!(
     3
 );
 
-/// As of 2024-09-24, the Myers-related test is expected to fail. Both tests use `imara-diff` 0.1
-/// under the hood.
+/// As of 2025-12-07, both algorithms are expected to pass. They use `imara-diff` 0.2 under the
+/// hood. One of them failed with `imara-diff` 0.1.
 ///
 /// Context: https://github.com/Byron/gitoxide/pull/1453#issuecomment-2371013904
 #[test]
-#[should_panic = "empty-lines-myers"]
-#[cfg(not(feature = "blob-experimental"))]
-fn diff_disparity_imara_diff_v1() {
-    diff_disparity_base();
-}
-
-/// As of 2025-12-07, both algorithms are expected to pass. They use `imara-diff` 0.2 under the hood.
-///
-/// Context: https://github.com/Byron/gitoxide/pull/1453#issuecomment-2371013904
-#[test]
-#[cfg(feature = "blob-experimental")]
 fn diff_disparity_imara_diff_v2() {
-    diff_disparity_base();
-}
-
-fn diff_disparity_base() {
-    for case in ["empty-lines-myers", "empty-lines-histogram"] {
+    for (case, diff_algorithm) in [
+        ("empty-lines-myers", gix_diff::blob::Algorithm::Myers),
+        ("empty-lines-histogram", gix_diff::blob::Algorithm::Histogram),
+    ] {
         let Fixture {
             odb,
             mut resource_cache,
@@ -344,7 +332,7 @@ fn diff_disparity_base() {
             &mut resource_cache,
             source_file_name.as_ref(),
             gix_blame::Options {
-                diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+                diff_algorithm,
                 ranges: BlameRanges::default(),
                 since: None,
                 rewrites: Some(gix_diff::Rewrites::default()),
