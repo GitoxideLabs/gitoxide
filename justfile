@@ -155,8 +155,8 @@ unit-tests:
     cargo nextest run -p gix-archive --no-default-features --features tar_gz --no-fail-fast
     cargo nextest run -p gix-archive --no-default-features --features zip --no-fail-fast
     cargo nextest run -p gix-status-tests --features gix-features-parallel --no-fail-fast
-    env GIX_TEST_HASH=sha1 cargo nextest run -p gix-worktree-state-tests --features gix-features-parallel --no-fail-fast
-    env GIX_TEST_HASH=sha1 cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-state-tests --features gix-features-parallel --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-error --no-fail-fast --test auto-chain-error --features auto-chain-error
     cargo nextest run -p gix-error --no-fail-fast
     cargo nextest run -p gix-hash --no-fail-fast
@@ -175,7 +175,7 @@ unit-tests:
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-pack --all-features --no-fail-fast
     cargo nextest run -p gix-pack-tests --features all-features --no-fail-fast
     cargo nextest run -p gix-pack-tests --features gix-features-parallel --no-fail-fast
-    env GIX_TEST_HASH=sha1 cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-packetline --features blocking-io,maybe-async/is_sync --test blocking-packetline --no-fail-fast
     cargo nextest run -p gix-packetline --features async-io --test async-packetline --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-curl,maybe-async/is_sync --no-fail-fast
