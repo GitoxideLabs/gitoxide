@@ -1173,14 +1173,15 @@ where
     );
 
     let gix_test_hash = env::var_os("GIX_TEST_FIXTURE_HASH").and_then(|os_string| os_string.into_string().ok());
-    let hash_kind =
-        match gix_test_hash {
-            Some(gix_test_hash) => gix_hash::Kind::from_str(&gix_test_hash).expect(&format!(
-            "GIX_TEST_FIXTURE_HASH was set to {gix_test_hash} which is an invalid value. Valid values are {}. Exiting.",
-            gix_hash::Kind::all().iter().map(|kind| kind.to_string()).collect::<Vec<_>>().join(", ")
-        )),
-            None => gix_hash::Kind::default(),
-        };
+    let hash_kind = match gix_test_hash {
+        Some(gix_test_hash) => gix_hash::Kind::from_str(&gix_test_hash).unwrap_or_else(|_| {
+            panic!(
+                "GIX_TEST_FIXTURE_HASH was set to {gix_test_hash} which is an invalid value. Valid values are {}. Exiting.",
+                gix_hash::Kind::all().iter().map(std::string::ToString::to_string).collect::<Vec<_>>().join(", ")
+            )
+        }),
+        None => gix_hash::Kind::default(),
+    };
 
     eprintln!("Using hash '{hash_kind}' when determining which fixture to use or recreate");
 
