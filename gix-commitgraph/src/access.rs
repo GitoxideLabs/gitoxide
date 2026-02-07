@@ -11,6 +11,20 @@ impl Graph {
         r.file.commit_at(r.pos)
     }
 
+    /// The kind of hash used in this `Graph`.
+    ///
+    /// Note that it is always conforming to the hash used in the owning repository.
+    ///
+    /// # Panics
+    ///
+    /// If the graph does not contain any `File`.
+    pub fn object_hash(&self) -> gix_hash::Kind {
+        self.files
+            .first()
+            .map(super::File::object_hash)
+            .expect("graph to have at least one file")
+    }
+
     /// Returns the commit matching the given `id`.
     pub fn commit_by_id(&self, id: impl AsRef<gix_hash::oid>) -> Option<Commit<'_>> {
         let r = self.lookup_by_id(id.as_ref())?;
