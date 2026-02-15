@@ -56,7 +56,7 @@ impl crate::Repository {
             first: one,
             second: two,
         })?;
-        Ok(bases[0].attach(self))
+        Ok(bases.first().attach(self))
     }
 
     /// Obtain the best merge-base between commit `one` and `two`, or fail if there is none, providing a
@@ -79,7 +79,7 @@ impl crate::Repository {
                 first: one,
                 second: two,
             })?;
-        Ok(bases[0].attach(self))
+        Ok(bases.first().attach(self))
     }
 
     /// Get all merge-bases between commit `one` and `others`, or an empty list if there is none, providing a
@@ -97,11 +97,10 @@ impl crate::Repository {
     ) -> Result<Vec<Id<'_>>, gix_revision::merge_base::Error> {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
-        Ok(gix_revision::merge_base(one, others, graph)?
-            .unwrap_or_default()
-            .into_iter()
-            .map(|id| id.attach(self))
-            .collect())
+        Ok(match gix_revision::merge_base(one, others, graph)? {
+            Some(bases) => bases.into_iter().map(|id| id.attach(self)).collect(),
+            None => Vec::new(),
+        })
     }
 
     /// Like [`merge_bases_many_with_graph()`](Self::merge_bases_many_with_graph), but without the ability to speed up consecutive calls with a [graph](gix_revwalk::Graph).

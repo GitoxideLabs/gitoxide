@@ -14,6 +14,8 @@ bitflags::bitflags! {
     }
 }
 
+use gix_hash::ObjectId;
+
 /// The error returned by the [`merge_base()`][function::merge_base()] function.
 pub type Error = Simple;
 
@@ -28,6 +30,56 @@ impl std::fmt::Display for Simple {
 }
 
 impl std::error::Error for Simple {}
+
+/// A non-empty collection of merge-base commit IDs, sorted from best to worst.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Bases(Vec<ObjectId>);
+
+impl Bases {
+    /// Create an instance containing `first` as best merge-base.
+    pub fn from_first(first: ObjectId) -> Self {
+        Self(vec![first])
+    }
+
+    /// Create an instance from `bases`, returning `None` if there is no merge base.
+    pub fn from_vec(bases: Vec<ObjectId>) -> Option<Self> {
+        (!bases.is_empty()).then_some(Self(bases))
+    }
+
+    /// Return all merge-base IDs as a slice.
+    pub fn as_slice(&self) -> &[ObjectId] {
+        &self.0
+    }
+
+    /// Return the best merge-base.
+    pub fn first(&self) -> &ObjectId {
+        // SAFETY: this type guarantees non-empty storage.
+        &self.0[0]
+    }
+
+    /// Return all merge-base IDs.
+    pub fn into_vec(self) -> Vec<ObjectId> {
+        self.0
+    }
+}
+
+impl IntoIterator for Bases {
+    type Item = ObjectId;
+    type IntoIter = std::vec::IntoIter<ObjectId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a Bases {
+    type Item = &'a ObjectId;
+    type IntoIter = std::slice::Iter<'a, ObjectId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
 
 pub(crate) mod function;
 
@@ -51,8 +103,8 @@ mod octopus {
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
     ) -> Result<Option<ObjectId>, Error> {
         for other in others {
-            if let Some(next) =
-                crate::merge_base(first, std::slice::from_ref(other), graph)?.and_then(|bases| bases.into_iter().next())
+            if let Some(next) = crate::merge_base(first, std::slice::from_ref(other), graph)?
+                .map(|bases| *bases.first())
             {
                 first = next;
             } else {

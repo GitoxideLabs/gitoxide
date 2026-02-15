@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
-use super::{Error, Simple};
+use super::{Bases, Error, Simple};
 use crate::{merge_base::Flags, Graph, PriorityQueue};
 
 /// Given a commit at `first` id, traverse the commit `graph` and return all possible merge-base between it and `others`,
@@ -26,17 +26,17 @@ pub fn merge_base(
     first: ObjectId,
     others: &[ObjectId],
     graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
-) -> Result<Option<Vec<ObjectId>>, Error> {
+) -> Result<Option<Bases>, Error> {
     let _span = gix_trace::coarse!("gix_revision::merge_base()", ?first, ?others);
     if others.is_empty() || others.contains(&first) {
-        return Ok(Some(vec![first]));
+        return Ok(Some(Bases::from_first(first)));
     }
 
     graph.clear_commit_data(|f| *f = Flags::empty());
     let bases = paint_down_to_common(first, others, graph)?;
 
     let bases = remove_redundant(&bases, graph)?;
-    Ok((!bases.is_empty()).then_some(bases))
+    Ok(Bases::from_vec(bases))
 }
 
 /// Remove all those commits from `commits` if they are in the history of another commit in `commits`.

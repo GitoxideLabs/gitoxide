@@ -44,7 +44,7 @@ pub struct Outcome<'a> {
     /// * an empty tree, if [`allow_missing_merge_base`](Options::allow_missing_merge_base) is enabled.
     pub merge_base_tree_id: gix_hash::ObjectId,
     /// The object ids of all the commits which were found to be merge-bases, or `None` if there was no merge-base.
-    pub merge_bases: Option<Vec<gix_hash::ObjectId>>,
+    pub merge_bases: Option<gix_revision::merge_base::Bases>,
     /// A list of virtual commits that were created to merge multiple merge-bases into one, the last one being
     /// the one we used as merge-base for the merge.
     /// As they are not reachable by anything they will be garbage collected, but knowing them provides options.
