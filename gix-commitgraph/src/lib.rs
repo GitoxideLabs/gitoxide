@@ -41,7 +41,7 @@ pub struct File {
 /// may come from one or more `objects/info/commit-graphs/graph-*.graph` files. These files are
 /// generated via `git commit-graph write ...` commands.
 pub struct Graph {
-    files: Vec<File>,
+    files: NonEmptyFiles,
 }
 
 /// Instantiate a commit graph from an `.git/objects/info` directory, or one of the various commit-graph files.
@@ -74,5 +74,30 @@ pub struct Position(pub u32);
 impl std::fmt::Display for Position {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+struct NonEmptyFiles(Vec<File>);
+
+impl NonEmptyFiles {
+    fn from_vec(files: Vec<File>) -> Option<Self> {
+        (!files.is_empty()).then_some(Self(files))
+    }
+}
+
+impl std::ops::Deref for NonEmptyFiles {
+    type Target = [File];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a> IntoIterator for &'a NonEmptyFiles {
+    type Item = &'a File;
+    type IntoIter = std::slice::Iter<'a, File>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }

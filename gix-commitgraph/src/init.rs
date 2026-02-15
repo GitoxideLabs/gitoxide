@@ -1,4 +1,4 @@
-use crate::{File, Graph, MAX_COMMITS};
+use crate::{File, Graph, MAX_COMMITS, NonEmptyFiles};
 use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
 use std::{
     io::{BufRead, BufReader},
@@ -54,6 +54,7 @@ impl Graph {
 
     /// Create a new commit graph from a list of `files`.
     pub fn new(files: Vec<File>) -> Result<Self, Message> {
+        let files = NonEmptyFiles::from_vec(files).ok_or_else(|| message!("Commit-graph must contain at least one file"))?;
         let num_commits: u64 = files.iter().map(|f| u64::from(f.num_commits())).sum();
         if num_commits > u64::from(MAX_COMMITS) {
             return Err(message!(
