@@ -1,4 +1,4 @@
-use std::{ops::Deref, option::Option::None, sync::Arc, vec::IntoIter};
+use std::{ops::Deref, option::Option::None, vec::IntoIter};
 
 use gix_hash::ObjectId;
 
@@ -56,7 +56,7 @@ pub enum Ordering {
 pub struct AllObjects {
     state: State,
     num_objects: usize,
-    loose_dbs: Arc<Vec<loose::Store>>,
+    loose_dbs: dynamic::load_index::NonEmptyLooseDbs,
     order: Ordering,
 }
 
@@ -78,8 +78,10 @@ impl AllObjects {
             .indices
             .iter()
             .fold(0usize, |dbc, index| dbc.saturating_add(index.num_objects() as usize));
+        let loose_dbs = snapshot
+            .non_empty_loose_dbs()
+            .expect("initialized snapshots always have at least one loose object db");
         let mut index_iter = snapshot.indices.into_iter();
-        let loose_dbs = snapshot.loose_dbs;
         let order = Default::default();
         let state = match index_iter.next() {
             Some(index) => {
@@ -95,7 +97,7 @@ impl AllObjects {
             None => {
                 let index = 0;
                 State::Loose {
-                    iter: loose_dbs.get(index).expect("at least one loose db").iter(),
+                    iter: loose_dbs.first().iter(),
                     index,
                 }
             }
@@ -180,7 +182,7 @@ impl Iterator for AllObjects {
                         None => {
                             let index = 0;
                             self.state = State::Loose {
-                                iter: self.loose_dbs.get(index).expect("at least one loose odb").iter(),
+                                iter: self.loose_dbs.first().iter(),
                                 index,
                             }
                         }

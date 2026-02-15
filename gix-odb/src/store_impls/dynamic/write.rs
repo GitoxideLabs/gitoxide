@@ -30,8 +30,8 @@ where
 {
     fn write_stream(&self, kind: Kind, size: u64, from: &mut dyn Read) -> Result<ObjectId, gix_object::write::Error> {
         let mut snapshot = self.snapshot.borrow_mut();
-        Ok(match snapshot.loose_dbs.first() {
-            Some(ldb) => ldb.write_stream(kind, size, from)?,
+        Ok(match snapshot.non_empty_loose_dbs() {
+            Some(loose_dbs) => loose_dbs.first().write_stream(kind, size, from)?,
             None => {
                 let new_snapshot = self
                     .store
@@ -39,7 +39,11 @@ where
                     .map_err(Box::new)?
                     .expect("there is always at least one ODB, and this code runs only once for initialization");
                 *snapshot = new_snapshot;
-                snapshot.loose_dbs[0].write_stream(kind, size, from)?
+                snapshot
+                    .non_empty_loose_dbs()
+                    .expect("loading a snapshot initializes loose object databases")
+                    .first()
+                    .write_stream(kind, size, from)?
             }
         })
     }

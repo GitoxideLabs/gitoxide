@@ -21,6 +21,29 @@ pub(crate) struct Snapshot {
     pub(crate) marker: types::SlotIndexMarker,
 }
 
+#[derive(Clone)]
+pub(crate) struct NonEmptyLooseDbs(Arc<Vec<crate::loose::Store>>);
+
+impl NonEmptyLooseDbs {
+    pub(crate) fn new(loose_dbs: Arc<Vec<crate::loose::Store>>) -> Option<Self> {
+        (!loose_dbs.is_empty()).then_some(Self(loose_dbs))
+    }
+
+    pub(crate) fn first(&self) -> &crate::loose::Store {
+        self.0.first().expect("non-empty by construction")
+    }
+
+    pub(crate) fn get(&self, idx: usize) -> Option<&crate::loose::Store> {
+        self.0.get(idx)
+    }
+}
+
+impl Snapshot {
+    pub(crate) fn non_empty_loose_dbs(&self) -> Option<NonEmptyLooseDbs> {
+        NonEmptyLooseDbs::new(Arc::clone(&self.loose_dbs))
+    }
+}
+
 mod error {
     use std::path::PathBuf;
 
