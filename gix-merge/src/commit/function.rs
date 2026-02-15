@@ -81,7 +81,7 @@ pub fn commit<'objects>(
                     abbreviate_hash,
                     options.tree_merge.clone(),
                 )?;
-                virtual_merge_bases = out.virtual_merge_bases;
+                virtual_merge_bases = out.virtual_merge_bases.into_vec();
                 out.tree_id
             };
             (virtual_base_tree, "merged common ancestors".into())

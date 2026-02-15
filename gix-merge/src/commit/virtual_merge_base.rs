@@ -4,7 +4,7 @@ pub struct Outcome {
     /// As they have been written to the object database, they are still available until they are garbage collected.
     /// The last one is the most recently produced and the one returned as `commit_id`.
     /// This is never empty.
-    pub virtual_merge_bases: Vec<gix_hash::ObjectId>,
+    pub virtual_merge_bases: gix_revision::merge_base::Bases,
     /// The id of the commit that was created to hold the merged tree.
     pub commit_id: gix_hash::ObjectId,
     /// The hash of the merged tree.
@@ -111,7 +111,8 @@ pub(super) mod function {
         }
 
         Ok(super::Outcome {
-            virtual_merge_bases,
+            virtual_merge_bases: gix_revision::merge_base::Bases::from_vec(virtual_merge_bases)
+                .expect("the virtual merge-base process always creates at least one commit"),
             commit_id: merged_commit_id,
             tree_id: tree_id.map_or_else(
                 || {
