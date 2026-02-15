@@ -18,7 +18,7 @@ mod prefix {
 
     #[test]
     fn short_absolute_refs_have_no_prefix() {
-        assert_eq!(parse("refs/short").to_ref().prefix(), None);
+        assert_eq!(parse("refs/short").to_ref().prefix().unwrap(), "refs/short");
     }
 
     #[test]
@@ -28,14 +28,14 @@ mod prefix {
                 .unwrap()
                 .prefix()
                 .unwrap(),
-            "refs/remote/"
+            "refs/remote/main"
         );
     }
 
     #[test]
     fn full_names_have_a_prefix() {
-        assert_eq!(parse("refs/heads/main").to_ref().prefix().unwrap(), "refs/heads/");
-        assert_eq!(parse("refs/foo/bar").to_ref().prefix().unwrap(), "refs/foo/");
+        assert_eq!(parse("refs/heads/main").to_ref().prefix().unwrap(), "refs/heads/main");
+        assert_eq!(parse("refs/foo/bar").to_ref().prefix().unwrap(), "refs/foo/bar");
         assert_eq!(
             parse("refs/heads/*:refs/remotes/origin/*").to_ref().prefix().unwrap(),
             "refs/heads/"
@@ -95,8 +95,8 @@ mod expand_prefixes {
 
     #[test]
     fn full_names_expand_to_their_prefix() {
-        assert_eq!(parse("refs/heads/main"), ["refs/heads/"]);
-        assert_eq!(parse("refs/foo/bar"), ["refs/foo/"]);
+        assert_eq!(parse("refs/heads/main"), ["refs/heads/main"]);
+        assert_eq!(parse("refs/foo/bar"), ["refs/foo/bar"]);
         assert_eq!(parse("refs/heads/*:refs/remotes/origin/*"), ["refs/heads/"]);
     }
 
@@ -106,7 +106,7 @@ mod expand_prefixes {
         gix_refspec::parse("refs/local/main:refs/remote/main".into(), Operation::Push)
             .unwrap()
             .expand_prefixes(&mut out);
-        assert_eq!(out, ["refs/remote/"]);
+        assert_eq!(out, ["refs/remote/main"]);
     }
 
     #[test]
