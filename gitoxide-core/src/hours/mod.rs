@@ -256,7 +256,10 @@ where
             results_by_hours.push(estimate);
         }
     }
-    if let Some((first, rest)) = commit_authors.get(slice_start..).and_then(|commits| commits.split_first()) {
+    if let Some((first, rest)) = commit_authors
+        .get(slice_start..)
+        .and_then(|commits| commits.split_first())
+    {
         results_by_hours.push(estimate_hours(first, rest, &stats));
     }
 

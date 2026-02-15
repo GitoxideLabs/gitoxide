@@ -14,7 +14,7 @@ fn validate() -> crate::Result {
                 let mut graph = gix_revision::Graph::new(&odb, cache.as_ref());
                 let actual = merge_base(expected.first, &expected.others, &mut graph)?;
                 assert_eq!(
-                    actual,
+                    actual.map(gix_revision::merge_base::Bases::into_vec),
                     expected.bases,
                     "sample {file:?}:{input}",
                     file = baseline_path.with_extension("").file_name(),
@@ -25,7 +25,7 @@ fn validate() -> crate::Result {
             for expected in baseline::parse_expectations(&baseline_path)? {
                 let actual = merge_base(expected.first, &expected.others, &mut graph)?;
                 assert_eq!(
-                    actual,
+                    actual.map(gix_revision::merge_base::Bases::into_vec),
                     expected.bases,
                     "sample (reused graph) {file:?}:{input}",
                     file = baseline_path.with_extension("").file_name(),

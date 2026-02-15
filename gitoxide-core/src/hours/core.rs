@@ -27,7 +27,10 @@ pub fn estimate_hours(
     let hours_for_commits = {
         let mut hours = 0.0;
 
-        let mut commits = std::iter::once(first_commit).chain(other_commits.iter()).map(|t| &t.1).rev();
+        let mut commits = std::iter::once(first_commit)
+            .chain(other_commits.iter())
+            .map(|t| &t.1)
+            .rev();
         let mut cur = commits
             .next()
             .expect("a commit sequence with explicit first commit is never empty");

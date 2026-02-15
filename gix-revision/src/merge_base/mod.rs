@@ -51,6 +51,11 @@ impl Bases {
         &self.0
     }
 
+    /// Iterate all merge-base IDs from best to worst.
+    pub fn iter(&self) -> std::slice::Iter<'_, ObjectId> {
+        self.0.iter()
+    }
+
     /// Return the best merge-base.
     pub fn first(&self) -> &ObjectId {
         // SAFETY: this type guarantees non-empty storage.
@@ -77,7 +82,7 @@ impl<'a> IntoIterator for &'a Bases {
     type IntoIter = std::slice::Iter<'a, ObjectId>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.iter()
     }
 }
 
@@ -103,8 +108,8 @@ mod octopus {
         graph: &mut Graph<'_, '_, graph::Commit<Flags>>,
     ) -> Result<Option<ObjectId>, Error> {
         for other in others {
-            if let Some(next) = crate::merge_base(first, std::slice::from_ref(other), graph)?
-                .map(|bases| *bases.first())
+            if let Some(next) =
+                crate::merge_base(first, std::slice::from_ref(other), graph)?.map(|bases| *bases.first())
             {
                 first = next;
             } else {
