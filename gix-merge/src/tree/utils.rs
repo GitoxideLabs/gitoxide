@@ -335,7 +335,40 @@ impl PossibleConflict {
 
 /// The flat list of all tree-nodes so we can avoid having a linked-tree using pointers
 /// which is useful for traversal and initial setup as that can then trivially be non-recursive.
-pub struct TreeNodes(Vec<TreeNode>);
+pub struct TreeNodes(NonEmptyVec<TreeNode>);
+
+#[derive(Debug, Clone)]
+struct NonEmptyVec<T>(Vec<T>);
+
+impl<T> NonEmptyVec<T> {
+    fn new(first: T) -> Self {
+        Self(vec![first])
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn push(&mut self, value: T) {
+        self.0.push(value);
+    }
+
+    fn first(&self) -> &T {
+        self.0.first().expect("non-empty by construction")
+    }
+
+    fn first_mut(&mut self) -> &mut T {
+        self.0.first_mut().expect("non-empty by construction")
+    }
+
+    fn get(&self, idx: usize) -> Option<&T> {
+        self.0.get(idx)
+    }
+
+    fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.0.get_mut(idx)
+    }
+}
 
 /// Trees lead to other trees, or leafs (without children), and it can be represented by a renamed directory.
 #[derive(Debug, Default, Clone)]
@@ -367,7 +400,7 @@ impl TreeNode {
 
 impl TreeNodes {
     pub fn new() -> Self {
-        TreeNodes(vec![TreeNode::default()])
+        TreeNodes(NonEmptyVec::new(TreeNode::default()))
     }
 
     /// Insert our `change` at `change_idx`, into a linked-tree, assuring that each `change` is non-conflicting
@@ -386,7 +419,7 @@ impl TreeNodes {
         {
             let mut components = to_components(path).peekable();
             let mut next_index = self.0.len();
-            let mut cursor = &mut self.0[0];
+            let mut cursor = self.0.first_mut();
             while let Some(component) = components.next() {
                 let is_last = components.peek().is_none();
                 match cursor.children.get(component).copied() {
@@ -398,11 +431,11 @@ impl TreeNodes {
                         };
                         cursor.children.insert(component.to_owned(), next_index);
                         self.0.push(new_node);
-                        cursor = &mut self.0[next_index];
+                        cursor = self.0.get_mut(next_index).expect("inserted above");
                         next_index += 1;
                     }
                     Some(index) => {
-                        cursor = &mut self.0[index];
+                        cursor = self.0.get_mut(index).expect("child indices are internal");
                         if is_last && !cursor.is_leaf_node() {
                             // NOTE: we might encounter the same path multiple times in rare conditions.
                             //       At least we avoid overwriting existing intermediate changes, for good measure.
@@ -423,7 +456,7 @@ impl TreeNodes {
             return None;
         }
         let components = to_components(theirs_location);
-        let mut cursor = &self.0[0];
+        let mut cursor = self.0.first();
         let mut cursor_idx = 0;
         let mut intermediate_change = None;
         for component in components {
@@ -440,7 +473,7 @@ impl TreeNodes {
                     } else {
                         // a change somewhere else, i.e. `a/c` and we know `a/b` only.
                         intermediate_change.and_then(|(change, cursor_idx)| {
-                            let cursor = &self.0[cursor_idx];
+                            let cursor = self.0.get(cursor_idx).expect("cursor indices are internal");
                             // If this is a destination location of a rename, then the `their_location`
                             // is already at the right spot, and we can just ignore it.
                             if matches!(cursor.location, ChangeLocation::CurrentLocation) {
@@ -454,7 +487,7 @@ impl TreeNodes {
                 }
                 Some(child_idx) => {
                     cursor_idx = child_idx;
-                    cursor = &self.0[cursor_idx];
+                    cursor = self.0.get(cursor_idx).expect("child indices are internal");
                 }
             }
         }
@@ -497,7 +530,7 @@ impl TreeNodes {
 
     fn remove_leaf_inner(&mut self, location: &BStr, must_exist: bool) {
         let mut components = to_components(location).peekable();
-        let mut cursor = &mut self.0[0];
+        let mut cursor = self.0.first_mut();
         while let Some(component) = components.next() {
             match cursor.children.get(component).copied() {
                 None => debug_assert!(!must_exist, "didn't find '{location}' for removal"),
@@ -505,14 +538,14 @@ impl TreeNodes {
                     let is_last = components.peek().is_none();
                     if is_last {
                         cursor.children.remove(component);
-                        cursor = &mut self.0[existing_idx];
+                        cursor = self.0.get_mut(existing_idx).expect("child indices are internal");
                         debug_assert!(
                             cursor.is_leaf_node(),
                             "BUG: we should really only try to remove leaf nodes: {cursor:?}"
                         );
                         cursor.change_idx = None;
                     } else {
-                        cursor = &mut self.0[existing_idx];
+                        cursor = self.0.get_mut(existing_idx).expect("child indices are internal");
                     }
                 }
             }
@@ -523,17 +556,17 @@ impl TreeNodes {
     /// Panic if that change already exists as it must be made so that it definitely doesn't overlap with this tree.
     pub fn insert(&mut self, new_change: &Change, new_change_idx: usize) {
         let mut next_index = self.0.len();
-        let mut cursor = &mut self.0[0];
+        let mut cursor = self.0.first_mut();
         for component in to_components(new_change.location()) {
             match cursor.children.get(component).copied() {
                 None => {
                     cursor.children.insert(component.to_owned(), next_index);
                     self.0.push(TreeNode::default());
-                    cursor = &mut self.0[next_index];
+                    cursor = self.0.get_mut(next_index).expect("inserted above");
                     next_index += 1;
                 }
                 Some(existing_idx) => {
-                    cursor = &mut self.0[existing_idx];
+                    cursor = self.0.get_mut(existing_idx).expect("child indices are internal");
                 }
             }
         }
