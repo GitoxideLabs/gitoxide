@@ -12,12 +12,44 @@ pub enum Update {
     Unshallow(gix_hash::ObjectId),
 }
 
+/// A non-empty list of commits at the shallow boundary.
+#[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Commits(Vec<gix_hash::ObjectId>);
+
+impl Commits {
+    /// Create a non-empty list from `commits`, or `None` if it is empty.
+    pub fn from_vec(commits: Vec<gix_hash::ObjectId>) -> Option<Self> {
+        (!commits.is_empty()).then_some(Self(commits))
+    }
+
+    /// Return all commits as slice.
+    pub fn as_slice(&self) -> &[gix_hash::ObjectId] {
+        &self.0
+    }
+
+    /// Iterate all commits.
+    pub fn iter(&self) -> std::slice::Iter<'_, gix_hash::ObjectId> {
+        self.0.iter()
+    }
+
+    /// Binary search for `id` in the sorted shallow boundary.
+    pub fn binary_search(&self, id: &gix_hash::ObjectId) -> Result<usize, usize> {
+        self.0.binary_search(id)
+    }
+
+    /// Return the owned list of commits.
+    pub fn into_vec(self) -> Vec<gix_hash::ObjectId> {
+        self.0
+    }
+}
+
 /// Return a list of shallow commits as unconditionally read from `shallow_file`.
 ///
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository
 /// isn't a shallow clone.
-pub fn read(shallow_file: &std::path::Path) -> Result<Option<Vec<gix_hash::ObjectId>>, read::Error> {
+pub fn read(shallow_file: &std::path::Path) -> Result<Option<Commits>, read::Error> {
     use bstr::ByteSlice;
     let buf = match std::fs::read(shallow_file) {
         Ok(buf) => buf,
@@ -31,11 +63,7 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<Vec<gix_hash::Objec
         .collect::<Result<Vec<_>, _>>()?;
 
     commits.sort();
-    if commits.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(commits))
-    }
+    Ok(Commits::from_vec(commits))
 }
 
 ///
@@ -56,10 +84,10 @@ pub mod write {
         /// Git also prunes the set of shallow commits while writing, we don't until we support some sort of pruning.
         pub fn write(
             mut file: gix_lock::File,
-            shallow_commits: Option<Vec<gix_hash::ObjectId>>,
+            shallow_commits: Option<crate::Commits>,
             updates: &[Update],
         ) -> Result<(), Error> {
-            let mut shallow_commits = shallow_commits.unwrap_or_default();
+            let mut shallow_commits = shallow_commits.map(crate::Commits::into_vec).unwrap_or_default();
             for update in updates {
                 match update {
                     Update::Shallow(id) => {
@@ -73,23 +101,14 @@ pub mod write {
                 drop(file);
                 return Ok(());
             }
-
-            if shallow_commits.is_empty() {
-                if let Err(err) = std::fs::remove_file(file.resource_path()) {
-                    if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(err.into());
-                    }
-                }
-            } else {
-                shallow_commits.sort();
-                let mut buf = Vec::<u8>::new();
-                for commit in shallow_commits {
-                    commit.write_hex_to(&mut buf).map_err(Error::Io)?;
-                    buf.push(b'\n');
-                }
-                file.write_all(&buf).map_err(Error::Io)?;
-                file.flush()?;
+            shallow_commits.sort();
+            let mut buf = Vec::<u8>::new();
+            for commit in shallow_commits {
+                commit.write_hex_to(&mut buf).map_err(Error::Io)?;
+                buf.push(b'\n');
             }
+            file.write_all(&buf).map_err(Error::Io)?;
+            file.flush()?;
             file.commit()?;
             Ok(())
         }

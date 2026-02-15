@@ -208,7 +208,7 @@ fn add_shallow_args(
     args: &mut Arguments,
     shallow: &Shallow,
     shallow_file: &std::path::Path,
-) -> Result<(Option<Vec<gix_hash::ObjectId>>, Option<gix_lock::File>), Error> {
+) -> Result<(Option<gix_shallow::Commits>, Option<gix_lock::File>), Error> {
     let expect_change = *shallow != Shallow::NoChange;
     let shallow_lock = expect_change.then(|| acquire_shallow_lock(shallow_file)).transpose()?;
 
