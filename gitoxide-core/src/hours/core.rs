@@ -17,18 +17,20 @@ const MINUTES_PER_HOUR: f32 = 60.0;
 pub const HOURS_PER_WORKDAY: f32 = 8.0;
 
 pub fn estimate_hours(
-    commits: &[(u32, super::SignatureRef<'static>)],
+    first_commit: &(u32, super::SignatureRef<'static>),
+    other_commits: &[(u32, super::SignatureRef<'static>)],
     stats: &[(u32, FileStats, LineStats)],
 ) -> WorkByEmail {
-    assert!(!commits.is_empty());
     const MAX_COMMIT_DIFFERENCE_IN_MINUTES: f32 = 2.0 * MINUTES_PER_HOUR;
     const FIRST_COMMIT_ADDITION_IN_MINUTES: f32 = 2.0 * MINUTES_PER_HOUR;
 
     let hours_for_commits = {
         let mut hours = 0.0;
 
-        let mut commits = commits.iter().map(|t| &t.1).rev();
-        let mut cur = commits.next().expect("at least one commit if we are here");
+        let mut commits = std::iter::once(first_commit).chain(other_commits.iter()).map(|t| &t.1).rev();
+        let mut cur = commits
+            .next()
+            .expect("a commit sequence with explicit first commit is never empty");
 
         for next in commits {
             let change_in_minutes = (next.seconds().saturating_sub(cur.seconds())) as f32 / MINUTES_PER_HOUR;
@@ -43,11 +45,11 @@ pub fn estimate_hours(
         hours
     };
 
-    let author = &commits[0].1;
+    let author = &first_commit.1;
     let (files, lines) = if !stats.is_empty() {
         {
-            commits
-                .iter()
+            std::iter::once(first_commit)
+                .chain(other_commits.iter())
                 .map(|t| &t.0)
                 .fold((FileStats::default(), LineStats::default()), |mut acc, id| match stats
                     .binary_search_by(|t| t.0.cmp(id))
@@ -68,7 +70,7 @@ pub fn estimate_hours(
         name: author.name,
         email: author.email,
         hours: FIRST_COMMIT_ADDITION_IN_MINUTES / 60.0 + hours_for_commits,
-        num_commits: commits.len() as u32,
+        num_commits: (1 + other_commits.len()) as u32,
         files,
         lines,
     }

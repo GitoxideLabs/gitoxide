@@ -243,7 +243,10 @@ where
     let mut ignored_bot_commits = 0_u32;
     for (idx, (_, elm)) in commit_authors.iter().enumerate() {
         if elm.email != *current_email {
-            let estimate = estimate_hours(&commit_authors[slice_start..idx], &stats);
+            let (first, rest) = commit_authors[slice_start..idx]
+                .split_first()
+                .expect("a changed email always implies a non-empty range");
+            let estimate = estimate_hours(first, rest, &stats);
             slice_start = idx;
             current_email = &elm.email;
             if ignore_bots && estimate.name.contains_str(b"[bot]") {
@@ -253,8 +256,8 @@ where
             results_by_hours.push(estimate);
         }
     }
-    if let Some(commits) = commit_authors.get(slice_start..) {
-        results_by_hours.push(estimate_hours(commits, &stats));
+    if let Some((first, rest)) = commit_authors.get(slice_start..).and_then(|commits| commits.split_first()) {
+        results_by_hours.push(estimate_hours(first, rest, &stats));
     }
 
     let num_authors = results_by_hours.len();
