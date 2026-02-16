@@ -266,6 +266,15 @@ mod into_iter {
     }
 
     #[test]
+    fn submodule_assume_unchanged_replaced_with_symlink_is_ignored() -> crate::Result {
+        let repo = repo("submodule-assume-unchanged-symlink")?;
+        let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
+        let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+        assert!(items.is_empty(), "assume-unchanged submodule should not show up in status");
+        Ok(())
+    }
+
+    #[test]
     fn error_during_tree_traversal_causes_failure() -> crate::Result {
         let repo = repo("untracked-only")?;
         let platform = repo.status(gix::progress::Discard)?.head_tree(hex_to_id(

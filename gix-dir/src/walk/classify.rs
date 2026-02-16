@@ -372,7 +372,11 @@ fn resolve_file_type_with_index(
             None
         };
         (
-            kind.filter(|_| entry.flags.contains(gix_index::entry::Flags::UPTODATE)),
+            kind.filter(|_| {
+                entry
+                    .flags
+                    .intersects(gix_index::entry::Flags::UPTODATE | gix_index::entry::Flags::ASSUME_VALID)
+            }),
             kind,
         )
     }
@@ -380,7 +384,11 @@ fn resolve_file_type_with_index(
     fn icase_directory_to_kinds(dir: Option<&gix_index::Entry>) -> (Option<entry::Kind>, Option<entry::Kind>) {
         let index_kind = dir.map(|_| entry::Kind::Directory);
         let uptodate_kind = dir
-            .filter(|entry| entry.flags.contains(gix_index::entry::Flags::UPTODATE))
+            .filter(|entry| {
+                entry
+                    .flags
+                    .intersects(gix_index::entry::Flags::UPTODATE | gix_index::entry::Flags::ASSUME_VALID)
+            })
             .map(|_| entry::Kind::Directory);
         (uptodate_kind, index_kind)
     }
