@@ -8,10 +8,12 @@ fn line_numbers_are_counted_correctly_in_errors() {
     assert_eq!(actual.len(), 2);
 
     let err = actual.next().expect("two items left").unwrap_err();
-    assert!(matches!(err, parse::Error::Malformed { line_number: 3, .. }));
+    let err_str = err.to_string();
+    assert!(err_str.contains("3:"), "expected line 3, got: {err_str}");
 
     let err = actual.next().expect("one item left").unwrap_err();
-    assert!(matches!(err, parse::Error::UnconsumedInput { line_number: 5, .. }));
+    let err_str = err.to_string();
+    assert!(err_str.contains("Line 5"), "expected line 5, got: {err_str}");
 }
 
 #[test]
@@ -84,39 +86,35 @@ fn valid_entries() {
 
 #[test]
 fn error_if_there_is_just_a_name() {
-    assert!(matches!(
-        try_line("just a name"),
-        Err(parse::Error::UnconsumedInput { line_number: 1, .. })
-    ));
+    let err = try_line("just a name").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("Line 1"), "expected line 1, got: {err_str}");
 }
 
 #[test]
 fn error_if_there_is_just_an_email() {
-    assert!(matches!(
-        try_line("<email>"),
-        Err(parse::Error::Malformed { line_number: 1, .. })
-    ));
+    let err = try_line("<email>").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
 
-    assert!(matches!(
-        try_line("   \t  <email>"),
-        Err(parse::Error::Malformed { line_number: 1, .. })
-    ));
+    let err = try_line("   \t  <email>").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
 }
 
 #[test]
 fn error_if_email_is_empty() {
-    assert!(matches!(
-        try_line("hello <"),
-        Err(parse::Error::Malformed { line_number: 1, .. })
-    ));
-    assert!(matches!(
-        try_line("hello < \t"),
-        Err(parse::Error::Malformed { line_number: 1, .. })
-    ));
-    assert!(matches!(
-        try_line("hello < \t\r >"),
-        Err(parse::Error::Malformed { line_number: 1, .. })
-    ));
+    let err = try_line("hello <").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+
+    let err = try_line("hello < \t").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
+
+    let err = try_line("hello < \t\r >").unwrap_err();
+    let err_str = err.to_string();
+    assert!(err_str.contains("1:"), "expected line 1, got: {err_str}");
 }
 
 fn line(input: &str) -> Entry<'_> {

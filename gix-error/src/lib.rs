@@ -4,6 +4,8 @@
 //!
 //! * When there is **no callee error** to track, use *simple* `std::error::Error` implementations directly,
 //!   e.g. `Result<_, Simple>`.
+//!      - If call-site tracking is important, prefer `Result<_, Exn<Simple>>` instead:
+//!        [`Exn`] stores the location where the error was raised, which plain error values do not.
 //! * When there **is callee error to track** *in a `gix-plumbing`*, use e.g. `Result<_, Exn<Simple>>`.
 //!      - Remember that `Exn<T>` does not implement `std::error::Error` so it's not easy to use outside `gix-` crates.
 //!      - Use the type-erased version in callbacks like [`Exn`] (without type arguments), i.e. `Result<T, Exn>`.
@@ -28,6 +30,15 @@
 //!
 //! - [`ValidationError`]
 //!    - like [`Message`], but can optionally store the input that caused the failure.
+//!    - For message-only validation failures, use `Into<ValidationError>` conversions instead of spelling out
+//!      [`ValidationError::new()`]:
+//! ```rust,ignore
+//! // All of these produce ValidationError:
+//! return Err(message("eof reading amount of bits").into());
+//! let value = maybe_value.ok_or(message("missing value").into())?;
+//! let header = maybe_header.ok_or("missing header".into())?;
+//! ```
+//!    - Use [`ValidationError::new_with_input()`] when you need to preserve the offending input.
 //!
 //! # [`Exn<ErrorType>`](Exn) and [`Exn`]
 //!
@@ -93,7 +104,7 @@
 //! # Migrating from `thiserror`
 //!
 //! This section describes the mechanical translation from `thiserror` error enums to `gix-error`.
-//! In `Cargo.toml`, replace `thiserror = "<version>"` with `gix-error = { version = "^0.0.0", path = "../gix-error" }`.
+//! In `Cargo.toml`, replace `thiserror = "<version>"` with `gix-error = { version = "^0.1.0", path = "../gix-error" }`.
 //!
 //! ## Choosing the replacement type
 //!
@@ -325,6 +336,9 @@ pub struct Error {
     #[cfg(all(feature = "auto-chain-error", not(feature = "tree-error")))]
     inner: ChainedError,
 }
+
+/// A Result type that uses the [`Error`] type.
+pub type Result<T = ()> = std::result::Result<T, Error>;
 
 mod error;
 

@@ -16,7 +16,7 @@ doctest = false
 test = true
 
 [dependencies]
-thiserror = "2.0.18"
+gix-error = { version = "0.1.0", path = "../gix-error" }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

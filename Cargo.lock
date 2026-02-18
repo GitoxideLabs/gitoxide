@@ -1498,8 +1498,8 @@ dependencies = [
 name = "gix-bitmap"
 version = "0.2.16"
 dependencies = [
+ "gix-error",
  "gix-testtools",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1944,9 +1944,9 @@ dependencies = [
  "document-features",
  "gix-actor",
  "gix-date",
+ "gix-error",
  "gix-testtools",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2206,8 +2206,8 @@ name = "gix-quote"
 version = "0.6.2"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-utils",
- "thiserror 2.0.18",
 ]
 
 [[package]]

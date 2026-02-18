@@ -1,25 +1,16 @@
 ///
 pub mod decode {
-    /// The error returned by [`decode()`][super::decode()].
-    #[derive(Debug, thiserror::Error)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error("{}", message)]
-        Corrupt { message: &'static str },
-    }
+    /// The error returned by [`decode()`](super::decode()).
+    pub type Error = gix_error::Exn<gix_error::ValidationError>;
 }
 
 /// Decode `data` as EWAH bitmap.
 pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
-    use self::decode::Error;
     use crate::decode;
+    use gix_error::{message, OptionExt};
 
-    let (num_bits, data) = decode::u32(data).ok_or(Error::Corrupt {
-        message: "eof reading amount of bits",
-    })?;
-    let (len, data) = decode::u32(data).ok_or(Error::Corrupt {
-        message: "eof reading chunk length",
-    })?;
+    let (num_bits, data) = decode::u32(data).ok_or_raise(|| message("eof reading amount of bits").into())?;
+    let (len, data) = decode::u32(data).ok_or_raise(|| message("eof reading chunk length").into())?;
     let len = len as usize;
 
     // NOTE: git does this by copying all bytes first, and then it will change the endianness in a separate loop.
@@ -27,9 +18,7 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
     //       one day somebody will find out that it's worth it to use unsafe here.
     let (mut bits, data) = data
         .split_at_checked(len * std::mem::size_of::<u64>())
-        .ok_or(Error::Corrupt {
-            message: "eof while reading bit data",
-        })?;
+        .ok_or_raise(|| message("eof while reading bit data").into())?;
     let mut buf = std::vec::Vec::<u64>::with_capacity(len);
     for _ in 0..len {
         let (bit_num, rest) = bits.split_at(std::mem::size_of::<u64>());
@@ -37,9 +26,7 @@ pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
         buf.push(u64::from_be_bytes(bit_num.try_into().unwrap()));
     }
 
-    let (rlw, data) = decode::u32(data).ok_or(Error::Corrupt {
-        message: "eof while reading run length width",
-    })?;
+    let (rlw, data) = decode::u32(data).ok_or_raise(|| message("eof while reading run length width").into())?;
 
     Ok((
         Vec {
