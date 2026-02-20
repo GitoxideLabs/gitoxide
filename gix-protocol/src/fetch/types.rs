@@ -13,6 +13,8 @@ pub struct Options<'a> {
     pub shallow: &'a Shallow,
     /// Describe how to handle tags when fetching.
     pub tags: Tags,
+    /// If set, request that the remote filters the object set according to `filter`.
+    pub filter: Option<&'a str>,
     /// If `true`, if we fetch from a remote that only offers shallow clones, the operation will fail with an error
     /// instead of writing the shallow boundary to the shallow file.
     pub reject_shallow_remote: bool,

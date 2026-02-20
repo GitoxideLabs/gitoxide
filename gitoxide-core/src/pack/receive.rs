@@ -136,6 +136,7 @@ where
             shallow_file: "no shallow file required as we reject it to keep it simple".into(),
             shallow: &Default::default(),
             tags: Default::default(),
+            filter: None,
             reject_shallow_remote: true,
         },
     )
