@@ -16,6 +16,8 @@ rust-version = "1.82"
 doctest = false
 
 [features]
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`
 serde = ["dep:serde", "gix-hash/serde", "bstr/serde"]
 
@@ -38,4 +40,4 @@ gix-hash = { path = "../gix-hash", features = ["sha256"] }
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]
