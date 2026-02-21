@@ -16,6 +16,7 @@ anyhow = "1.0.76"
 
 [dependencies.gix-config]
 path = ".."
+features = ["sha1"]
 
 # Prevent this from interfering with workspaces
 [workspace]

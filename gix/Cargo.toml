@@ -335,7 +335,7 @@ gix-dir = { version = "^0.22.0", path = "../gix-dir", optional = true }
 
 gix-config = { version = "^0.53.0", path = "../gix-config" }
 gix-odb = { version = "^0.77.0", path = "../gix-odb" }
-gix-hash = { version = "^0.22.1", path = "../gix-hash" }
+gix-hash = { version = "^0.22.1", path = "../gix-hash", features = ["sha1"] }
 gix-shallow = { version = "^0.9.0", path = "../gix-shallow" }
 gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-actor = { version = "^0.40.0", path = "../gix-actor" }
@@ -425,6 +425,7 @@ insta = "1.46.1"
 
 [package.metadata.docs.rs]
 features = [
+    "sha1",
     "document-features",
     "max-performance",
     "blocking-network-client",

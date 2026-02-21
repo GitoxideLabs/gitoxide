@@ -14,7 +14,14 @@ rust-version = "1.82"
 [lib]
 doctest = false
 
+[features]
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-hash/sha1"]
+
 [dependencies]
 parking_lot = "0.12.4"
 hashbrown = { version = "0.16.0", default-features = false, features = ["inline-more"] }
 gix-hash = { version = "^0.22.0", path = "../gix-hash" }
+
+[package.metadata.docs.rs]
+features = ["sha1"]

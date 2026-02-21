@@ -65,38 +65,56 @@ check:
     cargo check --no-default-features --features max
     cargo check -p gitoxide-core --features blocking-client
     cargo check -p gitoxide-core --features async-client
-    cargo check -p gix-pack --no-default-features
-    cargo check -p gix-pack --no-default-features --features generate
-    cargo check -p gix-pack --no-default-features --features streaming-input
+    cargo check -p gix-pack --no-default-features 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-pack --no-default-features --features sha1
+    cargo check -p gix-pack --no-default-features --features sha1,generate
+    cargo check -p gix-pack --no-default-features --features sha1,streaming-input
     cargo check -p gix-hash --all-features
     cargo check -p gix-hash 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-hash --features sha1
     cargo check -p gix-hash --features sha256
-    cargo check -p gix-hash --no-default-features --features sha256
+    cargo check -p gix-hash --features sha1,sha256
+    cargo check -p gix-hashtable 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-hashtable --features sha1
     cargo check -p gix-object --all-features
-    cargo check -p gix-object --features verbose-object-parsing-errors
+    cargo check -p gix-object --features verbose-object-parsing-errors 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-object --features sha1,verbose-object-parsing-errors
     cargo check -p gix-attributes --features serde
     cargo check -p gix-glob --features serde
-    cargo check -p gix-worktree --features serde
-    cargo check -p gix-worktree --no-default-features
+    cargo check -p gix-worktree --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-worktree --features sha1,serde
+    cargo check -p gix-worktree --no-default-features --features sha1
     cargo check -p gix-actor --features serde
     cargo check -p gix-date --features serde
     cargo check -p gix-tempfile --features signals
     cargo check -p gix-tempfile --features hp-hashmap
-    cargo check -p gix-pack --features serde
-    cargo check -p gix-pack --features pack-cache-lru-static
-    cargo check -p gix-pack --features pack-cache-lru-dynamic
-    cargo check -p gix-pack --features object-cache-dynamic
+    cargo check -p gix-merge 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-merge --features sha1
+    cargo check -p gix-pack --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-pack --features sha1,serde
+    cargo check -p gix-pack --features sha1,pack-cache-lru-static
+    cargo check -p gix-pack --features sha1,pack-cache-lru-dynamic
+    cargo check -p gix-pack --features sha1,object-cache-dynamic
     cargo check -p gix-packetline --features blocking-io
     cargo check -p gix-packetline --features async-io
-    cargo check -p gix-index --features serde
+    cargo check -p gix-index --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-index --features sha1,serde
     cargo check -p gix-credentials --features serde
     cargo check -p gix-sec --features serde
-    cargo check -p gix-revision --features serde
-    cargo check -p gix-revision --no-default-features --features describe
+    cargo check -p gix-ref 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-ref --features sha1
+    cargo check -p gix-refspec 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-refspec --features sha1
+    cargo check -p gix-revision --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-revision --features sha1,serde
+    cargo check -p gix-revision --no-default-features --features sha1,describe
     cargo check -p gix-mailmap --features serde
     cargo check -p gix-url --all-features
-    cargo check -p gix-status
+    cargo check -p gix-status 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-status --features sha1
     cargo check -p gix-status --all-features
+    cargo check -p gix-traverse 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-traverse --features sha1
     cargo check -p gix-features --all-features
     cargo check -p gix-features --features parallel
     cargo check -p gix-features --features fs-read-dir
@@ -105,18 +123,22 @@ check:
     cargo check -p gix-features --features crc32
     cargo check -p gix-features --features zlib
     cargo check -p gix-features --features cache-efficiency-debug
+    cargo check -p gix-commitgraph 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-commitgraph --all-features
     cargo check -p gix-config-value --all-features
+    cargo check -p gix-config 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-config --all-features
-    cargo check -p gix-diff --no-default-features
+    cargo check -p gix-diff --no-default-features 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-diff --no-default-features --features sha1
     cargo check -p gix-transport --features blocking-client
     cargo check -p gix-transport --features async-client
     cargo check -p gix-transport --features async-client,async-std
     cargo check -p gix-transport --features http-client
     cargo check -p gix-transport --features http-client-curl
     cargo check -p gix-transport --features http-client-reqwest
-    cargo check -p gix-protocol --features blocking-client
-    cargo check -p gix-protocol --features async-client
+    cargo check -p gix-protocol --features blocking-client 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-protocol --features sha1,blocking-client
+    cargo check -p gix-protocol --features sha1,async-client
     cargo check -p gix --no-default-features --features async-network-client
     cargo check -p gix --no-default-features --features async-network-client-async-std
     cargo check -p gix --no-default-features --features blocking-network-client
@@ -137,7 +159,8 @@ check:
     cargo check -p gix --no-default-features --features interrupt --tests
     cargo check -p gix --no-default-features --features blame --tests
     cargo check -p gix --no-default-features
-    cargo check -p gix-odb --features serde
+    cargo check -p gix-odb --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
+    cargo check -p gix-odb --features sha1,serde
     cargo check --no-default-features --features max-control
 
 # Run `cargo doc` on all crates
@@ -159,9 +182,9 @@ unit-tests:
     cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-error --no-fail-fast --test auto-chain-error --features auto-chain-error
     cargo nextest run -p gix-error --no-fail-fast
-    cargo nextest run -p gix-hash --no-fail-fast
+    cargo nextest run -p gix-hash --features sha1 --no-fail-fast
+    cargo nextest run -p gix-hash --features sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-hash --features sha256 --no-fail-fast
-    cargo nextest run -p gix-hash --no-default-features --features sha256 --no-fail-fast # TODO: make this actually work by removing 'sha1' from default features.
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-commitgraph --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-commitgraph --no-fail-fast
     cargo nextest run -p gix-object --no-fail-fast
@@ -181,8 +204,8 @@ unit-tests:
     cargo nextest run -p gix-transport --features http-client-curl,maybe-async/is_sync --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-reqwest,maybe-async/is_sync --no-fail-fast
     cargo nextest run -p gix-transport --features async-client --no-fail-fast
-    cargo nextest run -p gix-protocol --features blocking-client --no-fail-fast
-    cargo nextest run -p gix-protocol --features async-client --no-fail-fast
+    cargo nextest run -p gix-protocol --features sha1,blocking-client --no-fail-fast
+    cargo nextest run -p gix-protocol --features sha1,async-client --no-fail-fast
     cargo nextest run -p gix-blame --no-fail-fast
     cargo nextest run -p gix --no-default-features --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance-safe --no-fail-fast

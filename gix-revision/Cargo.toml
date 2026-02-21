@@ -16,6 +16,8 @@ doctest = false
 
 [features]
 default = ["describe", "merge_base"]
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-hash/sha1"]
 
 ## `git describe` functionality
 describe = ["dep:gix-trace", "dep:gix-hashtable"]
@@ -50,4 +52,4 @@ permutohedron = "0.2.4"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]

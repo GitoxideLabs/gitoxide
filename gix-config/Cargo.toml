@@ -15,6 +15,8 @@ rust-version = "1.82"
 autotests = false
 
 [features]
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-ref/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-sec/serde", "gix-ref/serde", "gix-glob/serde", "gix-config-value/serde"]
 
@@ -46,7 +48,7 @@ path = "./benches/large_config_file.rs"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]
 
 [package.metadata.cargo-machete]
 ignored = [

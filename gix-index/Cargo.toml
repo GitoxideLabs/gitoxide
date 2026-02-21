@@ -18,6 +18,8 @@ doctest = false
 test = true
 
 [features]
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "smallvec/serde", "gix-hash/serde"]
 
@@ -61,4 +63,4 @@ libc = { version = "0.2.180" }
 gix-testtools = { path = "../tests/tools" }
 
 [package.metadata.docs.rs]
-features = ["document-features", "serde"]
+features = ["sha1", "document-features", "serde"]

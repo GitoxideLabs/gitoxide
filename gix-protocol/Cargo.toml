@@ -54,6 +54,8 @@ fetch = [
 ]
 
 #! ### Other
+## Support for SHA1 hashes and digests.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde", "gix-shallow/serde"]
 
@@ -110,4 +112,4 @@ async-std = { version = "1.9.0", features = ["attributes"] }
 gix-packetline = { path = "../gix-packetline", version = "^0.21.1" }
 
 [package.metadata.docs.rs]
-features = ["blocking-client", "document-features", "serde"]
+features = ["sha1", "blocking-client", "document-features", "serde"]
