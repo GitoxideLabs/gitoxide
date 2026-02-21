@@ -69,7 +69,7 @@ check:
     cargo check -p gix-pack --no-default-features --features generate
     cargo check -p gix-pack --no-default-features --features streaming-input
     cargo check -p gix-hash --all-features
-    cargo check -p gix-hash
+    cargo check -p gix-hash 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-hash --features sha256
     cargo check -p gix-hash --no-default-features --features sha256
     cargo check -p gix-object --all-features
