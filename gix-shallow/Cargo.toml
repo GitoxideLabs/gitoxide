@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-shallow"
-version = "0.8.1"
+version = "0.9.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"

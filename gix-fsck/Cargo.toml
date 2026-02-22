@@ -17,7 +17,7 @@ doctest = false
 [dependencies]
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
 gix-hashtable = { version = "^0.12.0", path = "../gix-hashtable" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 
 [dev-dependencies]
 gix-odb = { path = "../gix-odb" }

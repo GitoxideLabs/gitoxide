@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-pack"
-version = "0.66.0"
+version = "0.67.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
@@ -37,14 +37,14 @@ wasm = ["gix-diff?/wasm"]
 gix-features = { version = "^0.46.1", path = "../gix-features", features = ["crc32", "progress", "zlib"] }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-chunk = { version = "^0.6.0", path = "../gix-chunk" }
-gix-error = { version = "^0.1.0", path = "../gix-error" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-chunk = { version = "^0.7.0", path = "../gix-chunk" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-hashtable = { version = "^0.12.0", path = "../gix-hashtable", optional = true }
 
 # for streaming of packs (input, output)
-gix-traverse = { version = "^0.53.0", path = "../gix-traverse", optional = true }
-gix-diff = { version = "^0.59.0", path = "../gix-diff", default-features = false, optional = true }
+gix-traverse = { version = "^0.54.0", path = "../gix-traverse", optional = true }
+gix-diff = { version = "^0.60.0", path = "../gix-diff", default-features = false, optional = true }
 
 memmap2 = "0.9.7"
 smallvec = "1.15.1"

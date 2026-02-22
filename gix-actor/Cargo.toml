@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-actor"
-version = "0.39.0"
+version = "0.40.0"
 description = "A way to identify git actors"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"
@@ -19,8 +19,8 @@ doctest = false
 serde = ["dep:serde", "bstr/serde", "gix-date/serde"]
 
 [dependencies]
-gix-date = { version = "^0.14.0", path = "../gix-date" }
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-date = { version = "^0.15.0", path = "../gix-date" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 
 bstr = { version = "1.12.0", default-features = false, features = [
     "std",

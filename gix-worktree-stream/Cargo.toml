@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-worktree-stream"
-version = "0.28.0"
+version = "0.29.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "generate a byte-stream from a git-tree"
@@ -17,14 +17,14 @@ doctest = false
 [dependencies]
 gix-features = { version = "^0.46.1", path = "../gix-features", features = ["progress", "io-pipe"] }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
-gix-attributes = { version = "^0.30.1", path = "../gix-attributes" }
-gix-filter = { version = "^0.26.0", path = "../gix-filter" }
-gix-traverse = { version = "^0.53.0", path = "../gix-traverse" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
+gix-attributes = { version = "^0.31.0", path = "../gix-attributes" }
+gix-filter = { version = "^0.27.0", path = "../gix-filter" }
+gix-traverse = { version = "^0.54.0", path = "../gix-traverse" }
 gix-fs = { version = "^0.19.1", path = "../gix-fs" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
 
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 parking_lot = "0.12.4"
 
 [dev-dependencies]

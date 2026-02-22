@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-index"
-version = "0.47.0"
+version = "0.48.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A work-in-progress crate of the gitoxide project dedicated implementing the git index file"
@@ -26,10 +26,10 @@ gix-features = { version = "^0.46.1", path = "../gix-features", features = [
     "progress",
 ] }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-bitmap = { version = "^0.2.16", path = "../gix-bitmap" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-bitmap = { version = "^0.3.0", path = "../gix-bitmap" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-validate = { version = "^0.11.0", path = "../gix-validate" }
-gix-traverse = { version = "^0.53.0", path = "../gix-traverse" }
+gix-traverse = { version = "^0.54.0", path = "../gix-traverse" }
 gix-lock = { version = "^21.0.0", path = "../gix-lock" }
 gix-fs = { version = "^0.19.1", path = "../gix-fs" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }

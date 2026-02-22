@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-archive"
-version = "0.28.0"
+version = "0.29.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "archive generation from of a worktree stream"
@@ -27,15 +27,15 @@ zip = ["dep:rawzip", "dep:flate2"]
 
 
 [dependencies]
-gix-worktree-stream = { version = "^0.28.0", path = "../gix-worktree-stream" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-worktree-stream = { version = "^0.29.0", path = "../gix-worktree-stream" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-path = { version = "^0.11.1", path = "../gix-path", optional = true }
-gix-date = { version = "^0.14.0", path = "../gix-date" }
+gix-date = { version = "^0.15.0", path = "../gix-date" }
 
 flate2 = { version = "1.1.8", optional = true, default-features = false, features = ["zlib-rs"] }
 rawzip = { version = "0.4.3", optional = true }
 
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false }
 
 tar = { version = "0.4.38", optional = true }

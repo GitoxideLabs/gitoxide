@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-credentials"
-version = "0.36.0"
+version = "0.37.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project to interact with git credentials helpers"
@@ -20,12 +20,12 @@ serde = ["dep:serde", "bstr/serde", "gix-sec/serde"]
 
 [dependencies]
 gix-sec = { version = "^0.13.1", path = "../gix-sec" }
-gix-url = { version = "^0.35.1", path = "../gix-url" }
+gix-url = { version = "^0.35.2", path = "../gix-url" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
-gix-command = { version = "^0.7.1", path = "../gix-command" }
+gix-command = { version = "^0.8.0", path = "../gix-command" }
 gix-config-value = { version = "^0.17.1", path = "../gix-config-value" }
-gix-prompt = { version = "^0.13.1", path = "../gix-prompt" }
-gix-date = { version = "^0.14.0", path = "../gix-date" }
+gix-prompt = { version = "^0.14.0", path = "../gix-prompt" }
+gix-date = { version = "^0.15.0", path = "../gix-date" }
 gix-trace = { version = "^0.1.18", path = "../gix-trace" }
 
 thiserror = "2.0.18"

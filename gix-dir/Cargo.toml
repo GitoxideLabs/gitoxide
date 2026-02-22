@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-dir"
-version = "0.21.0"
+version = "0.22.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with directory walks"
@@ -16,13 +16,13 @@ test = false
 
 [dependencies]
 gix-trace = { version = "^0.1.18", path = "../gix-trace" }
-gix-index = { version = "^0.47.0", path = "../gix-index" }
-gix-discover = { version = "^0.47.0", path = "../gix-discover" }
+gix-index = { version = "^0.48.0", path = "../gix-index" }
+gix-discover = { version = "^0.48.0", path = "../gix-discover" }
 gix-fs = { version = "^0.19.1", path = "../gix-fs" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
-gix-pathspec = { version = "^0.15.1", path = "../gix-pathspec" }
-gix-worktree = { version = "^0.48.0", path = "../gix-worktree", default-features = false }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-pathspec = { version = "^0.16.0", path = "../gix-pathspec" }
+gix-worktree = { version = "^0.49.0", path = "../gix-worktree", default-features = false }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-ignore = { version = "^0.19.0", path = "../gix-ignore" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils", features = ["bstr"] }
 

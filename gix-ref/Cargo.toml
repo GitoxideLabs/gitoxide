@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-ref"
-version = "0.59.0"
+version = "0.60.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate to handle git references"
@@ -25,10 +25,10 @@ gix-features = { version = "^0.46.1", path = "../gix-features", features = ["wal
 gix-fs = { version = "^0.19.1", path = "../gix-fs" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 gix-validate = { version = "^0.11.0", path = "../gix-validate" }
-gix-actor = { version = "^0.39.0", path = "../gix-actor" }
+gix-actor = { version = "^0.40.0", path = "../gix-actor" }
 gix-lock = { version = "^21.0.0", path = "../gix-lock" }
 gix-tempfile = { version = "^21.0.0", default-features = false, path = "../gix-tempfile" }
 
