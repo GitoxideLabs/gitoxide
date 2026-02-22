@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-chunk"
-version = "0.6.0"
+version = "0.7.0"
 description = "Interact with the git chunk file format used in multi-pack index and commit-graph files"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"
@@ -17,4 +17,4 @@ doctest = false
 test = false
 
 [dependencies]
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }

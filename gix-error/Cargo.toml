@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-error"
-version = "0.1.0"
+version = "0.2.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project to provide common errors and error-handling utilities"

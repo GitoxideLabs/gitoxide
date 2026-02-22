@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-quote"
-version = "0.6.2"
+version = "0.7.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with various quotations used by git"
@@ -18,4 +18,4 @@ doctest = false
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }

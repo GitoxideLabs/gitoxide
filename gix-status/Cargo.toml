@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-status"
-version = "0.26.0"
+version = "0.27.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with 'git status'-like functionality"
@@ -20,18 +20,18 @@ doctest = false
 worktree-rewrites = ["dep:gix-dir", "dep:gix-diff"]
 
 [dependencies]
-gix-index = { version = "^0.47.0", path = "../gix-index" }
+gix-index = { version = "^0.48.0", path = "../gix-index" }
 gix-fs = { version = "^0.19.1", path = "../gix-fs" }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
 gix-features = { version = "^0.46.1", path = "../gix-features", features = ["progress"] }
-gix-filter = { version = "^0.26.0", path = "../gix-filter" }
-gix-worktree = { version = "^0.48.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-pathspec = { version = "^0.15.1", path = "../gix-pathspec" }
+gix-filter = { version = "^0.27.0", path = "../gix-filter" }
+gix-worktree = { version = "^0.49.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-pathspec = { version = "^0.16.0", path = "../gix-pathspec" }
 
-gix-dir = { version = "^0.21.0", path = "../gix-dir", optional = true }
-gix-diff = { version = "^0.59.0", path = "../gix-diff", default-features = false, features = ["blob"], optional = true }
+gix-dir = { version = "^0.22.0", path = "../gix-dir", optional = true }
+gix-diff = { version = "^0.60.0", path = "../gix-diff", default-features = false, features = ["blob"], optional = true }
 
 thiserror = "2.0.18"
 filetime = "0.2.27"

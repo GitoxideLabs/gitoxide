@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-blame"
-version = "0.9.0"
+version = "0.10.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dedicated to implementing a 'blame' algorithm"
@@ -11,16 +11,16 @@ edition = "2021"
 rust-version = "1.82"
 
 [dependencies]
-gix-error = { version = "^0.1.0", path = "../gix-error" }
-gix-commitgraph = { version = "^0.33.0", path = "../gix-commitgraph" }
-gix-revwalk = { version = "^0.27.0", path = "../gix-revwalk" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
+gix-commitgraph = { version = "^0.34.0", path = "../gix-commitgraph" }
+gix-revwalk = { version = "^0.28.0", path = "../gix-revwalk" }
 gix-trace = { version = "^0.1.18", path = "../gix-trace" }
-gix-date = { version = "^0.14.0", path = "../gix-date" }
-gix-diff = { version = "^0.59.0", path = "../gix-diff", default-features = false, features = ["blob", "blob-experimental"] }
-gix-object = { version = "^0.56.0", path = "../gix-object" }
+gix-date = { version = "^0.15.0", path = "../gix-date" }
+gix-diff = { version = "^0.60.0", path = "../gix-diff", default-features = false, features = ["blob", "blob-experimental"] }
+gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
-gix-worktree = { version = "^0.48.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-traverse = { version = "^0.53.0", path = "../gix-traverse" }
+gix-worktree = { version = "^0.49.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
+gix-traverse = { version = "^0.54.0", path = "../gix-traverse" }
 
 smallvec = "1.15.1"
 thiserror = "2.0.18"

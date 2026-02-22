@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-bitmap"
-version = "0.2.16"
+version = "0.3.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dedicated implementing the standard git bitmap format"
@@ -16,7 +16,7 @@ doctest = false
 test = true
 
 [dependencies]
-gix-error = { version = "0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }

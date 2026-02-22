@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-object"
-version = "0.56.0"
+version = "0.57.0"
 description = "Immutable and mutable git objects with decoding and encoding support"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 repository = "https://github.com/GitoxideLabs/gitoxide"
@@ -47,8 +47,8 @@ gix-features = { version = "^0.46.1", path = "../gix-features", features = [
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
 gix-hashtable = { version = "^0.12.0", path = "../gix-hashtable" }
 gix-validate = { version = "^0.11.0", path = "../gix-validate" }
-gix-actor = { version = "^0.39.0", path = "../gix-actor" }
-gix-date = { version = "^0.14.0", path = "../gix-date" }
+gix-actor = { version = "^0.40.0", path = "../gix-actor" }
+gix-date = { version = "^0.15.0", path = "../gix-date" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 

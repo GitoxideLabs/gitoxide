@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-date"
-version = "0.14.0"
+version = "0.15.0"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project parsing dates the way git does"
@@ -19,7 +19,7 @@ doctest = false
 serde = ["dep:serde", "bstr/serde"]
 
 [dependencies]
-gix-error = { version = "^0.1.0", path = "../gix-error" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 itoa = "1.0.17"
