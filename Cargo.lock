@@ -1993,8 +1993,6 @@ dependencies = [
  "gix-ref",
  "gix-revwalk",
  "gix-testtools",
- "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
