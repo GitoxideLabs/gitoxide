@@ -246,6 +246,67 @@ fn root_may_be_a_symlink_if_it_is_the_worktree() -> crate::Result {
 }
 
 #[test]
+#[cfg(unix)]
+fn assume_unchanged_submodule_replaced_with_symlink_is_hidden() -> crate::Result {
+    let root = fixture_in("many-symlinks", "submodule-assume-unchanged-symlink");
+    let ((out, _root), entries) = try_collect_filtered_opts_collect(
+        &root,
+        None,
+        |keep, ctx| walk(&root, ctx, options(), keep),
+        None::<&str>,
+        Options {
+            fresh_index: false,
+            ..Default::default()
+        },
+    )?;
+
+    assert_eq!(
+        out,
+        walk::Outcome {
+            read_dir_calls: 1,
+            returned_entries: entries.len(),
+            seen_entries: 3,
+        }
+    );
+    assert!(
+        entries.is_empty(),
+        "assume-unchanged entries should use index type information and stay hidden"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> crate::Result {
+    let root = fixture_in("many-symlinks", "submodule-symlink");
+    let ((out, _root), entries) = try_collect_filtered_opts_collect(
+        &root,
+        None,
+        |keep, ctx| walk(&root, ctx, options(), keep),
+        None::<&str>,
+        Options {
+            fresh_index: false,
+            ..Default::default()
+        },
+    )?;
+
+    assert_eq!(
+        out,
+        walk::Outcome {
+            read_dir_calls: 1,
+            returned_entries: entries.len(),
+            seen_entries: 3,
+        }
+    );
+    assert_eq!(
+        entries,
+        [entry("sub", Untracked, Symlink).with_index_kind(Repository)],
+        "without assume-unchanged, the replaced submodule appears as an untracked symlink"
+    );
+    Ok(())
+}
+
+#[test]
 fn should_interrupt_works_even_in_empty_directories() {
     let root = fixture("empty");
     let should_interrupt = AtomicBool::new(true);
