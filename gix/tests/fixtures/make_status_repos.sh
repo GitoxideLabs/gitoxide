@@ -53,3 +53,19 @@ git init symlink-replaces-tracked-dir
   rm -rf tracked
   ln -s target tracked
 )
+
+git init -q module
+(cd module
+  touch this
+  git add this
+  git commit -q -m c1
+)
+
+git init -q submodule-assume-unchanged-symlink
+(cd submodule-assume-unchanged-symlink
+  git submodule add ../module sub
+  git commit -q -m "add submodule"
+  git update-index --assume-unchanged sub
+  rm -Rf sub
+  ln -s ../module sub
+)
