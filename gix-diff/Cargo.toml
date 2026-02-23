@@ -75,3 +75,11 @@ imara-diff-v2 = { version = "0.2.0", package = "imara-diff" }
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # WASM support dependency activated through the `wasm = ["dep:getrandom"]` feature.
+    "getrandom",
+    # Optional API feature wiring (`dep:serde`) referenced only from feature definitions.
+    "serde",
+]

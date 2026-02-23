@@ -7,6 +7,12 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[package.metadata.cargo-machete]
+ignored = [
+    # Kept for fuzz-input modeling support in this fuzz package.
+    "arbitrary",
+]
+
 [dependencies]
 anyhow = "1.0.76"
 arbitrary = { version = "1.3.2", features = ["derive"] }

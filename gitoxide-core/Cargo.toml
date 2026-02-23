@@ -97,3 +97,33 @@ document-features = { version = "0.2.0", optional = true }
 
 [package.metadata.docs.rs]
 features = ["document-features", "blocking-client", "organize", "estimate-hours", "serde"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Enabled through `async-client` feature wiring only.
+    "async-io",
+    # Enabled through `async-client` feature wiring only.
+    "async-net",
+    # Enabled through `async-client` feature wiring only.
+    "async-trait",
+    # Enabled through `async-client` feature wiring only.
+    "blocking",
+    # Enabled through `estimate-hours` feature wiring only.
+    "fs-err",
+    # Enabled through `async-client` feature wiring only.
+    "futures-io",
+    # Enabled through `async-client` feature wiring only.
+    "futures-lite",
+    # Configuration-only dependency selected by the `archive` feature.
+    "gix-archive-for-configuration-only",
+    # Configuration-only dependency used to constrain global `gix-error` feature resolution.
+    "gix-error-for-configuration-only",
+    # Configuration-only dependency used to constrain global `gix-pack` feature resolution.
+    "gix-pack-for-configuration-only",
+    # Configuration-only dependency selected by `async-client` feature wiring.
+    "gix-transport-configuration-only",
+    # Imported as crate `layout`, which does not match the package name `layout-rs`.
+    "layout-rs",
+    # Enabled through `estimate-hours` feature wiring only.
+    "smallvec",
+]

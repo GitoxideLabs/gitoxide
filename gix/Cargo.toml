@@ -432,3 +432,9 @@ features = [
     "need-more-recent-msrv",
     "serde",
 ]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Feature forwarding uses `prodash/*` in Cargo feature wiring without direct crate references.
+    "prodash",
+]

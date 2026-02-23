@@ -39,3 +39,9 @@ gix-hash = { path = "../gix-hash", features = ["sha256"] }
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Needed for `bstr/serde` feature forwarding, even though no direct `bstr` paths are referenced.
+    "bstr",
+]

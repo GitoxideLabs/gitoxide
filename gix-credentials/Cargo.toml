@@ -44,3 +44,9 @@ gix-testtools = { path = "../tests/tools" }
 [package.metadata.docs.rs]
 all-features = true
 features = ["document-features"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Public optional `serde` feature is retained for downstream feature compatibility.
+    "serde",
+]

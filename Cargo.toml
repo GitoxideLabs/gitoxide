@@ -304,6 +304,14 @@ members = [
 [package.metadata.docs.rs]
 features = ["document-features", "max"]
 
+[package.metadata.cargo-machete]
+ignored = [
+    # Feature-only dependency selected through `prodash-render-line-crossterm` wiring.
+    "crosstermion",
+    # Pinned direct dependency to avoid precompiled binaries; intentionally not referenced in code.
+    "serde_derive",
+]
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/gitoxide-max-pure-v{ version }-{ target }{ archive-suffix }"
 bin-dir = "gitoxide-max-pure-v{ version }-{ target }/{ bin }{ binary-ext }"
