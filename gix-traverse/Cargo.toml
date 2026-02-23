@@ -16,7 +16,7 @@ autotests = false
 doctest = false
 
 [features]
-## Support for SHA1 hashes and digests.
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 
 [dependencies]
@@ -29,6 +29,9 @@ gix-commitgraph = { version = "^0.34.0", path = "../gix-commitgraph" }
 smallvec = "1.15.1"
 thiserror = "2.0.18"
 bitflags = "2"
+
+[dev-dependencies]
+gix-hash = { path = "../gix-hash", features = ["sha1"] }
 
 [package.metadata.docs.rs]
 features = ["sha1"]

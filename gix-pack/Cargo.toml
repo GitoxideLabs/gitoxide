@@ -17,7 +17,7 @@ doctest = false
 
 [features]
 default = ["generate", "streaming-input"]
-## Support for SHA1 hashes and digests.
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 ## generate new packs from a set of objects.
 generate = ["dep:gix-traverse", "dep:gix-diff", "dep:parking_lot", "dep:gix-hashtable"]

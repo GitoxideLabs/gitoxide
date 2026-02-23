@@ -16,6 +16,8 @@ doctest = false
 
 [features]
 default = ["tar", "tar_gz", "zip"]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-worktree-stream/sha1", "gix-object/sha1"]
 
 ## Enable the `tar` archive format. It has support for all information, except for object ids.
 tar = ["dep:tar", "dep:gix-path"]
@@ -48,11 +50,11 @@ gix-odb = { path = "../gix-odb" }
 gix-worktree = { path = "../gix-worktree", default-features = false, features = [
     "attributes",
 ] }
-gix-hash = { path = "../gix-hash" }
+gix-hash = { path = "../gix-hash", features = ["sha1"] }
 gix-attributes = { path = "../gix-attributes" }
 gix-object = { path = "../gix-object" }
 gix-filter = { path = "../gix-filter" }
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]

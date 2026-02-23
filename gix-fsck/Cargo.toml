@@ -14,6 +14,10 @@ rust-version = "1.82"
 [lib]
 doctest = false
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-hash/sha1", "gix-hashtable/sha1", "gix-object/sha1"]
+
 [dependencies]
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
 gix-hashtable = { version = "^0.12.0", path = "../gix-hashtable" }
@@ -22,3 +26,6 @@ gix-object = { version = "^0.57.0", path = "../gix-object" }
 [dev-dependencies]
 gix-odb = { path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }
+
+[package.metadata.docs.rs]
+features = ["sha1"]

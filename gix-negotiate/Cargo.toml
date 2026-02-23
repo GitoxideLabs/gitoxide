@@ -15,6 +15,10 @@ include = ["src/**/*", "LICENSE-*"]
 doctest = false
 test = false
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-commitgraph/sha1", "gix-hash/sha1", "gix-object/sha1", "gix-revwalk/sha1"]
+
 [dependencies]
 gix-hash = { version = "^0.22.1", path = "../gix-hash" }
 gix-object = { version = "^0.57.0", path = "../gix-object" }
@@ -27,4 +31,7 @@ bitflags = "2"
 gix-testtools = { path = "../tests/tools" }
 gix-odb = { path = "../gix-odb" }
 gix-ref = { path = "../gix-ref" }
-gix-hash = { path = "../gix-hash", features = ["sha256"] }
+gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+
+[package.metadata.docs.rs]
+features = ["sha1"]

@@ -16,7 +16,7 @@ doctest = false
 
 [features]
 default = ["describe", "merge_base"]
-## Support for SHA1 hashes and digests.
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 
 ## `git describe` functionality
