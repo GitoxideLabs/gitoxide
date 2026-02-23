@@ -26,6 +26,8 @@ path = "./benches/edit_tree.rs"
 
 
 [features]
+## Support for SHA256 hashes and digests.
+sha256 = ["gix-hash/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = [
     "dep:serde",

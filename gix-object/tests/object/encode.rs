@@ -108,34 +108,38 @@ mod tree {
 
     #[test]
     fn write_to_does_not_validate() {
-        let mut tree = gix_object::Tree::empty();
-        tree.entries.push(tree::Entry {
-            mode: EntryKind::Blob.into(),
-            filename: "".into(),
-            oid: gix_hash::Kind::Sha1.null(),
-        });
-        tree.entries.push(tree::Entry {
-            mode: EntryKind::Tree.into(),
-            filename: "something\nwith\newlines\n".into(),
-            oid: gix_hash::ObjectId::empty_tree(gix_hash::Kind::Sha1),
-        });
-        tree.write_to(&mut std::io::sink())
-            .expect("write succeeds, no validation is performed");
+        for hash_kind in gix_hash::Kind::all() {
+            let mut tree = gix_object::Tree::empty();
+            tree.entries.push(tree::Entry {
+                mode: EntryKind::Blob.into(),
+                filename: "".into(),
+                oid: hash_kind.null(),
+            });
+            tree.entries.push(tree::Entry {
+                mode: EntryKind::Tree.into(),
+                filename: "something\nwith\newlines\n".into(),
+                oid: gix_hash::ObjectId::empty_tree(*hash_kind),
+            });
+            tree.write_to(&mut std::io::sink())
+                .expect("write succeeds, no validation is performed");
+        }
     }
 
     #[test]
     fn write_to_does_not_allow_separator() {
-        let mut tree = gix_object::Tree::empty();
-        tree.entries.push(tree::Entry {
-            mode: EntryKind::Blob.into(),
-            filename: "hi\0ho".into(),
-            oid: gix_hash::Kind::Sha1.null(),
-        });
-        let err = tree.write_to(&mut std::io::sink()).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            r#"Nullbytes are invalid in file paths as they are separators: "hi\0ho""#
-        );
+        for hash_kind in gix_hash::Kind::all() {
+            let mut tree = gix_object::Tree::empty();
+            tree.entries.push(tree::Entry {
+                mode: EntryKind::Blob.into(),
+                filename: "hi\0ho".into(),
+                oid: hash_kind.null(),
+            });
+            let err = tree.write_to(&mut std::io::sink()).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                r#"Nullbytes are invalid in file paths as they are separators: "hi\0ho""#
+            );
+        }
     }
 
     round_trip!(gix_object::Tree, gix_object::TreeRef, "tree/everything.tree");
