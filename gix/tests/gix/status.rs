@@ -270,7 +270,10 @@ mod into_iter {
         let repo = repo("submodule-assume-unchanged-symlink")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
         let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
-        assert!(items.is_empty(), "assume-unchanged submodule should not show up in status");
+        assert!(
+            items.is_empty(),
+            "assume-unchanged submodule should not show up in status"
+        );
         Ok(())
     }
 
