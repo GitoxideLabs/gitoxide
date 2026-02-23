@@ -266,6 +266,7 @@ mod into_iter {
     }
 
     #[test]
+    #[cfg(unix)]
     fn submodule_assume_unchanged_replaced_with_symlink_is_ignored() -> crate::Result {
         let repo = repo("submodule-assume-unchanged-symlink")?;
         let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
