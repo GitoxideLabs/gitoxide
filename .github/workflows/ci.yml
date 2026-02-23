@@ -470,7 +470,11 @@ jobs:
           rustup update stable
           rustup default stable
           rustup component add clippy rustfmt
+      - name: Install cargo machete
+        run: cargo install cargo-machete --version 0.9.1 --locked
       - uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3.0.0
+      - name: Run cargo machete
+        run: cargo machete
       - name: Run cargo clippy
         run: just clippy -D warnings -A unknown-lints --no-deps
       - name: Run cargo doc
