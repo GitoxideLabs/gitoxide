@@ -138,10 +138,17 @@ impl<'a> RefSpecRef<'a> {
         if source == "HEAD" {
             return source.into();
         }
-        let suffix = source.strip_prefix(b"refs/")?;
-        let slash_pos = suffix.find_byte(b'/')?;
-        let prefix = source[..="refs/".len() + slash_pos].as_bstr();
-        (!prefix.contains(&b'*')).then_some(prefix)
+
+        let sans_refs_prefix = source.strip_prefix(b"refs/")?;
+        if let Some(star_pos) = sans_refs_prefix.find_byte(b'*') {
+            // Disallow `*` glob star components after `refs/`
+            if star_pos == 0 {
+                return None;
+            }
+            let prefix = &source[.."refs/".len() + star_pos];
+            return (!prefix.is_empty()).then_some(prefix.as_bstr());
+        }
+        Some(source)
     }
 
     /// As opposed to [`prefix()`][Self::prefix], if the latter is `None` it will expand to all possible prefixes and place them in `out`.
