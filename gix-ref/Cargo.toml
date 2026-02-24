@@ -29,6 +29,7 @@ gix-object = { version = "^0.57.0", path = "../gix-object" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 gix-validate = { version = "^0.11.0", path = "../gix-validate" }
 gix-actor = { version = "^0.40.0", path = "../gix-actor" }
+gix-error = { version = "^0.2.0", path = "../gix-error" }
 gix-lock = { version = "^21.0.0", path = "../gix-lock" }
 gix-tempfile = { version = "^21.0.0", default-features = false, path = "../gix-tempfile" }
 
