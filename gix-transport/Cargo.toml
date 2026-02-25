@@ -36,18 +36,20 @@ http-client-curl-rust-tls = ["http-client-curl", "curl/rustls"]
 ## Implies `http-client-curl` and enables `ssl` for creating `https://` connections.
 ## If used in conjunction with `http-client-curl-rust-tls`, the `rust-tls` feature will take precedence.
 http-client-curl-openssl = ["http-client-curl", "curl/ssl"]
-## Implies `http-client` and adds support for http and https transports using the blocking version of `reqwest`.
+## Implies `http-client` and adds support for http transports using the blocking version of `reqwest`.
+## NOTE: `https://` is NOT supported by default. You must enable one of the `http-client-reqwest-rust-tls`
+## or `http-client-reqwest-native-tls` features to enable HTTPS support.
 http-client-reqwest = ["reqwest", "http-client"]
-## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `rustls` crate.
+## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
 http-client-reqwest-rust-tls = ["http-client-reqwest", "reqwest/rustls"]
-## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `rustls` crate.
-## This also makes use of `hickory-dns` to avoid `getaddrinfo`, but note it comes with its own problems.
+## Stacks with `http-client-reqwest` and enables `https://` via the `rustls` crate.
+## This also makes use of `trust-dns` to avoid `getaddrinfo`, but note it comes with its own problems.
 http-client-reqwest-rust-tls-trust-dns = [
     "http-client-reqwest",
     "reqwest/rustls",
     "reqwest/hickory-dns",
 ]
-## Stacks with `blocking-http-transport-reqwest` and enables `https://` via the `native-tls` crate.
+## Stacks with `http-client-reqwest` and enables `https://` via the `native-tls` crate.
 http-client-reqwest-native-tls = ["http-client-reqwest", "reqwest/native-tls"]
 ## Allows sending credentials over cleartext HTTP. For testing purposes only.
 http-client-insecure-credentials = []
