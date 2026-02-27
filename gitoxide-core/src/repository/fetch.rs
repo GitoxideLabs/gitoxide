@@ -1,4 +1,4 @@
-use gix::bstr::BString;
+use gix::{bstr::BString, hash::ObjectId};
 
 use crate::OutputFormat;
 
@@ -29,7 +29,7 @@ pub(crate) mod function {
         std_shapes::shapes::{Arrow, Element, ShapeKind},
     };
 
-    use super::Options;
+    use super::{ObjectId, Options};
     use crate::OutputFormat;
 
     pub fn fetch<P>(
@@ -57,8 +57,20 @@ pub(crate) mod function {
         }
 
         let mut remote = crate::repository::remote::by_name_or_url(&repo, remote.as_deref())?;
-        if !ref_specs.is_empty() {
-            remote.replace_refspecs(ref_specs.iter(), gix::remote::Direction::Fetch)?;
+        let mut wants = Vec::new();
+        let mut fetch_refspecs = Vec::new();
+        for spec in ref_specs {
+            if spec.len() == repo.object_hash().len_in_hex() {
+                if let Ok(oid) = ObjectId::from_hex(spec.as_ref()) {
+                    wants.push(oid);
+                    continue;
+                }
+            }
+            fetch_refspecs.push(spec);
+        }
+
+        if !fetch_refspecs.is_empty() {
+            remote.replace_refspecs(fetch_refspecs.iter(), gix::remote::Direction::Fetch)?;
             remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
         }
         let res: gix::remote::fetch::Outcome = remote
@@ -66,6 +78,7 @@ pub(crate) mod function {
             .prepare_fetch(&mut progress, Default::default())?
             .with_dry_run(dry_run)
             .with_shallow(shallow)
+            .with_additional_wants(wants)
             .receive(&mut progress, &gix::interrupt::IS_INTERRUPTED)?;
 
         if handshake_info {

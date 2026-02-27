@@ -51,6 +51,7 @@ pub async fn fetch<P, T, E>(
         shallow_file,
         shallow,
         tags,
+        filter,
         reject_shallow_remote,
     }: Options<'_>,
 ) -> Result<Option<Outcome>, Error>
@@ -74,6 +75,15 @@ where
     crate::fetch::Response::check_required_features(protocol_version, &fetch_features)?;
     let sideband_all = fetch_features.iter().any(|(n, _)| *n == "sideband-all");
     let mut arguments = Arguments::new(protocol_version, fetch_features, trace_packetlines);
+    if let Some(filter) = filter {
+        if !arguments.can_use_filter() {
+            return Err(Error::MissingServerFeature {
+                feature: "filter",
+                description: "Partial clone filters require server support configured on the remote server",
+            });
+        }
+        arguments.filter(filter);
+    }
     if matches!(tags, Tags::Included) {
         if !arguments.can_use_include_tag() {
             return Err(Error::MissingServerFeature {

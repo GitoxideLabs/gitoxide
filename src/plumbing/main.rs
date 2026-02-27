@@ -604,6 +604,7 @@ pub fn main() -> Result<()> {
             ref_name,
             remote,
             shallow,
+            filter,
             directory,
         }) => {
             let opts = core::repository::clone::Options {
@@ -613,6 +614,7 @@ pub fn main() -> Result<()> {
                 no_tags,
                 ref_name,
                 shallow: shallow.into(),
+                filter,
             };
             prepare_and_run(
                 "clone",

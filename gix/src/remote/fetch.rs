@@ -34,3 +34,6 @@ pub(crate) enum WritePackedRefs {
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use gix_protocol::fetch::{refmap, RefMap};
 pub use gix_protocol::fetch::{Shallow, Tags};
+
+mod object_filter;
+pub use object_filter::{ObjectFilter, ParseError as ObjectFilterParseError};
