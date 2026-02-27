@@ -14,6 +14,10 @@ rust-version = "1.82"
 [lib]
 doctest = false
 
+[features]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
+
 [dependencies]
 gix-error = { version = "^0.2.0", path = "../gix-error" }
 gix-revision = { version = "^0.42.0", path = "../gix-revision", default-features = false }
@@ -28,3 +32,6 @@ smallvec = "1.15.1"
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
 insta = "1.46.1"
+
+[package.metadata.docs.rs]
+features = ["sha1"]

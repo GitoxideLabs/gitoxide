@@ -95,6 +95,9 @@ open = "5.0.0"
 
 document-features = { version = "0.2.0", optional = true }
 
+[dev-dependencies]
+gix = { path = "../gix", default-features = false, features = ["sha1"] }
+
 [package.metadata.docs.rs]
 features = ["document-features", "blocking-client", "organize", "estimate-hours", "serde"]
 

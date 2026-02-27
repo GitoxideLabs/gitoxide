@@ -14,6 +14,10 @@ rust-version = "1.82"
 [lib]
 doctest = false
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-ref/sha1"]
+
 [dependencies]
 gix-sec = { version = "^0.13.1", path = "../gix-sec" }
 gix-path = { version = "^0.11.1", path = "../gix-path" }
@@ -36,3 +40,6 @@ defer = "0.2.1"
 
 [target.'cfg(any(unix, windows))'.dev-dependencies]
 tempfile = "3.24.0"
+
+[package.metadata.docs.rs]
+features = ["sha1"]

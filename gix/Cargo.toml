@@ -24,7 +24,7 @@ required-features = ["blocking-network-client"]
 
 [features]
 
-default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error"]
+default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
 
 #! There are various categories of features which help to optimize performance and build times. `gix` comes with 'batteries included' and everything is
 #! enabled as long as it doesn't sacrifice compatibility. Most users will be fine with that but will pay with higher compile times than necessary as they
@@ -78,6 +78,46 @@ need-more-recent-msrv = ["merge", "tree-editor"]
 comfort = [
     "gix-features/progress-unit-bytes",
     "gix-features/progress-unit-human-numbers",
+]
+
+#! #### Hashes
+#!
+#! Support for various hash algorithms is controlled here. The idea is to allow applications to
+#! compile in only the ones they need, which is why within the entire `gix` stack there is no
+#! crate that sets an algorithm, except for the top-level `gix` crate for convenience.
+#! 
+#! At least one hash algorithm must be enabled for compilation to succeed.
+
+## Enable support for the SHA-1 hash throughout the `gix` stack.
+sha1 = [
+    "gix-archive?/sha1",
+    "gix-blame?/sha1",
+    "gix-commitgraph/sha1",
+    "gix-config/sha1",
+    "gix-diff/sha1",
+    "gix-dir?/sha1",
+    "gix-discover/sha1",
+    "gix-filter?/sha1",
+    "gix-hash/sha1",
+    "gix-hashtable/sha1",
+    "gix-index?/sha1",
+    "gix-merge?/sha1",
+    "gix-negotiate?/sha1",
+    "gix-object/sha1",
+    "gix-odb/sha1",
+    "gix-pack/sha1",
+    "gix-protocol/sha1",
+    "gix-ref/sha1",
+    "gix-refspec/sha1",
+    "gix-revision/sha1",
+    "gix-revwalk/sha1",
+    "gix-shallow/sha1",
+    "gix-status?/sha1",
+    "gix-submodule?/sha1",
+    "gix-traverse/sha1",
+    "gix-worktree?/sha1",
+    "gix-worktree-state?/sha1",
+    "gix-worktree-stream?/sha1",
 ]
 
 #! #### Components
@@ -425,6 +465,7 @@ insta = "1.46.1"
 
 [package.metadata.docs.rs]
 features = [
+    "sha1",
     "document-features",
     "max-performance",
     "blocking-network-client",

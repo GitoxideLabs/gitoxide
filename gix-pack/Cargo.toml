@@ -17,6 +17,8 @@ doctest = false
 
 [features]
 default = ["generate", "streaming-input"]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
 ## generate new packs from a set of objects.
 generate = ["dep:gix-traverse", "dep:gix-diff", "dep:parking_lot", "dep:gix-hashtable"]
 ## Receive a pack as datastream and resolve it
@@ -69,4 +71,4 @@ gix-hash = { version = "^0.22.0", path = "../gix-hash", features = ["sha256"] }
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]
+features = ["sha1", "document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]

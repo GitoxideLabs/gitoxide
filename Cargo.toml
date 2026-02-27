@@ -42,7 +42,7 @@ default = ["max"]
 ##
 ## When used in conjunction with `http-client-curl-rustls`, the `openssl` crates will still be compiled, but won't be used. To bypass this, disable
 ## default dependencies and specify the features yourself.
-max = ["max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
+max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
 
 ## Like `max`, but only Rust is allowed.
 ##
@@ -51,22 +51,23 @@ max = ["max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-
 ## This uses Rust's HTTP implementation.
 ##
 ## As fast as possible, with TUI progress, progress line rendering with auto-configuration, all transports available but less mature pure Rust HTTP implementation, all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
-max-pure = ["max-control", "http-client-reqwest", "gitoxide-core-blocking-client"]
+max-pure = ["hashes", "max-control", "http-client-reqwest", "gitoxide-core-blocking-client"]
 
 ## Like `max`, but with more control for configuration. See the *Package Maintainers* headline for more information.
+## Needs to chose its own hash(es).
 max-control = ["tracing", "fast", "pretty-cli", "gitoxide-core-tools", "prodash-render-line", "prodash-render-tui", "prodash/render-line-autoconfigure", "gix/revparse-regex"]
 
 ## All the good stuff, with less fanciness for smaller binaries.
 ##
 ## As fast as possible, progress line rendering, all transports based on their most mature implementation (HTTP), all `ein` tools, CLI colors and local-time support, JSON output.
-lean = ["fast", "tracing", "pretty-cli", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
+lean = ["hashes", "fast", "tracing", "pretty-cli", "http-client-curl-openssl", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-tools", "gitoxide-core-blocking-client", "prodash-render-line"]
 
 ## The smallest possible build, best suitable for small single-core machines.
 ##
 ## This build is essentially limited to local operations without any fanciness. It does not have `gix clone`.
 ##
 ## Optimized for size, no parallelism thus much slower, progress line rendering.
-small = ["pretty-cli", "prodash-render-line", "is-terminal"]
+small = ["hashes", "pretty-cli", "prodash-render-line", "is-terminal"]
 
 ## Like lean, but uses Rusts async implementations for networking.
 ##
@@ -77,7 +78,7 @@ small = ["pretty-cli", "prodash-render-line", "is-terminal"]
 ##
 ## Due to async client-networking not being implemented for most transports, this one supports only the 'git+tcp' and HTTP transport.
 ## It uses, however, a fully asynchronous networking implementation which can serve a real-world example on how to implement custom async transports.
-lean-async = ["fast", "tracing", "pretty-cli", "gitoxide-core-tools", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-async-client", "prodash-render-line"]
+lean-async = ["hashes", "fast", "tracing", "pretty-cli", "gitoxide-core-tools", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-async-client", "prodash-render-line"]
 
 #! ### Package Maintainers
 #! `*-control` features leave it to you to configure C libraries, involving choices for HTTP transport implementation.
@@ -87,6 +88,11 @@ lean-async = ["fast", "tracing", "pretty-cli", "gitoxide-core-tools", "gitoxide-
 
 #! ### Building Blocks
 #! Typical combinations of features of our dependencies, some of which are referred to in the `gitoxide` crate's code for conditional compilation.
+
+## Provide support for all known hashes. If this isn't enabled, select an individual hash algorithms.
+hashes = ["sha1"]
+## Enable support for the SHA-1 hash throughout the `gix` crate.
+sha1 = ["gix/sha1"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.

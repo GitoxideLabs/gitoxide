@@ -1569,6 +1569,7 @@ dependencies = [
  "bstr",
  "criterion",
  "document-features",
+ "gix-config",
  "gix-config-value",
  "gix-features",
  "gix-glob",
@@ -2571,6 +2572,7 @@ dependencies = [
  "gix-object",
  "gix-path",
  "gix-worktree",
+ "gix-worktree-state",
  "io-close",
  "thiserror 2.0.18",
 ]

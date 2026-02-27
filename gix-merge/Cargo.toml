@@ -15,6 +15,8 @@ workspace = true
 doctest = false
 
 [features]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde"]
 
@@ -51,7 +53,7 @@ pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]
 
 [package.metadata.cargo-machete]
 ignored = [

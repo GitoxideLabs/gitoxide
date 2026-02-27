@@ -15,6 +15,10 @@ autotests = false
 [lib]
 doctest = false
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = ["gix-filter/sha1", "gix-index/sha1", "gix-object/sha1", "gix-worktree/sha1"]
+
 [dependencies]
 gix-worktree = { version = "^0.49.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-index = { version = "^0.48.0", path = "../gix-index" }
@@ -27,3 +31,9 @@ gix-filter = { version = "^0.27.0", path = "../gix-filter" }
 io-close = "0.3.7"
 thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false }
+
+[dev-dependencies]
+gix-worktree-state = { path = ".", features = ["sha1"] }
+
+[package.metadata.docs.rs]
+features = ["sha1"]

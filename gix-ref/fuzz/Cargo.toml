@@ -15,6 +15,7 @@ libfuzzer-sys = "0.4"
 
 [dependencies.gix-ref]
 path = ".."
+features = ["sha1"]
 
 # Prevent this from interfering with workspaces
 [workspace]

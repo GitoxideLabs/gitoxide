@@ -10,6 +10,18 @@ authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thi
 edition = "2021"
 rust-version = "1.82"
 
+[features]
+## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
+sha1 = [
+    "gix-commitgraph/sha1",
+    "gix-diff/sha1",
+    "gix-hash/sha1",
+    "gix-object/sha1",
+    "gix-revwalk/sha1",
+    "gix-traverse/sha1",
+    "gix-worktree/sha1",
+]
+
 [dependencies]
 gix-error = { version = "^0.2.0", path = "../gix-error" }
 gix-commitgraph = { version = "^0.34.0", path = "../gix-commitgraph" }
@@ -33,3 +45,6 @@ gix-index = { path = "../gix-index" }
 gix-odb = { path = "../gix-odb" }
 gix-testtools = { path = "../tests/tools" }
 pretty_assertions = "1.4.0"
+
+[package.metadata.docs.rs]
+features = ["sha1"]

@@ -558,22 +558,15 @@ jobs:
             gix-bitmap
             gix-chunk
             gix-command
-            gix-commitgraph
             gix-config-value
             gix-date
             gix-glob
-            gix-hash
-            gix-hashtable
             gix-mailmap
-            gix-object
             gix-packetline
             gix-path
             gix-pathspec
             gix-prompt
             gix-quote
-            gix-refspec
-            gix-revision
-            gix-traverse
             gix-url
             gix-validate
           )
@@ -587,11 +580,26 @@ jobs:
           for feature in progress parallel io-pipe crc32 zlib cache-efficiency-debug; do
             cargo build -p gix-features --features "$feature" --target "$TARGET"
           done
-      - name: crates with 'wasm' feature
+      - name: crates with 'sha1' and 'wasm' feature
         run: |
           set -x
           for crate in gix-pack; do
-            cargo build -p "$crate" --features wasm --target "$TARGET"
+            cargo build -p "$crate" --features sha1,wasm --target "$TARGET"
+          done
+      - name: crates with 'sha1' feature
+        run: |
+          crates=(
+            gix-commitgraph
+            gix-hash
+            gix-hashtable
+            gix-object
+            gix-refspec
+            gix-revision
+            gix-traverse
+          )
+          set -x
+          for crate in "${crates[@]}"; do
+            cargo build -p "$crate" --features sha1 --target "$TARGET"
           done
       - name: gix-pack with all features (including wasm)
         run: cargo build -p gix-pack --all-features --target "$TARGET"

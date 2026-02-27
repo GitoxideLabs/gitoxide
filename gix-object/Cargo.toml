@@ -26,6 +26,8 @@ path = "./benches/edit_tree.rs"
 
 
 [features]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = [
     "dep:serde",
@@ -75,4 +77,4 @@ termtree = "0.5.1"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]

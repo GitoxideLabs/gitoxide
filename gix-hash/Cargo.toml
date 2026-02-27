@@ -16,7 +16,7 @@ doctest = false
 test = false
 
 [features]
-default = ["sha1"]
+default = []
 ## Support for SHA1 hashes and digests.
 sha1 = ["dep:sha1-checked"]
 ## Support for SHA256 hashes and digests.
@@ -40,4 +40,4 @@ gix-testtools = { path = "../tests/tools" }
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]

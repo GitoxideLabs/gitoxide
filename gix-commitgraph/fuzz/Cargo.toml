@@ -21,6 +21,7 @@ memmap2 = "0.9.0"
 
 [dependencies.gix-commitgraph]
 path = ".."
+features = ["sha1"]
 
 # Prevent this from interfering with workspaces
 [workspace]

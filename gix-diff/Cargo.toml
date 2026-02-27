@@ -14,6 +14,8 @@ autotests = false
 
 [features]
 default = ["blob", "index"]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
 ## Enable diffing of blobs using imara-diff.
 blob = [
     "dep:imara-diff",
@@ -71,10 +73,11 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 criterion = "0.8.0"
 imara-diff-v2 = { version = "0.2.0", package = "imara-diff" }
+gix-hash = { path = "../gix-hash", features = ["sha1"] }
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["document-features"]
+features = ["sha1", "document-features"]
 
 [package.metadata.cargo-machete]
 ignored = [

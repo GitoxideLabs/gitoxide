@@ -16,6 +16,8 @@ doctest = false
 test = false
 
 [features]
+## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
+sha1 = ["gix-hash/sha1"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "nonempty/serialize"]
 
@@ -27,3 +29,6 @@ thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false }
 nonempty = "0.12.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
+
+[package.metadata.docs.rs]
+features = ["sha1"]
