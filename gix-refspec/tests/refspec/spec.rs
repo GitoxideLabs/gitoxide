@@ -53,6 +53,12 @@ mod prefix {
             parse("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").to_ref().prefix(),
             None
         );
+        assert_eq!(
+            parse("b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad")
+                .to_ref()
+                .prefix(),
+            None
+        );
     }
 
     fn parse(spec: &str) -> RefSpec {
@@ -117,6 +123,10 @@ mod expand_prefixes {
     #[test]
     fn object_names_expand_to_nothing() {
         assert_eq!(parse("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").len(), 0);
+        assert_eq!(
+            parse("b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad").len(),
+            0
+        );
     }
 
     fn parse(spec: &str) -> Vec<String> {

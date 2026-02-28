@@ -1266,8 +1266,13 @@ where
     Ok((script_result_directory, res))
 }
 
-fn hash_kind_from_env() -> gix_hash::Kind {
-    env::var_os("GIX_TEST_FIXTURE_HASH").and_then(|value| value.into_string().ok()).map(|object_kind| {
+/// Returns the hash function that is used when creating or loading test fixtures. The value
+/// returned is derived from the environment variable `GIX_TEST_FIXTURE_HASH`. Use this, e. g.,
+/// when you need to run different assertions depending on the hash function used in a specific
+/// fixture.
+pub fn hash_kind_from_env() -> gix_hash::Kind {
+    static FIXTURE_HASH: LazyLock<gix_hash::Kind> = LazyLock::new(|| {
+        env::var_os("GIX_TEST_FIXTURE_HASH").and_then(|value| value.into_string().ok()).map(|object_kind| {
         gix_hash::Kind::from_str(&object_kind).unwrap_or_else(|_| {
                     panic!(
                         "GIX_TEST_FIXTURE_HASH was set to {object_kind} which is an invalid value. Valid values are {}. Exiting.",
@@ -1275,6 +1280,8 @@ fn hash_kind_from_env() -> gix_hash::Kind {
                     )
                 })
     }).unwrap_or_default()
+    });
+    *FIXTURE_HASH
 }
 
 #[cfg(windows)]

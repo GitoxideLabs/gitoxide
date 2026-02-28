@@ -43,12 +43,24 @@ git clone --shared ./base clone
   baseline "main"
   baseline "v0.0-f1"
   baseline "tags/v0.0-f2"
-  baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1"
-  baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df"
-  baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1:special"
-  baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1:1111111111111111111111111111111111111111"
-  baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:tags/special"
-  baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:refs/tags/special"
+  case $GIX_TEST_FIXTURE_HASH in
+    sha1)
+      baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1"
+      baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df"
+      baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1:special"
+      baseline "78b1c1be9421b33a49a7a8176d93eeeafa112da1:1111111111111111111111111111111111111111"
+      baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:tags/special"
+      baseline "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:refs/tags/special" ;;
+    sha256)
+      baseline "b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad"
+      baseline "ac050883b75422e0d03bfee760c591b292cbc10cee8ad934480ea5fb2ebc44fe"
+      baseline "b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad:special"
+      baseline "b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad:1111111111111111111111111111111111111111"
+      baseline "ac050883b75422e0d03bfee760c591b292cbc10cee8ad934480ea5fb2ebc44fe:tags/special"
+      baseline "ac050883b75422e0d03bfee760c591b292cbc10cee8ad934480ea5fb2ebc44fe:refs/tags/special" ;;
+    *)
+      exit 1 ;;
+  esac
   baseline "f1:origin/f1"
   baseline "f1:remotes/origin/f1"
   baseline "f1:notes/f1"
