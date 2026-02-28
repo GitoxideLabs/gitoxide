@@ -1,38 +1,53 @@
 mod single {
     use crate::matching::baseline;
 
+    fn test_hashes() -> (String, String) {
+        let annotated_tag = match gix_testtools::hash_kind_from_env() {
+            gix_hash::Kind::Sha1 => "78b1c1be9421b33a49a7a8176d93eeeafa112da1",
+            gix_hash::Kind::Sha256 => "b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad",
+            _ => unimplemented!(),
+        };
+        let initial_commit = match gix_testtools::hash_kind_from_env() {
+            gix_hash::Kind::Sha1 => "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df",
+            gix_hash::Kind::Sha256 => "ac050883b75422e0d03bfee760c591b292cbc10cee8ad934480ea5fb2ebc44fe",
+            _ => unimplemented!(),
+        };
+
+        (annotated_tag.into(), initial_commit.into())
+    }
+
     #[test]
     fn fetch_only() {
+        let (annotated_tag, initial_commit) = test_hashes();
+
         baseline::agrees_with_fetch_specs(Some("refs/heads/main"));
         baseline::agrees_with_fetch_specs(Some("heads/main"));
         baseline::agrees_with_fetch_specs(Some("main"));
         baseline::agrees_with_fetch_specs(Some("v0.0-f1"));
         baseline::agrees_with_fetch_specs(Some("tags/v0.0-f2"));
-        baseline::of_objects_always_matches_if_the_server_has_the_object(Some(
-            "78b1c1be9421b33a49a7a8176d93eeeafa112da1",
-        ));
-        baseline::of_objects_always_matches_if_the_server_has_the_object(Some(
-            "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df",
-        ));
+        baseline::of_objects_always_matches_if_the_server_has_the_object(Some(annotated_tag.as_ref()));
+        baseline::of_objects_always_matches_if_the_server_has_the_object(Some(initial_commit.as_ref()));
     }
 
     #[test]
     fn fetch_and_update() {
+        let (annotated_tag, initial_commit) = test_hashes();
+
         baseline::of_objects_with_destinations_are_written_into_given_local_branches(
-            Some("78b1c1be9421b33a49a7a8176d93eeeafa112da1:special"),
-            ["78b1c1be9421b33a49a7a8176d93eeeafa112da1:refs/heads/special"],
+            Some(format!("{annotated_tag}:special").as_ref()),
+            [format!("{annotated_tag}:refs/heads/special").as_ref()],
         );
         baseline::of_objects_with_destinations_are_written_into_given_local_branches(
-            Some("78b1c1be9421b33a49a7a8176d93eeeafa112da1:1111111111111111111111111111111111111111"),
-            ["78b1c1be9421b33a49a7a8176d93eeeafa112da1:refs/heads/1111111111111111111111111111111111111111"],
+            Some(format!("{annotated_tag}:1111111111111111111111111111111111111111").as_ref()),
+            [format!("{annotated_tag}:refs/heads/1111111111111111111111111111111111111111").as_ref()],
         );
         baseline::of_objects_with_destinations_are_written_into_given_local_branches(
-            Some("9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:tags/special"),
-            ["9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:refs/tags/special"],
+            Some(format!("{initial_commit}:tags/special").as_ref()),
+            [format!("{initial_commit}:refs/tags/special").as_ref()],
         );
         baseline::of_objects_with_destinations_are_written_into_given_local_branches(
-            Some("9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:refs/tags/special"),
-            ["9d2fab1a0ba3585d0bc50922bfdd04ebb59361df:refs/tags/special"],
+            Some(format!("{initial_commit}:refs/tags/special").as_ref()),
+            [format!("{initial_commit}:refs/tags/special").as_ref()],
         );
 
         baseline::agrees_but_observable_refs_are_vague(Some("f1:origin/f1"), ["refs/heads/f1:refs/heads/origin/f1"]);
