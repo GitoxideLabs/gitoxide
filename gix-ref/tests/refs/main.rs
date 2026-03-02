@@ -44,4 +44,5 @@ mod namespace;
 mod packed;
 mod reference;
 mod store;
+mod traits;
 mod transaction;
