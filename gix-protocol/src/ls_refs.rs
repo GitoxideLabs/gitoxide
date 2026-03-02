@@ -30,6 +30,9 @@ mod error {
 pub use error::Error;
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
+pub use self::function::RefPrefixes;
+
+#[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub(crate) mod function {
     use std::{borrow::Cow, collections::HashSet};
 
@@ -47,6 +50,68 @@ pub(crate) mod function {
         Command,
     };
 
+    /// [`RefPrefixes`] are the set of prefixes that are sent to the server for
+    /// filtering purposes.
+    ///
+    /// These are communicated by sending zero or more `ref-prefix` values, and
+    /// are documented in [gitprotocol-v2.adoc#ls-refs].
+    ///
+    /// These prefixes can be constructed from a set of [`RefSpec`]'s using
+    /// [`RefPrefixes::from_refspecs`].
+    ///
+    /// Alternatively, they can be constructed using [`RefsPrefixes::new`] and
+    /// using [`RefPrefixes::extend`] to add new prefixes. Note that any
+    /// references not starting with `refs/` will be filtered out.
+    ///
+    /// [`RefSpec`]: gix_refspec::RefSpec
+    /// [gitprotocol-v2.adoc#ls-refs]: https://github.com/git/git/blob/master/Documentation/gitprotocol-v2.adoc#ls-refs
+    pub struct RefPrefixes {
+        prefixes: HashSet<BString>,
+    }
+
+    impl RefPrefixes {
+        /// Create an empty set of [`RefPrefixes`].
+        pub fn new() -> RefPrefixes {
+            RefPrefixes {
+                prefixes: HashSet::new(),
+            }
+        }
+
+        /// Convert a series of [`RefSpec`]'s into a set of [`RefPrefixes`].
+        ///
+        /// It attempts to expand each [`RefSpec`] into prefix references, e.g.
+        /// `refs/heads/`, `refs/remotes/`, `refs/namespaces/foo/`, etc.
+        ///
+        /// [`RefSpec`]: gix_refspec::RefSpec
+        pub fn from_refspecs<'a>(refspecs: impl IntoIterator<Item = &'a gix_refspec::RefSpec>) -> Self {
+            let mut seen = HashSet::new();
+            let mut prefixes = HashSet::new();
+            for spec in refspecs.into_iter() {
+                let spec = spec.to_ref();
+                if seen.insert(spec.instruction()) {
+                    let mut out = Vec::with_capacity(1);
+                    spec.expand_prefixes(&mut out);
+                    prefixes.extend(out);
+                }
+            }
+            Self { prefixes }
+        }
+
+        fn into_args(self) -> impl Iterator<Item = BString> {
+            self.prefixes.into_iter().map(|mut prefix| {
+                prefix.insert_str(0, "ref-prefix ");
+                prefix
+            })
+        }
+    }
+
+    impl Extend<BString> for RefPrefixes {
+        fn extend<T: IntoIterator<Item = BString>>(&mut self, iter: T) {
+            self.prefixes
+                .extend(iter.into_iter().filter(|prefix| prefix.starts_with(b"refs/")));
+        }
+    }
+
     /// A command to list references from a remote Git repository.
     ///
     /// It acts as a utility to separate the invocation into the shared blocking portion,
@@ -61,7 +126,7 @@ pub(crate) mod function {
         /// Build a command to list refs from the given server `capabilities`,
         /// using `agent` information to identify ourselves.
         pub fn new(
-            prefix_refspecs: Option<&[gix_refspec::RefSpec]>,
+            prefix_refspecs: Option<RefPrefixes>,
             capabilities: &'a Capabilities,
             agent: (&'static str, Option<Cow<'static, str>>),
         ) -> Self {
@@ -78,18 +143,7 @@ pub(crate) mod function {
             }
 
             if let Some(refspecs) = prefix_refspecs {
-                let mut seen = HashSet::new();
-                for spec in refspecs {
-                    let spec = spec.to_ref();
-                    if seen.insert(spec.instruction()) {
-                        let mut prefixes = Vec::with_capacity(1);
-                        spec.expand_prefixes(&mut prefixes);
-                        for mut prefix in prefixes {
-                            prefix.insert_str(0, "ref-prefix ");
-                            arguments.push(prefix);
-                        }
-                    }
-                }
+                arguments.extend(refspecs.into_args());
             }
 
             Self {
