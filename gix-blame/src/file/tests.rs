@@ -741,7 +741,7 @@ mod process_changes {
     fn nothing() {
         let suspect = zero_sha();
         let parent = one_sha();
-        let new_hunks_to_blame = process_changes(vec![], vec![], suspect, parent);
+        let new_hunks_to_blame = process_changes(vec![], &[], suspect, parent);
 
         assert_eq!(new_hunks_to_blame, []);
     }
@@ -752,7 +752,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(0..4, suspect).into()];
         let changes = vec![Change::AddedOrReplaced(0..4, 0)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(new_hunks_to_blame, [(0..4, suspect).into()]);
     }
@@ -763,7 +763,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(0..6, suspect).into()];
         let changes = vec![Change::AddedOrReplaced(0..4, 0), Change::Unchanged(4..6)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -781,7 +781,7 @@ mod process_changes {
             Change::AddedOrReplaced(2..4, 0),
             Change::Unchanged(4..6),
         ];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -803,7 +803,7 @@ mod process_changes {
             Change::AddedOrReplaced(1..4, 0),
             Change::Unchanged(4..6),
         ];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -821,7 +821,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(0..6, suspect).into()];
         let changes = vec![Change::AddedOrReplaced(0..1, 0)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -835,7 +835,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(2..6, suspect, 0..4).into()];
         let changes = vec![Change::AddedOrReplaced(0..1, 0)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -849,7 +849,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(0..6, suspect).into()];
         let changes = vec![Change::AddedOrReplaced(0..4, 3), Change::Unchanged(4..6)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -863,7 +863,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(4..6, suspect, 3..5).into()];
         let changes = vec![Change::AddedOrReplaced(0..3, 0), Change::Unchanged(3..5)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(new_hunks_to_blame, [(4..6, parent, 0..2).into()]);
     }
@@ -874,7 +874,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(1..3, suspect, 0..2).into()];
         let changes = vec![Change::AddedOrReplaced(0..1, 2)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -892,7 +892,7 @@ mod process_changes {
             Change::Unchanged(2..3),
             Change::AddedOrReplaced(3..4, 0),
         ];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -914,7 +914,7 @@ mod process_changes {
             Change::AddedOrReplaced(16..17, 0),
             Change::Unchanged(17..37),
         ];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -937,7 +937,7 @@ mod process_changes {
             Change::AddedOrReplaced(6..9, 0),
             Change::Unchanged(9..11),
         ];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -957,7 +957,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(0..4, suspect).into(), (4..7, suspect).into()];
         let changes = vec![Change::Deleted(0, 3), Change::AddedOrReplaced(0..4, 0)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
@@ -971,7 +971,7 @@ mod process_changes {
         let parent = one_sha();
         let hunks_to_blame = vec![(13..16, suspect).into(), (10..17, suspect).into()];
         let changes = vec![Change::AddedOrReplaced(10..14, 0)];
-        let new_hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, parent);
+        let new_hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, parent);
 
         assert_eq!(
             new_hunks_to_blame,
