@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use gix_blame::BlameRanges;
 use gix_hash::ObjectId;
@@ -349,6 +353,56 @@ fn diff_algorithm_parity() {
 
         pretty_assertions::assert_eq!(lines_blamed, baseline, "{case}");
     }
+}
+
+#[test]
+fn changed_path_bloom_prefilter_keeps_blame_output_identical() -> gix_testtools::Result {
+    let worktree_path = fixture_path()?;
+    write_changed_path_commit_graph(&worktree_path)?;
+
+    let source_file_name: gix_object::bstr::BString = "simple.txt".into();
+    let options = gix_blame::Options {
+        diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+        ranges: BlameRanges::default(),
+        since: None,
+        rewrites: Some(gix_diff::Rewrites::default()),
+        debug_track_path: false,
+    };
+
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::for_worktree_path(worktree_path.clone())?;
+    let without_bloom = gix_blame::file(
+        &odb,
+        suspect,
+        None,
+        &mut resource_cache,
+        source_file_name.as_ref(),
+        options.clone(),
+    )?;
+
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::for_worktree_path(worktree_path.clone())?;
+    let cache = gix_commitgraph::at(worktree_path.join(".git/objects/info"))
+        .map_err(|err| std::io::Error::other(format!("loading commit-graph failed: {err}")))?;
+    let with_bloom = gix_blame::file(
+        &odb,
+        suspect,
+        Some(cache),
+        &mut resource_cache,
+        source_file_name.as_ref(),
+        options,
+    )?;
+
+    pretty_assertions::assert_eq!(with_bloom.entries, without_bloom.entries);
+    assert!(with_bloom.statistics.bloom_queries > 0);
+    assert!(with_bloom.statistics.trees_diffed <= without_bloom.statistics.trees_diffed);
+    Ok(())
 }
 
 #[test]
@@ -754,6 +808,32 @@ mod incremental {
     }
 }
 
+fn write_changed_path_commit_graph(worktree_path: &Path) -> gix_testtools::Result {
+    let config_status = Command::new("git")
+        .args(["config", "commitGraph.changedPathsVersion", "2"])
+        .current_dir(worktree_path)
+        .status()?;
+    assert!(
+        config_status.success(),
+        "setting commitGraph.changedPathsVersion should succeed"
+    );
+
+    let write_status = Command::new("git")
+        .args([
+            "commit-graph",
+            "write",
+            "--no-progress",
+            "--reachable",
+            "--changed-paths",
+        ])
+        .current_dir(worktree_path)
+        .status()?;
+    assert!(
+        write_status.success(),
+        "writing changed-path commit-graph should succeed"
+    );
+    Ok(())
+}
 fn fixture_path() -> gix_testtools::Result<PathBuf> {
     gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")
 }
