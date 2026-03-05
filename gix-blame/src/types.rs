@@ -250,6 +250,16 @@ pub struct Statistics {
     /// The amount of blobs there were compared to each other to learn what changed between commits.
     /// Note that in order to diff a blob, one needs to load both versions from the database.
     pub blobs_diffed: usize,
+    /// Number of times changed-path Bloom filters were queried successfully.
+    pub bloom_queries: usize,
+    /// Number of queries where Bloom filters were unavailable for the commit.
+    pub bloom_filter_not_present: usize,
+    /// Number of Bloom answers that were `maybe`.
+    pub bloom_maybe: usize,
+    /// Number of Bloom answers that were `definitely not`.
+    pub bloom_definitely_not: usize,
+    /// Number of `maybe` Bloom answers that turned out not to affect the path.
+    pub bloom_false_positive: usize,
 }
 
 impl Outcome {

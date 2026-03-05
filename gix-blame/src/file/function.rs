@@ -173,6 +173,20 @@ pub fn incremental(
             continue;
         }
 
+        let first_parent_bloom_result =
+            maybe_changed_path_in_bloom_filter(cache, suspect, current_file_path.as_ref(), &mut stats);
+
+        if first_parent_bloom_result == Some(false) {
+            let (first_parent_id, first_parent_commit_time) = parent_ids[0];
+            pass_blame_from_to(suspect, first_parent_id, &mut hunks_to_blame);
+            queue.insert(first_parent_commit_time, first_parent_id);
+            previous_entry = previous_entry
+                .take()
+                .filter(|(id, _)| *id == suspect)
+                .map(|(_, entry)| (first_parent_id, entry));
+            continue 'outer;
+        }
+
         let mut entry = previous_entry
             .take()
             .filter(|(id, _)| *id == suspect)
@@ -269,6 +283,9 @@ pub fn incremental(
                 options.rewrites,
             )?;
             let Some(modification) = changes_for_file_path else {
+                if index == 0 && first_parent_bloom_result == Some(true) {
+                    stats.bloom_false_positive += 1;
+                }
                 if more_than_one_parent {
                     // None of the changes affected the file we’re currently blaming.
                     // Copy blame to parent.
@@ -908,6 +925,33 @@ fn collect_parents(
         }
     }
     Ok(parent_ids)
+}
+
+fn maybe_changed_path_in_bloom_filter(
+    cache: Option<&gix_commitgraph::Graph>,
+    commit_id: ObjectId,
+    path: &BStr,
+    stats: &mut Statistics,
+) -> Option<bool> {
+    if let Some(cache) = cache {
+        let result = cache.maybe_contains_path_by_id(commit_id, path);
+        match result {
+            Some(false) => {
+                stats.bloom_queries += 1;
+                stats.bloom_definitely_not += 1;
+            }
+            Some(true) => {
+                stats.bloom_queries += 1;
+                stats.bloom_maybe += 1;
+            }
+            None => {
+                stats.bloom_filter_not_present += 1;
+            }
+        }
+        result
+    } else {
+        None
+    }
 }
 
 /// Return an iterator over tokens for use in diffing. These are usually lines, but it's important
