@@ -10,6 +10,19 @@ use std::{
 use crate::file::function::tokens_for_diffing;
 use crate::Error;
 
+/// Receives [`BlameEntry`] values incrementally as they are discovered by
+/// [`incremental()`](crate::incremental()).
+pub trait BlameSink {
+    /// Receive a single blame chunk in generation order.
+    fn push(&mut self, entry: BlameEntry);
+}
+
+impl BlameSink for Vec<BlameEntry> {
+    fn push(&mut self, entry: BlameEntry) {
+        Vec::push(self, entry);
+    }
+}
+
 /// A type to represent one or more line ranges to blame in a file.
 ///
 /// It handles the conversion between git's 1-based inclusive ranges and the internal
@@ -196,6 +209,21 @@ pub struct Outcome {
     /// One entry in sequential order, to associate a hunk in the blamed file with the source commit (and its lines)
     /// that introduced it.
     pub entries: Vec<BlameEntry>,
+    /// A buffer with the file content of the *Blamed File*, ready for tokenization.
+    pub blob: Vec<u8>,
+    /// Additional information about the amount of work performed to produce the blame.
+    pub statistics: Statistics,
+    /// Contains a log of all changes that affected the outcome of this blame.
+    pub blame_path: Option<Vec<BlamePathEntry>>,
+}
+
+/// The outcome of [`incremental()`](crate::incremental()).
+///
+/// It contains all non-entry information so callers can process [`BlameEntry`] instances
+/// incrementally through a [`BlameSink`] while still receiving the metadata that was
+/// previously available through [`Outcome`].
+#[derive(Debug, Default, Clone)]
+pub struct IncrementalOutcome {
     /// A buffer with the file content of the *Blamed File*, ready for tokenization.
     pub blob: Vec<u8>,
     /// Additional information about the amount of work performed to produce the blame.
