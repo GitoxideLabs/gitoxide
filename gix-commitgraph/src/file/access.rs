@@ -4,7 +4,7 @@ use std::{
 };
 
 use crate::{
-    File,
+    BloomFilterSettings, File,
     file::{self, COMMIT_DATA_ENTRY_SIZE_SANS_HASH, commit::Commit},
 };
 
@@ -107,6 +107,11 @@ impl File {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Return changed-path Bloom filter settings if this file has a usable Bloom index and data pair.
+    pub fn bloom_filter_settings(&self) -> Option<BloomFilterSettings> {
+        self.bloom_filter_settings
+    }
 }
 
 impl File {
@@ -130,6 +135,13 @@ impl File {
     /// Returns the byte slice for this file's entire Extra Edge List (EDGE) chunk.
     pub(crate) fn extra_edges_data(&self) -> Option<&[u8]> {
         Some(&self.data[self.extra_edges_list_range.clone()?])
+    }
+
+    pub(crate) fn clear_bloom_filters(&mut self) {
+        self.bloom_filter_data_len = 0;
+        self.bloom_filter_data_offset = None;
+        self.bloom_filter_index_offset = None;
+        self.bloom_filter_settings = None;
     }
 }
 

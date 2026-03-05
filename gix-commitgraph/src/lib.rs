@@ -25,6 +25,10 @@ use std::path::Path;
 pub struct File {
     base_graph_count: u8,
     base_graphs_list_offset: Option<usize>,
+    bloom_filter_data_len: usize,
+    bloom_filter_data_offset: Option<usize>,
+    bloom_filter_index_offset: Option<usize>,
+    bloom_filter_settings: Option<BloomFilterSettings>,
     commit_data_offset: usize,
     data: memmap2::Mmap,
     extra_edges_list_range: Option<std::ops::Range<usize>>,
@@ -33,6 +37,17 @@ pub struct File {
     path: std::path::PathBuf,
     hash_len: usize,
     object_hash: gix_hash::Kind,
+}
+
+/// Bloom filter parameters as stored in a commit-graph `BDAT` chunk header.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct BloomFilterSettings {
+    /// Version of the hash algorithm used by changed-path Bloom filters.
+    pub hash_version: u32,
+    /// Number of hashes computed for each key.
+    pub num_hashes: u32,
+    /// Number of bits per Bloom filter entry.
+    pub bits_per_entry: u32,
 }
 
 /// A complete commit graph.
@@ -50,6 +65,7 @@ pub fn at(path: impl AsRef<Path>) -> Result<Graph, Exn<Message>> {
 }
 
 mod access;
+pub mod bloom;
 pub mod file;
 ///
 pub mod init;
@@ -66,6 +82,11 @@ pub const GENERATION_NUMBER_MAX: u32 = 0x3fff_ffff;
 
 /// The maximum number of commits that can be stored in a commit graph.
 pub const MAX_COMMITS: u32 = (1 << 30) + (1 << 29) + (1 << 28) - 1;
+
+#[inline]
+pub(crate) fn from_be_u32(b: &[u8]) -> u32 {
+    u32::from_be_bytes(b.try_into().unwrap())
+}
 
 /// A generalized position for use in [`Graph`].
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Hash)]
