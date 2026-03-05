@@ -1558,6 +1558,7 @@ dependencies = [
  "gix-hash",
  "gix-testtools",
  "memmap2",
+ "murmur3",
  "nonempty",
  "serde",
 ]
@@ -3534,6 +3535,12 @@ dependencies = [
  "tagptr",
  "uuid",
 ]
+
+[[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 
 [[package]]
 name = "native-tls"
