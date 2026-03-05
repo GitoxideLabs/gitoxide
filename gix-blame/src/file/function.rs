@@ -334,7 +334,7 @@ pub fn incremental(
                         options.diff_algorithm,
                         &mut stats,
                     )?;
-                    hunks_to_blame = process_changes(hunks_to_blame, changes.clone(), suspect, *parent_id);
+                    hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, *parent_id);
                     if let Some(ref mut blame_path) = blame_path {
                         let has_blame_been_passed = hunks_to_blame.iter().any(|hunk| hunk.has_suspect(parent_id));
 
@@ -366,7 +366,7 @@ pub fn incremental(
                         options.diff_algorithm,
                         &mut stats,
                     )?;
-                    hunks_to_blame = process_changes(hunks_to_blame, changes, suspect, *parent_id);
+                    hunks_to_blame = process_changes(hunks_to_blame, &changes, suspect, *parent_id);
 
                     let mut has_blame_been_passed = false;
 
