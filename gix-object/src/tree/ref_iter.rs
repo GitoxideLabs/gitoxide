@@ -1,7 +1,58 @@
 use bstr::BStr;
+use gix_hash::ObjectId;
 use winnow::{error::ParserError, prelude::*};
 
 use crate::{tree, tree::EntryRef, TreeRef, TreeRefIter};
+
+/// Follow a sequence of `path` components starting from the tree instance in `buf`,
+/// and look them up in `odb` one by one using `buffer` until the last component is looked up and
+/// its tree entry is returned.
+///
+/// # Performance Notes
+///
+/// Searching tree entries is currently done in sequence, which allows the search to be allocation free. It would be possible
+/// to reuse a vector and use a binary search instead, which might be able to improve performance over all.
+/// However, a benchmark should be created first to have some data and see which trade-off to choose here.
+pub fn lookup_entry<C, I, R, P, E, M>(
+    tree: &mut Vec<u8>,
+    path: I,
+    mut load_next_tree: C,
+    map_entry_to_output: M,
+) -> Result<Option<R>, E>
+where
+    I: IntoIterator<Item = P>,
+    P: PartialEq<BStr>,
+    C: FnMut(ObjectId, &'_ mut Vec<u8>) -> Result<Option<crate::Data<'_>>, E>,
+    M: FnOnce(crate::tree::EntryRef<'_>) -> R,
+{
+    let mut path = path.into_iter().peekable();
+
+    while let Some(component) = path.next() {
+        match TreeRefIter::from_bytes(tree)
+            .filter_map(Result::ok)
+            .find(|entry| component.eq(entry.filename))
+        {
+            Some(entry) => {
+                if path.peek().is_none() {
+                    return Ok(Some(map_entry_to_output(entry)));
+                } else {
+                    let oid = entry.oid.to_owned();
+
+                    let Some(obj) = load_next_tree(oid, tree)? else {
+                        return Ok(None);
+                    };
+
+                    if !obj.kind.is_tree() {
+                        return Ok(None);
+                    }
+                }
+            }
+            None => return Ok(None),
+        }
+    }
+
+    Ok(None)
+}
 
 impl<'a> TreeRefIter<'a> {
     /// Instantiate an iterator from the given tree data.
@@ -28,30 +79,8 @@ impl<'a> TreeRefIter<'a> {
         P: PartialEq<BStr>,
     {
         buffer.clear();
-
-        let mut path = path.into_iter().peekable();
         buffer.extend_from_slice(self.data);
-        while let Some(component) = path.next() {
-            match TreeRefIter::from_bytes(buffer)
-                .filter_map(Result::ok)
-                .find(|entry| component.eq(entry.filename))
-            {
-                Some(entry) => {
-                    if path.peek().is_none() {
-                        return Ok(Some(entry.into()));
-                    } else {
-                        let next_id = entry.oid.to_owned();
-                        let obj = odb.try_find(&next_id, buffer)?;
-                        let Some(obj) = obj else { return Ok(None) };
-                        if !obj.kind.is_tree() {
-                            return Ok(None);
-                        }
-                    }
-                }
-                None => return Ok(None),
-            }
-        }
-        Ok(None)
+        lookup_entry(buffer, path, |oid, buf| odb.try_find(&oid, buf), |entry| entry.into())
     }
 
     /// Like [`Self::lookup_entry()`], but takes any [`AsRef<Path>`](`std::path::Path`) directly via `relative_path`,
