@@ -146,12 +146,12 @@ impl<'repo> Tree<'repo> {
         &self,
         relative_path: impl AsRef<std::path::Path>,
     ) -> Result<Option<Entry<'repo>>, find::existing::Error> {
-        use crate::bstr::ByteSlice;
-        self.lookup_entry(relative_path.as_ref().components().map(|c: std::path::Component<'_>| {
-            gix_path::os_str_into_bstr(c.as_os_str())
-                .unwrap_or_else(|_| "".into())
-                .as_bytes()
-        }))
+        self.lookup_entry(
+            relative_path
+                .as_ref()
+                .components()
+                .map(|c| c.as_os_str().as_encoded_bytes()),
+        )
     }
 
     /// Like [`Self::peel_to_entry()`], but takes a `Path` directly via `relative_path`, a path relative to this tree.
@@ -164,12 +164,12 @@ impl<'repo> Tree<'repo> {
         &mut self,
         relative_path: impl AsRef<std::path::Path>,
     ) -> Result<Option<Entry<'repo>>, find::existing::Error> {
-        use crate::bstr::ByteSlice;
-        self.peel_to_entry(relative_path.as_ref().components().map(|c: std::path::Component<'_>| {
-            gix_path::os_str_into_bstr(c.as_os_str())
-                .unwrap_or_else(|_| "".into())
-                .as_bytes()
-        }))
+        self.peel_to_entry(
+            relative_path
+                .as_ref()
+                .components()
+                .map(|c| c.as_os_str().as_encoded_bytes()),
+        )
     }
 }
 

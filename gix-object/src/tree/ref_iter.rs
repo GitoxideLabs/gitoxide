@@ -68,15 +68,13 @@ impl<'a> TreeRefIter<'a> {
         buffer: &'a mut Vec<u8>,
         relative_path: impl AsRef<std::path::Path>,
     ) -> Result<Option<tree::Entry>, crate::find::Error> {
-        use crate::bstr::ByteSlice;
         self.lookup_entry(
             odb,
             buffer,
-            relative_path.as_ref().components().map(|c: std::path::Component<'_>| {
-                gix_path::os_str_into_bstr(c.as_os_str())
-                    .unwrap_or_else(|_| "".into())
-                    .as_bytes()
-            }),
+            relative_path
+                .as_ref()
+                .components()
+                .map(|c| c.as_os_str().as_encoded_bytes()),
         )
     }
 }
