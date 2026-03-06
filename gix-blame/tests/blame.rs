@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use gix_blame::BlameRanges;
 use gix_hash::ObjectId;
@@ -352,6 +356,56 @@ fn diff_algorithm_parity() {
 }
 
 #[test]
+fn changed_path_bloom_prefilter_keeps_blame_output_identical() -> gix_testtools::Result {
+    let worktree_path = fixture_path()?;
+    write_changed_path_commit_graph(&worktree_path)?;
+
+    let source_file_name: gix_object::bstr::BString = "simple.txt".into();
+    let options = gix_blame::Options {
+        diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+        ranges: BlameRanges::default(),
+        since: None,
+        rewrites: Some(gix_diff::Rewrites::default()),
+        debug_track_path: false,
+    };
+
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::for_worktree_path(worktree_path.clone())?;
+    let without_bloom = gix_blame::file(
+        &odb,
+        suspect,
+        None,
+        &mut resource_cache,
+        source_file_name.as_ref(),
+        options.clone(),
+    )?;
+
+    let Fixture {
+        odb,
+        mut resource_cache,
+        suspect,
+    } = Fixture::for_worktree_path(worktree_path.clone())?;
+    let cache = gix_commitgraph::at(worktree_path.join(".git/objects/info"))
+        .map_err(|err| std::io::Error::other(format!("loading commit-graph failed: {err}")))?;
+    let with_bloom = gix_blame::file(
+        &odb,
+        suspect,
+        Some(cache),
+        &mut resource_cache,
+        source_file_name.as_ref(),
+        options,
+    )?;
+
+    pretty_assertions::assert_eq!(with_bloom.entries, without_bloom.entries);
+    assert!(with_bloom.statistics.bloom_queries > 0);
+    assert!(with_bloom.statistics.trees_diffed <= without_bloom.statistics.trees_diffed);
+    Ok(())
+}
+
+#[test]
 fn file_that_was_added_in_two_branches() -> gix_testtools::Result {
     let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_two_roots_repo.sh")?;
 
@@ -621,6 +675,165 @@ mod rename_tracking {
     }
 }
 
+mod incremental {
+    use std::num::NonZeroU32;
+
+    use gix_blame::{BlameEntry, BlameRanges, BlameSink};
+
+    use crate::Fixture;
+
+    #[derive(Default)]
+    struct CountingSink {
+        chunks_received: usize,
+    }
+
+    impl BlameSink for CountingSink {
+        fn push(&mut self, _entry: BlameEntry) {
+            self.chunks_received += 1;
+        }
+    }
+
+    fn options() -> gix_blame::Options {
+        gix_blame::Options {
+            diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+            ranges: BlameRanges::default(),
+            since: None,
+            rewrites: Some(gix_diff::Rewrites::default()),
+            debug_track_path: false,
+        }
+    }
+
+    fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
+        let len = lines_blamed.len();
+        lines_blamed
+            .into_iter()
+            .fold(Vec::with_capacity(len), |mut acc, entry| {
+                let previous_entry = acc.last();
+
+                if let Some(previous_entry) = previous_entry {
+                    let previous_blamed_range = previous_entry.range_in_blamed_file();
+                    let current_blamed_range = entry.range_in_blamed_file();
+                    let previous_source_range = previous_entry.range_in_source_file();
+                    let current_source_range = entry.range_in_source_file();
+                    if previous_entry.commit_id == entry.commit_id
+                        && previous_blamed_range.end == current_blamed_range.start
+                        && previous_source_range.end == current_source_range.start
+                    {
+                        let coalesced_entry = BlameEntry {
+                            start_in_blamed_file: previous_blamed_range.start as u32,
+                            start_in_source_file: previous_source_range.start as u32,
+                            len: NonZeroU32::new((current_source_range.end - previous_source_range.start) as u32)
+                                .expect("BUG: hunks are never zero-sized"),
+                            commit_id: previous_entry.commit_id,
+                            source_file_name: previous_entry.source_file_name.clone(),
+                        };
+
+                        acc.pop();
+                        acc.push(coalesced_entry);
+                    } else {
+                        acc.push(entry);
+                    }
+
+                    acc
+                } else {
+                    acc.push(entry);
+
+                    acc
+                }
+            })
+    }
+
+    #[test]
+    fn streams_chunks_to_custom_sink() -> gix_testtools::Result {
+        let Fixture {
+            odb,
+            mut resource_cache,
+            suspect,
+        } = Fixture::new()?;
+        let source_file_name: gix_object::bstr::BString = "simple.txt".into();
+        let mut sink = CountingSink::default();
+
+        gix_blame::incremental(
+            &odb,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            &mut sink,
+            options(),
+        )?;
+
+        assert!(
+            sink.chunks_received > 0,
+            "incremental blame should stream at least one chunk"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn vec_sink_can_reconstruct_file_entries() -> gix_testtools::Result {
+        let Fixture {
+            odb,
+            mut resource_cache,
+            suspect,
+        } = Fixture::new()?;
+        let source_file_name: gix_object::bstr::BString = "simple.txt".into();
+
+        let mut streamed_entries = Vec::new();
+        gix_blame::incremental(
+            &odb,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            &mut streamed_entries,
+            options(),
+        )?;
+
+        streamed_entries.sort_by(|a, b| a.start_in_blamed_file.cmp(&b.start_in_blamed_file));
+        let streamed_entries = coalesce_blame_entries(streamed_entries);
+
+        let file_entries = gix_blame::file(
+            &odb,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            options(),
+        )?
+        .entries;
+
+        pretty_assertions::assert_eq!(streamed_entries, file_entries);
+        Ok(())
+    }
+}
+
+fn write_changed_path_commit_graph(worktree_path: &Path) -> gix_testtools::Result {
+    let config_status = Command::new("git")
+        .args(["config", "commitGraph.changedPathsVersion", "2"])
+        .current_dir(worktree_path)
+        .status()?;
+    assert!(
+        config_status.success(),
+        "setting commitGraph.changedPathsVersion should succeed"
+    );
+
+    let write_status = Command::new("git")
+        .args([
+            "commit-graph",
+            "write",
+            "--no-progress",
+            "--reachable",
+            "--changed-paths",
+        ])
+        .current_dir(worktree_path)
+        .status()?;
+    assert!(
+        write_status.success(),
+        "writing changed-path commit-graph should succeed"
+    );
+    Ok(())
+}
 fn fixture_path() -> gix_testtools::Result<PathBuf> {
     gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")
 }

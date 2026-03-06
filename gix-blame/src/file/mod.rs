@@ -322,24 +322,36 @@ fn process_change(
 /// Consume `hunks_to_blame` and `changes` to pair up matches ranges (also overlapping) with each other.
 /// Once a match is found, it's pushed onto `out`.
 ///
-/// `process_changes` assumes that ranges coming from the same *Source File* can and do
-/// occasionally overlap. If it were a desirable property of the blame algorithm as a whole to
-/// never have two different lines from a *Blamed File* mapped to the same line in a *Source File*,
-/// this property would need to be enforced at a higher level than `process_changes`.
-/// Then the nested loops could potentially be flattened into one.
+/// Uses a cursor to avoid restarting the changes iteration from the beginning for each hunk.
+/// When suspect ranges overlap (rare, from merge blame convergence), the cursor resets to
+/// maintain correctness.
 fn process_changes(
     hunks_to_blame: Vec<UnblamedHunk>,
-    changes: Vec<Change>,
+    changes: &[Change],
     suspect: ObjectId,
     parent: ObjectId,
 ) -> Vec<UnblamedHunk> {
     let mut new_hunks_to_blame = Vec::new();
+    let mut offset_in_destination = Offset::Added(0);
+    let mut changes_pos = 0;
+    let mut last_suspect_end: Option<u32> = None;
 
-    for mut hunk in hunks_to_blame.into_iter().map(Some) {
-        let mut offset_in_destination = Offset::Added(0);
+    for hunk in hunks_to_blame {
+        if !hunk.has_suspect(&suspect) {
+            new_hunks_to_blame.push(hunk);
+            continue;
+        }
 
-        let mut changes_iter = changes.iter().cloned();
-        let mut change = changes_iter.next();
+        let suspect_range = hunk.get_range(&suspect).expect("has_suspect was true");
+        if last_suspect_end.is_some_and(|end| suspect_range.start < end) {
+            changes_pos = 0;
+            offset_in_destination = Offset::Added(0);
+        }
+        last_suspect_end = Some(suspect_range.end);
+
+        let mut hunk = Some(hunk);
+        let mut pos = changes_pos;
+        let mut change: Option<Change> = changes.get(pos).cloned();
 
         loop {
             (hunk, change) = process_change(
@@ -351,12 +363,17 @@ fn process_changes(
                 change,
             );
 
-            change = change.or_else(|| changes_iter.next());
+            if change.is_none() {
+                pos += 1;
+                change = changes.get(pos).cloned();
+            }
 
             if hunk.is_none() {
                 break;
             }
         }
+
+        changes_pos = pos;
     }
     new_hunks_to_blame
 }

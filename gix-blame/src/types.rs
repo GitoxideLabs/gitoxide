@@ -10,6 +10,19 @@ use std::{
 use crate::file::function::tokens_for_diffing;
 use crate::Error;
 
+/// Receives [`BlameEntry`] values incrementally as they are discovered by
+/// [`incremental()`](crate::incremental()).
+pub trait BlameSink {
+    /// Receive a single blame chunk in generation order.
+    fn push(&mut self, entry: BlameEntry);
+}
+
+impl BlameSink for Vec<BlameEntry> {
+    fn push(&mut self, entry: BlameEntry) {
+        Vec::push(self, entry);
+    }
+}
+
 /// A type to represent one or more line ranges to blame in a file.
 ///
 /// It handles the conversion between git's 1-based inclusive ranges and the internal
@@ -204,6 +217,21 @@ pub struct Outcome {
     pub blame_path: Option<Vec<BlamePathEntry>>,
 }
 
+/// The outcome of [`incremental()`](crate::incremental()).
+///
+/// It contains all non-entry information so callers can process [`BlameEntry`] instances
+/// incrementally through a [`BlameSink`] while still receiving the metadata that was
+/// previously available through [`Outcome`].
+#[derive(Debug, Default, Clone)]
+pub struct IncrementalOutcome {
+    /// A buffer with the file content of the *Blamed File*, ready for tokenization.
+    pub blob: Vec<u8>,
+    /// Additional information about the amount of work performed to produce the blame.
+    pub statistics: Statistics,
+    /// Contains a log of all changes that affected the outcome of this blame.
+    pub blame_path: Option<Vec<BlamePathEntry>>,
+}
+
 /// Additional information about the performed operations.
 #[derive(Debug, Default, Copy, Clone)]
 pub struct Statistics {
@@ -222,6 +250,16 @@ pub struct Statistics {
     /// The amount of blobs there were compared to each other to learn what changed between commits.
     /// Note that in order to diff a blob, one needs to load both versions from the database.
     pub blobs_diffed: usize,
+    /// Number of times changed-path Bloom filters were queried successfully.
+    pub bloom_queries: usize,
+    /// Number of queries where Bloom filters were unavailable for the commit.
+    pub bloom_filter_not_present: usize,
+    /// Number of Bloom answers that were `maybe`.
+    pub bloom_maybe: usize,
+    /// Number of Bloom answers that were `definitely not`.
+    pub bloom_definitely_not: usize,
+    /// Number of `maybe` Bloom answers that turned out not to affect the path.
+    pub bloom_false_positive: usize,
 }
 
 impl Outcome {
