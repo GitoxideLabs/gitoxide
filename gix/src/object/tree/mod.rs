@@ -1,6 +1,8 @@
+use std::ops::ControlFlow;
+
 use gix_hash::ObjectId;
 pub use gix_object::tree::{EntryKind, EntryMode};
-use gix_object::{bstr::BStr, tree::lookup_entry, FindExt, TreeRefIter};
+use gix_object::{bstr::BStr, tree::iter_next, FindExt, TreeRefIter};
 
 use crate::{object::find, Id, ObjectDetached, Repository, Tree};
 
@@ -66,12 +68,22 @@ impl<'repo> Tree<'repo> {
         let buf = &mut self.repo.empty_reusable_buffer();
         buf.extend_from_slice(&self.data);
 
-        let map_entry = |entry: gix_object::tree::EntryRef<'_>| Entry {
-            inner: entry.into(),
-            repo: self.repo,
-        };
+        let mut iter = path.into_iter().peekable();
+        let mut data = gix_object::Data::new(gix_object::Kind::Tree, buf);
 
-        lookup_entry(buf, path, |oid, buf| self.repo.find(&oid, buf).map(Some), map_entry)
+        loop {
+            data = match iter_next(&mut iter, data) {
+                ControlFlow::Continue(oid) => self.repo.find(&oid, buf)?,
+                ControlFlow::Break(entry) => {
+                    let mapped = entry.map(|e| Entry {
+                        inner: e.into(),
+                        repo: self.repo,
+                    });
+
+                    break Ok(mapped);
+                }
+            }
+        }
     }
 
     /// Follow a sequence of `path` components starting from this instance, and look them up one by one until the last component
@@ -90,20 +102,22 @@ impl<'repo> Tree<'repo> {
         I: IntoIterator<Item = P>,
         P: PartialEq<BStr>,
     {
-        let map_entry = |entry: gix_object::tree::EntryRef<'_>| Entry {
-            inner: entry.into(),
-            repo: self.repo,
-        };
+        let mut iter = path.into_iter().peekable();
+        let mut data = gix_object::Data::new(gix_object::Kind::Tree, &self.data);
 
-        lookup_entry(
-            &mut self.data,
-            path,
-            |oid, buf| {
-                self.id = oid;
-                self.repo.find(&oid, buf).map(Some)
-            },
-            map_entry,
-        )
+        loop {
+            data = match iter_next(&mut iter, data) {
+                ControlFlow::Continue(oid) => {
+                    self.id = oid;
+                    self.repo.find(&oid, &mut self.data)?
+                }
+                ControlFlow::Break(entry) => {
+                    let repo = self.repo;
+                    let mapped = entry.map(|e| Entry { inner: e.into(), repo });
+                    break Ok(mapped);
+                }
+            }
+        }
     }
 
     /// Like [`Self::lookup_entry()`], but takes a `Path` directly via `relative_path`, a path relative to this tree.

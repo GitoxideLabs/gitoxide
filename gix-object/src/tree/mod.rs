@@ -12,7 +12,7 @@ mod ref_iter;
 ///
 pub mod write;
 
-pub use ref_iter::lookup_entry;
+pub use ref_iter::iter_next;
 
 /// The state needed to apply edits instantly to in-memory trees.
 ///
