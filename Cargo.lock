@@ -2013,7 +2013,6 @@ dependencies = [
  "gix-hash",
  "gix-hashtable",
  "gix-odb",
- "gix-path",
  "gix-testtools",
  "gix-utils",
  "gix-validate",
