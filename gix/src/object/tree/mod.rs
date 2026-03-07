@@ -1,6 +1,8 @@
+use std::ops::ControlFlow;
+
 use gix_hash::ObjectId;
 pub use gix_object::tree::{EntryKind, EntryMode};
-use gix_object::{bstr::BStr, FindExt, TreeRefIter};
+use gix_object::{bstr::BStr, tree::iter_next, FindExt, TreeRefIter};
 
 use crate::{object::find, Id, ObjectDetached, Repository, Tree};
 
@@ -63,34 +65,25 @@ impl<'repo> Tree<'repo> {
         I: IntoIterator<Item = P>,
         P: PartialEq<BStr>,
     {
-        let mut buf = self.repo.empty_reusable_buffer();
-        buf.clear();
-
-        let mut path = path.into_iter().peekable();
+        let buf = &mut self.repo.empty_reusable_buffer();
         buf.extend_from_slice(&self.data);
-        while let Some(component) = path.next() {
-            match TreeRefIter::from_bytes(&buf)
-                .filter_map(Result::ok)
-                .find(|entry| component.eq(entry.filename))
-            {
-                Some(entry) => {
-                    if path.peek().is_none() {
-                        return Ok(Some(Entry {
-                            inner: entry.into(),
-                            repo: self.repo,
-                        }));
-                    } else {
-                        let next_id = entry.oid.to_owned();
-                        let obj = self.repo.objects.find(&next_id, &mut buf)?;
-                        if !obj.kind.is_tree() {
-                            return Ok(None);
-                        }
-                    }
+
+        let mut iter = path.into_iter().peekable();
+        let mut data = gix_object::Data::new(gix_object::Kind::Tree, buf);
+
+        loop {
+            data = match iter_next(&mut iter, data) {
+                ControlFlow::Continue(oid) => self.repo.find(&oid, buf)?,
+                ControlFlow::Break(entry) => {
+                    let mapped = entry.map(|e| Entry {
+                        inner: e.into(),
+                        repo: self.repo,
+                    });
+
+                    break Ok(mapped);
                 }
-                None => return Ok(None),
             }
         }
-        Ok(None)
     }
 
     /// Follow a sequence of `path` components starting from this instance, and look them up one by one until the last component
@@ -109,31 +102,22 @@ impl<'repo> Tree<'repo> {
         I: IntoIterator<Item = P>,
         P: PartialEq<BStr>,
     {
-        let mut path = path.into_iter().peekable();
-        while let Some(component) = path.next() {
-            match TreeRefIter::from_bytes(&self.data)
-                .filter_map(Result::ok)
-                .find(|entry| component.eq(entry.filename))
-            {
-                Some(entry) => {
-                    if path.peek().is_none() {
-                        return Ok(Some(Entry {
-                            inner: entry.into(),
-                            repo: self.repo,
-                        }));
-                    } else {
-                        let next_id = entry.oid.to_owned();
-                        let obj = self.repo.objects.find(&next_id, &mut self.data)?;
-                        self.id = next_id;
-                        if !obj.kind.is_tree() {
-                            return Ok(None);
-                        }
-                    }
+        let mut iter = path.into_iter().peekable();
+        let mut data = gix_object::Data::new(gix_object::Kind::Tree, &self.data);
+
+        loop {
+            data = match iter_next(&mut iter, data) {
+                ControlFlow::Continue(oid) => {
+                    self.id = oid;
+                    self.repo.find(&oid, &mut self.data)?
                 }
-                None => return Ok(None),
+                ControlFlow::Break(entry) => {
+                    let repo = self.repo;
+                    let mapped = entry.map(|e| Entry { inner: e.into(), repo });
+                    break Ok(mapped);
+                }
             }
         }
-        Ok(None)
     }
 
     /// Like [`Self::lookup_entry()`], but takes a `Path` directly via `relative_path`, a path relative to this tree.

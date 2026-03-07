@@ -12,6 +12,8 @@ mod ref_iter;
 ///
 pub mod write;
 
+pub use ref_iter::iter_next;
+
 /// The state needed to apply edits instantly to in-memory trees.
 ///
 /// It's made so that each tree is looked at in the object database at most once, and held in memory for

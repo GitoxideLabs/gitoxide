@@ -1,7 +1,40 @@
+use std::ops::ControlFlow;
+
 use bstr::BStr;
 use winnow::{error::ParserError, prelude::*};
 
 use crate::{tree, tree::EntryRef, TreeRef, TreeRefIter};
+
+/// Yes
+pub fn iter_next<'a, I, P>(
+    components: &mut core::iter::Peekable<I>,
+    tree: crate::Data<'a>,
+) -> core::ops::ControlFlow<Option<EntryRef<'a>>, gix_hash::ObjectId>
+where
+    I: Iterator<Item = P>,
+    P: PartialEq<BStr>,
+{
+    if !tree.kind.is_tree() {
+        return ControlFlow::Break(None);
+    }
+
+    let Some(component) = components.next() else {
+        return ControlFlow::Break(None);
+    };
+
+    let Some(entry) = TreeRefIter::from_bytes(tree.data)
+        .filter_map(Result::ok)
+        .find(|entry| component.eq(entry.filename))
+    else {
+        return ControlFlow::Break(None);
+    };
+
+    if components.peek().is_none() {
+        ControlFlow::Break(Some(entry))
+    } else {
+        ControlFlow::Continue(entry.oid.to_owned())
+    }
+}
 
 impl<'a> TreeRefIter<'a> {
     /// Instantiate an iterator from the given tree data.
@@ -28,30 +61,22 @@ impl<'a> TreeRefIter<'a> {
         P: PartialEq<BStr>,
     {
         buffer.clear();
-
-        let mut path = path.into_iter().peekable();
         buffer.extend_from_slice(self.data);
-        while let Some(component) = path.next() {
-            match TreeRefIter::from_bytes(buffer)
-                .filter_map(Result::ok)
-                .find(|entry| component.eq(entry.filename))
-            {
-                Some(entry) => {
-                    if path.peek().is_none() {
-                        return Ok(Some(entry.into()));
-                    } else {
-                        let next_id = entry.oid.to_owned();
-                        let obj = odb.try_find(&next_id, buffer)?;
-                        let Some(obj) = obj else { return Ok(None) };
-                        if !obj.kind.is_tree() {
-                            return Ok(None);
-                        }
-                    }
+
+        let mut iter = path.into_iter().peekable();
+        let mut data = crate::Data::new(crate::Kind::Tree, buffer);
+
+        loop {
+            data = match iter_next(&mut iter, data) {
+                ControlFlow::Continue(oid) => {
+                    let Some(next_tree) = odb.try_find(&oid, buffer)? else {
+                        break Ok(None);
+                    };
+                    next_tree
                 }
-                None => return Ok(None),
+                ControlFlow::Break(v) => break Ok(v.map(Into::into)),
             }
         }
-        Ok(None)
     }
 
     /// Like [`Self::lookup_entry()`], but takes any [`AsRef<Path>`](`std::path::Path`) directly via `relative_path`,
