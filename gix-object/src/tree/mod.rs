@@ -104,32 +104,52 @@ impl EntryMode {
     /// Return the mode and the remainder of the bytes.
     pub(crate) fn extract_from_bytes(i: &[u8]) -> Option<(Self, &'_ [u8])> {
         let mut mode = 0;
-        let mut idx = 0;
-        let mut space_pos = 0;
         if i.is_empty() {
             return None;
         }
-        // const fn, this is why we can't have nice things (like `.iter().any()`).
-        while idx < i.len() {
-            let b = i[idx];
-            // Delimiter, return what we got
-            if b == b' ' {
-                space_pos = idx;
-                break;
+
+        // Happy path: space is at index 6
+        let space_pos = if i.get(6) == Some(&b' ') {
+            for b in i.iter().take(6) {
+                let b = b.wrapping_sub(b'0') as u16;
+                // Not a pure octal input.
+                // Performance matters here, so `!(b'0'..=b'7').contains(&b)` won't do.
+                if b > 7 {
+                    return None;
+                }
+                mode = (mode << 3) + b;
             }
-            // Not a pure octal input.
-            // Performance matters here, so `!(b'0'..=b'7').contains(&b)` won't do.
-            #[allow(clippy::manual_range_contains)]
-            if b < b'0' || b > b'7' {
-                return None;
-            }
-            // More than 6 octal digits we must have hit the delimiter or the input was malformed.
-            if idx > 6 {
-                return None;
-            }
-            mode = (mode << 3) + (b - b'0') as u16;
-            idx += 1;
+            6
         }
+        // Space is not at index 6, we must find it.
+        else {
+            let mut idx = 0;
+            let mut space_pos = 0;
+
+            // const fn, this is why we can't have nice things (like `.iter().any()`).
+            while idx < i.len() {
+                let b = i[idx].wrapping_sub(b'0') as u16;
+                // Delimiter, return what we got
+                if b == b' '.wrapping_sub(b'0') as u16 {
+                    space_pos = idx;
+                    break;
+                }
+                // Not a pure octal input.
+                // Performance matters here, so `!(b'0'..=b'7').contains(&b)` won't do.
+                if b > 7 {
+                    return None;
+                }
+                // More than 6 octal digits we must have hit the delimiter or the input was malformed.
+                if idx > 6 {
+                    return None;
+                }
+                mode = (mode << 3) + b;
+                idx += 1;
+            }
+
+            space_pos
+        };
+
         // Hack: `0o140000` represents `"040000"`, `0o40000` represents `"40000"`.
         if mode == 0o040000 && i[0] == b'0' {
             mode += 0o100000;
