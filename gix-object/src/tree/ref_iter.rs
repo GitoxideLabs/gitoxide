@@ -184,7 +184,8 @@ mod decode {
 
     pub fn fast_entry(i: &[u8]) -> Option<(&[u8], EntryRef<'_>)> {
         let (mode, i) = tree::EntryMode::extract_from_bytes(i)?;
-        let (filename, i) = i.split_at(i.find_byte(0)?);
+        let zero = i.iter().position(|v| *v == 0)?;
+        let (filename, i) = i.split_at(zero);
         let i = &i[1..];
         const HASH_LEN_FIXME: usize = 20; // TODO(SHA256): know actual/desired length or we may overshoot
         let (oid, i) = match i.len() {
