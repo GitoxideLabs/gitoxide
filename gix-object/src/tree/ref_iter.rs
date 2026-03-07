@@ -202,8 +202,16 @@ mod decode {
     }
 
     pub fn tree<'a, E: ParserError<&'a [u8]>>(i: &mut &'a [u8]) -> ModalResult<TreeRef<'a>, E> {
-        let mut out = Vec::new();
         let mut i = &**i;
+
+        // Calculate an estimate of the amount of entries to reduce
+        // the amount of allocations necessary.
+        // TODO(SHA256): know actual/desired length for reduced overallocation
+        const HASH_LEN_FIXME: usize = 20;
+        let lower_bound_single_entry = 2 + HASH_LEN_FIXME; // 2 = space + trailing zero
+        let upper_bound_entries = i.len() / lower_bound_single_entry;
+        let mut out = Vec::with_capacity(upper_bound_entries);
+
         while !i.is_empty() {
             let Some((rest, entry)) = fast_entry(i) else {
                 #[allow(clippy::unit_arg)]
