@@ -1,5 +1,6 @@
 use std::{
     env,
+    ops::ControlFlow,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -13,7 +14,9 @@ const DEFAULT_BENCH_PATH: &str = "gix-blame/src/file/function.rs";
 struct DiscardSink;
 
 impl BlameSink for DiscardSink {
-    fn push(&mut self, _entry: BlameEntry) {}
+    fn push(&mut self, _entry: BlameEntry) -> ControlFlow<()> {
+        ControlFlow::Continue(())
+    }
 }
 
 fn incremental_options() -> gix_blame::Options {
