@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::ops::ControlFlow;
 
 use gix_diff::{blob::intern::TokenSource, tree::Visit};
 use gix_hash::ObjectId;
@@ -9,7 +9,7 @@ use gix_object::{
 use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
 
-use super::{process_changes, Change, UnblamedHunk};
+use super::{coalesce_blame_entries, process_changes, Change, UnblamedHunk};
 use crate::{types::BlamePathEntry, BlameEntry, BlameSink, Error, IncrementalOutcome, Options, Outcome, Statistics};
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
@@ -107,6 +107,7 @@ pub fn incremental(
     } else {
         None
     };
+    let mut stopped_early = false;
 
     'outer: while let Some(suspect) = queue.pop_value() {
         stats.commits_traversed += 1;
@@ -131,11 +132,14 @@ pub fn incremental(
 
         if let Some(since) = options.since {
             if commit_time < since.seconds {
-                if unblamed_to_out_is_done(&mut hunks_to_blame, sink, suspect) {
-                    break 'outer;
+                match emit_unblamed_hunks(&mut hunks_to_blame, sink, suspect) {
+                    ControlFlow::Continue(true) => break 'outer,
+                    ControlFlow::Continue(false) => continue,
+                    ControlFlow::Break(()) => {
+                        stopped_early = true;
+                        break 'outer;
+                    }
                 }
-
-                continue;
             }
         }
 
@@ -148,25 +152,32 @@ pub fn incremental(
                 // the remaining lines to it, even though we don’t explicitly check whether that is
                 // true here. We could perhaps use diff-tree-to-tree to compare `suspect` against
                 // an empty tree to validate this assumption.
-                if unblamed_to_out_is_done(&mut hunks_to_blame, sink, suspect) {
-                    if let Some(ref mut blame_path) = blame_path {
-                        let entry = previous_entry
-                            .take()
-                            .filter(|(id, _)| *id == suspect)
-                            .map(|(_, entry)| entry);
+                match emit_unblamed_hunks(&mut hunks_to_blame, sink, suspect) {
+                    ControlFlow::Continue(true) => {
+                        if let Some(ref mut blame_path) = blame_path {
+                            let entry = previous_entry
+                                .take()
+                                .filter(|(id, _)| *id == suspect)
+                                .map(|(_, entry)| entry);
 
-                        let blame_path_entry = BlamePathEntry {
-                            source_file_path: current_file_path.clone(),
-                            previous_source_file_path: None,
-                            commit_id: suspect,
-                            blob_id: entry.unwrap_or(ObjectId::null(gix_hash::Kind::Sha1)),
-                            previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
-                            parent_index: 0,
-                        };
-                        blame_path.push(blame_path_entry);
+                            let blame_path_entry = BlamePathEntry {
+                                source_file_path: current_file_path.clone(),
+                                previous_source_file_path: None,
+                                commit_id: suspect,
+                                blob_id: entry.unwrap_or(ObjectId::null(gix_hash::Kind::Sha1)),
+                                previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                                parent_index: 0,
+                            };
+                            blame_path.push(blame_path_entry);
+                        }
+
+                        break 'outer;
                     }
-
-                    break 'outer;
+                    ControlFlow::Continue(false) => {}
+                    ControlFlow::Break(()) => {
+                        stopped_early = true;
+                        break 'outer;
+                    }
                 }
             }
             // There is more, keep looking.
@@ -304,20 +315,29 @@ pub fn incremental(
                         // Do nothing under the assumption that this always (or almost always)
                         // implies that the file comes from a different parent, compared to which
                         // it was modified, not added.
-                    } else if unblamed_to_out_is_done(&mut hunks_to_blame, sink, suspect) {
-                        if let Some(ref mut blame_path) = blame_path {
-                            let blame_path_entry = BlamePathEntry {
-                                source_file_path: current_file_path.clone(),
-                                previous_source_file_path: None,
-                                commit_id: suspect,
-                                blob_id: id,
-                                previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
-                                parent_index: index,
-                            };
-                            blame_path.push(blame_path_entry);
-                        }
+                    } else {
+                        match emit_unblamed_hunks(&mut hunks_to_blame, sink, suspect) {
+                            ControlFlow::Continue(true) => {
+                                if let Some(ref mut blame_path) = blame_path {
+                                    let blame_path_entry = BlamePathEntry {
+                                        source_file_path: current_file_path.clone(),
+                                        previous_source_file_path: None,
+                                        commit_id: suspect,
+                                        blob_id: id,
+                                        previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                                        parent_index: index,
+                                    };
+                                    blame_path.push(blame_path_entry);
+                                }
 
-                        break 'outer;
+                                break 'outer;
+                            }
+                            ControlFlow::Continue(false) => {}
+                            ControlFlow::Break(()) => {
+                                stopped_early = true;
+                                break 'outer;
+                            }
+                        }
                     }
                 }
                 TreeDiffChange::Deletion => {
@@ -395,27 +415,19 @@ pub fn incremental(
             }
         }
 
-        hunks_to_blame.retain_mut(|unblamed_hunk| {
-            if unblamed_hunk.suspects.len() == 1 {
-                if let Some(entry) = BlameEntry::from_unblamed_hunk(unblamed_hunk, suspect) {
-                    // At this point, we have copied blame for every hunk to a parent. Hunks
-                    // that have only `suspect` left in `suspects` have not passed blame to any
-                    // parent, and so they can be converted to a `BlameEntry` and moved to
-                    // the sink.
-                    sink.push(entry);
-                    return false;
-                }
-            }
-            unblamed_hunk.remove_blame(suspect);
-            true
-        });
+        if let ControlFlow::Break(()) = emit_single_suspect_hunks(&mut hunks_to_blame, sink, suspect) {
+            stopped_early = true;
+            break 'outer;
+        }
     }
 
-    debug_assert_eq!(
-        hunks_to_blame,
-        vec![],
-        "only if there is no portion of the file left we have completed the blame"
-    );
+    if !stopped_early {
+        debug_assert_eq!(
+            hunks_to_blame,
+            vec![],
+            "only if there is no portion of the file left we have completed the blame"
+        );
+    }
 
     Ok(IncrementalOutcome {
         blob: blamed_file_blob,
@@ -471,75 +483,60 @@ fn pass_blame_from_to(from: ObjectId, to: ObjectId, hunks_to_blame: &mut Vec<Unb
     }
 }
 
-/// Convert each of the unblamed hunk in `hunks_to_blame` into a [`BlameEntry`], consuming them in the process,
-/// and emit each entry to `sink`.
+/// Convert each of the unblamed hunks in `hunks_to_blame` into [`BlameEntry`] values, consuming
+/// the ones emitted to `sink`.
 ///
-/// Return `true` if we are done because `hunks_to_blame` is empty.
-fn unblamed_to_out_is_done(
+/// Return [`ControlFlow::Continue`] with `true` if we are done because `hunks_to_blame` is empty.
+fn emit_unblamed_hunks(
     hunks_to_blame: &mut Vec<UnblamedHunk>,
     sink: &mut impl BlameSink,
     suspect: ObjectId,
-) -> bool {
+) -> ControlFlow<(), bool> {
     let mut without_suspect = Vec::new();
-    for hunk in hunks_to_blame.drain(..) {
+    let mut remaining_hunks = std::mem::take(hunks_to_blame).into_iter();
+    while let Some(hunk) = remaining_hunks.next() {
         if let Some(entry) = BlameEntry::from_unblamed_hunk(&hunk, suspect) {
-            sink.push(entry);
+            if let ControlFlow::Break(()) = sink.push(entry) {
+                without_suspect.extend(remaining_hunks);
+                *hunks_to_blame = without_suspect;
+                return ControlFlow::Break(());
+            }
         } else {
             without_suspect.push(hunk);
         }
     }
     *hunks_to_blame = without_suspect;
-    hunks_to_blame.is_empty()
+    ControlFlow::Continue(hunks_to_blame.is_empty())
 }
 
-/// This function merges adjacent blame entries. It merges entries that are adjacent both in the
-/// blamed file and in the source file that introduced them. This follows `git`’s
-/// behaviour. `libgit2`, as of 2024-09-19, only checks whether two entries are adjacent in the
-/// blamed file which can result in different blames in certain edge cases. See [the commit][1]
-/// that introduced the extra check into `git` for context. See [this commit][2] for a way to test
-/// for this behaviour in `git`.
-///
-/// [1]: https://github.com/git/git/commit/c2ebaa27d63bfb7c50cbbdaba90aee4efdd45d0a
-/// [2]: https://github.com/git/git/commit/6dbf0c7bebd1c71c44d786ebac0f2b3f226a0131
-fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
-    let len = lines_blamed.len();
-    lines_blamed
-        .into_iter()
-        .fold(Vec::with_capacity(len), |mut acc, entry| {
-            let previous_entry = acc.last();
-
-            if let Some(previous_entry) = previous_entry {
-                let previous_blamed_range = previous_entry.range_in_blamed_file();
-                let current_blamed_range = entry.range_in_blamed_file();
-                let previous_source_range = previous_entry.range_in_source_file();
-                let current_source_range = entry.range_in_source_file();
-                if previous_entry.commit_id == entry.commit_id
-                    && previous_blamed_range.end == current_blamed_range.start
-                    // As of 2024-09-19, the check below only is in `git`, but not in `libgit2`.
-                    && previous_source_range.end == current_source_range.start
-                {
-                    let coalesced_entry = BlameEntry {
-                        start_in_blamed_file: previous_blamed_range.start as u32,
-                        start_in_source_file: previous_source_range.start as u32,
-                        len: NonZeroU32::new((current_source_range.end - previous_source_range.start) as u32)
-                            .expect("BUG: hunks are never zero-sized"),
-                        commit_id: previous_entry.commit_id,
-                        source_file_name: previous_entry.source_file_name.clone(),
-                    };
-
-                    acc.pop();
-                    acc.push(coalesced_entry);
-                } else {
-                    acc.push(entry);
+/// Convert hunks that still have `suspect` as their only candidate into [`BlameEntry`] values.
+fn emit_single_suspect_hunks(
+    hunks_to_blame: &mut Vec<UnblamedHunk>,
+    sink: &mut impl BlameSink,
+    suspect: ObjectId,
+) -> ControlFlow<()> {
+    let mut remaining_hunks = Vec::with_capacity(hunks_to_blame.len());
+    let mut pending_hunks = std::mem::take(hunks_to_blame).into_iter();
+    while let Some(mut unblamed_hunk) = pending_hunks.next() {
+        if unblamed_hunk.suspects.len() == 1 {
+            if let Some(entry) = BlameEntry::from_unblamed_hunk(&unblamed_hunk, suspect) {
+                // At this point, we have copied blame for every hunk to a parent. Hunks that have
+                // only `suspect` left in `suspects` have not passed blame to any parent, and so
+                // they can be converted to a `BlameEntry` and moved to the sink.
+                if let ControlFlow::Break(()) = sink.push(entry) {
+                    remaining_hunks.extend(pending_hunks);
+                    *hunks_to_blame = remaining_hunks;
+                    return ControlFlow::Break(());
                 }
-
-                acc
-            } else {
-                acc.push(entry);
-
-                acc
+                continue;
             }
-        })
+        }
+        unblamed_hunk.remove_blame(suspect);
+        remaining_hunks.push(unblamed_hunk);
+    }
+
+    *hunks_to_blame = remaining_hunks;
+    ControlFlow::Continue(())
 }
 
 /// The union of [`gix_diff::tree::recorder::Change`] and [`gix_diff::tree_with_rewrites::Change`],
@@ -958,4 +955,80 @@ fn maybe_changed_path_in_bloom_filter(
 /// to unify them so the later access shows the right thing.
 pub(crate) fn tokens_for_diffing(data: &[u8]) -> impl TokenSource<Token = &[u8]> {
     gix_diff::blob::sources::byte_lines_with_terminator(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use gix_object::bstr::BString;
+    use gix_testtools::Result;
+
+    use super::{file, incremental};
+    use crate::{file::coalesce_blame_entries, BlameRanges, Options};
+
+    struct Fixture {
+        repo: gix::Repository,
+        resource_cache: gix_diff::blob::Platform,
+        suspect: gix_hash::ObjectId,
+    }
+
+    impl Fixture {
+        fn new() -> Result<Self> {
+            let repo_path = gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")?;
+            let repo = gix::open(&repo_path)?;
+            let suspect = repo.rev_parse_single("HEAD")?.detach();
+            let resource_cache = repo.diff_resource_cache_for_tree_diff()?;
+            Ok(Self {
+                repo,
+                resource_cache,
+                suspect,
+            })
+        }
+    }
+
+    fn options() -> Options {
+        Options {
+            diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+            ranges: BlameRanges::default(),
+            since: None,
+            rewrites: Some(gix_diff::Rewrites::default()),
+            debug_track_path: false,
+        }
+    }
+
+    #[test]
+    fn vec_sink_can_reconstruct_file_entries() -> Result {
+        let Fixture {
+            repo,
+            mut resource_cache,
+            suspect,
+        } = Fixture::new()?;
+        let source_file_name: BString = "simple.txt".into();
+
+        let mut streamed_entries = Vec::new();
+        incremental(
+            &repo,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            &mut streamed_entries,
+            options(),
+        )?;
+
+        streamed_entries.sort_by(|a, b| a.start_in_blamed_file.cmp(&b.start_in_blamed_file));
+        let streamed_entries = coalesce_blame_entries(streamed_entries);
+
+        let file_entries = file(
+            &repo,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            options(),
+        )?
+        .entries;
+
+        pretty_assertions::assert_eq!(streamed_entries, file_entries);
+        Ok(())
+    }
 }

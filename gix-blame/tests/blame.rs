@@ -676,7 +676,7 @@ mod rename_tracking {
 }
 
 mod incremental {
-    use std::num::NonZeroU32;
+    use std::ops::ControlFlow;
 
     use gix_blame::{BlameEntry, BlameRanges, BlameSink};
 
@@ -688,8 +688,25 @@ mod incremental {
     }
 
     impl BlameSink for CountingSink {
-        fn push(&mut self, _entry: BlameEntry) {
+        fn push(&mut self, _entry: BlameEntry) -> ControlFlow<()> {
             self.chunks_received += 1;
+            ControlFlow::Continue(())
+        }
+    }
+
+    struct BreakingSink {
+        chunks_received: usize,
+        stop_after: usize,
+    }
+
+    impl BlameSink for BreakingSink {
+        fn push(&mut self, _entry: BlameEntry) -> ControlFlow<()> {
+            self.chunks_received += 1;
+            if self.chunks_received >= self.stop_after {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
         }
     }
 
@@ -701,46 +718,6 @@ mod incremental {
             rewrites: Some(gix_diff::Rewrites::default()),
             debug_track_path: false,
         }
-    }
-
-    fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
-        let len = lines_blamed.len();
-        lines_blamed
-            .into_iter()
-            .fold(Vec::with_capacity(len), |mut acc, entry| {
-                let previous_entry = acc.last();
-
-                if let Some(previous_entry) = previous_entry {
-                    let previous_blamed_range = previous_entry.range_in_blamed_file();
-                    let current_blamed_range = entry.range_in_blamed_file();
-                    let previous_source_range = previous_entry.range_in_source_file();
-                    let current_source_range = entry.range_in_source_file();
-                    if previous_entry.commit_id == entry.commit_id
-                        && previous_blamed_range.end == current_blamed_range.start
-                        && previous_source_range.end == current_source_range.start
-                    {
-                        let coalesced_entry = BlameEntry {
-                            start_in_blamed_file: previous_blamed_range.start as u32,
-                            start_in_source_file: previous_source_range.start as u32,
-                            len: NonZeroU32::new((current_source_range.end - previous_source_range.start) as u32)
-                                .expect("BUG: hunks are never zero-sized"),
-                            commit_id: previous_entry.commit_id,
-                            source_file_name: previous_entry.source_file_name.clone(),
-                        };
-
-                        acc.pop();
-                        acc.push(coalesced_entry);
-                    } else {
-                        acc.push(entry);
-                    }
-
-                    acc
-                } else {
-                    acc.push(entry);
-
-                    acc
-                }
-            })
     }
 
     #[test]
@@ -771,39 +748,56 @@ mod incremental {
     }
 
     #[test]
-    fn vec_sink_can_reconstruct_file_entries() -> gix_testtools::Result {
+    fn sink_can_stop_streaming_early() -> gix_testtools::Result {
         let Fixture {
             odb,
             mut resource_cache,
             suspect,
         } = Fixture::new()?;
         let source_file_name: gix_object::bstr::BString = "simple.txt".into();
+        let mut sink = BreakingSink {
+            chunks_received: 0,
+            stop_after: 1,
+        };
 
-        let mut streamed_entries = Vec::new();
+        let outcome = gix_blame::incremental(
+            &odb,
+            suspect,
+            None,
+            &mut resource_cache,
+            source_file_name.as_ref(),
+            &mut sink,
+            options(),
+        )?;
+
+        let Fixture {
+            odb,
+            mut resource_cache,
+            suspect,
+        } = Fixture::new()?;
+        let mut full_sink = CountingSink::default();
         gix_blame::incremental(
             &odb,
             suspect,
             None,
             &mut resource_cache,
             source_file_name.as_ref(),
-            &mut streamed_entries,
+            &mut full_sink,
             options(),
         )?;
 
-        streamed_entries.sort_by(|a, b| a.start_in_blamed_file.cmp(&b.start_in_blamed_file));
-        let streamed_entries = coalesce_blame_entries(streamed_entries);
-
-        let file_entries = gix_blame::file(
-            &odb,
-            suspect,
-            None,
-            &mut resource_cache,
-            source_file_name.as_ref(),
-            options(),
-        )?
-        .entries;
-
-        pretty_assertions::assert_eq!(streamed_entries, file_entries);
+        assert_eq!(
+            sink.chunks_received, 1,
+            "the sink should stop after the first streamed chunk"
+        );
+        assert!(
+            full_sink.chunks_received > sink.chunks_received,
+            "the early-stopping sink should observe fewer chunks than a full run"
+        );
+        assert!(
+            !outcome.blob.is_empty(),
+            "incremental blame should still return partial metadata on early stop"
+        );
         Ok(())
     }
 }

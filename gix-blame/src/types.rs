@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use std::ops::RangeInclusive;
 use std::{
     num::NonZeroU32,
-    ops::{AddAssign, Range, SubAssign},
+    ops::{AddAssign, ControlFlow, Range, SubAssign},
 };
 
 use crate::file::function::tokens_for_diffing;
@@ -14,12 +14,16 @@ use crate::Error;
 /// [`incremental()`](crate::incremental()).
 pub trait BlameSink {
     /// Receive a single blame chunk in generation order.
-    fn push(&mut self, entry: BlameEntry);
+    ///
+    /// Return [`ControlFlow::Break`] to stop streaming early while still allowing
+    /// [`incremental()`](crate::incremental()) to return the partial metadata gathered so far.
+    fn push(&mut self, entry: BlameEntry) -> ControlFlow<()>;
 }
 
 impl BlameSink for Vec<BlameEntry> {
-    fn push(&mut self, entry: BlameEntry) {
+    fn push(&mut self, entry: BlameEntry) -> ControlFlow<()> {
         Vec::push(self, entry);
+        ControlFlow::Continue(())
     }
 }
 
