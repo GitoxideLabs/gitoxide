@@ -353,7 +353,7 @@ serde = [
 
 ## Re-export the progress tree root which allows to obtain progress from various functions which take `impl gix::Progress`.
 ## Applications which want to display progress will probably need this implementation.
-progress-tree = ["prodash/progress-tree"]
+progress-tree = ["dep:prodash", "prodash?/progress-tree"]
 
 ## Print debugging information about usage of object database caches, useful for tuning cache sizes.
 cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
