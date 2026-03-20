@@ -41,7 +41,7 @@ fs_extra = "1.2.0"
 parking_lot = { version = "0.12.4" }
 is_ci = "1.1.1"
 io-close = "0.3.7"
-tar = { version = "0.4.38", default-features = false }
+tar = { version = "0.4.45", default-features = false }
 xz2 = { version = "0.1.6", optional = true }
 
 document-features = { version = "0.2.1", optional = true }

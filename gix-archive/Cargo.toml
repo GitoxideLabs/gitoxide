@@ -40,7 +40,7 @@ rawzip = { version = "0.4.3", optional = true }
 gix-error = { version = "^0.2.0", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false }
 
-tar = { version = "0.4.38", optional = true }
+tar = { version = "0.4.45", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
 
