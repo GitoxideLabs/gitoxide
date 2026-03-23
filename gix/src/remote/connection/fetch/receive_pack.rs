@@ -77,7 +77,7 @@ where
         P::SubProgress: 'static,
     {
         let ref_map = &self.ref_map;
-        if ref_map.mappings.is_empty() && !ref_map.remote_refs.is_empty() {
+        if ref_map.explicit_refspecs_have_no_mapping() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
             return Err(Error::NoMapping {

@@ -39,6 +39,8 @@ pub struct Context<'a, T> {
 
 #[cfg(feature = "fetch")]
 mod with_fetch {
+    use bstr::ByteSlice;
+
     use crate::fetch::{self, negotiate, refmap};
 
     /// For use in [`fetch`](crate::fetch()).
@@ -136,6 +138,113 @@ mod with_fetch {
         ///
         /// It was extracted from the `handshake` as advertised by the server.
         pub object_hash: gix_hash::Kind,
+    }
+
+    impl RefMap {
+        /// Return `true` if the explicit fetch refspecs represented by this mapping failed to match the remote in a way
+        /// that should typically be reported as "no mapping".
+        ///
+        /// Use this before negotiation or reference updates when callers need to reject a fetch early instead of proceeding
+        /// with an empty or purely implicit mapping set.
+        ///
+        /// This is the case if the server advertised refs but none matched at all, or if only implicit mappings were produced
+        /// while at least one explicit refspec required an actual ref match, as is the case for exact ref names like `HEAD`
+        /// or `refs/heads/main`.
+        pub fn explicit_refspecs_have_no_mapping(&self) -> bool {
+            let has_explicit_mapping = self
+                .mappings
+                .iter()
+                .any(|mapping| matches!(mapping.spec_index, crate::fetch::refmap::SpecIndex::ExplicitInRemote(_)));
+
+            (self.mappings.is_empty() && !self.remote_refs.is_empty())
+                || (!has_explicit_mapping && explicit_fetch_refspecs_require_a_match(&self.refspecs))
+        }
+    }
+
+    fn explicit_fetch_refspecs_require_a_match(refspecs: &[gix_refspec::RefSpec]) -> bool {
+        refspecs.iter().any(|spec| match spec.to_ref().instruction() {
+            gix_refspec::Instruction::Fetch(
+                gix_refspec::instruction::Fetch::Only { src } | gix_refspec::instruction::Fetch::AndUpdate { src, .. },
+            ) => src.find_byteset(b"*?[]\\").is_none() && gix_hash::ObjectId::from_hex(src).is_err(),
+            gix_refspec::Instruction::Fetch(gix_refspec::instruction::Fetch::Exclude { .. })
+            | gix_refspec::Instruction::Push(_) => false,
+        })
+    }
+
+    #[cfg(test)]
+    mod ref_map {
+        use crate::{
+            fetch::{
+                refmap::{Mapping, Source, SpecIndex},
+                RefMap,
+            },
+            handshake::Ref,
+        };
+
+        fn fetch_spec(spec: &str) -> gix_refspec::RefSpec {
+            gix_refspec::parse(spec.into(), gix_refspec::parse::Operation::Fetch)
+                .expect("valid")
+                .to_owned()
+        }
+
+        #[test]
+        fn is_true_if_remote_refs_exist_but_nothing_mapped() {
+            let map = RefMap {
+                refspecs: vec![fetch_spec("refs/heads/main")],
+                remote_refs: vec![Ref::Direct {
+                    full_ref_name: "refs/heads/other".into(),
+                    object: gix_hash::ObjectId::null(gix_hash::Kind::Sha1),
+                }],
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            };
+
+            assert!(map.explicit_refspecs_have_no_mapping());
+        }
+
+        #[test]
+        fn is_true_if_only_implicit_mappings_exist_for_exact_refspecs() {
+            let map = RefMap {
+                mappings: vec![Mapping {
+                    remote: Source::ObjectId(gix_hash::ObjectId::null(gix_hash::Kind::Sha1)),
+                    local: Some("refs/remotes/origin/main".into()),
+                    spec_index: SpecIndex::Implicit(0),
+                }],
+                refspecs: vec![fetch_spec("HEAD")],
+                extra_refspecs: vec![fetch_spec("refs/tags/*:refs/tags/*")],
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            };
+
+            assert!(map.explicit_refspecs_have_no_mapping());
+        }
+
+        #[test]
+        fn is_false_if_wildcards_are_the_only_unmatched_explicit_refspecs() {
+            let map = RefMap {
+                refspecs: vec![fetch_spec("refs/heads/*:refs/remotes/origin/*")],
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            };
+
+            assert!(!map.explicit_refspecs_have_no_mapping());
+        }
+
+        #[test]
+        fn is_false_if_an_explicit_mapping_exists() {
+            let map = RefMap {
+                mappings: vec![Mapping {
+                    remote: Source::ObjectId(gix_hash::ObjectId::null(gix_hash::Kind::Sha1)),
+                    local: Some("refs/remotes/origin/main".into()),
+                    spec_index: SpecIndex::ExplicitInRemote(0),
+                }],
+                refspecs: vec![fetch_spec("refs/heads/main")],
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            };
+
+            assert!(!map.explicit_refspecs_have_no_mapping());
+        }
     }
 }
 #[cfg(feature = "fetch")]

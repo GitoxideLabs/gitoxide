@@ -60,8 +60,7 @@ pub(crate) mod function {
     /// [`RefPrefixes::from_refspecs`].
     ///
     /// Alternatively, they can be constructed using [`RefPrefixes::new`] and
-    /// using [`RefPrefixes::extend`] to add new prefixes. Note that any
-    /// references not starting with `refs/` will be filtered out.
+    /// using [`RefPrefixes::extend`] to add new prefixes.
     ///
     /// [`RefSpec`]: gix_refspec::RefSpec
     /// [gitprotocol-v2.adoc#ls-refs]: https://github.com/git/git/blob/master/Documentation/gitprotocol-v2.adoc#ls-refs
@@ -85,6 +84,11 @@ pub(crate) mod function {
         ///
         /// It attempts to expand each [`RefSpec`] into prefix references, e.g.
         /// `refs/heads/`, `refs/remotes/`, `refs/namespaces/foo/`, etc.
+        ///
+        /// Inputs that aren't fully qualified refs, like `HEAD` or `main`, are
+        /// expanded in the same DWIM-style way that Git uses for `ref-prefix`
+        /// generation, yielding prefixes like `HEAD`, `refs/heads/main`, and
+        /// other rev-parse candidates.
         ///
         /// [`RefSpec`]: gix_refspec::RefSpec
         pub fn from_refspecs<'a>(refspecs: impl IntoIterator<Item = &'a gix_refspec::RefSpec>) -> Self {
@@ -111,7 +115,7 @@ pub(crate) mod function {
 
     impl Extend<BString> for RefPrefixes {
         fn extend<T: IntoIterator<Item = BString>>(&mut self, iter: T) {
-            for prefix in iter.into_iter().filter(|prefix| prefix.starts_with(b"refs/")) {
+            for prefix in iter {
                 if !self.prefixes.iter().any(|existing| existing == &prefix) {
                     self.prefixes.push(prefix);
                 }
@@ -241,14 +245,16 @@ pub(crate) mod function {
         use super::RefPrefixes;
 
         #[test]
-        fn extend_preserves_first_seen_order_and_deduplicates_refs() {
+        fn extend_preserves_first_seen_order_and_deduplicates_prefixes() {
             let mut prefixes = RefPrefixes::new();
             prefixes.extend(
                 [
                     "refs/tags",
                     "HEAD",
+                    "main",
                     "refs/heads/main",
                     "refs/tags",
+                    "HEAD",
                     "refs/heads/feature",
                     "refs/heads/main",
                 ]
@@ -260,8 +266,51 @@ pub(crate) mod function {
                 prefixes.into_args().collect::<Vec<_>>(),
                 [
                     "ref-prefix refs/tags",
+                    "ref-prefix HEAD",
+                    "ref-prefix main",
                     "ref-prefix refs/heads/main",
                     "ref-prefix refs/heads/feature"
+                ]
+                .into_iter()
+                .map(BString::from)
+                .collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn from_refspecs_keeps_exact_refs_and_dwim_expansions() {
+            let specs = [
+                gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
+                    .expect("valid")
+                    .to_owned(),
+                gix_refspec::parse("dwim".into(), gix_refspec::parse::Operation::Fetch)
+                    .expect("valid")
+                    .to_owned(),
+                gix_refspec::parse(
+                    "refs/tags/prefix*:refs/tags/prefix*".into(),
+                    gix_refspec::parse::Operation::Fetch,
+                )
+                .expect("valid")
+                .to_owned(),
+                gix_refspec::parse("refs/heads/main".into(), gix_refspec::parse::Operation::Fetch)
+                    .expect("valid")
+                    .to_owned(),
+            ];
+
+            let prefixes = RefPrefixes::from_refspecs(&specs);
+
+            assert_eq!(
+                prefixes.into_args().collect::<Vec<_>>(),
+                [
+                    "ref-prefix HEAD",
+                    "ref-prefix dwim",
+                    "ref-prefix refs/dwim",
+                    "ref-prefix refs/tags/dwim",
+                    "ref-prefix refs/heads/dwim",
+                    "ref-prefix refs/remotes/dwim",
+                    "ref-prefix refs/remotes/dwim/HEAD",
+                    "ref-prefix refs/tags/prefix",
+                    "ref-prefix refs/heads/main",
                 ]
                 .into_iter()
                 .map(BString::from)

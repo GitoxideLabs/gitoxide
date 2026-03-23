@@ -98,7 +98,7 @@ where
     #[cfg(feature = "blocking-client")]
     let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
 
-    if refmap.mappings.is_empty() && !refmap.remote_refs.is_empty() {
+    if refmap.explicit_refspecs_have_no_mapping() {
         return Err(Error::NoMapping {
             refspecs: refmap.refspecs.clone(),
             num_remote_refs: refmap.remote_refs.len(),

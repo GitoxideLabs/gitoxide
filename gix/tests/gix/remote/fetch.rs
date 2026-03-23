@@ -587,6 +587,40 @@ mod blocking_and_async_io {
         feature = "blocking-network-client",
         async(feature = "async-network-client-async-std", async_std::test)
     )]
+    async fn fetching_a_missing_explicit_ref_fails_even_if_ls_refs_returns_nothing() -> crate::Result {
+        let daemon = spawn_git_daemon_if_async({
+            let mut p = repo_path("base");
+            p.pop();
+            p
+        })?;
+        let (repo, _tmp) = repo_rw("two-origins");
+        let mut remote = into_daemon_remote_if_async(
+            repo.find_remote("origin")?.with_fetch_tags(fetch::Tags::None),
+            daemon.as_ref(),
+            "base",
+        );
+        remote.replace_refspecs(Some("refs/heads/does-not-exist"), Fetch)?;
+
+        let err = remote
+            .connect(Fetch)
+            .await?
+            .prepare_fetch(gix::progress::Discard, Default::default())
+            .await?
+            .receive(gix::progress::Discard, &AtomicBool::default())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "None of the refspec(s) refs/heads/does-not-exist matched any of the 0 refs on the remote"
+        );
+        Ok(())
+    }
+
+    #[maybe_async::test(
+        feature = "blocking-network-client",
+        async(feature = "async-network-client-async-std", async_std::test)
+    )]
     async fn fetch_pack() -> crate::Result {
         let daemon = spawn_git_daemon_if_async({
             let mut p = repo_path("base");
