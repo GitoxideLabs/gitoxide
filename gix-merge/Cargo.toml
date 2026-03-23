@@ -50,6 +50,7 @@ gix-odb = { path = "../gix-odb" }
 gix-utils = { path = "../gix-utils" }
 termtree = "1.0.0"
 pretty_assertions = "1.4.0"
+arbitrary = { version = "1.4.2", features = ["derive"] }
 
 [package.metadata.docs.rs]
 all-features = true
