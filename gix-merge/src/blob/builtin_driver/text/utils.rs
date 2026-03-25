@@ -457,6 +457,60 @@ pub fn take_intersecting(
     Some(())
 }
 
+/// Absorb empty-range insertion hunks into an adjacent same-side non-empty hunk.
+///
+/// Different diff algorithms (Myers vs Histogram) can produce different hunk boundaries
+/// for the same edit. Myers sometimes splits what is logically one change into a deletion
+/// plus a separate empty insertion, with one or more unchanged lines between them. When
+/// the empty insertion lands at a position that the other side also touches, the merge
+/// sees a false conflict.
+///
+/// This function detects the pattern: a non-empty same-side hunk `H` followed (after at
+/// most one unchanged base line) by an empty insertion `I`. It extends `H` to cover the
+/// gap and the insertion point, effectively re-joining the split hunk. This makes the
+/// merge insensitive to the diff algorithm's alignment choices for these cases.
+///
+/// Requires `hunks` to be sorted by `before.start`.
+pub fn coalesce_empty_insertions_with_nearest_same_side_hunk(hunks: &mut Vec<Hunk>) {
+    let mut i = 0;
+    while i < hunks.len() {
+        let hunk = &hunks[i];
+        // Only process empty insertions (before range is empty).
+        if !hunk.before.is_empty() {
+            i += 1;
+            continue;
+        }
+        let ins_pos = hunk.before.start;
+        let ins_side = hunk.side;
+        let ins_after_end = hunk.after.end;
+
+        // Look backwards for the nearest same-side non-empty hunk within a gap of ≤ 1 base line.
+        let mut found = false;
+        for j in (0..i).rev() {
+            let candidate = &hunks[j];
+            if candidate.side != ins_side {
+                continue;
+            }
+            if candidate.before.is_empty() {
+                // Skip other empty insertions from the same side.
+                continue;
+            }
+            let gap = ins_pos.saturating_sub(candidate.before.end);
+            if gap <= 1 {
+                // Extend the candidate to cover the gap and the insertion.
+                hunks[j].before.end = ins_pos;
+                hunks[j].after.end = ins_after_end;
+                hunks.remove(i);
+                found = true;
+            }
+            break;
+        }
+        if !found {
+            i += 1;
+        }
+    }
+}
+
 pub fn tokens(input: &[u8]) -> imara_diff::sources::ByteLines<'_, true> {
     imara_diff::sources::byte_lines_with_terminator(input)
 }

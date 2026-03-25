@@ -3,9 +3,10 @@ use std::ops::Range;
 use crate::blob::{
     builtin_driver::text::{
         utils::{
-            assure_ends_with_nl, contains_lines, detect_line_ending, detect_line_ending_or_nl, fill_ancestor,
-            hunks_differ_in_diff3, take_intersecting, tokens, write_ancestor, write_conflict_marker, write_hunks,
-            zealously_contract_hunks, CollectHunks, Hunk, Side,
+            assure_ends_with_nl, coalesce_empty_insertions_with_nearest_same_side_hunk, contains_lines,
+            detect_line_ending, detect_line_ending_or_nl, fill_ancestor, hunks_differ_in_diff3, take_intersecting,
+            tokens, write_ancestor, write_conflict_marker, write_hunks, zealously_contract_hunks, CollectHunks, Hunk,
+            Side,
         },
         Conflict, ConflictStyle, Labels, Options,
     },
@@ -72,6 +73,7 @@ pub fn merge<'a>(
     }
 
     hunks.sort_by(|a, b| a.before.start.cmp(&b.before.start));
+    coalesce_empty_insertions_with_nearest_same_side_hunk(&mut hunks);
     let mut hunks = hunks.into_iter().peekable();
     let mut intersecting = Vec::new();
     let mut ancestor_integrated_until = 0;
