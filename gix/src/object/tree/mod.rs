@@ -116,36 +116,41 @@ impl<'repo> Tree<'repo> {
     {
         let mut iter = path.into_iter().peekable();
         let mut data = gix_object::Data::new(gix_object::Kind::Tree, &self.data);
-        let mut data_id = self.id;
+        let mut last_tree_id = self.id;
 
         loop {
             data = match next_entry(&mut iter, data) {
                 ControlFlow::Continue(id) => {
                     let res = self.repo.find(&id, &mut self.data)?;
-                    data_id = id;
+                    self.id = id;
+
                     if res.kind.is_tree() {
-                        self.id = data_id;
+                        last_tree_id = id;
                     }
+
                     res
                 }
                 ControlFlow::Break(entry) => {
-                    let mapped = entry.map(|e| Entry {
-                        inner: e.into(),
-                        repo: self.repo,
-                    });
-                    if let Some(entry) = &mapped {
-                        if entry.mode().is_tree() {
-                            let id = entry.object_id();
-                            self.repo.find(&id, &mut self.data)?;
-                            data_id = id;
-                            self.id = data_id;
+                    let entry = if let Some(e) = entry {
+                        if e.mode.is_tree() {
+                            last_tree_id = e.oid.to_owned();
                         }
+                        Some(Entry {
+                            inner: e.into(),
+                            repo: self.repo,
+                        })
+                    } else {
+                        None
+                    };
+
+                    if self.id != last_tree_id {
+                        // Ensure that our data & ID alway match the last seen tree so that
+                        // this tree can be reused, even if this means an extra lookup.
+                        self.repo.find(&last_tree_id, &mut self.data)?;
+                        self.id = last_tree_id;
                     }
-                    if data_id != self.id {
-                        // Ensure that our data always matches our id, even if this means an extra lookup.
-                        self.repo.find(&self.id, &mut self.data)?;
-                    }
-                    break Ok(mapped);
+
+                    break Ok(entry);
                 }
             }
         }
