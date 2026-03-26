@@ -10,6 +10,11 @@ authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thi
 edition = "2021"
 rust-version = "1.82"
 
+[[bench]]
+name = "incremental-blame"
+harness = false
+path = "./benches/incremental_blame.rs"
+
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = [
@@ -38,6 +43,8 @@ smallvec = "1.15.1"
 thiserror = "2.0.18"
 
 [dev-dependencies]
+criterion = "0.8.0"
+gix = { path = "../gix", default-features = false, features = ["basic", "sha1"] }
 gix-ref = { path = "../gix-ref" }
 gix-filter = { path = "../gix-filter" }
 gix-fs = { path = "../gix-fs" }

@@ -4,10 +4,11 @@ use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
 
 use crate::{
     file::{
-        BASE_GRAPHS_LIST_CHUNK_ID, COMMIT_DATA_CHUNK_ID, COMMIT_DATA_ENTRY_SIZE_SANS_HASH,
-        EXTENDED_EDGES_LIST_CHUNK_ID, FAN_LEN, HEADER_LEN, OID_FAN_CHUNK_ID, OID_LOOKUP_CHUNK_ID, SIGNATURE,
+        BASE_GRAPHS_LIST_CHUNK_ID, BLOOM_FILTER_DATA_CHUNK_ID, BLOOM_FILTER_HEADER_SIZE, BLOOM_FILTER_INDEX_CHUNK_ID,
+        COMMIT_DATA_CHUNK_ID, COMMIT_DATA_ENTRY_SIZE_SANS_HASH, EXTENDED_EDGES_LIST_CHUNK_ID, FAN_LEN, HEADER_LEN,
+        OID_FAN_CHUNK_ID, OID_LOOKUP_CHUNK_ID, SIGNATURE,
     },
-    File,
+    from_be_u32, BloomFilterSettings, File,
 };
 
 const MIN_FILE_SIZE: usize = HEADER_LEN
@@ -129,6 +130,32 @@ impl File {
             .or_raise(|| message("Error getting offset for OID lookup chunk"))?;
 
         let extra_edges_list_range = chunks.usize_offset_by_id(EXTENDED_EDGES_LIST_CHUNK_ID).ok();
+        let bloom_filter_index_range = chunks.usize_offset_by_id(BLOOM_FILTER_INDEX_CHUNK_ID).ok();
+        let bloom_filter_data_range = chunks.usize_offset_by_id(BLOOM_FILTER_DATA_CHUNK_ID).ok();
+
+        let mut bloom_filter_data_len = 0usize;
+        let mut bloom_filter_data_offset = None;
+        let mut bloom_filter_index_offset = None;
+        let mut bloom_filter_settings = None;
+        if let (Some(index_range), Some(data_range)) =
+            (bloom_filter_index_range.as_ref(), bloom_filter_data_range.as_ref())
+        {
+            let expected_index_chunk_size = commit_data_count as usize * std::mem::size_of::<u32>();
+            if index_range.len() == expected_index_chunk_size && data_range.len() >= BLOOM_FILTER_HEADER_SIZE {
+                let settings = BloomFilterSettings {
+                    hash_version: from_be_u32(&data[data_range.start..][..4]),
+                    num_hashes: from_be_u32(&data[data_range.start + 4..][..4]),
+                    bits_per_entry: from_be_u32(&data[data_range.start + 8..][..4]),
+                };
+                let bloom_data_payload_len = data_range.len() - BLOOM_FILTER_HEADER_SIZE;
+                if bloom_index_offsets_are_valid(&data[index_range.clone()], bloom_data_payload_len) {
+                    bloom_filter_settings = Some(settings);
+                    bloom_filter_data_len = bloom_data_payload_len;
+                    bloom_filter_data_offset = Some(data_range.start + BLOOM_FILTER_HEADER_SIZE);
+                    bloom_filter_index_offset = Some(index_range.start);
+                }
+            }
+        }
 
         let trailer = &data[chunks.highest_offset() as usize..];
         if trailer.len() != object_hash.len_in_bytes() {
@@ -162,6 +189,10 @@ impl File {
         Ok(File {
             base_graph_count,
             base_graphs_list_offset,
+            bloom_filter_data_len,
+            bloom_filter_data_offset,
+            bloom_filter_index_offset,
+            bloom_filter_settings,
             commit_data_offset,
             data,
             extra_edges_list_range,
@@ -200,4 +231,19 @@ fn read_fan(d: &[u8]) -> ([u32; FAN_LEN], usize) {
         *f = u32::from_be_bytes(c.try_into().unwrap());
     }
     (fan, FAN_LEN * 4)
+}
+
+fn bloom_index_offsets_are_valid(index_data: &[u8], bloom_data_payload_len: usize) -> bool {
+    let mut previous = 0usize;
+    for offset_bytes in index_data.chunks_exact(std::mem::size_of::<u32>()) {
+        let offset = from_be_u32(offset_bytes) as usize;
+        if offset > bloom_data_payload_len {
+            return false;
+        }
+        if offset < previous {
+            return false;
+        }
+        previous = offset;
+    }
+    true
 }
