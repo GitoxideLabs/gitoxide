@@ -41,8 +41,10 @@ pub mod transaction;
 
 mod parse;
 mod raw;
+mod traits;
 
 pub use raw::Reference;
+pub use traits::{StoreMutate, StoreRead, StoreReadExt};
 
 mod target;
 
