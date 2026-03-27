@@ -84,3 +84,7 @@ pub use traits::IsSpuriousError;
 
 ///
 pub mod client;
+
+#[cfg(feature = "blocking-server")]
+///
+pub mod server;
