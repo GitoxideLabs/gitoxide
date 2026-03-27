@@ -2354,6 +2354,24 @@ name = "gix-sequencer"
 version = "0.0.0"
 
 [[package]]
+name = "gix-serve"
+version = "0.1.0"
+dependencies = [
+ "bstr",
+ "gix-features",
+ "gix-hash",
+ "gix-odb",
+ "gix-pack",
+ "gix-packetline",
+ "gix-protocol",
+ "gix-ref",
+ "gix-serve",
+ "gix-testtools",
+ "gix-transport",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gix-shallow"
 version = "0.10.0"
 dependencies = [
