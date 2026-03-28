@@ -48,8 +48,14 @@ fn all_stages_mean_streaming_is_impossible() -> gix_testtools::Result {
         )
     })?;
 
+    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
+        gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
+        _ => unimplemented!(),
+    };
+    let src = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
     let mut out = pipe.convert_to_git(
-        "➡a\r\n➡b\r\n➡$Id: 2188d1cdee2b93a80084b61af431a49d21bc7cc0$".as_bytes(),
+        src.as_bytes(),
         Path::new("any.txt"),
         &mut |path, attrs| {
             cache
@@ -77,8 +83,14 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
         )
     })?;
 
+    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
+        gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
+        _ => unimplemented!(),
+    };
+    let src = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
     let mut out = pipe.convert_to_git(
-        "➡a\r\n➡b\r\n➡$Id: 2188d1cdee2b93a80084b61af431a49d21bc7cc0$".as_bytes(),
+        src.as_bytes(),
         Path::new("subdir/doesnot/matter/any.txt"),
         &mut |path, attrs| {
             cache
@@ -94,7 +106,7 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
     out.read_to_end(&mut buf)?;
     assert_eq!(
         buf.as_bstr(),
-        "a\r\nb\r\n$Id: 2188d1cdee2b93a80084b61af431a49d21bc7cc0$",
+        format!("a\r\nb\r\n$Id: {source_hash}$"),
         "one filter was reversed"
     );
     Ok(())
@@ -106,7 +118,12 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
         (vec![], Vec::new(), CrlfRoundTripCheck::Fail, Default::default())
     })?;
 
-    let input = "➡a\r\n➡b\r\n➡$Id: 2188d1cdee2b93a80084b61af431a49d21bc7cc0$";
+    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
+        gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
+        _ => unimplemented!(),
+    };
+    let input = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
     let mut out = pipe.convert_to_git(
         input.as_bytes(),
         Path::new("other.txt"),

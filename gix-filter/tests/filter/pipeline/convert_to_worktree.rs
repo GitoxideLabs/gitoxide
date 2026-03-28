@@ -35,9 +35,14 @@ fn all_stages() -> gix_testtools::Result {
     assert!(out.as_read().is_some(), "process filter is last");
     let mut buf = Vec::new();
     out.read_to_end(&mut buf)?;
+    let expected_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
+        gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
+        _ => unimplemented!(),
+    };
     assert_eq!(
         buf.as_bstr(),
-        "➡a\r\n➡b\r\n➡$Id: 2188d1cdee2b93a80084b61af431a49d21bc7cc0$",
+        format!("➡a\r\n➡b\r\n➡$Id: {expected_hash}$"),
         "the buffer shows that a lot of transformations were applied"
     );
     Ok(())
@@ -66,9 +71,14 @@ fn all_stages_no_filter() -> gix_testtools::Result {
         "there is no filter process, so no chance for getting a stream"
     );
     let buf = out.as_bytes().expect("no filter process");
+    let expected_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        gix_hash::Kind::Sha1 => "a77d7acbc809ac8df987a769221c83137ba1b9f9",
+        gix_hash::Kind::Sha256 => "5ac811252c70ca9761feaa6fe00a74fbf558378ff4fc2853e43b097b153bd7eb",
+        _ => unimplemented!(),
+    };
     assert_eq!(
         buf.as_bstr(),
-        "$Id: a77d7acbc809ac8df987a769221c83137ba1b9f9$a\r\nb\r\n",
+        format!("$Id: {expected_hash}$a\r\nb\r\n"),
         "the buffer shows that a lot of transformations were applied"
     );
     Ok(())

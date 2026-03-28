@@ -207,6 +207,8 @@ unit-tests:
     cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
     cargo nextest run -p gix-error --no-fail-fast --test auto-chain-error --features auto-chain-error
     cargo nextest run -p gix-error --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-filter --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-filter --no-fail-fast
     cargo nextest run -p gix-hash --features sha1 --no-fail-fast
     cargo nextest run -p gix-hash --features sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-hash --features sha256 --no-fail-fast

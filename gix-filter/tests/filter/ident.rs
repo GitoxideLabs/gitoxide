@@ -78,7 +78,11 @@ mod apply {
             "$ID$ case sensitive matching",
             "$Id: expanded is ignored$",
         ] {
-            let changed = ident::apply(input_no_match.as_bytes(), gix_hash::Kind::Sha1, &mut buf)?;
+            let changed = ident::apply(
+                input_no_match.as_bytes(),
+                gix_testtools::hash_kind_from_env().unwrap_or_default(),
+                &mut buf,
+            )?;
             assert!(!changed, "no substitution happens, nothing to do");
             assert_eq!(buf.len(), 0);
         }
@@ -89,15 +93,33 @@ mod apply {
     fn simple() -> crate::Result {
         let mut buf = Vec::new();
         assert!(
-            ident::apply(B("$Id$"), gix_hash::Kind::Sha1, &mut buf)?,
+            ident::apply(
+                B("$Id$"),
+                gix_testtools::hash_kind_from_env().unwrap_or_default(),
+                &mut buf
+            )?,
             "a change happens"
         );
-        assert_eq!(buf.as_bstr(), "$Id: b3f5ebfb5843bc43ceecff6d4f26bb37c615beb1$");
+        let expected_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+            gix_hash::Kind::Sha1 => "b3f5ebfb5843bc43ceecff6d4f26bb37c615beb1",
+            gix_hash::Kind::Sha256 => "63cdf77e7872965e2af1bee42e925f9b4bd6a3ab9f5ef6c06c4312f7d90d8021",
+            _ => unimplemented!(),
+        };
+        assert_eq!(buf.as_bstr(), format!("$Id: {expected_hash}$"));
 
-        assert!(ident::apply(B("$Id$ $Id$ foo"), gix_hash::Kind::Sha1, &mut buf)?);
+        assert!(ident::apply(
+            B("$Id$ $Id$ foo"),
+            gix_testtools::hash_kind_from_env().unwrap_or_default(),
+            &mut buf
+        )?);
+        let expected_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+            gix_hash::Kind::Sha1 => "e230cff7a9624f59eaa28bfb97602c3a03651a49",
+            gix_hash::Kind::Sha256 => "64a29d2cfd88cf6cfd786cdd88e99112bef2f7d8596a8701f6955784624604ca",
+            _ => unimplemented!(),
+        };
         assert_eq!(
             buf.as_bstr(),
-            "$Id: e230cff7a9624f59eaa28bfb97602c3a03651a49$ $Id: e230cff7a9624f59eaa28bfb97602c3a03651a49$ foo"
+            format!("$Id: {expected_hash}$ $Id: {expected_hash}$ foo")
         );
         Ok(())
     }
@@ -110,7 +132,11 @@ mod apply {
             "$Id$",
             "$Id$ and one more $Id$ and done",
         ] {
-            let changed = ident::apply(B(input), gix_hash::Kind::Sha1, &mut buf)?;
+            let changed = ident::apply(
+                B(input),
+                gix_testtools::hash_kind_from_env().unwrap_or_default(),
+                &mut buf,
+            )?;
             assert!(changed, "the input was rewritten");
             assert!(ident::undo(&buf.clone(), &mut buf)?, "undo does something as well");
             assert_eq!(buf.as_bstr(), input, "the filter can be undone perfectly");
