@@ -27,6 +27,7 @@ fn binary() {
 }
 
 mod text {
+    use arbitrary::Arbitrary;
     use bstr::ByteSlice;
     use gix_merge::blob::{
         builtin_driver,
@@ -34,6 +35,7 @@ mod text {
         Resolution,
     };
     use pretty_assertions::assert_str_eq;
+    use std::num::NonZero;
 
     const DIVERGING: &[&str] = &[
         // Somehow, on in zdiff mode, it's different, and I wasn't able to figure out the rule properly.
@@ -138,6 +140,76 @@ mod text {
             let mut input = imara_diff::intern::InternedInput::default();
             gix_merge::blob::builtin_driver::text(&mut out, &mut input, Default::default(), ours, base, theirs, opts);
         }
+    }
+
+    /// This test reproduces what the fuzzer does, allowing it to accept `Arbitrary` input produced by the fuzzer.
+    #[test]
+    fn clusterfuzz_timeout_regression() {
+        #[derive(Debug, Arbitrary)]
+        struct FuzzCtx<'a> {
+            base: &'a [u8],
+            ours: &'a [u8],
+            theirs: &'a [u8],
+            marker_size: NonZero<u8>,
+        }
+        fn run_fuzz_case(ours: &[u8], base: &[u8], theirs: &[u8], marker_size: NonZero<u8>) {
+            let mut out = Vec::new();
+            let mut input = imara_diff::intern::InternedInput::default();
+            for diff_algorithm in [
+                imara_diff::Algorithm::Histogram,
+                imara_diff::Algorithm::Myers,
+                imara_diff::Algorithm::MyersMinimal,
+            ] {
+                let mut options = builtin_driver::text::Options {
+                    diff_algorithm,
+                    conflict: Default::default(),
+                };
+                for (left, right) in [(ours, theirs), (theirs, ours)] {
+                    let resolution = gix_merge::blob::builtin_driver::text(
+                        &mut out,
+                        &mut input,
+                        Default::default(),
+                        left,
+                        base,
+                        right,
+                        options,
+                    );
+                    if resolution == Resolution::Conflict {
+                        for conflict in [
+                            Conflict::ResolveWithOurs,
+                            Conflict::ResolveWithTheirs,
+                            Conflict::ResolveWithUnion,
+                            Conflict::Keep {
+                                style: ConflictStyle::Diff3,
+                                marker_size,
+                            },
+                            Conflict::Keep {
+                                style: ConflictStyle::ZealousDiff3,
+                                marker_size,
+                            },
+                        ] {
+                            options.conflict = conflict;
+                            gix_merge::blob::builtin_driver::text(
+                                &mut out,
+                                &mut input,
+                                Default::default(),
+                                left,
+                                base,
+                                right,
+                                options,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let ctx = FuzzCtx::arbitrary(&mut arbitrary::Unstructured::new(include_bytes!(
+            "../../fixtures/clusterfuzz-testcase-minimized-gix-merge-blob-6377298803884032"
+        )))
+        .expect("testcase matches the historical fuzz target input layout");
+
+        run_fuzz_case(ctx.ours, ctx.base, ctx.theirs, ctx.marker_size);
     }
 
     #[test]
