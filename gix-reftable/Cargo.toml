@@ -1,0 +1,22 @@
+lints.workspace = true
+
+[package]
+name = "gix-reftable"
+version = "0.0.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "Read and write Git reftable storage"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+include = ["src/**/*", "LICENSE-*"]
+rust-version = "1.82"
+
+[lib]
+doctest = false
+test = true
+
+[dependencies]
+crc32fast = "1.5.0"
+flate2 = "1.1.5"
+gix-hash = { version = "^0.22.1", path = "../gix-hash", features = ["sha1", "sha256"] }
+thiserror = "2.0.18"
