@@ -149,7 +149,9 @@ impl File {
                     bits_per_entry: from_be_u32(&data[data_range.start + 8..][..4]),
                 };
                 let bloom_data_payload_len = data_range.len() - BLOOM_FILTER_HEADER_SIZE;
-                if bloom_index_offsets_are_valid(&data[index_range.clone()], bloom_data_payload_len) {
+                if settings.is_supported()
+                    && bloom_index_offsets_are_valid(&data[index_range.clone()], bloom_data_payload_len)
+                {
                     bloom_filter_settings = Some(settings);
                     bloom_filter_data_len = bloom_data_payload_len;
                     bloom_filter_data_offset = Some(data_range.start + BLOOM_FILTER_HEADER_SIZE);

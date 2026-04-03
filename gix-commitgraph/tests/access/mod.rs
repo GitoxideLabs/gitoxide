@@ -1,5 +1,6 @@
 use crate::{check_common, graph_and_expected, graph_and_expected_named};
-use gix_testtools::scripted_fixture_writable;
+use bstr::BStr;
+use gix_testtools::{scripted_fixture_read_only, scripted_fixture_writable};
 use std::{fs, path::Path};
 
 fn should_skip_path_v2_unsupported() -> bool {
@@ -8,6 +9,11 @@ fn should_skip_path_v2_unsupported() -> bool {
     // Use the raw version here instead of `should_skip_as_git_version_is_smaller_than()`,
     // which intentionally never skips on CI.
     *gix_testtools::GIT_VERSION < (2, 46, 0)
+}
+
+fn fixture_changed_path_version(script_name: &str, layer: BloomLayer) -> Option<u32> {
+    let repo_path = scripted_fixture_read_only(script_name).expect("fixture available");
+    bloom_hash_version(&repo_path, layer)
 }
 
 #[test]
@@ -123,10 +129,31 @@ fn two_parents() {
 }
 
 #[test]
+fn changed_paths_v1_settings_are_read() {
+    assert_eq!(
+        fixture_changed_path_version("changed_paths_v1.sh", BloomLayer::Monolithic),
+        Some(1),
+        "fixture explicitly requests v1 filters"
+    );
+    let (cg, _refs) = graph_and_expected("changed_paths_v1.sh", &["HEAD"]);
+    let settings = cg
+        .bloom_filter_settings()
+        .expect("changed-path Bloom settings are available");
+    assert_eq!(settings.hash_version, 1, "fixture explicitly requests v1 filters");
+    assert_eq!(settings.bits_per_entry, 10, "git default bits per entry");
+    assert_eq!(settings.num_hashes, 7, "git default hash count");
+}
+
+#[test]
 fn changed_paths_v2_settings_are_read() {
     if should_skip_path_v2_unsupported() {
         return;
     }
+    assert_eq!(
+        fixture_changed_path_version("changed_paths_v2.sh", BloomLayer::Monolithic),
+        Some(2),
+        "fixture explicitly requests v2 filters"
+    );
     let (cg, _refs) = graph_and_expected("changed_paths_v2.sh", &["HEAD"]);
     let settings = cg
         .bloom_filter_settings()
@@ -137,10 +164,49 @@ fn changed_paths_v2_settings_are_read() {
 }
 
 #[test]
+fn changed_paths_v1_maybe_contains_changed_paths() {
+    let (cg, refs) = graph_and_expected("changed_paths_v1.sh", &["HEAD"]);
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["HEAD"].id(), BStr::new(b"dir/subdir/file")),
+        Some(true)
+    );
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["HEAD"].id(), BStr::new(b"other")),
+        Some(true)
+    );
+}
+
+#[test]
+fn changed_paths_v2_maybe_contains_changed_paths() {
+    if should_skip_path_v2_unsupported() {
+        return;
+    }
+    let (cg, refs) = graph_and_expected("changed_paths_v2.sh", &["HEAD"]);
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["HEAD"].id(), BStr::new(b"dir/subdir/file")),
+        Some(true)
+    );
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["HEAD"].id(), BStr::new(b"other")),
+        Some(true)
+    );
+}
+
+#[test]
 fn incompatible_split_chain_prefers_top_layer_bloom_settings() {
     if should_skip_path_v2_unsupported() {
         return;
     }
+    assert_eq!(
+        fixture_changed_path_version("split_chain_changed_paths_mismatch.sh", BloomLayer::Base),
+        Some(1),
+        "base layer should keep v1 settings"
+    );
+    assert_eq!(
+        fixture_changed_path_version("split_chain_changed_paths_mismatch.sh", BloomLayer::Top),
+        Some(2),
+        "top layer should keep v2 settings"
+    );
     let (cg, _refs) = graph_and_expected("split_chain_changed_paths_mismatch.sh", &["c1", "c2"]);
     let settings = cg
         .bloom_filter_settings()
@@ -149,15 +215,53 @@ fn incompatible_split_chain_prefers_top_layer_bloom_settings() {
 }
 
 #[test]
+fn incompatible_split_chain_disables_base_bloom_queries() {
+    if should_skip_path_v2_unsupported() {
+        return;
+    }
+    let (cg, refs) = graph_and_expected("split_chain_changed_paths_mismatch.sh", &["c1", "c2"]);
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["c1"].id(), BStr::new(b"tracked")),
+        None,
+        "base layer Bloom data is cleared when the top layer uses incompatible settings"
+    );
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["c2"].id(), BStr::new(b"tracked")),
+        Some(true),
+        "top layer Bloom data remains usable"
+    );
+}
+
+#[test]
 fn split_chain_uses_base_bloom_when_top_has_none() {
     if should_skip_path_v2_unsupported() {
         return;
     }
+    assert_eq!(
+        fixture_changed_path_version("split_chain_top_without_bloom.sh", BloomLayer::Base),
+        Some(2),
+        "base layer should keep v2 settings"
+    );
     let (cg, _refs) = graph_and_expected("split_chain_top_without_bloom.sh", &["c1", "c2"]);
     let settings = cg
         .bloom_filter_settings()
         .expect("base layer changed-path settings remain usable");
     assert_eq!(settings.hash_version, 2);
+}
+
+#[test]
+fn split_chain_uses_base_bloom_only_for_base_commits() {
+    let (cg, refs) = graph_and_expected("split_chain_top_without_bloom.sh", &["c1", "c2"]);
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["c1"].id(), BStr::new(b"tracked")),
+        Some(true),
+        "base layer Bloom data remains usable"
+    );
+    assert_eq!(
+        cg.maybe_contains_path_by_id(refs["c2"].id(), BStr::new(b"tracked")),
+        None,
+        "top layer without Bloom data should not answer Bloom queries"
+    );
 }
 
 #[test]
@@ -227,14 +331,71 @@ fn bloom_is_disabled_if_bidx_offsets_are_invalid() {
     );
 }
 
+#[test]
+fn bloom_is_disabled_if_hash_version_is_unsupported() {
+    let tmp = scripted_fixture_writable("changed_paths_v2.sh").expect("fixture available");
+    mutate_commit_graph(tmp.path(), |data| {
+        let entries = parse_chunk_table(data);
+        let bdat = find_chunk_index(&entries, *b"BDAT").expect("BDAT present in fixture");
+        let bdat_offset = entries[bdat].offset as usize;
+        data[bdat_offset..bdat_offset + 4].copy_from_slice(&3u32.to_be_bytes());
+    });
+    let graph = gix_commitgraph::Graph::from_info_dir(&info_dir(tmp.path())).expect("graph remains readable");
+    assert!(
+        graph.bloom_filter_settings().is_none(),
+        "unsupported hash versions disable Bloom so callers fall back safely"
+    );
+}
+
 #[derive(Clone, Copy)]
 struct ChunkTableEntry {
     id: [u8; 4],
     offset: u64,
 }
 
+#[derive(Clone, Copy)]
+enum BloomLayer {
+    Monolithic,
+    Base,
+    Top,
+}
+
 fn info_dir(repo_path: &Path) -> std::path::PathBuf {
     repo_path.join(".git").join("objects").join("info")
+}
+
+fn bloom_hash_version(repo_path: &Path, layer: BloomLayer) -> Option<u32> {
+    let graph_path = bloom_graph_path(repo_path, layer)?;
+    let data = fs::read(graph_path).expect("read commit-graph fixture");
+    let entries = parse_chunk_table(&data);
+    let bdat = find_chunk_index(&entries, *b"BDAT")?;
+    let start = entries[bdat].offset as usize;
+    let bytes: [u8; 4] = data.get(start..start + 4)?.try_into().ok()?;
+    Some(u32::from_be_bytes(bytes))
+}
+
+fn bloom_graph_path(repo_path: &Path, layer: BloomLayer) -> Option<std::path::PathBuf> {
+    let info_dir = info_dir(repo_path);
+    let monolithic = info_dir.join("commit-graph");
+    if monolithic.is_file() {
+        return match layer {
+            BloomLayer::Monolithic => Some(monolithic),
+            BloomLayer::Base | BloomLayer::Top => None,
+        };
+    }
+
+    let chain_dir = info_dir.join("commit-graphs");
+    let chain = fs::read_to_string(chain_dir.join("commit-graph-chain")).ok()?;
+    let graphs: Vec<_> = chain
+        .lines()
+        .map(|hash| chain_dir.join(format!("graph-{hash}.graph")))
+        .collect();
+    let graph_path = match layer {
+        BloomLayer::Monolithic => return None,
+        BloomLayer::Base => graphs.first()?,
+        BloomLayer::Top => graphs.last()?,
+    };
+    Some(graph_path.clone())
 }
 
 #[allow(clippy::permissions_set_readonly_false)]

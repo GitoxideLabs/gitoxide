@@ -45,9 +45,14 @@ impl BloomKey {
     }
 
     fn from_bytes(path: &[u8], settings: BloomFilterSettings) -> Self {
+        let (h0, h1) = match settings.hash_version {
+            1 => (murmur3_v1(SEED0, path), murmur3_v1(SEED1, path)),
+            2 => (murmur3_v2(SEED0, path), murmur3_v2(SEED1, path)),
+            version => panic!("BUG: unsupported Bloom hash version {version} should have been filtered earlier"),
+        };
         Self {
-            h0: murmur3_v2(SEED0, path),
-            h1: murmur3_v2(SEED1, path),
+            h0,
+            h1,
             num_hashes: settings.num_hashes,
         }
     }
@@ -144,15 +149,90 @@ impl Graph {
     }
 }
 
+pub(crate) fn murmur3_v1(seed: u32, data: &[u8]) -> u32 {
+    const C1: u32 = 0xcc9e_2d51;
+    const C2: u32 = 0x1b87_3593;
+    const R1: u32 = 15;
+    const R2: u32 = 13;
+    const M: u32 = 5;
+    const N: u32 = 0xe654_6b64;
+
+    fn byte_to_u32(byte: u8) -> u32 {
+        u32::from_ne_bytes(i32::from(i8::from_ne_bytes([byte])).to_ne_bytes())
+    }
+
+    let mut seed = seed;
+    let chunks = data.chunks_exact(4);
+    let tail = chunks.remainder();
+    for chunk in chunks {
+        let byte1 = byte_to_u32(chunk[0]);
+        let byte2 = byte_to_u32(chunk[1]) << 8;
+        let byte3 = byte_to_u32(chunk[2]) << 16;
+        let byte4 = byte_to_u32(chunk[3]) << 24;
+        let mut k = byte1 | byte2 | byte3 | byte4;
+        k = k.wrapping_mul(C1);
+        k = k.rotate_left(R1);
+        k = k.wrapping_mul(C2);
+
+        seed ^= k;
+        seed = seed.rotate_left(R2).wrapping_mul(M).wrapping_add(N);
+    }
+
+    let mut k1 = 0u32;
+    match tail.len() {
+        3 => {
+            k1 ^= byte_to_u32(tail[2]) << 16;
+            k1 ^= byte_to_u32(tail[1]) << 8;
+            k1 ^= byte_to_u32(tail[0]);
+        }
+        2 => {
+            k1 ^= byte_to_u32(tail[1]) << 8;
+            k1 ^= byte_to_u32(tail[0]);
+        }
+        1 => {
+            k1 ^= byte_to_u32(tail[0]);
+        }
+        0 => {}
+        _ => unreachable!("remainder is shorter than 4 bytes"),
+    }
+    if !tail.is_empty() {
+        k1 = k1.wrapping_mul(C1);
+        k1 = k1.rotate_left(R1);
+        k1 = k1.wrapping_mul(C2);
+        seed ^= k1;
+    }
+
+    seed ^= data.len() as u32;
+    seed ^= seed >> 16;
+    seed = seed.wrapping_mul(0x85eb_ca6b);
+    seed ^= seed >> 13;
+    seed = seed.wrapping_mul(0xc2b2_ae35);
+    seed ^= seed >> 16;
+    seed
+}
+
 pub(crate) fn murmur3_v2(seed: u32, data: &[u8]) -> u32 {
     let mut reader = Cursor::new(data);
     murmur3::murmur3_32(&mut reader, seed).expect("reading from memory does not fail")
 }
 #[cfg(test)]
 mod tests {
-    use super::{BloomKey, murmur3_v2};
+    use super::{BITS_PER_WORD, BloomKey, murmur3_v2};
     use crate::BloomFilterSettings;
     use bstr::BStr;
+
+    fn filter_bytes_for_path(path: &[u8], settings: BloomFilterSettings, len: usize) -> Vec<u8> {
+        let key = BloomKey::from_path(BStr::new(path), settings);
+        let mut out = vec![0u8; len];
+        let modulo = (len as u64) * BITS_PER_WORD;
+        for i in 0..key.num_hashes {
+            let hash = key.h0.wrapping_add(i.wrapping_mul(key.h1));
+            let bit_pos = u64::from(hash) % modulo;
+            let byte_pos = (bit_pos / BITS_PER_WORD) as usize;
+            out[byte_pos] |= 1u8 << (bit_pos % BITS_PER_WORD);
+        }
+        out
+    }
 
     #[test]
     fn murmur3_known_vectors_match_git_and_reference_values() {
@@ -165,7 +245,36 @@ mod tests {
     }
 
     #[test]
-    fn bloom_key_for_empty_path_matches_git_vector() {
+    fn murmur3_v2_matches_git_high_bit_vector() {
+        assert_eq!(murmur3_v2(0, b"\x99\xaa\xbb\xcc\xdd\xee\xff"), 0xa183_ccfd);
+    }
+
+    #[test]
+    fn bloom_key_for_empty_path_matches_git_v1_vector() {
+        let settings = BloomFilterSettings {
+            hash_version: 1,
+            num_hashes: 7,
+            bits_per_entry: 10,
+        };
+        let key = BloomKey::from_path(BStr::new(b""), settings);
+        assert_eq!(
+            (0..key.num_hashes)
+                .map(|i| key.h0.wrapping_add(i.wrapping_mul(key.h1)))
+                .collect::<Vec<_>>(),
+            &[
+                0x5615_800c,
+                0x5b96_6560,
+                0x6117_4ab4,
+                0x6698_3008,
+                0x6c19_155c,
+                0x7199_fab0,
+                0x771a_e004
+            ]
+        );
+    }
+
+    #[test]
+    fn bloom_key_for_empty_path_matches_git_v2_vector() {
         let settings = BloomFilterSettings {
             hash_version: 2,
             num_hashes: 7,
@@ -185,6 +294,57 @@ mod tests {
                 0x7199_fab0,
                 0x771a_e004
             ]
+        );
+    }
+
+    #[test]
+    fn bloom_key_for_high_bit_path_differs_between_versions() {
+        let path = BStr::new(b"\xc2\xa2");
+        let v1 = BloomKey::from_path(
+            path,
+            BloomFilterSettings {
+                hash_version: 1,
+                num_hashes: 7,
+                bits_per_entry: 10,
+            },
+        );
+        let v2 = BloomKey::from_path(
+            path,
+            BloomFilterSettings {
+                hash_version: 2,
+                num_hashes: 7,
+                bits_per_entry: 10,
+            },
+        );
+        assert_ne!(v1, v2);
+    }
+
+    #[test]
+    fn bloom_filter_for_high_bit_path_matches_git_v1_and_v2_vectors() {
+        let path = b"\xc2\xa2";
+        assert_eq!(
+            filter_bytes_for_path(
+                path,
+                BloomFilterSettings {
+                    hash_version: 1,
+                    num_hashes: 7,
+                    bits_per_entry: 10,
+                },
+                2,
+            ),
+            vec![0x52, 0xa9]
+        );
+        assert_eq!(
+            filter_bytes_for_path(
+                path,
+                BloomFilterSettings {
+                    hash_version: 2,
+                    num_hashes: 7,
+                    bits_per_entry: 10,
+                },
+                2,
+            ),
+            vec![0xc0, 0x1f]
         );
     }
 }

@@ -50,6 +50,17 @@ pub struct BloomFilterSettings {
     pub bits_per_entry: u32,
 }
 
+impl BloomFilterSettings {
+    pub(crate) fn is_supported(&self) -> bool {
+        match self.hash_version {
+            // Git's changed-path Bloom filter v1 hashes are deprecated, but we still need to
+            // read them to match Git's historical commit-graph behavior.
+            1 | 2 => true,
+            _ => false,
+        }
+    }
+}
+
 /// A complete commit graph.
 ///
 /// The data in the commit graph may come from a monolithic `objects/info/commit-graph` file, or it

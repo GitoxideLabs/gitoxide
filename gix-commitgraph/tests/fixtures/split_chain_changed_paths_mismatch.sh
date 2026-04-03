@@ -15,6 +15,7 @@ git add tracked
 git commit -q -m c2
 git branch c2
 
+# Keep this fixture distinct so cached outputs are regenerated with a Git that can emit both versions.
 git show-ref -s c1 | git -c commitGraph.changedPathsVersion=1 commit-graph write \
   --no-progress --changed-paths --split=no-merge --stdin-commits
 git show-ref -s c2 | git -c commitGraph.changedPathsVersion=2 commit-graph write \
