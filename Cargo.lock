@@ -1715,7 +1715,9 @@ dependencies = [
  "gix-trace",
  "gix-utils",
  "gix-worktree",
+ "libc",
  "pretty_assertions",
+ "rustix",
  "thiserror 2.0.18",
 ]
 

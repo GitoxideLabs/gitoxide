@@ -85,6 +85,27 @@ impl Ignore {
         self.matched_directory_patterns_stack.pop().expect("something to pop");
         self.stack.patterns.pop().expect("something to pop");
     }
+
+    /// Return the override patterns that are consulted last and typically originate from explicit user input.
+    pub fn overrides(&self) -> &IgnoreMatchGroup {
+        &self.overrides
+    }
+
+    /// Return the global ignore patterns, usually loaded from `core.excludesFile` and `$GIT_DIR/info/exclude`.
+    pub fn globals(&self) -> &IgnoreMatchGroup {
+        &self.globals
+    }
+
+    /// Return the per-directory ignore filename, typically `.gitignore`.
+    pub fn exclude_file_name_for_directories(&self) -> &BStr {
+        self.exclude_file_name_for_directories.as_ref()
+    }
+
+    /// Return where per-directory ignore files are loaded from.
+    pub fn source(&self) -> Source {
+        self.source
+    }
+
     /// The match groups from lowest priority to highest.
     pub(crate) fn match_groups(&self) -> [&IgnoreMatchGroup; 3] {
         [&self.globals, &self.stack, &self.overrides]
