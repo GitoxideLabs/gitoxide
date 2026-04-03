@@ -60,6 +60,38 @@ pub struct UntrackedCache {
     directories: Vec<untracked_cache::Directory>,
 }
 
+impl UntrackedCache {
+    /// Return an identifier tying this cache to the worktree location and host system.
+    pub fn identifier(&self) -> &bstr::BStr {
+        self.identifier.as_ref()
+    }
+
+    /// Return stat information for `$GIT_DIR/info/exclude`, along with its object id if available.
+    pub fn info_exclude(&self) -> Option<&untracked_cache::OidStat> {
+        self.info_exclude.as_ref()
+    }
+
+    /// Return stat information for `core.excludesFile`, along with its object id if available.
+    pub fn excludes_file(&self) -> Option<&untracked_cache::OidStat> {
+        self.excludes_file.as_ref()
+    }
+
+    /// Return the filename used for per-directory ignore files, typically `.gitignore`.
+    pub fn exclude_filename_per_dir(&self) -> &bstr::BStr {
+        self.exclude_filename_per_dir.as_ref()
+    }
+
+    /// Return flags that describe how the cache contents were recorded.
+    pub fn dir_flags(&self) -> u32 {
+        self.dir_flags
+    }
+
+    /// Return all cached directories, with index `0` representing the repository root.
+    pub fn directories(&self) -> &[untracked_cache::Directory] {
+        &self.directories
+    }
+}
+
 /// The extension for keeping state on recent information provided by the filesystem monitor.
 #[allow(dead_code)]
 #[derive(Clone)]

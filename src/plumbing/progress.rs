@@ -118,7 +118,7 @@ static GIT_CONFIG: &[Record] = &[
     },
     Record {
         config: "core.untrackedCache",
-        usage: Planned("Needed for fast worktree operation")
+        usage: InUse("Consulted for repository dirwalk defaults, with API overrides available")
     },
     Record {
         config: "checkout.guess",

@@ -843,7 +843,7 @@ A git directory walk.
 * [x] pathspec based filtering
 * [ ] multi-threaded initialization of icase hash table is always used to accelerate index lookups, even if ignoreCase = false for performance
 * [ ] special handling of submodules (for now, submodules or nested repositories are detected, but they can't be walked into naturally)
-* [ ] accelerated walk with `untracked`-cache (as provided by `UNTR` extension of `gix_index::File`)
+* [x] accelerated walk with `untracked`-cache (as provided by `UNTR` extension of `gix_index::File`)
 
 ### gix-index
 

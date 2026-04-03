@@ -74,9 +74,11 @@ mod index {
 
 #[cfg(feature = "dirwalk")]
 mod dirwalk {
-    use std::sync::atomic::AtomicBool;
+    use std::{process::Command, sync::atomic::AtomicBool};
 
+    use gix::config::tree::Core;
     use gix_dir::{entry::Kind::*, walk::EmissionMode};
+    use gix_testtools::tempfile;
 
     #[test]
     fn basics() -> crate::Result {
@@ -130,6 +132,105 @@ mod dirwalk {
             "just a minor sanity check, assuming everything else works as well"
         );
         Ok(())
+    }
+
+    #[test]
+    // On Windows, NTFS flushes directory metadata asynchronously. Directories modified
+    // very recently can report slightly different `LastWriteTime` values depending on
+    // when the stat is read, causing the IOUC stat check to fail unpredictably.
+    #[cfg_attr(windows, ignore)]
+    fn untracked_cache_respects_config_and_allows_overrides() -> crate::Result {
+        let mut repo = repo_with_untracked_cache()?;
+        let index = repo.index()?;
+
+        repo.config_snapshot_mut().set_value(&Core::UNTRACKED_CACHE, "true")?;
+        let out = run_dirwalk(
+            &repo,
+            &index,
+            repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory),
+        )?;
+        assert_eq!(
+            out.dirwalk.read_dir_calls, 0,
+            "core.untrackedCache=true should enable the fast path"
+        );
+
+        let out = run_dirwalk(
+            &repo,
+            &index,
+            repo.dirwalk_options()?
+                .emit_untracked(EmissionMode::CollapseDirectory)
+                .untracked_cache(gix::dirwalk::UntrackedCache::Ignore),
+        )?;
+        assert_ne!(
+            out.dirwalk.read_dir_calls, 0,
+            "callers can explicitly disable the untracked cache"
+        );
+
+        repo.config_snapshot_mut().set_value(&Core::UNTRACKED_CACHE, "false")?;
+        let out = run_dirwalk(
+            &repo,
+            &index,
+            repo.dirwalk_options()?.emit_untracked(EmissionMode::CollapseDirectory),
+        )?;
+        assert_ne!(
+            out.dirwalk.read_dir_calls, 0,
+            "core.untrackedCache=false should disable the fast path"
+        );
+
+        let out = run_dirwalk(
+            &repo,
+            &index,
+            repo.dirwalk_options()?
+                .emit_untracked(EmissionMode::CollapseDirectory)
+                .untracked_cache(gix::dirwalk::UntrackedCache::Use),
+        )?;
+        assert_eq!(
+            out.dirwalk.read_dir_calls, 0,
+            "callers can override config to force use of the untracked cache"
+        );
+        Ok(())
+    }
+
+    fn repo_with_untracked_cache() -> crate::Result<gix::Repository> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().join("repo");
+        std::mem::forget(tmp);
+        std::fs::create_dir(&root)?;
+        git(&root, ["init"])?;
+        git(&root, ["config", "status.showUntrackedFiles", "all"])?;
+        git(&root, ["config", "user.name", "a"])?;
+        git(&root, ["config", "user.email", "a@example.com"])?;
+        git(&root, ["config", "core.untrackedCache", "true"])?;
+        std::fs::create_dir(root.join("tracked"))?;
+        std::fs::write(root.join("tracked/keep"), "keep")?;
+        git(&root, ["add", "tracked/keep"])?;
+        git(&root, ["commit", "-m", "init"])?;
+        std::fs::create_dir_all(root.join("tracked/new"))?;
+        std::fs::create_dir_all(root.join("new"))?;
+        std::fs::write(root.join("tracked/new/file"), "tracked-new")?;
+        std::fs::write(root.join("new/file"), "new")?;
+        git(&root, ["update-index", "--force-untracked-cache"])?;
+        git(&root, ["status", "--porcelain"])?;
+        // Run status a second time so git validates the recorded directory stats and sets
+        // the valid bitmap in the IOUC. Some git versions only populate the structure on
+        // the first run and mark entries valid on the second.
+        git(&root, ["status", "--porcelain"])?;
+        Ok(gix::open_opts(&root, gix::open::Options::isolated())?)
+    }
+
+    fn git(cwd: &std::path::Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> crate::Result {
+        let status = Command::new("git").args(args).current_dir(cwd).status()?;
+        assert!(status.success());
+        Ok(())
+    }
+
+    fn run_dirwalk<'repo>(
+        repo: &'repo gix::Repository,
+        index: &gix::worktree::Index,
+        options: gix::dirwalk::Options,
+    ) -> crate::Result<gix::dirwalk::Outcome<'repo>> {
+        let mut collect = gix::dir::walk::delegate::Collect::default();
+        Ok(repo.dirwalk(index, None::<&str>, &AtomicBool::default(), options, &mut collect)?)
     }
 }
 
