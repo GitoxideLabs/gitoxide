@@ -29,6 +29,14 @@ pub fn words(data: &str) -> Words<'_> {
 /// separator (`\r\n` or `\n`) is included in the emitted tokens. This means that changing
 /// the newline separator from `\r\n` to `\n` (or omitting it fully on the last line) is
 /// detected when computing a [`Diff`](crate::Diff).
+pub fn bstr_lines(data: &bstr::BStr) -> BStrLines<'_> {
+    BStrLines(data)
+}
+
+/// Returns a [`TokenSource`] that uses the lines in `data` as Tokens. The newline
+/// separator (`\r\n` or `\n`) is included in the emitted tokens. This means that changing
+/// the newline separator from `\r\n` to `\n` (or omitting it fully on the last line) is
+/// detected when computing a [`Diff`](crate::Diff).
 pub fn byte_lines(data: &[u8]) -> ByteLines<'_> {
     ByteLines(data)
 }
@@ -45,6 +53,21 @@ impl<'a> TokenSource for &'a str {
 
     fn estimate_tokens(&self) -> u32 {
         lines(self).estimate_tokens()
+    }
+}
+
+/// By default, a line diff is produced for a string
+impl<'a> TokenSource for &'a bstr::BStr {
+    type Token = Self;
+
+    type Tokenizer = BStrLines<'a>;
+
+    fn tokenize(&self) -> Self::Tokenizer {
+        bstr_lines(self)
+    }
+
+    fn estimate_tokens(&self) -> u32 {
+        bstr_lines(self).estimate_tokens()
     }
 }
 
@@ -136,6 +159,43 @@ impl<'a> TokenSource for Words<'a> {
 
     fn estimate_tokens(&self) -> u32 {
         (self.0.len() / 3) as u32
+    }
+}
+
+/// A [`TokenSource`] that returns the lines of a `BStr` as tokens. See [`bstr_lines`] for details.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BStrLines<'a>(&'a bstr::BStr);
+
+impl<'a> Iterator for BStrLines<'a> {
+    type Item = &'a bstr::BStr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.0.is_empty() {
+            return None;
+        }
+        let line_len = memchr(b'\n', self.0).map_or(self.0.len(), |len| len + 1);
+        let (line, rem) = self.0.split_at(line_len);
+        self.0 = rem.into();
+        Some(line.into())
+    }
+}
+
+impl<'a> TokenSource for BStrLines<'a> {
+    type Token = &'a bstr::BStr;
+
+    type Tokenizer = Self;
+
+    fn tokenize(&self) -> Self::Tokenizer {
+        *self
+    }
+
+    fn estimate_tokens(&self) -> u32 {
+        let len: usize = self.take(20).map(|line| line.len()).sum();
+        if len == 0 {
+            100
+        } else {
+            (self.0.len() * 20 / len) as u32
+        }
     }
 }
 

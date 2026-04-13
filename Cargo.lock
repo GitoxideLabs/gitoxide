@@ -1922,6 +1922,7 @@ dependencies = [
 name = "gix-imara-diff"
 version = "0.2.0"
 dependencies = [
+ "bstr",
  "cov-mark",
  "expect-test",
  "hashbrown 0.16.1",
