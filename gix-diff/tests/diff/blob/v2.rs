@@ -1,5 +1,6 @@
 //! We can consider to move some of these tests to the actual imara-diff test-suite as well.
 use gix_diff::blob::{diff_with_slider_heuristics, v2};
+use gix_object::bstr::BStr;
 
 /// Test that the UnifiedDiffPrinter can be used with the v0.2 API
 #[test]
@@ -21,6 +22,39 @@ fn unified_diff_printer_usage() -> crate::Result {
     let diff = diff_with_slider_heuristics(v2::Algorithm::Histogram, &input);
 
     let printer = v2::BasicLineDiffPrinter(&input.interner);
+    insta::assert_snapshot!(util::unidiff(&diff, &input, &printer), @r#"
+    @@ -2,1 +2,1 @@
+    -    let x = 1;
+    +    let x = 2;
+    @@ -4,0 +4,1 @@
+    +    println!("done");
+    "#);
+    Ok(())
+}
+
+/// Test that the `UnifiedDiffPrinter` can be used with `BStr` and the v0.2 API
+#[test]
+fn unified_diff_with_bstr_printer_usage() -> crate::Result {
+    let before: &BStr = r#"fn foo() {
+    let x = 1;
+    println!("x = {}", x);
+}
+"#
+    .into();
+
+    let after: &BStr = r#"fn foo() {
+    let x = 2;
+    println!("x = {}", x);
+    println!("done");
+}
+"#
+    .into();
+
+    let input = v2::InternedInput::new(before, after);
+    let diff = diff_with_slider_heuristics(v2::Algorithm::Histogram, &input);
+
+    let printer = v2::BasicLineDiffPrinter(&input.interner);
+
     insta::assert_snapshot!(util::unidiff(&diff, &input, &printer), @r#"
     @@ -2,1 +2,1 @@
     -    let x = 1;
@@ -265,13 +299,16 @@ fn indent_heuristic_available() -> crate::Result {
 }
 
 mod util {
+    use std::fmt::Display;
+    use std::hash::Hash;
+
     use gix_diff::blob::v2;
 
-    pub fn unidiff<'a>(
+    pub fn unidiff<'a, T: AsRef<[u8]> + ?Sized + Hash + Eq + Display>(
         diff: &'a v2::Diff,
-        input: &'a v2::InternedInput<&str>,
-        printer: &'a v2::BasicLineDiffPrinter<'_, str>,
-    ) -> v2::UnifiedDiff<'a, v2::BasicLineDiffPrinter<'a, str>> {
+        input: &'a v2::InternedInput<&T>,
+        printer: &'a v2::BasicLineDiffPrinter<'_, T>,
+    ) -> v2::UnifiedDiff<'a, v2::BasicLineDiffPrinter<'a, T>> {
         let mut config = v2::UnifiedDiffConfig::default();
         config.context_len(0);
         diff.unified_diff(printer, config, input)
