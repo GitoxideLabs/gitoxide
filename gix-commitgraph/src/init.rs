@@ -1,4 +1,4 @@
-use crate::{File, Graph, MAX_COMMITS};
+use crate::{BloomFilterSettings, File, Graph, MAX_COMMITS};
 use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
 use std::{
     io::{BufRead, BufReader},
@@ -54,7 +54,7 @@ impl Graph {
 
     /// Create a new commit graph from a list of `files`.
     pub fn new(files: Vec<File>) -> Result<Self, Message> {
-        let files = nonempty::NonEmpty::from_vec(files)
+        let mut files = nonempty::NonEmpty::from_vec(files)
             .ok_or_else(|| message!("Commit-graph must contain at least one file"))?;
         let num_commits: u64 = files.iter().map(|f| u64::from(f.num_commits())).sum();
         if num_commits > u64::from(MAX_COMMITS) {
@@ -77,7 +77,25 @@ impl Graph {
             f1 = f2;
         }
 
+        disable_incompatible_bloom_layers(&mut files);
+
         Ok(Self { files })
+    }
+}
+
+fn disable_incompatible_bloom_layers(files: &mut nonempty::NonEmpty<File>) {
+    let mut preferred: Option<BloomFilterSettings> = None;
+    for file in files.iter_mut().rev() {
+        let Some(settings) = file.bloom_filter_settings else {
+            continue;
+        };
+        if preferred.is_none() {
+            preferred = Some(settings);
+            continue;
+        }
+        if preferred != Some(settings) {
+            file.clear_bloom_filters();
+        }
     }
 }
 

@@ -8,6 +8,56 @@ use crate::types::{BlameEntry, Change, Either, LineRange, Offset, UnblamedHunk};
 
 pub(super) mod function;
 
+/// This function merges adjacent blame entries. It merges entries that are adjacent both in the
+/// blamed file and in the source file that introduced them. This follows `git`'s
+/// behaviour. `libgit2`, as of 2024-09-19, only checks whether two entries are adjacent in the
+/// blamed file which can result in different blames in certain edge cases. See [the commit][1]
+/// that introduced the extra check into `git` for context. See [this commit][2] for a way to test
+/// for this behaviour in `git`.
+///
+/// [1]: https://github.com/git/git/commit/c2ebaa27d63bfb7c50cbbdaba90aee4efdd45d0a
+/// [2]: https://github.com/git/git/commit/6dbf0c7bebd1c71c44d786ebac0f2b3f226a0131
+pub(super) fn coalesce_blame_entries(lines_blamed: Vec<BlameEntry>) -> Vec<BlameEntry> {
+    let len = lines_blamed.len();
+    lines_blamed
+        .into_iter()
+        .fold(Vec::with_capacity(len), |mut acc, entry| {
+            let previous_entry = acc.last();
+
+            if let Some(previous_entry) = previous_entry {
+                let previous_blamed_range = previous_entry.range_in_blamed_file();
+                let current_blamed_range = entry.range_in_blamed_file();
+                let previous_source_range = previous_entry.range_in_source_file();
+                let current_source_range = entry.range_in_source_file();
+                if previous_entry.commit_id == entry.commit_id
+                    && previous_blamed_range.end == current_blamed_range.start
+                    // As of 2024-09-19, the check below only is in `git`, but not in `libgit2`.
+                    && previous_source_range.end == current_source_range.start
+                {
+                    let coalesced_entry = BlameEntry {
+                        start_in_blamed_file: previous_blamed_range.start as u32,
+                        start_in_source_file: previous_source_range.start as u32,
+                        len: NonZeroU32::new((current_source_range.end - previous_source_range.start) as u32)
+                            .expect("BUG: hunks are never zero-sized"),
+                        commit_id: previous_entry.commit_id,
+                        source_file_name: previous_entry.source_file_name.clone(),
+                    };
+
+                    acc.pop();
+                    acc.push(coalesced_entry);
+                } else {
+                    acc.push(entry);
+                }
+
+                acc
+            } else {
+                acc.push(entry);
+
+                acc
+            }
+        })
+}
+
 /// Compare a section from a potential *Source File* (`hunk`) with a change from a diff and see if
 /// there is an intersection with `change`. Based on that intersection, we may generate a
 /// [`BlameEntry`] for `out` and/or split the `hunk` into multiple.
@@ -322,24 +372,36 @@ fn process_change(
 /// Consume `hunks_to_blame` and `changes` to pair up matches ranges (also overlapping) with each other.
 /// Once a match is found, it's pushed onto `out`.
 ///
-/// `process_changes` assumes that ranges coming from the same *Source File* can and do
-/// occasionally overlap. If it were a desirable property of the blame algorithm as a whole to
-/// never have two different lines from a *Blamed File* mapped to the same line in a *Source File*,
-/// this property would need to be enforced at a higher level than `process_changes`.
-/// Then the nested loops could potentially be flattened into one.
+/// Uses a cursor to avoid restarting the changes iteration from the beginning for each hunk.
+/// When suspect ranges overlap (rare, from merge blame convergence), the cursor resets to
+/// maintain correctness.
 fn process_changes(
     hunks_to_blame: Vec<UnblamedHunk>,
-    changes: Vec<Change>,
+    changes: &[Change],
     suspect: ObjectId,
     parent: ObjectId,
 ) -> Vec<UnblamedHunk> {
     let mut new_hunks_to_blame = Vec::new();
+    let mut offset_in_destination = Offset::Added(0);
+    let mut changes_pos = 0;
+    let mut last_suspect_end: Option<u32> = None;
 
-    for mut hunk in hunks_to_blame.into_iter().map(Some) {
-        let mut offset_in_destination = Offset::Added(0);
+    for hunk in hunks_to_blame {
+        if !hunk.has_suspect(&suspect) {
+            new_hunks_to_blame.push(hunk);
+            continue;
+        }
 
-        let mut changes_iter = changes.iter().cloned();
-        let mut change = changes_iter.next();
+        let suspect_range = hunk.get_range(&suspect).expect("has_suspect was true");
+        if last_suspect_end.is_some_and(|end| suspect_range.start < end) {
+            changes_pos = 0;
+            offset_in_destination = Offset::Added(0);
+        }
+        last_suspect_end = Some(suspect_range.end);
+
+        let mut hunk = Some(hunk);
+        let mut pos = changes_pos;
+        let mut change: Option<Change> = changes.get(pos).cloned();
 
         loop {
             (hunk, change) = process_change(
@@ -351,12 +413,17 @@ fn process_changes(
                 change,
             );
 
-            change = change.or_else(|| changes_iter.next());
+            if change.is_none() {
+                pos += 1;
+                change = changes.get(pos).cloned();
+            }
 
             if hunk.is_none() {
                 break;
             }
         }
+
+        changes_pos = pos;
     }
     new_hunks_to_blame
 }

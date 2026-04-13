@@ -1,8 +1,10 @@
 //! Low-level operations on individual commits.
 use crate::{
+    bloom::BloomKey,
     file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
-    File, Position,
+    from_be_u32, File, Position,
 };
+use bstr::BStr;
 use gix_error::{message, Message};
 use std::{
     fmt::{Debug, Formatter},
@@ -22,11 +24,6 @@ pub struct Commit<'a> {
     root_tree_id: &'a gix_hash::oid,
 }
 
-#[inline]
-fn read_u32(b: &[u8]) -> u32 {
-    u32::from_be_bytes(b.try_into().unwrap())
-}
-
 impl<'a> Commit<'a> {
     pub(crate) fn new(file: &'a File, pos: file::Position) -> Self {
         let bytes = file.commit_data_bytes(pos);
@@ -34,12 +31,12 @@ impl<'a> Commit<'a> {
             file,
             pos,
             root_tree_id: gix_hash::oid::from_bytes_unchecked(&bytes[..file.hash_len]),
-            parent1: ParentEdge::from_raw(read_u32(&bytes[file.hash_len..][..4])),
-            parent2: ParentEdge::from_raw(read_u32(&bytes[file.hash_len + 4..][..4])),
+            parent1: ParentEdge::from_raw(from_be_u32(&bytes[file.hash_len..][..4])),
+            parent2: ParentEdge::from_raw(from_be_u32(&bytes[file.hash_len + 4..][..4])),
             // TODO: Add support for corrected commit date offset overflow.
             //      See https://github.com/git/git/commit/e8b63005c48696a26f976f5f9b0ccaf1983e439d and
             //          https://github.com/git/git/commit/f90fca638e99a031dce8e3aca72427b2f9b4bb38 for more details and hints at a test.
-            generation: read_u32(&bytes[file.hash_len + 8..][..4]) >> 2,
+            generation: from_be_u32(&bytes[file.hash_len + 8..][..4]) >> 2,
             commit_timestamp: u64::from_be_bytes(bytes[file.hash_len + 8..][..8].try_into().unwrap())
                 & 0x0003_ffff_ffff,
         }
@@ -89,6 +86,16 @@ impl<'a> Commit<'a> {
     /// Return the hash of the tree this commit points to.
     pub fn root_tree_id(&self) -> &gix_hash::oid {
         self.root_tree_id
+    }
+
+    /// Query if `path` may be present in this commit's changed-path Bloom filter.
+    pub fn maybe_contains_path(&self, path: &BStr) -> Option<bool> {
+        self.file.maybe_contains_path(self.pos, path)
+    }
+
+    /// Query if all `keys` may be present in this commit's changed-path Bloom filter.
+    pub fn maybe_contains_all_keys(&self, keys: &[BloomKey]) -> Option<bool> {
+        self.file.maybe_contains_all_keys(self.pos, keys)
     }
 }
 
@@ -176,7 +183,7 @@ impl Iterator for Parents<'_> {
             },
             ParentIteratorState::Extra(mut chunks) => {
                 if let Some(chunk) = chunks.next() {
-                    let extra_edge = read_u32(chunk);
+                    let extra_edge = from_be_u32(chunk);
                     match ExtraEdge::from_raw(extra_edge) {
                         ExtraEdge::Internal(pos) => {
                             self.state = ParentIteratorState::Extra(chunks);
