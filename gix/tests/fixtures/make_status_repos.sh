@@ -69,3 +69,12 @@ git init -q submodule-assume-unchanged-symlink
   rm -Rf sub
   ln -s ../module sub
 )
+
+git init -q nested-empty-tree
+(cd nested-empty-tree
+  touch tracked
+  git add tracked
+  git commit -q -m init
+
+  mkdir -p empty/nested
+)

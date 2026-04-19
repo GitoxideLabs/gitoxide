@@ -359,6 +359,11 @@ impl Mark {
             return None;
         }
 
+        let collapsed_property = state.on_hold[self.start_index..]
+            .iter()
+            .all(|entry| entry.property == Some(entry::Property::EmptyDirectory))
+            .then_some(entry::Property::EmptyDirectory);
+
         // Pathspecs affect the collapse of the next level, hence find the highest-value one.
         let dir_pathspec_match = state.on_hold[self.start_index..]
             .iter()
@@ -396,6 +401,7 @@ impl Mark {
                 Cow::Borrowed(dir_rela_path),
                 classify::Outcome {
                     status: dir_status,
+                    property: dir_info.property.or(collapsed_property),
                     pathspec_match: dir_pathspec_match,
                     ..dir_info
                 },

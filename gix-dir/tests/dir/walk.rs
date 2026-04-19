@@ -443,7 +443,7 @@ fn complex_empty() -> crate::Result {
         &[
             entry("dirs-and-files", Untracked, Directory),
             entry("empty-toplevel", Untracked, Directory).with_property(EmptyDirectory),
-            entry("only-dirs", Untracked, Directory),
+            entry("only-dirs", Untracked, Directory).with_property(EmptyDirectory),
         ],
         "empty directories collapse just fine"
     );

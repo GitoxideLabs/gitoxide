@@ -343,6 +343,25 @@ mod index_worktree {
         }
 
         #[test]
+        fn nested_empty_directories_are_ignored() -> crate::Result {
+            let repo = repo("nested-empty-tree")?;
+            let mut status = repo
+                .status(gix::progress::Discard)?
+                .index_worktree_options_mut(|opts| {
+                    opts.sorting =
+                        Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
+                })
+                .into_index_worktree_iter(None)?;
+            let items: Vec<_> = status.by_ref().filter_map(Result::ok).collect();
+            assert_eq!(
+                items,
+                [],
+                "directories that only contain empty subdirectories should not be reported as untracked"
+            );
+            Ok(())
+        }
+
+        #[test]
         fn untracked_files_collapse_by_default() -> crate::Result {
             let repo = repo("untracked-only")?;
             let status = repo
