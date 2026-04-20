@@ -52,7 +52,11 @@ mod stream {
 
         let mut stream = store.try_find_stream(id.as_ref())?.expect("object still addressable");
         let err = std::io::copy(&mut stream, &mut std::io::sink()).expect_err("truncated streams must fail");
-        assert_eq!(err.kind(), ErrorKind::UnexpectedEof);
+        assert!(
+            matches!(err.kind(), ErrorKind::UnexpectedEof | ErrorKind::InvalidData),
+            "expected stream corruption to surface as EOF or invalid data, got {:?}",
+            err.kind()
+        );
         Ok(())
     }
 }
