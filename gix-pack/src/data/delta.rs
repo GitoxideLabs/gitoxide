@@ -30,7 +30,7 @@ pub(crate) fn decode_header_size(d: &[u8]) -> (u64, usize) {
     (size, consumed)
 }
 
-pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
+pub(crate) fn apply<W: std::io::Write + ?Sized>(base: &[u8], target: &mut W, data: &[u8]) -> Result<(), apply::Error> {
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
         i += 1;
@@ -69,19 +69,20 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     size = 0x10000; // 65536
                 }
                 let ofs = ofs as usize;
-                std::io::Write::write(&mut target, &base[ofs..ofs + size as usize])
+                target
+                    .write_all(&base[ofs..ofs + size as usize])
                     .map_err(|_e| apply::Error::DeltaCopyBaseSliceMismatch)?;
             }
             0 => return Err(apply::Error::UnsupportedCommandCode),
             size => {
-                std::io::Write::write(&mut target, &data[i..i + *size as usize])
+                target
+                    .write_all(&data[i..i + *size as usize])
                     .map_err(|_e| apply::Error::DeltaCopyDataSliceMismatch)?;
                 i += *size as usize;
             }
         }
     }
-    assert_eq!(i, data.len());
-    assert_eq!(target.len(), 0);
+    debug_assert_eq!(i, data.len());
 
     Ok(())
 }

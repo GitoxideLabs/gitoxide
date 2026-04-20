@@ -581,6 +581,93 @@ mod find {
     }
 }
 
+mod blob_stream {
+    use std::io::Read;
+
+    use gix_object::Kind;
+
+    fn blob_id_with_storage(repo: &gix::Repository, packed: bool) -> crate::Result<gix::ObjectId> {
+        for id in repo.objects.iter()? {
+            let id = id?;
+            let Some(header) = repo.try_find_header(id)? else {
+                continue;
+            };
+            let is_packed = matches!(header, gix_odb::find::Header::Packed(_));
+            if header.kind() == Kind::Blob && is_packed == packed {
+                return Ok(id);
+            }
+        }
+        panic!(
+            "expected at least one {} blob in fixture",
+            if packed { "packed" } else { "loose" }
+        );
+    }
+
+    #[test]
+    fn streams_loose_blobs() -> crate::Result {
+        let repo = crate::named_repo("make_packed_and_loose.sh")?;
+        let id = blob_id_with_storage(&repo, false)?;
+        let expected = repo.find_blob(id)?.data.clone();
+
+        let mut stream = repo.find_blob_stream(id)?;
+        assert_eq!(stream.kind(), Kind::Blob);
+        assert_eq!(stream.size(), expected.len() as u64);
+
+        let mut actual = Vec::new();
+        stream.read_to_end(&mut actual)?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn streams_packed_blobs_via_repository_and_odb() -> crate::Result {
+        let repo = crate::named_repo("make_packed_and_loose.sh")?;
+        let id = blob_id_with_storage(&repo, true)?;
+        let expected = repo.find_blob(id)?.data.clone();
+
+        let mut stream = repo.find_blob_stream(id)?;
+        assert_eq!(stream.kind(), Kind::Blob);
+        assert_eq!(stream.size(), expected.len() as u64);
+        let mut actual = Vec::new();
+        stream.read_to_end(&mut actual)?;
+        assert_eq!(actual, expected);
+
+        let Some((mut odb_stream, location)) = repo.objects.try_find_stream(id.as_ref())? else {
+            panic!("blob must be present");
+        };
+        assert!(location.is_some(), "packed blobs report their pack location");
+        assert_eq!(odb_stream.kind(), Kind::Blob);
+        assert_eq!(odb_stream.size(), expected.len() as u64);
+        actual.clear();
+        odb_stream.read_to_end(&mut actual)?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn streams_empty_blob_without_storage_lookup() -> crate::Result {
+        let repo = crate::basic_repo()?;
+        let mut stream = repo.find_blob_stream(repo.object_hash().empty_blob())?;
+        let mut actual = Vec::new();
+        stream.read_to_end(&mut actual)?;
+        assert!(actual.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_non_blob_stream_requests() -> crate::Result {
+        let repo = crate::basic_repo()?;
+        match repo.find_blob_stream(repo.head_id()?) {
+            Err(gix::repository::blob_stream::existing::Error::NotABlob { actual, .. }) => {
+                assert_eq!(actual, Kind::Commit);
+            }
+            Ok(_) => panic!("expected the HEAD commit lookup to be rejected"),
+            Err(other) => panic!("unexpected error: {other}"),
+        }
+        Ok(())
+    }
+}
+
 #[test]
 fn empty_objects_are_always_present_but_not_in_plumbing() -> crate::Result {
     let repo = empty_bare_in_memory_repo()?;

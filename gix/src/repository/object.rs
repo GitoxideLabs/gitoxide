@@ -240,6 +240,62 @@ impl crate::Repository {
             None => Ok(None),
         }
     }
+
+    /// Try to find a blob with `id` and return its decoded bytes as a stream.
+    pub fn try_find_blob_stream(
+        &self,
+        id: impl Into<ObjectId>,
+    ) -> Result<Option<gix_odb::find::Stream>, crate::repository::blob_stream::Error> {
+        let id = id.into();
+        if id == ObjectId::empty_blob(self.object_hash()) {
+            return Ok(Some(gix_odb::find::Stream::empty_blob()));
+        }
+
+        match self.try_find_header(id)? {
+            Some(header) => {
+                if header.kind() != gix_object::Kind::Blob {
+                    return Err(crate::repository::blob_stream::Error::NotABlob {
+                        id,
+                        actual: header.kind(),
+                    });
+                }
+            }
+            None => return Ok(None),
+        }
+
+        match self
+            .objects
+            .try_find_stream(&id)
+            .map_err(crate::object::find::Error::from)?
+        {
+            Some((stream, _location)) => Ok(Some(stream)),
+            None => Ok(None),
+        }
+    }
+
+    /// Find a blob with `id` and return its decoded bytes as a stream.
+    pub fn find_blob_stream(
+        &self,
+        id: impl Into<ObjectId>,
+    ) -> Result<gix_odb::find::Stream, crate::repository::blob_stream::existing::Error> {
+        let id = id.into();
+        self.try_find_blob_stream(id)
+            .map_err(|err| match err {
+                crate::repository::blob_stream::Error::Find(err) => {
+                    crate::repository::blob_stream::existing::Error::Find(gix_object::find::existing::Error::Find(
+                        err.0,
+                    ))
+                }
+                crate::repository::blob_stream::Error::NotABlob { id, actual } => {
+                    crate::repository::blob_stream::existing::Error::NotABlob { id, actual }
+                }
+            })?
+            .ok_or_else(|| {
+                crate::repository::blob_stream::existing::Error::Find(gix_object::find::existing::Error::NotFound {
+                    oid: id,
+                })
+            })
+    }
 }
 
 /// Write objects of any type.

@@ -1,3 +1,73 @@
+use std::io::{self, Cursor, Read};
+
+/// A streaming view over an object's decoded bytes.
+pub struct Stream {
+    kind: gix_object::Kind,
+    size: u64,
+    inner: StreamInner,
+}
+
+enum StreamInner {
+    InMemory(Cursor<Vec<u8>>),
+    File(std::fs::File),
+    Loose(crate::store_impls::loose::find::StreamReader),
+}
+
+impl Stream {
+    /// Return the kind of the object yielded by this stream.
+    pub fn kind(&self) -> gix_object::Kind {
+        self.kind
+    }
+
+    /// Return the decoded object size in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// Return an empty blob stream.
+    pub fn empty_blob() -> Self {
+        Self::from_bytes(gix_object::Kind::Blob, Vec::new())
+    }
+
+    pub(crate) fn from_bytes(kind: gix_object::Kind, data: Vec<u8>) -> Self {
+        Self {
+            kind,
+            size: data.len() as u64,
+            inner: StreamInner::InMemory(Cursor::new(data)),
+        }
+    }
+
+    pub(crate) fn from_file(kind: gix_object::Kind, size: u64, file: std::fs::File) -> Self {
+        Self {
+            kind,
+            size,
+            inner: StreamInner::File(file),
+        }
+    }
+
+    pub(crate) fn from_loose(
+        kind: gix_object::Kind,
+        size: u64,
+        reader: crate::store_impls::loose::find::StreamReader,
+    ) -> Self {
+        Self {
+            kind,
+            size,
+            inner: StreamInner::Loose(reader),
+        }
+    }
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match &mut self.inner {
+            StreamInner::InMemory(cursor) => cursor.read(buf),
+            StreamInner::File(file) => file.read(buf),
+            StreamInner::Loose(reader) => reader.read(buf),
+        }
+    }
+}
+
 /// An object header informing about object properties, without it being fully decoded in the process.
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Header {

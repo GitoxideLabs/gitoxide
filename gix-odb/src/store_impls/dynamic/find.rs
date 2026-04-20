@@ -85,7 +85,7 @@ impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
 {
-    fn try_find_cached_inner<'a, 'b>(
+    pub(crate) fn try_find_cached_inner<'a, 'b>(
         &'b self,
         mut id: &'b gix_hash::oid,
         buffer: &'a mut Vec<u8>,

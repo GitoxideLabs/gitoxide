@@ -123,6 +123,26 @@ impl<T> Proxy<T> {
     }
 }
 
+impl<S> Proxy<crate::Cache<crate::store::Handle<S>>>
+where
+    S: Deref<Target = crate::Store> + Clone,
+{
+    /// Find an object and return its decoded bytes as a stream.
+    pub fn try_find_stream(
+        &self,
+        id: &gix_hash::oid,
+    ) -> Result<Option<(crate::find::Stream, Option<crate::pack::data::entry::Location>)>, gix_object::find::Error>
+    {
+        if let Some(map) = self.memory.as_ref() {
+            let map = map.borrow();
+            if let Some((kind, data)) = map.get(id) {
+                return Ok(Some((crate::find::Stream::from_bytes(*kind, data.clone()), None)));
+            }
+        }
+        self.inner.try_find_stream(id)
+    }
+}
+
 impl<T> Clone for Proxy<T>
 where
     T: Clone,
