@@ -41,6 +41,7 @@ pub(crate) struct StreamReader {
     compressed_len: usize,
     pending: Vec<u8>,
     pending_pos: usize,
+    remaining: u64,
     done: bool,
 }
 
@@ -54,7 +55,66 @@ impl StreamReader {
             compressed_len: 0,
             pending: Vec::new(),
             pending_pos: 0,
+            remaining: 0,
             done: false,
+        }
+    }
+
+    fn finish_stream(&mut self) -> io::Result<()> {
+        if self.done {
+            return Ok(());
+        }
+
+        let mut scratch = [0u8; 256];
+        loop {
+            if self.compressed_pos == self.compressed_len {
+                self.compressed_len = self.file.read(&mut self.compressed)?;
+                self.compressed_pos = 0;
+            }
+
+            let input = &self.compressed[self.compressed_pos..self.compressed_len];
+            let eof = input.is_empty();
+            let before_in = self.inflate.total_in();
+            let before_out = self.inflate.total_out();
+            let flush = if eof {
+                zlib::FlushDecompress::Finish
+            } else {
+                zlib::FlushDecompress::None
+            };
+            let status = self
+                .inflate
+                .decompress(input, &mut scratch, flush)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "corrupt deflate stream"))?;
+            let consumed = (self.inflate.total_in() - before_in) as usize;
+            let produced = (self.inflate.total_out() - before_out) as usize;
+            self.compressed_pos += consumed;
+
+            if produced != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "loose object stream exceeded the declared size",
+                ));
+            }
+
+            match status {
+                zlib::Status::StreamEnd => {
+                    self.done = true;
+                    return Ok(());
+                }
+                zlib::Status::Ok | zlib::Status::BufError if eof => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated loose object stream",
+                    ));
+                }
+                zlib::Status::Ok | zlib::Status::BufError if consumed != 0 => {}
+                zlib::Status::Ok | zlib::Status::BufError => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "deflate stream made no progress",
+                    ));
+                }
+            }
         }
     }
 
@@ -93,7 +153,17 @@ impl StreamReader {
             produced_total += produced;
 
             if let Ok((kind, size, header_size)) = gix_object::decode::loose_header(&decompressed[..produced_total]) {
+                let pending_len = produced_total.saturating_sub(header_size);
+                if pending_len as u64 > size {
+                    return Err(Error::SizeMismatch {
+                        expected: size,
+                        actual: pending_len as u64,
+                        path: path.to_owned(),
+                    });
+                }
                 self.pending = decompressed[header_size..produced_total].to_vec();
+                self.remaining = size - pending_len as u64;
+                self.done = self.remaining == 0 && matches!(status, zlib::Status::StreamEnd);
                 return Ok((kind, size, self));
             }
 
@@ -136,6 +206,10 @@ impl io::Read for StreamReader {
     fn read(&mut self, mut out: &mut [u8]) -> io::Result<usize> {
         let mut total_written = 0usize;
 
+        if out.is_empty() {
+            return Ok(0);
+        }
+
         if self.pending_pos < self.pending.len() {
             let pending = &self.pending[self.pending_pos..];
             let count = pending.len().min(out.len());
@@ -147,9 +221,18 @@ impl io::Read for StreamReader {
                 self.pending.clear();
                 self.pending_pos = 0;
             }
+            if self.remaining == 0 {
+                self.finish_stream()?;
+                return Ok(total_written);
+            }
             if out.is_empty() {
                 return Ok(total_written);
             }
+        }
+
+        if self.remaining == 0 {
+            self.finish_stream()?;
+            return Ok(total_written);
         }
 
         loop {
@@ -170,24 +253,42 @@ impl io::Read for StreamReader {
             } else {
                 zlib::FlushDecompress::None
             };
+            let out_len = out.len().min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
             let status = self
                 .inflate
-                .decompress(input, out, flush)
+                .decompress(input, &mut out[..out_len], flush)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "corrupt deflate stream"))?;
             let consumed = (self.inflate.total_in() - before_in) as usize;
             let produced = (self.inflate.total_out() - before_out) as usize;
             self.compressed_pos += consumed;
             total_written += produced;
+            self.remaining = self
+                .remaining
+                .checked_sub(produced as u64)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "loose object exceeded the declared size"))?;
 
             match status {
                 zlib::Status::StreamEnd => {
+                    if self.remaining != 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "truncated loose object stream",
+                        ));
+                    }
                     self.done = true;
                     return Ok(total_written);
                 }
-                zlib::Status::Ok | zlib::Status::BufError if produced != 0 => return Ok(total_written),
-                zlib::Status::Ok | zlib::Status::BufError if eof => {
-                    self.done = true;
+                zlib::Status::Ok | zlib::Status::BufError if produced != 0 => {
+                    if self.remaining == 0 {
+                        self.finish_stream()?;
+                    }
                     return Ok(total_written);
+                }
+                zlib::Status::Ok | zlib::Status::BufError if eof => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "truncated loose object stream",
+                    ));
                 }
                 zlib::Status::Ok | zlib::Status::BufError if consumed != 0 => {}
                 zlib::Status::Ok | zlib::Status::BufError => {

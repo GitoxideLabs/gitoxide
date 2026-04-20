@@ -453,7 +453,7 @@ impl File {
                 last_result_size = Some(result_size);
             }
             let mut target = &mut target_buf[..result_size];
-            delta::apply(&source_buf[..base_size], &mut target, data)?;
+            delta::apply(&source_buf[..base_size], &mut target, data, result_size)?;
             // use the target as source for the next delta
             std::mem::swap(&mut source_buf, &mut target_buf);
         }
@@ -652,10 +652,10 @@ impl File {
             let is_last_delta = delta_idx + 1 == chain_len;
             if is_last_delta {
                 last_result_size = Some(result_size);
-                delta::apply(&source_buf[..base_size], writer, data)?;
+                delta::apply(&source_buf[..base_size], writer, data, result_size)?;
             } else {
                 let mut target = &mut target_buf[..result_size];
-                delta::apply(&source_buf[..base_size], &mut target, data)?;
+                delta::apply(&source_buf[..base_size], &mut target, data, result_size)?;
                 std::mem::swap(&mut source_buf, &mut target_buf);
             }
         }

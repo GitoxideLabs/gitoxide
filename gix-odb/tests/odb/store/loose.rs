@@ -33,6 +33,29 @@ pub fn locate_oid(id: gix_hash::ObjectId, buf: &mut Vec<u8>) -> gix_object::Data
     ldb().try_find(&id, buf).expect("read success").expect("id present")
 }
 
+mod stream {
+    use std::io::{ErrorKind, Read};
+
+    use gix_odb::loose::Store;
+
+    #[test]
+    fn truncated_streams_fail_instead_of_returning_early_eof() -> crate::Result {
+        let dir = gix_testtools::tempfile::tempdir()?;
+        let store = Store::at(dir.path(), gix_hash::Kind::Sha1);
+        let id = store.write_buf(gix_object::Kind::Blob, &vec![b'x'; 64 * 1024])?;
+        let path = store.object_path(&id);
+
+        let mut compressed = std::fs::read(&path)?;
+        compressed.truncate(compressed.len() - 1);
+        std::fs::write(&path, compressed)?;
+
+        let mut stream = store.try_find_stream(id.as_ref())?.expect("object still addressable");
+        let err = std::io::copy(&mut stream, &mut std::io::sink()).expect_err("truncated streams must fail");
+        assert_eq!(err.kind(), ErrorKind::UnexpectedEof);
+        Ok(())
+    }
+}
+
 #[test]
 fn verify_integrity() {
     let db = ldb();
