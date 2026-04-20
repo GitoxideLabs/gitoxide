@@ -34,8 +34,9 @@ pub fn locate_oid(id: gix_hash::ObjectId, buf: &mut Vec<u8>) -> gix_object::Data
 }
 
 mod stream {
-    use std::io::{ErrorKind, Read};
+    use std::io::ErrorKind;
 
+    use gix_object::Write;
     use gix_odb::loose::Store;
 
     #[test]
