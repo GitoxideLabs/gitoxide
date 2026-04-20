@@ -46,6 +46,10 @@ mod stream {
         let id = store.write_buf(gix_object::Kind::Blob, &vec![b'x'; 64 * 1024])?;
         let path = store.object_path(&id);
 
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions)?;
+
         let mut compressed = std::fs::read(&path)?;
         compressed.truncate(compressed.len() - 1);
         std::fs::write(&path, compressed)?;
