@@ -1,3 +1,5 @@
+use std::io::Write;
+
 ///
 pub mod apply {
     /// Returned when failing to apply deltas.
@@ -10,6 +12,21 @@ pub mod apply {
         DeltaCopyBaseSliceMismatch,
         #[error("Delta copy data: byte slices must match")]
         DeltaCopyDataSliceMismatch,
+    }
+}
+
+///
+pub mod encode {
+    /// Returned when failing to encode deltas.
+    #[derive(thiserror::Error, Debug)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error("Failed to write bytes")]
+        IOError,
+        #[error("Too large size in Copy instruction, should <= 0x00ffffff")]
+        TooLargeSize,
+        #[error("Too large data in Add instruction, length should <= 127")]
+        TooLargeData,
     }
 }
 
@@ -49,8 +66,10 @@ fn encode_size(mut n: u64) -> Vec<u8> {
 pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
+        eprintln!("index: {i}, cmd: {cmd}");
         i += 1;
         match cmd {
+            // Copy
             cmd if cmd & 0b1000_0000 != 0 => {
                 let (mut ofs, mut size): (u32, u32) = (0, 0);
                 if cmd & 0b0000_0001 != 0 {
@@ -85,12 +104,14 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     size = 0x10000; // 65536
                 }
                 let ofs = ofs as usize;
-                std::io::Write::write(&mut target, &base[ofs..ofs + size as usize])
+                Write::write(&mut target, &base[ofs..ofs + size as usize])
                     .map_err(|_e| apply::Error::DeltaCopyBaseSliceMismatch)?;
             }
+            // Reserved
             0 => return Err(apply::Error::UnsupportedCommandCode),
+            // Add
             size => {
-                std::io::Write::write(&mut target, &data[i..i + *size as usize])
+                Write::write(&mut target, &data[i..i + *size as usize])
                     .map_err(|_e| apply::Error::DeltaCopyDataSliceMismatch)?;
                 i += *size as usize;
             }
@@ -102,23 +123,63 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
     Ok(())
 }
 
+#[derive(Debug)]
 enum Instruction {
-    Copy { offset: usize, size: usize },
+    Copy { offset: u32, size: u32 },
     Add { data: Vec<u8> },
 }
 
 impl Instruction {
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(self, mut writer: impl Write) -> Result<(), encode::Error> {
         match self {
-            Self::Copy { offset, size } => todo!(),
-            Self::Add { data } => todo!(),
+            Self::Copy { offset, mut size } => {
+                let mut header = 0x80u8;
+                let mut buf = [0u8; 7];
+                let mut n = 0;
+
+                if size == 0x10000 {
+                    size = 0;
+                } else if size > 0x00ffffff {
+                    return Err(encode::Error::TooLargeSize);
+                }
+
+                for i in 0..4 {
+                    let byte = (offset >> (i * 8)) as u8;
+                    if byte != 0 {
+                        header |= 1 << i;
+                        buf[n] = byte;
+                        n += 1;
+                    }
+                }
+                for i in 0..3 {
+                    let byte = (size >> (i * 8)) as u8;
+                    if byte != 0 {
+                        header |= 1 << (4 + i);
+                        buf[n] = byte;
+                        n += 1;
+                    }
+                }
+
+                writer.write_all(&[header]).map_err(|_| encode::Error::IOError)?;
+                writer.write_all(&buf[..n]).map_err(|_| encode::Error::IOError)?;
+                Ok(())
+            }
+            Self::Add { data } => {
+                if data.len() > 127 {
+                    return Err(encode::Error::TooLargeData);
+                }
+
+                let header = data.len() as u8;
+                writer.write(&[header]).map_err(|_| encode::Error::IOError)?;
+                writer.write(data.as_slice()).map_err(|_| encode::Error::IOError)?;
+                Ok(())
+            }
         }
-        todo!()
     }
 }
 
 fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
-    let mut common_prefix_len = 0;
+    let mut common_prefix_len: usize = 0;
     for (s, t) in source.iter().zip(target) {
         if s == t {
             common_prefix_len += 1;
@@ -129,7 +190,7 @@ fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
     vec![
         Instruction::Copy {
             offset: 0,
-            size: common_prefix_len,
+            size: common_prefix_len as u32,
         },
         Instruction::Add {
             data: target[common_prefix_len..].into(),
@@ -151,12 +212,14 @@ mod tests {
         }
     }
 
-    fn apply_delta(source: &[u8], delta: Vec<Instruction>) -> Vec<u8> {
+    fn apply_delta(source: &[u8], delta: &Vec<Instruction>) -> Vec<u8> {
         let mut buf = Vec::new();
         for inst in delta {
             match inst {
                 Instruction::Add { data } => buf.extend_from_slice(&data),
-                Instruction::Copy { offset, size } => buf.extend_from_slice(&source[offset..offset + size]),
+                Instruction::Copy { offset, size } => {
+                    buf.extend_from_slice(&source[(*offset as usize)..(*offset as usize + *size as usize)])
+                }
             }
         }
         buf
@@ -167,7 +230,18 @@ mod tests {
         let source = "hello, world".as_bytes();
         let target = "hello, gitoxide".as_bytes();
         let delta = compute_delta(source, target);
-        let restored = apply_delta(source, delta);
+        let restored = apply_delta(source, &delta);
         assert_eq!(target, restored);
+
+        let mut delta_data = Vec::new();
+        for inst in delta {
+            eprintln!("inst: {inst:?}");
+            inst.encode(&mut delta_data).unwrap();
+        }
+
+        let mut restored_target = vec![0u8; target.len()];
+        eprintln!("delta_data: {delta_data:?}");
+        apply(source, &mut restored_target, &delta_data).unwrap();
+        assert_eq!(target, restored_target);
     }
 }
