@@ -85,3 +85,53 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
 
     Ok(())
 }
+
+enum Instruction {
+    Copy { offset: usize, size: usize },
+    Add { data: Vec<u8> },
+}
+
+fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
+    let mut common_prefix_len = 0;
+    for (s, t) in source.iter().zip(target) {
+        if s == t {
+            common_prefix_len += 1;
+        } else {
+            break;
+        }
+    }
+    vec![
+        Instruction::Copy {
+            offset: 0,
+            size: common_prefix_len,
+        },
+        Instruction::Add {
+            data: target[common_prefix_len..].into(),
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn apply_delta(source: &[u8], delta: Vec<Instruction>) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for inst in delta {
+            match inst {
+                Instruction::Add { data } => buf.extend_from_slice(&data),
+                Instruction::Copy { offset, size } => buf.extend_from_slice(&source[offset..offset + size]),
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn make_it_right() {
+        let source = "hello, world".as_bytes();
+        let target = "hello, gitoxide".as_bytes();
+        let delta = compute_delta(source, target);
+        let restored = apply_delta(source, delta);
+        assert_eq!(target, restored);
+    }
+}
