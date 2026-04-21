@@ -242,6 +242,7 @@ pub(crate) mod function {
                     reduce::Statistics::default(),
                 )
             }
+            Mode::CustomedDeltaTopo(topo) => todo!(),
         }
     }
 }
@@ -322,6 +323,9 @@ mod reduce {
 }
 
 mod types {
+    use gix_hash::ObjectId;
+    use gix_hashtable::sync::ObjectIdMap;
+
     use crate::data::output::entry;
 
     /// Information gathered during the run of [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
@@ -365,6 +369,10 @@ mod types {
         /// from existing pack compression and spending the smallest possible time on compressing unpacked objects at
         /// the cost of bandwidth.
         PackCopyAndBaseObjects,
+        /// Determine whether an object is a base or a delta based on topological relationships.
+        /// `Option::is_none` signifies a base object, while `Option::is_some(src)` signifies a delta.
+        /// If the required delta does not exist, it will be computed.
+        CustomedDeltaTopo(ObjectIdMap<Option<ObjectId>>),
     }
 
     /// Configuration options for the pack generation functions provided in [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].

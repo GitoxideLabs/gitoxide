@@ -1900,6 +1900,7 @@ dependencies = [
  "gix-hash",
  "hashbrown 0.16.1",
  "parking_lot",
+ "serde",
 ]
 
 [[package]]

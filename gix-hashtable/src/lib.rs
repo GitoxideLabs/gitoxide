@@ -26,6 +26,7 @@ pub use hashbrown::{hash_map, hash_set, hash_table, Equivalent};
 /// thread-safe types
 pub mod sync {
     /// A map for associating data with object ids in a thread-safe fashion. It should scale well up to 256 threads.
+    #[derive(Debug)]
     pub struct ObjectIdMap<V> {
         /// Sharing is done by the first byte of the incoming object id.
         shards: [parking_lot::Mutex<super::HashMap<gix_hash::ObjectId, V>>; 256],
@@ -45,6 +46,71 @@ pub mod sync {
         /// if `key` was already set.
         pub fn insert(&self, key: gix_hash::ObjectId, value: V) -> Option<V> {
             self.shards[key.as_slice()[0] as usize].lock().insert(key, value)
+        }
+    }
+
+    impl<V> serde::Serialize for ObjectIdMap<V>
+    where
+        V: serde::Serialize,
+    {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            use serde::ser::SerializeMap as _;
+
+            let total_len: usize = self.shards.iter().map(|shard| shard.lock().len()).sum();
+
+            let mut map = serializer.serialize_map(Some(total_len))?;
+            for shard_mutex in &self.shards {
+                let shard = shard_mutex.lock();
+                for (key, value) in shard.iter() {
+                    map.serialize_entry(key, value)?;
+                }
+            }
+            map.end()
+        }
+    }
+
+    impl<'de, V> serde::Deserialize<'de> for ObjectIdMap<V>
+    where
+        V: serde::Deserialize<'de>,
+    {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            use serde::de::{Deserialize, MapAccess, Visitor};
+            use std::fmt;
+            use std::marker::PhantomData;
+
+            struct ObjectIdMapVisitor<V> {
+                _marker: PhantomData<fn() -> V>,
+            }
+
+            impl<'de, V> Visitor<'de> for ObjectIdMapVisitor<V>
+            where
+                V: Deserialize<'de>,
+            {
+                type Value = ObjectIdMap<V>;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    formatter.write_str("a map of ObjectId to V")
+                }
+
+                fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+                where
+                    M: MapAccess<'de>,
+                {
+                    let map = ObjectIdMap::default();
+                    while let Some((key, value)) = access.next_entry::<gix_hash::ObjectId, V>()? {
+                        map.insert(key, value);
+                    }
+                    Ok(map)
+                }
+            }
+
+            deserializer.deserialize_map(ObjectIdMapVisitor { _marker: PhantomData })
         }
     }
 }
