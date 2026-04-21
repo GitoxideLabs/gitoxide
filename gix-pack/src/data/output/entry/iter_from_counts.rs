@@ -357,7 +357,7 @@ mod types {
     }
 
     /// The way the iterator operates.
-    #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
+    #[derive(Debug)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub enum Mode {
         /// Copy base objects and deltas from packs, while non-packed objects will be treated as base objects
@@ -368,7 +368,7 @@ mod types {
     }
 
     /// Configuration options for the pack generation functions provided in [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
-    #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
+    #[derive(Debug)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct Options {
         /// The amount of threads to use at most when resolving the pack. If `None`, all logical cores are used.
