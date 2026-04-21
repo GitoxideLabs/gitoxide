@@ -30,6 +30,22 @@ pub(crate) fn decode_header_size(d: &[u8]) -> (u64, usize) {
     (size, consumed)
 }
 
+fn encode_size(mut n: u64) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(8);
+    loop {
+        let mut byte = (n & 0x7F) as u8;
+        n >>= 7;
+        if n != 0 {
+            byte |= 0x80;
+            buf.push(byte);
+        } else {
+            buf.push(byte);
+            break;
+        }
+    }
+    buf
+}
+
 pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
@@ -91,6 +107,16 @@ enum Instruction {
     Add { data: Vec<u8> },
 }
 
+impl Instruction {
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Copy { offset, size } => todo!(),
+            Self::Add { data } => todo!(),
+        }
+        todo!()
+    }
+}
+
 fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
     let mut common_prefix_len = 0;
     for (s, t) in source.iter().zip(target) {
@@ -114,6 +140,16 @@ fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_size_works() {
+        let cases: Vec<u64> = vec![0x00, 0x01, 0x7f, 0xff, 0x7777, 1795265022, 3_825_123_056_546_413_051];
+        for n in cases {
+            let encoded = encode_size(n);
+            let (restored_n, _) = decode_header_size(&encoded);
+            assert_eq!(n, restored_n);
+        }
+    }
 
     fn apply_delta(source: &[u8], delta: Vec<Instruction>) -> Vec<u8> {
         let mut buf = Vec::new();
