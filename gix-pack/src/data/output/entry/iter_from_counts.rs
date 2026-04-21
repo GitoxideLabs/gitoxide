@@ -242,7 +242,7 @@ pub(crate) mod function {
                     reduce::Statistics::default(),
                 )
             }
-            Mode::CustomedDeltaTopo(topo) => todo!(),
+            Mode::CustomizedDeltaTopo(topo) => todo!(),
         }
     }
 }
@@ -372,7 +372,7 @@ mod types {
         /// Determine whether an object is a base or a delta based on topological relationships.
         /// `Option::is_none` signifies a base object, while `Option::is_some(src)` signifies a delta.
         /// If the required delta does not exist, it will be computed.
-        CustomedDeltaTopo(ObjectIdMap<Option<ObjectId>>),
+        CustomizedDeltaTopo(ObjectIdMap<Option<ObjectId>>),
     }
 
     /// Configuration options for the pack generation functions provided in [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
