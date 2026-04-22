@@ -539,3 +539,35 @@ pub mod worktree_archive {
     /// The error returned by [`Repository::worktree_archive()`](crate::Repository::worktree_archive()).
     pub type Error = gix_error::Error;
 }
+
+///
+pub mod blob_stream {
+    /// The error returned by [`Repository::try_find_blob_stream()`](crate::Repository::try_find_blob_stream()).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error(transparent)]
+        Find(#[from] crate::object::find::Error),
+        #[error("Needed {id} to be a blob to stream it, got {actual}")]
+        NotABlob {
+            id: gix_hash::ObjectId,
+            actual: gix_object::Kind,
+        },
+    }
+
+    /// Errors returned by [`Repository::find_blob_stream()`](crate::Repository::find_blob_stream()).
+    pub mod existing {
+        /// The error returned by [`Repository::find_blob_stream()`](crate::Repository::find_blob_stream()).
+        #[derive(Debug, thiserror::Error)]
+        #[allow(missing_docs)]
+        pub enum Error {
+            #[error(transparent)]
+            Find(#[from] crate::object::find::existing::Error),
+            #[error("Needed {id} to be a blob to stream it, got {actual}")]
+            NotABlob {
+                id: gix_hash::ObjectId,
+                actual: gix_object::Kind,
+            },
+        }
+    }
+}

@@ -91,6 +91,22 @@ impl<S> Cache<S> {
     }
 }
 
+impl<S> Cache<crate::store::Handle<S>>
+where
+    S: Deref<Target = crate::Store> + Clone,
+{
+    /// Find an object and return its decoded bytes as a stream.
+    pub fn try_find_stream(
+        &self,
+        id: &gix_hash::oid,
+    ) -> Result<Option<(crate::find::Stream, Option<gix_pack::data::entry::Location>)>, gix_object::find::Error> {
+        match self.pack_cache.as_ref().map(RefCell::borrow_mut) {
+            Some(mut pack_cache) => self.inner.try_find_stream(id, pack_cache.deref_mut()),
+            None => self.inner.try_find_stream(id, &mut gix_pack::cache::Never),
+        }
+    }
+}
+
 impl<S> From<S> for Cache<S>
 where
     S: gix_pack::Find,

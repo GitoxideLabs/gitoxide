@@ -57,6 +57,7 @@ pub mod find;
 pub mod prefix;
 
 mod header;
+mod stream;
 
 ///
 pub mod iter;

@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{io, ops::Range};
 
 use gix_features::zlib;
 use smallvec::SmallVec;
@@ -147,6 +147,40 @@ impl File {
             .map(|(_status, consumed_in, consumed_out)| (consumed_in, consumed_out))
     }
 
+    fn decompress_entry_to_write(
+        &self,
+        entry: &data::Entry,
+        inflate: &mut zlib::Inflate,
+        out: &mut dyn io::Write,
+    ) -> Result<usize, Error> {
+        let offset: usize = entry.data_offset.try_into().expect("offset representable by machine");
+        assert!(offset < self.data.len(), "entry offset out of bounds");
+
+        inflate.reset();
+        let mut input = io::Cursor::new(&self.data[offset..]);
+        let mut buf = [0u8; 8192];
+        let mut total_written = 0usize;
+        loop {
+            let written = gix_features::zlib::stream::inflate::read(&mut input, &mut inflate.state, &mut buf)?;
+            if written == 0 {
+                break;
+            }
+            out.write_all(&buf[..written])?;
+            total_written += written;
+            if total_written as u64 == entry.decompressed_size {
+                break;
+            }
+        }
+
+        if total_written as u64 != entry.decompressed_size {
+            return Err(Error::ZlibInflate(gix_features::zlib::inflate::Error::Status(
+                gix_features::zlib::Status::BufError,
+            )));
+        }
+
+        Ok(inflate.state.total_in() as usize)
+    }
+
     /// Decode an entry, resolving delta's as needed, while growing the `out` vector if there is not enough
     /// space to hold the result object.
     ///
@@ -184,6 +218,49 @@ impl File {
                     })
             }
             OfsDelta { .. } | RefDelta { .. } => self.resolve_deltas(entry, resolve, inflate, out, delta_cache),
+        }
+    }
+
+    /// Decode an entry while streaming the fully resolved object bytes into `out`.
+    ///
+    /// Unlike [`decode_entry()`][Self::decode_entry()], this never returns
+    /// the decoded object bytes to the caller. Instead, it uses `scratch`
+    /// for the temporary buffers needed during delta resolution and writes
+    /// the final object bytes into `out`.
+    pub fn decode_entry_to_write(
+        &self,
+        entry: data::Entry,
+        scratch: &mut Vec<u8>,
+        inflate: &mut zlib::Inflate,
+        out: &mut dyn io::Write,
+        resolve: &dyn Fn(&gix_hash::oid, &mut Vec<u8>) -> Option<ResolvedBase>,
+        delta_cache: &mut dyn cache::DecodeEntry,
+    ) -> Result<Outcome, Error> {
+        use crate::data::entry::Header::*;
+        if let Some((kind, packed_size)) = delta_cache.get(self.id, entry.data_offset, scratch) {
+            out.write_all(scratch)?;
+            return Ok(Outcome {
+                kind,
+                num_deltas: 0,
+                decompressed_size: entry.decompressed_size,
+                compressed_size: packed_size,
+                object_size: scratch.len() as u64,
+            });
+        }
+
+        match entry.header {
+            Tree | Blob | Commit | Tag => self
+                .decompress_entry_to_write(&entry, inflate, out)
+                .map(|consumed_input| {
+                    Outcome::from_object_entry(
+                        entry.header.as_kind().expect("a non-delta entry"),
+                        &entry,
+                        consumed_input,
+                    )
+                }),
+            OfsDelta { .. } | RefDelta { .. } => {
+                self.resolve_deltas_to_write(entry, resolve, inflate, scratch, out, delta_cache)
+            }
         }
     }
 
@@ -375,7 +452,8 @@ impl File {
             if delta_idx + 1 == chain_len {
                 last_result_size = Some(result_size);
             }
-            delta::apply(&source_buf[..base_size], &mut target_buf[..result_size], data)?;
+            let mut target = &mut target_buf[..result_size];
+            delta::apply(&source_buf[..base_size], &mut target, data, result_size)?;
             // use the target as source for the next delta
             std::mem::swap(&mut source_buf, &mut target_buf);
         }
@@ -410,6 +488,183 @@ impl File {
             // technically depending on the cache, the chain size is not correct as it might
             // have been cut short by a cache hit. The caller must deactivate the cache to get
             // actual results
+            num_deltas: chain_len as u32,
+            decompressed_size: first_entry.decompressed_size,
+            compressed_size: consumed_input,
+            object_size: last_result_size as u64,
+        })
+    }
+
+    fn resolve_deltas_to_write(
+        &self,
+        last: data::Entry,
+        resolve: &dyn Fn(&gix_hash::oid, &mut Vec<u8>) -> Option<ResolvedBase>,
+        inflate: &mut zlib::Inflate,
+        out: &mut Vec<u8>,
+        writer: &mut dyn io::Write,
+        cache: &mut dyn cache::DecodeEntry,
+    ) -> Result<Outcome, Error> {
+        let mut chain = SmallVec::<[Delta; 10]>::default();
+        let first_entry = last.clone();
+        let mut cursor = last;
+        let mut base_buffer_size: Option<usize> = None;
+        let mut object_kind: Option<gix_object::Kind> = None;
+        let mut consumed_input: Option<usize> = None;
+
+        let mut total_delta_data_size: u64 = 0;
+        while cursor.header.is_delta() {
+            if let Some((kind, packed_size)) = cache.get(self.id, cursor.data_offset, out) {
+                base_buffer_size = Some(out.len());
+                object_kind = Some(kind);
+                if total_delta_data_size == 0 {
+                    consumed_input = Some(packed_size);
+                }
+                break;
+            }
+            total_delta_data_size += cursor.decompressed_size;
+            let decompressed_size = cursor
+                .decompressed_size
+                .try_into()
+                .expect("a single delta size small enough to fit a usize");
+            chain.push(Delta {
+                data: Range {
+                    start: 0,
+                    end: decompressed_size,
+                },
+                base_size: 0,
+                result_size: 0,
+                decompressed_size,
+                data_offset: cursor.data_offset,
+            });
+            use crate::data::entry::Header;
+            cursor = match cursor.header {
+                Header::OfsDelta { base_distance } => self.entry(cursor.base_pack_offset(base_distance))?,
+                Header::RefDelta { base_id } => match resolve(base_id.as_ref(), out) {
+                    Some(ResolvedBase::InPack(entry)) => entry,
+                    Some(ResolvedBase::OutOfPack { end, kind }) => {
+                        base_buffer_size = Some(end);
+                        object_kind = Some(kind);
+                        break;
+                    }
+                    None => return Err(Error::DeltaBaseUnresolved(base_id)),
+                },
+                _ => unreachable!("cursor.is_delta() only allows deltas here"),
+            };
+        }
+
+        if chain.is_empty() {
+            writer.write_all(out)?;
+            return Ok(Outcome::from_object_entry(
+                object_kind.expect("object kind as set by cache"),
+                &first_entry,
+                consumed_input.expect("consumed bytes as set by cache"),
+            ));
+        }
+
+        let total_delta_data_size: usize = total_delta_data_size.try_into().expect("delta data to fit in memory");
+
+        let chain_len = chain.len();
+        let (first_buffer_end, second_buffer_end) = {
+            let delta_start = base_buffer_size.unwrap_or(0);
+
+            let delta_range = Range {
+                start: delta_start,
+                end: delta_start + total_delta_data_size,
+            };
+            out.try_reserve(delta_range.end.saturating_sub(out.len()))?;
+            out.resize(delta_range.end, 0);
+
+            let mut instructions = &mut out[delta_range.clone()];
+            let mut relative_delta_start = 0;
+            let mut biggest_result_size = 0;
+            for (delta_idx, delta) in chain.iter_mut().rev().enumerate() {
+                let consumed_from_data_offset = self.decompress_entry_from_data_offset(
+                    delta.data_offset,
+                    inflate,
+                    &mut instructions[..delta.decompressed_size],
+                )?;
+                let is_last_delta_to_be_applied = delta_idx + 1 == chain_len;
+                if is_last_delta_to_be_applied {
+                    consumed_input = Some(consumed_from_data_offset);
+                }
+
+                let (base_size, offset) = delta::decode_header_size(instructions);
+                let mut bytes_consumed_by_header = offset;
+                biggest_result_size = biggest_result_size.max(base_size);
+                delta.base_size = base_size.try_into().expect("base size fits into usize");
+
+                let (result_size, offset) = delta::decode_header_size(&instructions[offset..]);
+                bytes_consumed_by_header += offset;
+                biggest_result_size = biggest_result_size.max(result_size);
+                delta.result_size = result_size.try_into().expect("result size fits into usize");
+
+                delta.data.start = relative_delta_start + bytes_consumed_by_header;
+                relative_delta_start += delta.decompressed_size;
+                delta.data.end = relative_delta_start;
+
+                instructions = &mut instructions[delta.decompressed_size..];
+            }
+
+            let biggest_result_size: usize = biggest_result_size.try_into().map_err(|_| Error::OutOfMemory)?;
+            let first_buffer_size = biggest_result_size;
+            let second_buffer_size = if chain_len > 1 { first_buffer_size } else { 0 };
+            let out_size = first_buffer_size + second_buffer_size + total_delta_data_size;
+            out.try_reserve(out_size.saturating_sub(out.len()))?;
+            out.resize(out_size, 0);
+
+            let second_buffer_end = {
+                let end = first_buffer_size + second_buffer_size;
+                if delta_range.start < end {
+                    out.copy_within(delta_range, end);
+                } else {
+                    let (buffers, instructions) = out.split_at_mut(end);
+                    instructions.copy_from_slice(&buffers[delta_range]);
+                }
+                end
+            };
+
+            if base_buffer_size.is_none() {
+                let base_entry = cursor;
+                debug_assert!(!base_entry.header.is_delta());
+                object_kind = base_entry.header.as_kind();
+                let out_base = &mut out[..out_size - total_delta_data_size];
+                self.decompress_entry_from_data_offset(base_entry.data_offset, inflate, out_base)?;
+            }
+
+            (first_buffer_size, second_buffer_end)
+        };
+
+        let (buffers, instructions) = out.split_at_mut(second_buffer_end);
+        let (mut source_buf, mut target_buf) = buffers.split_at_mut(first_buffer_end);
+
+        let mut last_result_size = None;
+        for (
+            delta_idx,
+            Delta {
+                data,
+                base_size,
+                result_size,
+                ..
+            },
+        ) in chain.into_iter().rev().enumerate()
+        {
+            let data = &mut instructions[data];
+            let is_last_delta = delta_idx + 1 == chain_len;
+            if is_last_delta {
+                last_result_size = Some(result_size);
+                delta::apply(&source_buf[..base_size], writer, data, result_size)?;
+            } else {
+                let mut target = &mut target_buf[..result_size];
+                delta::apply(&source_buf[..base_size], &mut target, data, result_size)?;
+                std::mem::swap(&mut source_buf, &mut target_buf);
+            }
+        }
+
+        let object_kind = object_kind.expect("a base object as root of any delta chain that we are here to resolve");
+        let consumed_input = consumed_input.expect("at least one decompressed delta object");
+        let last_result_size = last_result_size.expect("at least one delta chain item");
+        Ok(Outcome {
+            kind: object_kind,
             num_deltas: chain_len as u32,
             decompressed_size: first_entry.decompressed_size,
             compressed_size: consumed_input,

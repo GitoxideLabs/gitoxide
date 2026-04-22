@@ -10,6 +10,8 @@ pub mod apply {
         DeltaCopyBaseSliceMismatch,
         #[error("Delta copy data: byte slices must match")]
         DeltaCopyDataSliceMismatch,
+        #[error("Delta output size mismatch: expected {expected} bytes, got {actual}")]
+        OutputSizeMismatch { expected: usize, actual: usize },
     }
 }
 
@@ -30,8 +32,14 @@ pub(crate) fn decode_header_size(d: &[u8]) -> (u64, usize) {
     (size, consumed)
 }
 
-pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
+pub(crate) fn apply<W: std::io::Write + ?Sized>(
+    base: &[u8],
+    target: &mut W,
+    data: &[u8],
+    expected_size: usize,
+) -> Result<(), apply::Error> {
     let mut i = 0;
+    let mut produced = 0usize;
     while let Some(cmd) = data.get(i) {
         i += 1;
         match cmd {
@@ -69,19 +77,46 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                     size = 0x10000; // 65536
                 }
                 let ofs = ofs as usize;
-                std::io::Write::write(&mut target, &base[ofs..ofs + size as usize])
+                let size = size as usize;
+                target
+                    .write_all(&base[ofs..ofs + size])
                     .map_err(|_e| apply::Error::DeltaCopyBaseSliceMismatch)?;
+                produced += size;
             }
             0 => return Err(apply::Error::UnsupportedCommandCode),
             size => {
-                std::io::Write::write(&mut target, &data[i..i + *size as usize])
+                let size = *size as usize;
+                target
+                    .write_all(&data[i..i + size])
                     .map_err(|_e| apply::Error::DeltaCopyDataSliceMismatch)?;
-                i += *size as usize;
+                produced += size;
+                i += size;
             }
         }
     }
-    assert_eq!(i, data.len());
-    assert_eq!(target.len(), 0);
+    debug_assert_eq!(i, data.len());
+
+    if produced != expected_size {
+        return Err(apply::Error::OutputSizeMismatch {
+            expected: expected_size,
+            actual: produced,
+        });
+    }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply;
+
+    #[test]
+    fn rejects_outputs_shorter_than_declared() {
+        let mut out = Vec::new();
+        let err = super::apply(b"hello", &mut out, &[0x90, 0x05], 6).expect_err("malformed deltas must fail");
+        assert!(matches!(
+            err,
+            apply::Error::OutputSizeMismatch { expected: 6, actual: 5 }
+        ));
+    }
 }

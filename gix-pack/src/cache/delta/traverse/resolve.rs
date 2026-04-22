@@ -188,7 +188,13 @@ where
             header_ofs += consumed;
 
             fully_resolved_delta_bytes.resize(result_size as usize, 0);
-            data::delta::apply(&base_bytes, fully_resolved_delta_bytes, &delta_bytes[header_ofs..])?;
+            let mut target = &mut fully_resolved_delta_bytes[..];
+            data::delta::apply(
+                &base_bytes,
+                &mut target,
+                &delta_bytes[header_ofs..],
+                result_size as usize,
+            )?;
 
             // FIXME: this actually invalidates the "pack_offset()" computation, which is not obvious to consumers
             //        at all
@@ -363,10 +369,12 @@ where
                                     header_ofs += consumed;
 
                                     fully_resolved_delta_bytes.resize(result_size as usize, 0);
+                                    let mut target = &mut fully_resolved_delta_bytes[..];
                                     data::delta::apply(
                                         &base_bytes,
-                                        &mut fully_resolved_delta_bytes,
+                                        &mut target,
                                         &delta_bytes[header_ofs..],
+                                        result_size as usize,
                                     )?;
 
                                     // FIXME: this actually invalidates the "pack_offset()" computation, which is not obvious to consumers
