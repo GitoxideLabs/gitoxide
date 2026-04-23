@@ -106,9 +106,9 @@ pub enum Instruction<'a> {
     /// Copy data from source
     Copy {
         /// Start position to copy
-        offset: u32,
+        offset: usize,
         /// Data length in bytes
-        size: u32,
+        size: usize,
     },
     /// Insert bytes embedded in instruction
     Add {
@@ -186,7 +186,7 @@ where
     let mut insts = Vec::new();
     insts.push(Instruction::Copy {
         offset: 0,
-        size: common_prefix_len as u32,
+        size: common_prefix_len,
     });
     for chunk in target[common_prefix_len..].chunks(127) {
         insts.push(Instruction::Add { data: chunk });
@@ -202,10 +202,8 @@ mod tests {
         let mut buf = Vec::new();
         for inst in delta {
             match inst {
-                Instruction::Add { data } => buf.extend_from_slice(&data),
-                Instruction::Copy { offset, size } => {
-                    buf.extend_from_slice(&source[(*offset as usize)..(*offset as usize + *size as usize)])
-                }
+                Instruction::Add { data } => buf.extend_from_slice(data),
+                Instruction::Copy { offset, size } => buf.extend_from_slice(&source[*offset..*offset + *size]),
             }
         }
         buf
