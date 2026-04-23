@@ -264,37 +264,45 @@ pub(crate) mod function {
 
                             for count in chunk.iter() {
                                 let oid = count.id;
+                                let db_find_cached = |oid, buf| {
+                                    db.try_find_cached(
+                                        oid,
+                                        buf,
+                                        &mut *cache.lock().expect("other thread should not panic on cache"),
+                                    )
+                                    .map_err(Error::Find)
+                                };
                                 let entry = if let Some(soruce_oid) = topo.get(&oid) {
-                                    let (mut target, _) = db
-                                        .try_find_cached(&oid, buf_t, &mut *cache.lock().unwrap()) // TODO: replace with map_err
-                                        .unwrap()
-                                        .unwrap(); // TODO: replace with map_err
-                                    let (source, _) = db
-                                        .try_find_cached(&soruce_oid, buf_s, &mut *cache.lock().unwrap())
-                                        .unwrap()
-                                        .unwrap(); // TODO: replace with map_err
-                                    let delta_insts = crate::data::delta::compute_delta(source.data, target.data);
-                                    let mut delta_data_buf = Vec::new();
-                                    for inst in delta_insts {
-                                        inst.encode(&mut delta_data_buf).unwrap();
-                                        // TODO: replace with map_err
+                                    if let Some((mut target, _)) = db_find_cached(&oid, buf_t)? {
+                                        if let Some((source, _)) = db_find_cached(&soruce_oid, buf_s)? {
+                                            let delta_insts =
+                                                crate::data::delta::compute_delta(source.data, target.data);
+                                            let mut delta_data_buf = Vec::new();
+                                            for inst in delta_insts {
+                                                inst.encode(&mut delta_data_buf)
+                                                    .expect("delta instruction should valid");
+                                            }
+                                            target.data = delta_data_buf.as_slice();
+                                            let entry = output::Entry::from_delta_ref(
+                                                count,
+                                                &target,
+                                                *oid_index_mapping.get(&oid).unwrap(), // FIXIT: incorrect index
+                                            );
+                                            // target is dropped here, releasing the borrow on delta_data
+                                            entry
+                                        } else {
+                                            Ok(output::Entry::invalid())
+                                        }
+                                    } else {
+                                        Ok(output::Entry::invalid())
                                     }
-                                    target.data = delta_data_buf.as_slice();
-                                    let entry = output::Entry::from_delta_ref(
-                                        count,
-                                        &target,
-                                        *oid_index_mapping.get(&oid).unwrap(),
-                                    ); // TODO: replace with map_err
-                                       // target is dropped here, releasing the borrow on delta_data
-                                    entry
                                 } else {
-                                    let (data, _) = db
-                                        .try_find_cached(&oid, buf_t, &mut *cache.lock().unwrap())
-                                        .unwrap()
-                                        .unwrap(); // TODO: replace with map_err
-                                    output::Entry::from_base(count, &data)
-                                }
-                                .unwrap(); // TODO: replace with map_err
+                                    if let Some((data, _)) = db_find_cached(&oid, buf_t)? {
+                                        output::Entry::from_base(count, &data)
+                                    } else {
+                                        Ok(output::Entry::invalid())
+                                    }
+                                }?;
                                 out.push(entry);
                                 progress.inc();
                             }
