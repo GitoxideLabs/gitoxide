@@ -31,7 +31,7 @@ pub enum Kind {
     },
 }
 
-/// The error returned by [`output::Entry::from_data()`].
+/// The error returned by [`output::Entry::from_base()`].
 #[allow(missing_docs)]
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -151,7 +151,7 @@ impl output::Entry {
         })
     }
 
-    /// Like [`from_base()`], but with type OfsDelta.
+    /// Like [`output::Entry::from_base()`], but with type OfsDelta.
     /// `object_index` is the absolute index to the object.
     pub fn from_delta_ref(
         count: &output::Count,
