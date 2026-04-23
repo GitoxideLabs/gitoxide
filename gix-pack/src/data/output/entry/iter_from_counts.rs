@@ -9,10 +9,9 @@ pub(crate) mod function {
             Progress,
         },
     };
-    use gix_hash::ObjectId;
 
     use super::{reduce, util, Error, Mode, Options, Outcome, ProgressId};
-    use crate::{data::output, FindExt};
+    use crate::data::output;
 
     /// Given a known list of object `counts`, calculate entries ready to be put into a data pack.
     ///
@@ -218,51 +217,92 @@ pub(crate) mod function {
                 )
             }
             Mode::CustomizedDeltaTopo { topo, cache_capacity } => {
-                // TODO: parallel, progress
+                let sorted_counts = Arc::new(counts);
+                let progress = Arc::new(parking_lot::Mutex::new(progress));
+                let chunks = util::ChunkRanges::new(chunk_size, sorted_counts.len());
+
                 // TODO: reuse delta
                 if allow_thin_pack {
                     todo!("support allow_thin_pack");
                 }
-                let mut buffer_a = Vec::new();
-                let mut buffer_b = Vec::new();
-                let mut buffer_c = Vec::new();
-                let mut obj_cache = crate::cache::lru::MemoryCappedHashmap::new(cache_capacity);
-                let oid_index_mapping = counts
-                    .iter()
-                    .enumerate()
-                    .map(|(index, count)| (count.id, index))
-                    .collect::<std::collections::HashMap<_, _>>();
-                let out = counts
-                    .iter()
-                    .map(|count| {
-                        let oid = count.id;
-                        if let Some(soruce_oid) = topo.get(&oid) {
-                            let (mut target, _) = db
-                                .try_find_cached(&oid, &mut buffer_a, &mut obj_cache)
-                                .unwrap()
-                                .unwrap(); // TODO: replace with map_err
-                            let (source, _) = db
-                                .try_find_cached(&soruce_oid, &mut buffer_b, &mut obj_cache)
-                                .unwrap()
-                                .unwrap(); // TODO: replace with map_err
-                            let delta_insts = crate::data::delta::compute_delta(source.data, target.data);
-                            buffer_c.clear();
-                            for inst in delta_insts {
-                                inst.encode(&mut buffer_c).unwrap(); // TODO: replace with map_err
-                            }
-                            target.data = buffer_c.as_slice();
-                            // TODO: replace with map_err
-                            output::Entry::from_delta_ref(count, &target, *oid_index_mapping.get(&oid).unwrap())
-                        } else {
-                            let (data, _) = db
-                                .try_find_cached(&oid, &mut buffer_a, &mut obj_cache)
-                                .unwrap()
-                                .unwrap(); // TODO: replace with map_err
-                            output::Entry::from_base(count, &data)
+
+                let cache = Arc::new(std::sync::Mutex::new(crate::cache::lru::MemoryCappedHashmap::new(
+                    cache_capacity,
+                ))); // TODO: use parking_lot::Mutex
+                let oid_index_mapping = Arc::new(
+                    sorted_counts
+                        .iter()
+                        .enumerate()
+                        .map(|(index, count)| (count.id, index))
+                        .collect::<std::collections::HashMap<_, _>>(),
+                ); // TODO: rearrange delta solving order or lru to avoid cache peak
+                parallel::reduce::Stepwise::new(
+                    chunks.enumerate(),
+                    thread_limit,
+                    {
+                        let progress = Arc::clone(&progress);
+                        move |n| {
+                            (
+                                Vec::new(), // buffer object data for target
+                                Vec::new(), // buffer object data for source
+                                progress
+                                    .lock()
+                                    .add_child_with_id(format!("thread {n}"), gix_features::progress::UNKNOWN),
+                            )
                         }
-                    })
-                    .collect::<Vec<_>>();
-                todo!()
+                    },
+                    {
+                        let sorted_counts = Arc::clone(&sorted_counts);
+                        let oid_index_mapping = Arc::clone(&oid_index_mapping);
+                        let cache = Arc::clone(&cache);
+                        move |(chunk_id, chunk_range): (SequenceId, std::ops::Range<usize>),
+                              (buf_t, buf_s, progress)| {
+                            let mut out = Vec::new();
+                            let chunk = &sorted_counts[chunk_range];
+                            let stats = Outcome::default();
+                            progress.init(Some(chunk.len()), gix_features::progress::count("objects"));
+
+                            for count in chunk.iter() {
+                                let oid = count.id;
+                                let entry = if let Some(soruce_oid) = topo.get(&oid) {
+                                    let (mut target, _) = db
+                                        .try_find_cached(&oid, buf_t, &mut *cache.lock().unwrap()) // TODO: replace with map_err
+                                        .unwrap()
+                                        .unwrap(); // TODO: replace with map_err
+                                    let (source, _) = db
+                                        .try_find_cached(&soruce_oid, buf_s, &mut *cache.lock().unwrap())
+                                        .unwrap()
+                                        .unwrap(); // TODO: replace with map_err
+                                    let delta_insts = crate::data::delta::compute_delta(source.data, target.data);
+                                    let mut delta_data_buf = Vec::new();
+                                    for inst in delta_insts {
+                                        inst.encode(&mut delta_data_buf).unwrap();
+                                        // TODO: replace with map_err
+                                    }
+                                    target.data = delta_data_buf.as_slice();
+                                    let entry = output::Entry::from_delta_ref(
+                                        count,
+                                        &target,
+                                        *oid_index_mapping.get(&oid).unwrap(),
+                                    ); // TODO: replace with map_err
+                                       // target is dropped here, releasing the borrow on delta_data
+                                    entry
+                                } else {
+                                    let (data, _) = db
+                                        .try_find_cached(&oid, buf_t, &mut *cache.lock().unwrap())
+                                        .unwrap()
+                                        .unwrap(); // TODO: replace with map_err
+                                    output::Entry::from_base(count, &data)
+                                }
+                                .unwrap(); // TODO: replace with map_err
+                                out.push(entry);
+                                progress.inc();
+                            }
+                            Ok((chunk_id, out, stats))
+                        }
+                    },
+                    reduce::Statistics::default(),
+                )
             }
         }
     }
