@@ -222,12 +222,10 @@ mod tests {
 
         let mut delta_data = Vec::new();
         for inst in delta {
-            eprintln!("inst: {inst:?}");
             inst.encode(&mut delta_data).unwrap();
         }
 
         let mut restored_target = vec![0u8; target.len()];
-        eprintln!("delta_data: {delta_data:?}");
         apply(source, &mut restored_target, &delta_data).unwrap();
         assert_eq!(target, restored_target);
     }

@@ -494,6 +494,7 @@ mod types {
         /// Key object refers to delta target, value object refers to delta source.
         /// Treat objects missing in keys as base objects.
         /// If the required delta does not exist, it will be computed.
+        #[cfg_attr(feature = "serde", serde(skip))]
         CustomizedDeltaTopo {
             /// A mapping from a delta target's Object ID to its corresponding delta source (base) ID.
             topo: std::collections::HashMap<ObjectId, ObjectId>,
