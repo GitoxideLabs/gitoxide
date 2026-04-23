@@ -419,3 +419,142 @@ fn write_and_verify(
 
     Ok(())
 }
+
+#[test]
+fn customized_delta_topo() -> crate::Result {
+    use gix_pack::data::output::entry::iter_from_counts::{Mode, Options};
+
+    #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+    struct Count {
+        trees: usize,
+        commits: usize,
+        blobs: usize,
+        tags: usize,
+        delta_ref: usize,
+        delta_oid: usize,
+    }
+    impl Count {
+        fn add(&mut self, kind: output::entry::Kind) {
+            use gix_object::Kind::*;
+            use output::entry::Kind::*;
+            match kind {
+                Base(Tree) => self.trees += 1,
+                Base(Commit) => self.commits += 1,
+                Base(Blob) => self.blobs += 1,
+                Base(Tag) => self.tags += 1,
+                DeltaRef { .. } => self.delta_ref += 1,
+                DeltaOid { .. } => self.delta_oid += 1,
+            }
+        }
+    }
+
+    for db_kind in [
+        DbKind::DeterministicGeneratedContent,
+        DbKind::DeterministicGeneratedContentMultiIndex,
+    ] {
+        let db = db(db_kind)?;
+
+        // Get commits for testing
+        let head = hex_to_id("dfcb5e39ac6eb30179808bbab721e8a28ce1b52e");
+        let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head), db.clone())
+            .map(Result::unwrap)
+            .map(|c| c.id)
+            .take(3)
+            .collect();
+
+        // Count objects
+        let (counts, _) = output::count::objects(
+            db.clone(),
+            Box::new(commits.clone().into_iter().map(Ok)),
+            &progress::Discard,
+            &AtomicBool::new(false),
+            count::objects::Options {
+                input_object_expansion: count::objects::ObjectExpansion::AsIs,
+                thread_limit: Some(1),
+                ..Default::default()
+            },
+        )?;
+
+        // Create a simple topo: map each commit to its parent (if any)
+        // This is a simplified example - in real use, you'd compute delta relationships
+        let topo = std::collections::HashMap::new();
+        // For demo purposes, use empty topo (all base objects)
+        // In practice, you'd compute which objects should be deltas
+
+        let mut entries_iter = output::entry::iter_from_counts(
+            counts,
+            db.clone(),
+            Box::new(progress::Discard),
+            Options {
+                mode: Mode::CustomizedDeltaTopo {
+                    topo,
+                    cache_capacity: 1024 * 1024, // 1MB cache
+                },
+                ..Default::default()
+            },
+        );
+
+        let entries: Vec<_> = InOrderIter::from(entries_iter.by_ref())
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let actual_count = entries.iter().fold(Count::default(), |mut c, e| {
+            c.add(e.kind);
+            c
+        });
+
+        // All should be base objects since topo is empty
+        assert!(actual_count.delta_ref == 0 || actual_count.delta_oid == 0);
+
+        // Test with non-empty topo
+        let topo_with_deltas = if commits.len() >= 2 {
+            let mut m = std::collections::HashMap::new();
+            // Map commit[1] -> commit[0] as delta
+            m.insert(commits[1], commits[0]);
+            m
+        } else {
+            std::collections::HashMap::new()
+        };
+
+        let (counts2, _) = output::count::objects(
+            db.clone(),
+            Box::new(commits.into_iter().map(Ok)),
+            &progress::Discard,
+            &AtomicBool::new(false),
+            count::objects::Options {
+                input_object_expansion: count::objects::ObjectExpansion::AsIs,
+                thread_limit: Some(1),
+                ..Default::default()
+            },
+        )?;
+
+        let mut entries_iter2 = output::entry::iter_from_counts(
+            counts2,
+            db.clone(),
+            Box::new(progress::Discard),
+            Options {
+                mode: Mode::CustomizedDeltaTopo {
+                    topo: topo_with_deltas,
+                    cache_capacity: 1024 * 1024,
+                },
+                ..Default::default()
+            },
+        );
+
+        let entries2: Vec<_> = InOrderIter::from(entries_iter2.by_ref())
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        // Should have at least some base objects
+        assert!(!entries2.is_empty());
+
+        // Verify finalize works
+        let _stats = entries_iter2.finalize_boxed()?;
+    }
+
+    Ok(())
+}

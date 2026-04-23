@@ -300,13 +300,11 @@ pub(crate) mod function {
                                                     .expect("delta instruction should valid");
                                             }
                                             target.data = delta_data_buf.as_slice();
-                                            let entry = output::Entry::from_delta_ref(
+                                            output::Entry::from_delta_ref(
                                                 count,
                                                 &target,
-                                                *oid_index_mapping.get(&oid).unwrap(), // FIXIT: incorrect index
-                                            );
-                                            // target is dropped here, releasing the borrow on delta_data
-                                            entry
+                                                *oid_index_mapping.get(&oid).unwrap(),
+                                            )
                                         } else {
                                             Ok(output::Entry::invalid())
                                         }

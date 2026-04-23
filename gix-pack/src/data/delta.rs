@@ -180,15 +180,16 @@ pub fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
             break;
         }
     }
-    vec![
-        Instruction::Copy {
-            offset: 0,
-            size: common_prefix_len as u32,
-        },
-        Instruction::Add {
-            data: target[common_prefix_len..].into(),
-        },
-    ]
+
+    let mut insts = Vec::new();
+    insts.push(Instruction::Copy {
+        offset: 0,
+        size: common_prefix_len as u32,
+    });
+    for chunk in target[common_prefix_len..].chunks(127) {
+        insts.push(Instruction::Add { data: chunk.to_vec() });
+    }
+    insts
 }
 
 #[cfg(test)]
