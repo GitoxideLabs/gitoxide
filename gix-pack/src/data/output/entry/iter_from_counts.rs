@@ -446,8 +446,6 @@ mod reduce {
 }
 
 mod types {
-    use gix_hash::ObjectId;
-
     use crate::data::output::entry;
 
     /// Information gathered during the run of [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
@@ -499,7 +497,7 @@ mod types {
         #[cfg(feature = "pack-cache-lru-dynamic")]
         CustomizedDeltaTopo {
             /// A mapping from a delta target's Object ID to its corresponding delta source (base) ID.
-            topo: std::collections::HashMap<ObjectId, ObjectId>,
+            topo: std::collections::HashMap<gix_hash::ObjectId, gix_hash::ObjectId>,
             /// The maximum cache capacity to store object data while find object. Count in bytes.
             cache_capacity: usize,
         },

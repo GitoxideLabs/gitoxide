@@ -420,6 +420,7 @@ fn write_and_verify(
     Ok(())
 }
 
+#[cfg(feature = "all-features")]
 #[test]
 fn customized_delta_topo() -> crate::Result {
     use gix_pack::data::output::entry::iter_from_counts::{Mode, Options};
