@@ -113,7 +113,7 @@ pub enum Instruction<'a> {
     /// Insert bytes embedded in instruction
     Add {
         /// Data to add
-        data: &'a [u8], // TODO: use borrow here
+        data: &'a [u8],
     },
 }
 
