@@ -103,7 +103,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
 
 /// Delta instruction
 #[derive(Debug)]
-pub enum Instruction {
+pub enum Instruction<'a> {
     /// Copy data from source
     Copy {
         /// Start position to copy
@@ -114,11 +114,11 @@ pub enum Instruction {
     /// Insert bytes embedded in instruction
     Add {
         /// Data to add
-        data: Vec<u8>, // TODO: use borrow here
+        data: &'a [u8], // TODO: use borrow here
     },
 }
 
-impl Instruction {
+impl<'a> Instruction<'a> {
     /// Encode instruction to bytes.
     pub fn encode(self, mut writer: impl Write) -> Result<(), EncodeError> {
         match self {
@@ -161,7 +161,7 @@ impl Instruction {
 
                 let header = data.len() as u8;
                 writer.write(&[header]).map_err(|_| EncodeError::IOError)?;
-                writer.write(data.as_slice()).map_err(|_| EncodeError::IOError)?;
+                writer.write(data).map_err(|_| EncodeError::IOError)?;
                 Ok(())
             }
         }
@@ -169,7 +169,10 @@ impl Instruction {
 }
 
 /// Calcuate delta instructions from `source` to `target`.
-pub fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
+pub fn compute_delta<'a, 'b>(source: &'a [u8], target: &'b [u8]) -> Vec<Instruction<'a>>
+where
+    'b: 'a,
+{
     // TODO: more efficient
     // TODO: more configurable
     let mut common_prefix_len: usize = 0;
@@ -187,7 +190,7 @@ pub fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
         size: common_prefix_len as u32,
     });
     for chunk in target[common_prefix_len..].chunks(127) {
-        insts.push(Instruction::Add { data: chunk.to_vec() });
+        insts.push(Instruction::Add { data: chunk });
     }
     insts
 }
@@ -196,7 +199,7 @@ pub fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
 mod tests {
     use super::*;
 
-    fn apply_delta(source: &[u8], delta: &Vec<Instruction>) -> Vec<u8> {
+    fn apply_delta<'a>(source: &'a [u8], delta: &Vec<Instruction<'a>>) -> Vec<u8> {
         let mut buf = Vec::new();
         for inst in delta {
             match inst {
