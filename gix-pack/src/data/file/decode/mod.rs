@@ -20,7 +20,7 @@ pub enum Error {
     #[error("Entry too large to fit in memory")]
     OutOfMemory,
     #[error(transparent)]
-    Delta(#[from] crate::data::delta::apply::Error),
+    Delta(#[from] crate::data::delta::ApplyError),
 }
 
 impl From<TryReserveError> for Error {

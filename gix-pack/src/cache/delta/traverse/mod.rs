@@ -42,7 +42,7 @@ pub enum Error {
     #[error("Failed to spawn thread when switching to work-stealing mode")]
     SpawnThread(#[from] std::io::Error),
     #[error(transparent)]
-    Delta(#[from] crate::data::delta::apply::Error),
+    Delta(#[from] crate::data::delta::ApplyError),
 }
 
 /// Additional context passed to the `inspect_object(…)` function of the [`Tree::traverse()`] method.

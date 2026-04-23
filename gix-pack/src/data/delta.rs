@@ -1,33 +1,27 @@
 use std::io::Write;
 
-///
-pub mod apply {
-    /// Returned when failing to apply deltas.
-    #[derive(thiserror::Error, Debug)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error("Encountered unsupported command code: 0")]
-        UnsupportedCommandCode,
-        #[error("Delta copy from base: byte slices must match")]
-        DeltaCopyBaseSliceMismatch,
-        #[error("Delta copy data: byte slices must match")]
-        DeltaCopyDataSliceMismatch,
-    }
+/// Returned when failing to apply deltas.
+#[derive(thiserror::Error, Debug)]
+#[allow(missing_docs)]
+pub enum ApplyError {
+    #[error("Encountered unsupported command code: 0")]
+    UnsupportedCommandCode,
+    #[error("Delta copy from base: byte slices must match")]
+    DeltaCopyBaseSliceMismatch,
+    #[error("Delta copy data: byte slices must match")]
+    DeltaCopyDataSliceMismatch,
 }
 
-///
-pub mod encode {
-    /// Returned when failing to encode deltas.
-    #[derive(thiserror::Error, Debug)]
-    #[allow(missing_docs)]
-    pub enum Error {
-        #[error("Failed to write bytes")]
-        IOError,
-        #[error("Too large size in Copy instruction, should <= 0x00ffffff")]
-        TooLargeSize,
-        #[error("Too large data in Add instruction, length should <= 127")]
-        TooLargeData,
-    }
+/// Returned when failing to encode deltas.
+#[derive(thiserror::Error, Debug)]
+#[allow(missing_docs)]
+pub enum EncodeError {
+    #[error("Failed to write bytes")]
+    IOError,
+    #[error("Too large size in Copy instruction, should <= 0x00ffffff")]
+    TooLargeSize,
+    #[error("Too large data in Add instruction, length should <= 127")]
+    TooLargeData,
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)
@@ -47,7 +41,7 @@ pub(crate) fn decode_header_size(d: &[u8]) -> (u64, usize) {
     (size, consumed)
 }
 
-pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), apply::Error> {
+pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), ApplyError> {
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
         eprintln!("index: {i}, cmd: {cmd}");
@@ -89,14 +83,14 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                 }
                 let ofs = ofs as usize;
                 Write::write(&mut target, &base[ofs..ofs + size as usize])
-                    .map_err(|_e| apply::Error::DeltaCopyBaseSliceMismatch)?;
+                    .map_err(|_e| ApplyError::DeltaCopyBaseSliceMismatch)?;
             }
             // Reserved
-            0 => return Err(apply::Error::UnsupportedCommandCode),
+            0 => return Err(ApplyError::UnsupportedCommandCode),
             // Add
             size => {
                 Write::write(&mut target, &data[i..i + *size as usize])
-                    .map_err(|_e| apply::Error::DeltaCopyDataSliceMismatch)?;
+                    .map_err(|_e| ApplyError::DeltaCopyDataSliceMismatch)?;
                 i += *size as usize;
             }
         }
@@ -117,7 +111,7 @@ pub enum Instruction {
         /// Data length in bytes
         size: u32,
     },
-    /// Add data embedded in instruction
+    /// Insert bytes embedded in instruction
     Add {
         /// Data to add
         data: Vec<u8>, // TODO: use borrow here
@@ -126,7 +120,7 @@ pub enum Instruction {
 
 impl Instruction {
     /// Encode instruction to bytes.
-    pub fn encode(self, mut writer: impl Write) -> Result<(), encode::Error> {
+    pub fn encode(self, mut writer: impl Write) -> Result<(), EncodeError> {
         match self {
             Self::Copy { offset, mut size } => {
                 let mut header = 0x80u8;
@@ -136,7 +130,7 @@ impl Instruction {
                 if size == 0x10000 {
                     size = 0;
                 } else if size > 0x00ffffff {
-                    return Err(encode::Error::TooLargeSize);
+                    return Err(EncodeError::TooLargeSize);
                 }
 
                 for i in 0..4 {
@@ -156,18 +150,18 @@ impl Instruction {
                     }
                 }
 
-                writer.write_all(&[header]).map_err(|_| encode::Error::IOError)?;
-                writer.write_all(&buf[..n]).map_err(|_| encode::Error::IOError)?;
+                writer.write_all(&[header]).map_err(|_| EncodeError::IOError)?;
+                writer.write_all(&buf[..n]).map_err(|_| EncodeError::IOError)?;
                 Ok(())
             }
             Self::Add { data } => {
                 if data.len() > 127 {
-                    return Err(encode::Error::TooLargeData);
+                    return Err(EncodeError::TooLargeData);
                 }
 
                 let header = data.len() as u8;
-                writer.write(&[header]).map_err(|_| encode::Error::IOError)?;
-                writer.write(data.as_slice()).map_err(|_| encode::Error::IOError)?;
+                writer.write(&[header]).map_err(|_| EncodeError::IOError)?;
+                writer.write(data.as_slice()).map_err(|_| EncodeError::IOError)?;
                 Ok(())
             }
         }
