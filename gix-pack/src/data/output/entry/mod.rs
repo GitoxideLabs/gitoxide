@@ -131,11 +131,38 @@ impl output::Entry {
         })
     }
 
-    /// Create a new instance from the given `oid` and its corresponding git object data `obj`.
-    pub fn from_data(count: &output::Count, obj: &gix_object::Data<'_>) -> Result<Self, Error> {
+    /// Create a new instance with type Base from the given `oid` and its corresponding git object data `obj`.
+    pub fn from_base(count: &output::Count, obj: &gix_object::Data<'_>) -> Result<Self, Error> {
         Ok(output::Entry {
             id: count.id.to_owned(),
             kind: Kind::Base(obj.kind),
+            decompressed_size: obj.data.len(),
+            compressed_data: {
+                let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());
+                if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
+                    match err.kind() {
+                        std::io::ErrorKind::Other => return Err(Error::ZlibDeflate(err)),
+                        err => unreachable!("Should never see other errors than zlib, but got {:?}", err),
+                    }
+                }
+                out.flush()?;
+                out.into_inner()
+            },
+        })
+    }
+
+    /// Like [`from_base()`], but with type OfsDelta.
+    /// `object_index` is the absolute index to the object.
+    pub fn from_delta_ref(
+        count: &output::Count,
+        obj: &gix_object::Data<'_>,
+        object_index: usize,
+    ) -> Result<Self, Error> {
+        Ok(output::Entry {
+            id: count.id.to_owned(),
+            kind: Kind::DeltaRef {
+                object_index: object_index,
+            },
             decompressed_size: obj.data.len(),
             compressed_data: {
                 let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());

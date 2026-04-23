@@ -123,13 +123,25 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
     Ok(())
 }
 
+/// Delta instruction
 #[derive(Debug)]
-enum Instruction {
-    Copy { offset: u32, size: u32 },
-    Add { data: Vec<u8> },
+pub enum Instruction {
+    /// Copy data from source
+    Copy {
+        /// Start position to copy
+        offset: u32,
+        /// Data length in bytes
+        size: u32,
+    },
+    /// Add data embedded in instruction
+    Add {
+        /// Data to add
+        data: Vec<u8>, // TODO: use borrow here
+    },
 }
 
 impl Instruction {
+    /// Encode instruction to bytes.
     pub fn encode(self, mut writer: impl Write) -> Result<(), encode::Error> {
         match self {
             Self::Copy { offset, mut size } => {
@@ -178,7 +190,10 @@ impl Instruction {
     }
 }
 
-fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
+/// Calcuate delta instructions from `source` to `target`.
+pub fn compute_delta(source: &[u8], target: &[u8]) -> Vec<Instruction> {
+    // TODO: more efficient
+    // TODO: more configurable
     let mut common_prefix_len: usize = 0;
     for (s, t) in source.iter().zip(target) {
         if s == t {
