@@ -13,6 +13,24 @@ pub(crate) mod function {
     use super::{reduce, util, Error, Mode, Options, Outcome, ProgressId};
     use crate::data::output;
 
+    type Item = Result<(SequenceId, Vec<output::Entry>), Error>;
+    type Stats = reduce::Statistics<Error>;
+    type StatsOutput = <Stats as gix_features::parallel::Reduce>::Output;
+    type StatsError = <Stats as gix_features::parallel::Reduce>::Error;
+
+    pub trait DynFinalizeIterator: Iterator<Item = Item> {
+        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError>;
+    }
+
+    impl<T> DynFinalizeIterator for T
+    where
+        T: Iterator<Item = Item> + parallel::reduce::Finalize<Reduce = Stats>,
+    {
+        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError> {
+            self.finalize()
+        }
+    }
+
     /// Given a known list of object `counts`, calculate entries ready to be put into a data pack.
     ///
     /// This allows objects to be written quite soon without having to wait for the entire pack to be built in memory.
@@ -53,8 +71,7 @@ pub(crate) mod function {
             thread_limit,
             chunk_size,
         }: Options,
-    ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), Error>>
-           + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
+    ) -> Box<dyn DynFinalizeIterator>
     where
         Find: crate::Find + Send + Clone + 'static,
     {
@@ -104,7 +121,7 @@ pub(crate) mod function {
                 let progress = Arc::new(parking_lot::Mutex::new(progress));
                 let chunks = util::ChunkRanges::new(chunk_size, sorted_counts.len());
 
-                parallel::reduce::Stepwise::new(
+                Box::new(parallel::reduce::Stepwise::new(
                     chunks.enumerate(),
                     thread_limit,
                     {
@@ -214,7 +231,7 @@ pub(crate) mod function {
                         }
                     },
                     reduce::Statistics::default(),
-                )
+                ))
             }
             Mode::CustomizedDeltaTopo { topo, cache_capacity } => {
                 let sorted_counts = Arc::new(counts);
@@ -236,7 +253,7 @@ pub(crate) mod function {
                         .map(|(index, count)| (count.id, index))
                         .collect::<std::collections::HashMap<_, _>>(),
                 ); // TODO: rearrange delta solving order or lru to avoid cache peak
-                parallel::reduce::Stepwise::new(
+                Box::new(parallel::reduce::Stepwise::new(
                     chunks.enumerate(),
                     thread_limit,
                     {
@@ -310,7 +327,7 @@ pub(crate) mod function {
                         }
                     },
                     reduce::Statistics::default(),
-                )
+                ))
             }
         }
     }

@@ -2,8 +2,8 @@ use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
 use anyhow::anyhow;
 use gix::{
-    hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack, parallel::InOrderIter, prelude::Finalize,
-    progress, traverse, Count, NestedProgress, Progress,
+    hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack, parallel::InOrderIter, progress, traverse, Count,
+    NestedProgress, Progress,
 };
 
 use crate::OutputFormat;
@@ -284,7 +284,7 @@ where
     } else {
         writeln!(out, "{pack_name}")?;
     }
-    stats.entries = in_order_entries.inner.finalize()?;
+    stats.entries = in_order_entries.inner.finalize_boxed()?;
 
     write_progress.show_throughput(start);
     entries_progress.show_throughput(start);

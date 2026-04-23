@@ -1,9 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use gix_features::{
-    parallel::{reduce::Finalize, InOrderIter},
-    progress,
-};
+use gix_features::{parallel::InOrderIter, progress};
 use gix_odb::{pack, pack::FindExt};
 use gix_pack::data::{
     output,
@@ -304,7 +301,7 @@ fn traversals() -> crate::Result {
             });
             assert_eq!(actual_count, expected_count);
             assert_eq!(counts_len, expected_count.total());
-            let stats = entries_iter.finalize()?;
+            let stats = entries_iter.finalize_boxed()?;
             assert_eq!(stats, expected_entries_outcome);
 
             assert_eq!(
