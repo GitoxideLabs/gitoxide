@@ -160,9 +160,7 @@ impl output::Entry {
     ) -> Result<Self, Error> {
         Ok(output::Entry {
             id: count.id.to_owned(),
-            kind: Kind::DeltaRef {
-                object_index: object_index,
-            },
+            kind: Kind::DeltaRef { object_index },
             decompressed_size: obj.data.len(),
             compressed_data: {
                 let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());

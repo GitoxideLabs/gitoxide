@@ -44,7 +44,6 @@ pub(crate) fn decode_header_size(d: &[u8]) -> (u64, usize) {
 pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(), ApplyError> {
     let mut i = 0;
     while let Some(cmd) = data.get(i) {
-        eprintln!("index: {i}, cmd: {cmd}");
         i += 1;
         match cmd {
             // Copy
@@ -118,7 +117,7 @@ pub enum Instruction<'a> {
     },
 }
 
-impl<'a> Instruction<'a> {
+impl Instruction<'_> {
     /// Encode instruction to bytes.
     pub fn encode(self, mut writer: impl Write) -> Result<(), EncodeError> {
         match self {

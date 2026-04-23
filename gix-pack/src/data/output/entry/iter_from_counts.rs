@@ -233,6 +233,7 @@ pub(crate) mod function {
                     reduce::Statistics::default(),
                 ))
             }
+            #[cfg(feature = "pack-cache-lru-dynamic")]
             Mode::CustomizedDeltaTopo { topo, cache_capacity } => {
                 let sorted_counts = Arc::new(counts);
                 let progress = Arc::new(parking_lot::Mutex::new(progress));
@@ -289,9 +290,9 @@ pub(crate) mod function {
                                     )
                                     .map_err(Error::Find)
                                 };
-                                let entry = if let Some(soruce_oid) = topo.get(&oid) {
+                                let entry = if let Some(source_oid) = topo.get(&oid) {
                                     if let Some((mut target, _)) = db_find_cached(&oid, buf_t)? {
-                                        if let Some((source, _)) = db_find_cached(&soruce_oid, buf_s)? {
+                                        if let Some((source, _)) = db_find_cached(source_oid, buf_s)? {
                                             let delta_insts =
                                                 crate::data::delta::compute_delta(source.data, target.data);
                                             let mut delta_data_buf = Vec::new();
@@ -331,7 +332,7 @@ pub(crate) mod function {
     }
 
     fn rearrange_counts_by_pack_id(
-        counts: &mut Vec<output::Count>,
+        counts: &mut [output::Count],
         progress: &mut Box<dyn DynNestedProgress + 'static>,
     ) -> Vec<(u32, std::ops::Range<usize>)> {
         let mut progress = progress.add_child_with_id("sorting".into(), ProgressId::SortEntries.into());
@@ -495,6 +496,7 @@ mod types {
         /// Treat objects missing in keys as base objects.
         /// If the required delta does not exist, it will be computed.
         #[cfg_attr(feature = "serde", serde(skip))]
+        #[cfg(feature = "pack-cache-lru-dynamic")]
         CustomizedDeltaTopo {
             /// A mapping from a delta target's Object ID to its corresponding delta source (base) ID.
             topo: std::collections::HashMap<ObjectId, ObjectId>,
