@@ -192,6 +192,40 @@ title "Porcelain ${kind}"
         fi
       )
     )
+    (with "a bare repository"
+      (sandbox
+        bare-repo-with-remotes bare-origin.git origin https://example.com/bare-origin
+        snapshot="$snapshot/tool-bare"
+
+        title "ein tool organize (bare)"
+        (when "running 'organize'"
+          snapshot="$snapshot/organize"
+          (with "no arguments"
+            it "succeeds and informs about the operations that it WOULD do" && {
+              WITH_SNAPSHOT="$snapshot/no-args-success" \
+              expect_run_sh $SUCCESSFULLY "$exe tool organize 2>/dev/null"
+            }
+
+            it "does not change the directory structure at all" && {
+              WITH_SNAPSHOT="$snapshot/initial-directory-structure" \
+              expect_run_sh $SUCCESSFULLY 'find . -maxdepth 2 -type d | sort'
+            }
+          )
+
+          (with "--execute"
+            it "succeeds" && {
+              WITH_SNAPSHOT="$snapshot/execute-success" \
+              expect_run_sh $SUCCESSFULLY "$exe tool organize --execute 2>/dev/null"
+            }
+
+            it "moves the bare repository into the remote-host tree" && {
+              WITH_SNAPSHOT="$snapshot/directory-structure-after-organize" \
+              expect_run_sh $SUCCESSFULLY 'find . -maxdepth 2 -type d | sort'
+            }
+          )
+        )
+      )
+    )
   )
 
   title "ein init"

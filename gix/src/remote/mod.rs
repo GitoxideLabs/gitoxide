@@ -50,6 +50,9 @@ pub mod init;
 pub mod fetch;
 
 ///
+pub mod push;
+
+///
 #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
 pub mod connect;
 

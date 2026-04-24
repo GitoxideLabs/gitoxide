@@ -56,6 +56,7 @@ gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.30
 gix-status = { version = "^0.28.0", path = "../gix-status" }
 gix-fsck = { version = "^0.19.0", path = "../gix-fsck" }
 gix-error-for-configuration-only = { package = "gix-error", version = "^0.2.1", path = "../gix-error", features = ["anyhow"] }
+gix-config-value = { version = "^0.17.1", path = "../gix-config-value" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 anyhow = "1.0.102"
 thiserror = "2.0.18"

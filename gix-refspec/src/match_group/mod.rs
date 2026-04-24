@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::{parse::Operation, types::Mode, MatchGroup, RefSpecRef};
 
 pub(crate) mod types;
-pub use types::{match_lhs, match_rhs, Item, Mapping, Source, SourceRef};
+pub use types::{match_lhs, match_push, match_rhs, Item, Mapping, Source, SourceRef};
 
 ///
 pub mod validate;
@@ -35,7 +35,8 @@ impl<'spec> MatchGroup<'spec> {
     /// Object names are never mapped and always returned as match.
     ///
     /// Note that negative matches are not part of the return value, so they are not observable but will be used to remove mappings.
-    // TODO: figure out how to deal with push-specs, probably when push is being implemented.
+    ///
+    /// Push-specs are matched via [`MatchGroup::match_push`].
     pub fn match_lhs<'item>(
         self,
         mut items: impl Iterator<Item = Item<'item>> + Clone,
@@ -175,6 +176,124 @@ impl<'spec> MatchGroup<'spec> {
             }
         }
         match_rhs::Outcome {
+            group: self,
+            mappings: out,
+        }
+    }
+
+    /// Match all `items` (local references) against all *push* specs present in this group,
+    /// returning deduplicated mappings from local source to remote destination.
+    ///
+    /// `items` are expected to be **local** references.  For each item the spec's left-hand side
+    /// (source) is consulted; when it matches, the right-hand side (destination) determines the
+    /// remote ref name — mirroring git's `match_push_refs` / `match_explicit_refs` logic.
+    ///
+    /// Special cases:
+    /// - **Delete spec** (`":refs/heads/gone"`) — the spec has no source; the mapping carries
+    ///   `item_index = None` and `rhs = Some("refs/heads/gone")`.  Callers treat this as a remote
+    ///   deletion request.
+    /// - **One-sided spec** (`"refs/heads/main"`) — the source and destination are the same ref
+    ///   name, following git's convention of pushing to the same remote ref.
+    ///
+    /// Note that negative specs are not part of the return value; they are applied internally to
+    /// suppress matching mappings.
+    pub fn match_push<'item>(
+        self,
+        mut items: impl Iterator<Item = Item<'item>> + Clone,
+    ) -> match_push::Outcome<'spec, 'item> {
+        let mut out = Vec::<Mapping<'item, 'spec>>::new();
+        let mut seen = BTreeSet::default();
+        let mut push_unique = |mapping| {
+            if seen.insert(calculate_hash(&mapping)) {
+                out.push(mapping);
+            }
+        };
+
+        // First pass: handle delete specs (lhs=None, rhs=Some) — these do not require an item.
+        for (spec_index, (spec, matcher)) in self
+            .specs
+            .iter()
+            .zip(self.specs.iter().copied().map(Matcher::from).collect::<Vec<_>>().iter())
+            .enumerate()
+        {
+            if spec.mode == crate::types::Mode::Negative {
+                continue;
+            }
+            if let (None, Some(rhs)) = (matcher.lhs, matcher.rhs) {
+                // Delete spec: src is empty, dst names the remote ref to delete.
+                push_unique(Mapping {
+                    item_index: None,
+                    lhs: SourceRef::FullName(std::borrow::Cow::Borrowed(bstr::BStr::new(b""))),
+                    rhs: Some(rhs.to_bstr()),
+                    spec_index,
+                });
+            }
+        }
+
+        // Second pass: match local items against specs with a source pattern.
+        let matchers: Vec<Option<Matcher<'_>>> = self
+            .specs
+            .iter()
+            .copied()
+            .map(Matcher::from)
+            .map(|m| {
+                // Skip specs with no lhs (delete specs, handled above) and negative specs.
+                if m.lhs.is_none() {
+                    None
+                } else {
+                    Some(m)
+                }
+            })
+            .collect();
+
+        let mut has_negation = false;
+        for (spec_index, (spec, matcher)) in self.specs.iter().zip(matchers.iter()).enumerate() {
+            if spec.mode == crate::types::Mode::Negative {
+                has_negation = true;
+                continue;
+            }
+            let Some(matcher) = matcher else { continue };
+            for (item_index, item) in items.clone().enumerate() {
+                let (matched, rhs) = matcher.matches_lhs(item);
+                if matched {
+                    push_unique(Mapping {
+                        item_index: Some(item_index),
+                        lhs: SourceRef::FullName(item.full_ref_name.into()),
+                        rhs,
+                        spec_index,
+                    });
+                }
+            }
+        }
+
+        // Apply negations: remove any mapping whose lhs matches a negative spec.
+        if let Some(hash_kind) = has_negation.then(|| items.next().map(|i| i.target.kind())).flatten() {
+            let null_id = hash_kind.null();
+            for matcher in matchers
+                .into_iter()
+                .zip(self.specs.iter())
+                .filter_map(|(m, spec)| m.and_then(|m| (spec.mode == crate::types::Mode::Negative).then_some(m)))
+            {
+                out.retain(|m| match &m.lhs {
+                    SourceRef::ObjectId(_) => true,
+                    SourceRef::FullName(name) => {
+                        // Keep empty-name delete-spec sentinels unconditionally.
+                        if name.is_empty() {
+                            return true;
+                        }
+                        !matcher
+                            .matches_lhs(Item {
+                                full_ref_name: name.as_ref(),
+                                target: &null_id,
+                                object: None,
+                            })
+                            .0
+                    }
+                });
+            }
+        }
+
+        match_push::Outcome {
             group: self,
             mappings: out,
         }

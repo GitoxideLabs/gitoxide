@@ -1,0 +1,7 @@
+.
+./bare-origin.git
+./bare-origin.git/branches
+./bare-origin.git/hooks
+./bare-origin.git/info
+./bare-origin.git/objects
+./bare-origin.git/refs

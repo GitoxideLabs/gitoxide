@@ -13,6 +13,8 @@ mod object;
 mod open;
 #[cfg(feature = "attributes")]
 mod pathspec;
+#[cfg(feature = "blocking-network-client")]
+mod push;
 mod reference;
 mod remote;
 mod shallow;

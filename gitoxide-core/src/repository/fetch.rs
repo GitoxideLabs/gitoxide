@@ -12,6 +12,11 @@ pub struct Options {
     pub handshake_info: bool,
     pub negotiation_info: bool,
     pub open_negotiation_graph: Option<std::path::PathBuf>,
+    /// `true` when the user passed `--unshallow` on the command line (vs.
+    /// `--depth` being set by configuration). Triggers the
+    /// "--unshallow on a complete repository" die-128 check in cmd_fetch
+    /// (vendor/git/builtin/fetch.c).
+    pub unshallow_requested: bool,
 }
 
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
@@ -46,6 +51,7 @@ pub(crate) mod function {
             open_negotiation_graph,
             shallow,
             ref_specs,
+            unshallow_requested,
         }: Options,
     ) -> anyhow::Result<()>
     where
@@ -56,9 +62,108 @@ pub(crate) mod function {
             bail!("JSON output isn't yet supported for fetching.");
         }
 
-        let mut remote = crate::repository::remote::by_name_or_url(&repo, remote.as_deref())?;
+        // git's config reader validates boolean config values eagerly when
+        // cmd_fetch consults them, dying 128 with
+        //     fatal: bad boolean config value '<value>' for '<key-lowercase>'
+        // before any transport work. Enumerate the fetch-side boolean keys
+        // the C entry-point reads via git_config_bool.
+        let die_on_bad_bool = |key: &str| -> anyhow::Result<()> {
+            if let Some(v) = repo.config_snapshot().string(key) {
+                let is_valid = gix::config::Boolean::try_from(v.as_ref()).is_ok();
+                if !is_valid {
+                    use std::io::Write;
+                    let s = std::str::from_utf8(v.as_ref()).unwrap_or("");
+                    let mut stderr = std::io::stderr().lock();
+                    let _ = writeln!(
+                        stderr,
+                        "fatal: bad boolean config value '{s}' for '{}'",
+                        key.to_ascii_lowercase()
+                    );
+                    drop(stderr);
+                    std::process::exit(128);
+                }
+            }
+            Ok(())
+        };
+        die_on_bad_bool("fetch.prune")?;
+        die_on_bad_bool("fetch.pruneTags")?;
+        die_on_bad_bool("fetch.writeCommitGraph")?;
+        die_on_bad_bool("fetch.showForcedUpdates")?;
+
+        // fetch.recurseSubmodules is string-valued (yes/no/on-demand plus
+        // boolean aliases). git dies 128 on anything outside that set with
+        //     fatal: bad recurse-submodules argument: <value>
+        // Inline parser matches parse_fetch_recurse + git_parse_maybe_bool_text
+        // in vendor/git/ — mirrored in src/plumbing/options/fetch.rs for the
+        // CLI-side check; duplicated here for the config-side check because
+        // gitoxide-core cannot depend on the binary's options module.
+        if let Some(v) = repo.config_snapshot().string("fetch.recurseSubmodules") {
+            let s = std::str::from_utf8(v.as_ref()).unwrap_or("");
+            let lower = s.to_ascii_lowercase();
+            let ok = matches!(
+                lower.as_str(),
+                "no" | "false" | "off" | "0" | "yes" | "true" | "on" | "1" | "" | "on-demand"
+            );
+            if !ok {
+                // Note the different message shape for the config key vs.
+                // the CLI flag: git prints the config key itself ("bad
+                // fetch.recursesubmodules argument") rather than the
+                // generic "bad recurse-submodules argument" used for
+                // --recurse-submodules=<bogus>.
+                use std::io::Write;
+                let mut stderr = std::io::stderr().lock();
+                let _ = writeln!(stderr, "fatal: bad fetch.recursesubmodules argument: {s}");
+                drop(stderr);
+                std::process::exit(128);
+            }
+        }
+
+        // cmd_fetch in vendor/git/builtin/fetch.c:
+        //     if (unshallow) {
+        //         if (depth) die ...     // already handled at CLI dispatch
+        //         else if (!is_repository_shallow(the_repository))
+        //             die("--unshallow on a complete repository does not make sense");
+        //     }
+        // Matches git's message text + exit code (128) exactly.
+        if unshallow_requested && !repo.is_shallow() {
+            use std::io::Write;
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(
+                stderr,
+                "fatal: --unshallow on a complete repository does not make sense"
+            );
+            drop(stderr);
+            std::process::exit(128);
+        }
+
+        // cmd_fetch treats an empty `""` positional the same as no positional —
+        // `remote_get("")` returns NULL, falling through to the silent
+        // fetch_multiple(empty) path. Collapse Some("") to None up-front so
+        // the silent-exit branch below catches it.
+        let remote_explicit = remote.as_deref().filter(|s| !s.is_empty()).map(str::to_owned);
+        let remote_was_explicit = remote_explicit.is_some();
+        let mut remote = match repo.find_fetch_remote(remote_explicit.as_deref().map(Into::into)) {
+            Ok(r) => r,
+            Err(gix::remote::find::for_fetch::Error::ExactlyOneRemoteNotAvailable) if !remote_was_explicit => {
+                // cmd_fetch with no positional + no configured default remote
+                // falls through to `fetch_multiple(&list, ...)` with an empty
+                // list and returns 0. Match that silent exit-0 so
+                // `gix fetch` / `gix fetch ''` in a freshly-init'd repo
+                // doesn't spuriously diverge from git.
+                return Ok(());
+            }
+            Err(e) => return Err(e.into()),
+        };
         if !ref_specs.is_empty() {
             remote.replace_refspecs(ref_specs.iter(), gix::remote::Direction::Fetch)?;
+            remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
+        } else if remote.refspecs(gix::remote::Direction::Fetch).is_empty() {
+            // Anonymous URL remote (no configured fetch refspecs) — mirror
+            // cmd_fetch's behavior of implicitly fetching HEAD into
+            // FETCH_HEAD when no explicit refspec is given. Without this,
+            // gix's prepare_fetch returns MissingRefSpecs and the
+            // `gix fetch <url>` row diverges from git.
+            remote.replace_refspecs([b"HEAD".as_ref()], gix::remote::Direction::Fetch)?;
             remote = remote.with_fetch_tags(gix::remote::fetch::Tags::None);
         }
         let res: gix::remote::fetch::Outcome = remote

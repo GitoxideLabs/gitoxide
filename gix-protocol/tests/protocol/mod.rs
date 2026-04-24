@@ -10,3 +10,4 @@ pub mod fetch;
 mod handshake;
 pub use fetch::_impl::{fetch, FetchConnection};
 pub mod remote_progress;
+pub mod send_pack;

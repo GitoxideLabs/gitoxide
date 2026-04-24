@@ -163,6 +163,65 @@ impl crate::Repository {
         self.try_find_remote_inner(name_or_url.into(), false)
     }
 
+    /// Connect to `remote_name` in the push direction, perform a `receive-pack` handshake,
+    /// apply `refspecs`, and transmit a pack.
+    ///
+    /// This is a convenience wrapper over
+    /// [`Remote::connect`] → [`Connection::prepare_push`] → [`Prepare::with_refspecs`] → [`Prepare::transmit`].
+    ///
+    /// For finer control (dry-run, custom progress, per-call options) use the lower-level chain directly.
+    ///
+    /// # Feature flag
+    ///
+    /// Only available when the `blocking-network-client` feature is active.
+    #[cfg(feature = "blocking-network-client")]
+    pub fn push<'a, I, S>(
+        &self,
+        remote_name: impl Into<&'a crate::bstr::BStr>,
+        refspecs: I,
+    ) -> Result<crate::remote::push::Outcome, crate::repository::push::Error>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<[u8]>,
+    {
+        use crate::repository::push::Error;
+        let name_or_url = remote_name.into();
+        // Mirror `find_fetch_remote`: named remote first, anonymous URL-based remote as fallback.
+        // Matches git's `remote_get_1` which wraps any non-empty string that isn't a configured
+        // name as an on-the-fly URL remote (vendor/git/remote.c).
+        let remote = match self.try_find_remote(name_or_url).and_then(Result::ok) {
+            Some(r) => r,
+            None => self.remote_at(gix_url::parse(name_or_url)?)?,
+        };
+
+        // Materialize CLI refspecs; fall back to the remote's configured push refspecs
+        // when the caller supplied none — mirrors git's `match_push_refs` which consults
+        // `remote->push_refspec` when no positional refspec is given.
+        let mut materialized: Vec<crate::bstr::BString> = refspecs
+            .into_iter()
+            .map(|s| crate::bstr::BString::from(s.as_ref()))
+            .collect();
+        if materialized.is_empty() {
+            materialized = remote
+                .refspecs(crate::remote::Direction::Push)
+                .iter()
+                .map(|spec| spec.to_ref().to_bstring())
+                .collect();
+        }
+
+        let conn = remote.connect(crate::remote::Direction::Push).map_err(Error::Connect)?;
+        let prepare = conn
+            .prepare_push(gix_features::progress::Discard)
+            .map_err(Error::Prepare)?;
+        prepare
+            .with_refspecs(&materialized)
+            .transmit(
+                gix_features::progress::Discard,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .map_err(Error::Transmit)
+    }
+
     fn try_find_remote_inner<'a>(
         &self,
         name_or_url: impl Into<&'a BStr>,

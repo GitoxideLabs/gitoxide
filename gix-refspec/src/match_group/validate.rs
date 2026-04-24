@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use bstr::BString;
 
 use crate::{
-    match_group::{match_lhs, Source},
+    match_group::{match_lhs, match_push, Source},
     RefSpec,
 };
 
@@ -86,6 +86,47 @@ pub enum Fix {
         /// The spec that defined the mapping
         spec: RefSpec,
     },
+}
+
+impl match_push::Outcome<'_, '_> {
+    /// Validate push-direction mappings, returning an error if two local sources map to the same
+    /// remote destination (a conflict that would cause the push to overwrite an unintended ref).
+    ///
+    /// On success returns `(self, fixes)`.  The `fixes` vector is always empty for push mappings
+    /// because partial destination names are not removed (push destinations must be fully
+    /// qualified by the caller or by refspec expansion).
+    pub fn validated(self) -> Result<(Self, Vec<Fix>), Error> {
+        let mut sources_by_destinations: BTreeMap<_, Vec<_>> = BTreeMap::new();
+        for (dst, (spec_index, src)) in self
+            .mappings
+            .iter()
+            .filter_map(|m| m.rhs.as_ref().map(|dst| (dst.as_ref(), (m.spec_index, &m.lhs))))
+        {
+            let sources = sources_by_destinations.entry(dst).or_default();
+            if !sources.iter().any(|(_, lhs)| lhs == &src) {
+                sources.push((spec_index, src));
+            }
+        }
+        let mut issues = Vec::new();
+        for (dst, conflicting_sources) in sources_by_destinations.into_iter().filter(|(_, v)| v.len() > 1) {
+            issues.push(Issue::Conflict {
+                destination_full_ref_name: dst.to_owned(),
+                specs: conflicting_sources
+                    .iter()
+                    .map(|(spec_idx, _)| self.group.specs[*spec_idx].to_bstring())
+                    .collect(),
+                sources: conflicting_sources
+                    .into_iter()
+                    .map(|(_, src)| src.clone().into_owned())
+                    .collect(),
+            });
+        }
+        if !issues.is_empty() {
+            Err(Error { issues })
+        } else {
+            Ok((self, Vec::new()))
+        }
+    }
 }
 
 impl match_lhs::Outcome<'_, '_> {

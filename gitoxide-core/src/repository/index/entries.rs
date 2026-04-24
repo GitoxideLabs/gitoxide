@@ -127,6 +127,11 @@ pub(crate) mod function {
         if let Some(entries) = index.prefixed_entries(pathspec.common_prefix()) {
             stats.entries_after_prune = entries.len();
             let mut entries = entries.iter().peekable();
+            // Keep `while let Some(entry) = entries.next()` — converting to
+            // `for entry in entries.by_ref()` would compile, but the loop
+            // body reaches into the peekable at line 233 via `entries.peek()`,
+            // and the explicit `while let` form makes that pairing obvious.
+            #[allow(clippy::while_let_on_iterator)]
             while let Some(entry) = entries.next() {
                 let mut last_match = None;
                 let attrs = cache

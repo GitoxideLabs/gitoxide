@@ -44,6 +44,29 @@ pub mod match_rhs {
     }
 }
 
+///
+pub mod match_push {
+    use crate::{match_group::Mapping, MatchGroup};
+
+    /// The outcome of a push-direction matching operation of a [`MatchGroup`].
+    ///
+    /// Each [`Mapping`] describes a local source (the item the caller wants to push) and the
+    /// remote destination name it should be pushed to.  When `item_index` is `None` the mapping
+    /// represents a **delete** request: the remote ref in `rhs` should be deleted and there is no
+    /// local source object.
+    ///
+    /// Use [`validated`](Self::validated) to check for destination conflicts before acting on the
+    /// mappings.
+    #[derive(Debug, Clone)]
+    pub struct Outcome<'spec, 'item> {
+        /// The match group that produced this outcome.
+        pub group: MatchGroup<'spec>,
+        /// The mappings derived from matching local [items](crate::match_group::Item) against
+        /// push-spec sources, yielding remote destination names.
+        pub mappings: Vec<Mapping<'item, 'spec>>,
+    }
+}
+
 /// An item to match, input to various matching operations.
 #[derive(Debug, Copy, Clone)]
 pub struct Item<'a> {

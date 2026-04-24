@@ -56,6 +56,8 @@ fetch = [
 #! ### Other
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-transport/serde", "gix-hash/serde", "gix-shallow/serde"]
 
@@ -80,6 +82,7 @@ gix-date = { version = "^0.15.1", path = "../gix-date" }
 gix-utils = { version = "^0.3.1", path = "../gix-utils" }
 gix-ref = { version = "^0.61.0", path = "../gix-ref" }
 
+gix-pack = { version = "^0.68.0", path = "../gix-pack", default-features = false, features = ["generate"] }
 gix-trace = { version = "^0.1.18", path = "../gix-trace", optional = true }
 gix-negotiate = { version = "^0.29.0", path = "../gix-negotiate", optional = true }
 gix-object = { version = "^0.58.0", path = "../gix-object", optional = true }
