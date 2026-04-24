@@ -297,9 +297,11 @@ pub(crate) mod function {
                                                 crate::data::delta::compute_delta(source.data, target.data);
                                             let mut delta_data_buf = Vec::new();
                                             for inst in delta_insts {
+                                                // Panic here because delta algorithm is incorrect, should fast fail
                                                 inst.encode(&mut delta_data_buf)
                                                     .expect("delta instruction should valid");
                                             }
+                                            // Header will be encoded by `output::Entry::to_entry_header`
                                             target.data = delta_data_buf.as_slice();
                                             output::Entry::from_delta_ref(
                                                 count,
