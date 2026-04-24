@@ -510,13 +510,19 @@ fn customized_delta_topo() -> crate::Result {
 
         // Test with non-empty topo
         {
-            let topo_with_deltas = if commits.len() >= 2 {
+            // Skip if not enough commits for delta test
+            if commits.len() < 2 {
+                continue;
+            }
+
+            // Save source_oid before commits is moved
+            let source_oid = commits[0];
+
+            let topo_with_deltas = {
                 let mut m = std::collections::HashMap::new();
                 // Map commit[1] -> commit[0] as delta
-                m.insert(commits[1], commits[0]);
+                m.insert(commits[1], source_oid);
                 m
-            } else {
-                std::collections::HashMap::new()
             };
 
             let (counts2, _) = output::count::objects(
@@ -532,7 +538,7 @@ fn customized_delta_topo() -> crate::Result {
             )?;
 
             let mut entries_iter2 = output::entry::iter_from_counts(
-                counts2,
+                counts2.clone(),
                 db.clone(),
                 Box::new(progress::Discard),
                 Options {
@@ -552,6 +558,35 @@ fn customized_delta_topo() -> crate::Result {
 
             // Should have at least some base objects
             assert!(!entries2.is_empty());
+
+            // Find the index of source object in counts2 for verification
+            let source_index = counts2
+                .iter()
+                .position(|c| c.id == source_oid)
+                .expect("source commit should be in counts");
+
+            // Verify object_index in DeltaRef entries is valid and correct
+            let count_len = counts2.len();
+            let mut found_delta_ref = false;
+            for entry in &entries2 {
+                if let gix_pack::data::output::entry::Kind::DeltaRef { object_index } = entry.kind {
+                    found_delta_ref = true;
+                    assert!(
+                        object_index < count_len,
+                        "DeltaRef object_index {} should be < count_len {}",
+                        object_index,
+                        count_len
+                    );
+                    // Verify it points to the expected source
+                    assert_eq!(
+                        object_index, source_index,
+                        "DeltaRef should point to source commit, expected {} but got {}",
+                        source_index, object_index
+                    );
+                }
+            }
+            // We created topo with commit[1] -> source, so there should be DeltaRef entries
+            assert!(found_delta_ref, "Should have DeltaRef entries from customized topo");
 
             // Verify finalize works
             let _stats = entries_iter2.finalize_boxed()?;
