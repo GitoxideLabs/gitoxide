@@ -159,8 +159,8 @@ impl Instruction<'_> {
                 }
 
                 let header = data.len() as u8;
-                writer.write(&[header]).map_err(|_| EncodeError::IOError)?;
-                writer.write(data).map_err(|_| EncodeError::IOError)?;
+                writer.write_all(&[header]).map_err(|_| EncodeError::IOError)?;
+                writer.write_all(data).map_err(|_| EncodeError::IOError)?;
                 Ok(())
             }
         }
