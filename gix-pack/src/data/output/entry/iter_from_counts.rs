@@ -304,7 +304,7 @@ pub(crate) mod function {
                                             output::Entry::from_delta_ref(
                                                 count,
                                                 &target,
-                                                *oid_index_mapping.get(&oid).unwrap(),
+                                                *oid_index_mapping.get(source_oid).unwrap(), // TODO: test this
                                             )
                                         } else {
                                             Ok(output::Entry::invalid())
