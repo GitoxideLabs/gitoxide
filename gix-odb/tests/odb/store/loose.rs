@@ -8,7 +8,11 @@ use pretty_assertions::assert_eq;
 use crate::hex_to_id;
 
 fn ldb() -> Store {
-    Store::at(fixture_path_standalone("objects"), gix_hash::Kind::Sha1)
+    Store::at(fixture_path_standalone("objects"), gix_hash::Kind::Sha1, None)
+}
+
+fn limited_ldb(limit: usize) -> Store {
+    Store::at(fixture_path_standalone("objects"), gix_hash::Kind::Sha1, Some(limit))
 }
 
 pub fn object_ids() -> Vec<gix_hash::ObjectId> {
@@ -51,7 +55,7 @@ mod write {
     #[test]
     fn read_and_write() -> crate::Result {
         let dir = gix_testtools::tempfile::tempdir()?;
-        let db = loose::Store::at(dir.path(), gix_hash::Kind::Sha1);
+        let db = loose::Store::at(dir.path(), gix_hash::Kind::Sha1, None);
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
 
@@ -80,6 +84,7 @@ mod write {
         let git_store = loose::Store::at(
             gix_testtools::scripted_fixture_read_only_standalone("repo_with_loose_objects.sh")?.join(".git/objects"),
             hk,
+            None,
         );
         let expected_perm = git_store
             .object_path(&gix_hash::ObjectId::empty_blob(hk))
@@ -87,7 +92,7 @@ mod write {
             .permissions();
 
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let store = loose::Store::at(tmp.path(), hk);
+        let store = loose::Store::at(tmp.path(), hk, None);
         store.write_buf(gix_object::Kind::Blob, &[])?;
         let actual_perm = store
             .object_path(&gix_hash::ObjectId::empty_blob(hk))
@@ -105,7 +110,7 @@ mod write {
         let dir = gix_testtools::tempfile::tempdir()?;
 
         fn write_empty_trees(dir: &std::path::Path) {
-            let db = loose::Store::at(dir, gix_hash::Kind::Sha1);
+            let db = loose::Store::at(dir, gix_hash::Kind::Sha1, None);
             let empty_tree = gix_object::Tree::empty();
             for _ in 0..2 {
                 let id = db.write(&empty_tree).expect("works");
@@ -176,7 +181,7 @@ mod lookup_prefix {
             b"fake",
         )
         .unwrap();
-        let store = gix_odb::loose::Store::at(objects_dir.path(), gix_hash::Kind::Sha1);
+        let store = gix_odb::loose::Store::at(objects_dir.path(), gix_hash::Kind::Sha1, None);
         let input_id = hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980");
         let prefix = gix_hash::Prefix::new(&input_id, 4).unwrap();
         assert_eq!(
@@ -228,7 +233,7 @@ mod find {
 
     use crate::{
         hex_to_id,
-        store::loose::{ldb, locate_oid},
+        store::loose::{ldb, limited_ldb, locate_oid},
     };
 
     fn find<'a>(hex: &str, buf: &'a mut Vec<u8>) -> gix_object::Data<'a> {
@@ -241,7 +246,7 @@ mod find {
         let base = tmp.path().join("aa");
         std::fs::create_dir(&base)?;
         std::fs::write(base.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [])?;
-        let db = loose::Store::at(tmp.path(), gix_hash::Kind::Sha1);
+        let db = loose::Store::at(tmp.path(), gix_hash::Kind::Sha1, None);
 
         let mut buf = Vec::new();
         let id = hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -346,6 +351,24 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
             o.data.len(),
             "erm, blobs are the same as raw data?"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn blob_big_respects_alloc_limit_bytes() -> crate::Result {
+        let id = hex_to_id("a706d7cd20fc8ce71489f34b50cf01011c104193");
+        let db = limited_ldb(1);
+        let mut buf = Vec::new();
+
+        assert_eq!(
+            db.try_header(&id)?.expect("header present"),
+            (56915, Kind::Blob),
+            "header-only reads remain available"
+        );
+        assert!(matches!(
+            db.try_find(&id, &mut buf),
+            Err(loose::find::Error::OutOfMemory { size: 56915 })
+        ));
         Ok(())
     }
 

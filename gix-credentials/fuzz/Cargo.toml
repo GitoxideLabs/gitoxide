@@ -1,0 +1,26 @@
+[package]
+name = "gix-credentials-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gix-credentials]
+path = ".."
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "context"
+path = "fuzz_targets/context.rs"
+test = false
+doc = false

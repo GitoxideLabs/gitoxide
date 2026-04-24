@@ -44,6 +44,7 @@ mod with_overrides {
             .set("GIT_PROTOCOL_FROM_USER", "file-allowed")
             .set("GIT_REPLACE_REF_BASE", "refs/replace-mine")
             .set("GIT_NO_REPLACE_OBJECTS", "no-replace")
+            .set("GIT_ALLOC_LIMIT", "7m")
             .set("GIT_COMMITTER_NAME", "committer name")
             .set("GIT_COMMITTER_EMAIL", "committer email")
             .set("GIT_COMMITTER_DATE", default_date)
@@ -248,6 +249,7 @@ mod with_overrides {
             ("gitoxide.parsePrecious", "1"),
             ("core.deltaBaseCacheLimit", "0"),
             ("gitoxide.objects.cacheLimit", "5m"),
+            ("gitoxide.objects.allocLimit", "7m"),
             ("gitoxide.pathspec.icase", "pathspecs-icase"),
             ("gitoxide.pathspec.glob", "pathspecs-glob"),
             ("gitoxide.pathspec.noglob", "pathspecs-noglob"),

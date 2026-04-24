@@ -10,6 +10,7 @@
 [advisories]
 ignore = [
     { id = "RUSTSEC-2025-0052", reason = "`async-std` - unmaintained without replacement - needs some time to replace, but async version isn't too important right now" },
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, comes in with `curl`" }
 ]
 
 

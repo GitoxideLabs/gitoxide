@@ -426,6 +426,36 @@ impl ThreadSafeRepository {
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
+
+        if *git_dir_trust == gix_sec::Trust::Reduced && config.alloc_limit_bytes.is_none() {
+            let alloc_limit_if_reduced_trust = match config
+                .resolved
+                .integer_filter(
+                    gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST,
+                    &mut filter_config_section,
+                )
+                .map(|res| gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST.try_into_usize(res))
+                .transpose()
+            {
+                Ok(Some(value)) => value,
+                Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
+                Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
+                Err(err) => return Err(Error::from(config::Error::from(err))),
+            };
+            if alloc_limit_if_reduced_trust != 0 {
+                config.alloc_limit_bytes = Some(alloc_limit_if_reduced_trust);
+                gix_trace::info!(
+                    concat!(
+                        "Applied a default allocation limit of {alloc_limit_bytes} ",
+                        "bytes while opening reduced-trust repository '{git_dir}'. ",
+                        "Set `gitoxide.objects.allocLimitIfReducedTrust=0` to disable this fallback",
+                    ),
+                    alloc_limit_bytes = alloc_limit_if_reduced_trust,
+                    git_dir = git_dir.display(),
+                );
+            }
+        }
+
         let replacements = match prefix {
             Some(prefix) => {
                 let prefix: &RelativePath = prefix.as_bstr().try_into()?;
@@ -458,6 +488,7 @@ impl ThreadSafeRepository {
                     slots: object_store_slots,
                     object_hash: config.object_hash,
                     use_multi_pack_index: config.use_multi_pack_index,
+                    alloc_limit_bytes: config.alloc_limit_bytes,
                     current_dir: current_dir.to_owned().into(),
                 },
             )?),

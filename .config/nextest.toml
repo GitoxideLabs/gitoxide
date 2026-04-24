@@ -1,2 +1,7 @@
+[profile.default]
+# it doesn't scale for me on macOS at least :/
+test-threads = 6
+fail-fast = false
+
 [profile.with-xml.junit]
 path = "junit.xml"

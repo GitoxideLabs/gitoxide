@@ -1,7 +1,17 @@
 use std::path::PathBuf;
 
 use super::multi_index;
-use crate::hex_to_id;
+use crate::{hex_to_id, pack::leaked_fixture_bytes};
+
+/// Load a multi-index fixture into memory and instantiate a memory-backed multi-index file from it.
+fn multi_index_from_memory() -> gix_pack::multi_index::File<&'static [u8]> {
+    let (data, path) = leaked_fixture_bytes(
+        crate::scripted_fixture_read_only("make_pack_gen_repo_multi_index.sh")
+            .expect("test fixture exists")
+            .join(".git/objects/pack/multi-pack-index"),
+    );
+    gix_pack::multi_index::File::from_data(data, path, None).expect("valid multi-index")
+}
 
 #[test]
 fn lookup_with_ambiguity() {
@@ -95,4 +105,18 @@ fn general() {
         count += 1;
     }
     assert_eq!(count, file.num_objects());
+}
+
+#[test]
+fn from_memory() {
+    let file = multi_index_from_memory();
+    assert_eq!(file.version(), gix_pack::multi_index::Version::V1);
+    assert_eq!(file.num_indices(), 1);
+    assert_eq!(file.object_hash(), gix_hash::Kind::Sha1);
+    assert_eq!(file.num_objects(), 868);
+    assert_eq!(file.checksum(), hex_to_id("39a3804d0a84de609e4fcb49e66dc1297c75ca11"));
+    assert_eq!(
+        file.lookup(hex_to_id("000f574443efab4ddbeee3621e49124eb3f8b6d0")),
+        Some(0)
+    );
 }

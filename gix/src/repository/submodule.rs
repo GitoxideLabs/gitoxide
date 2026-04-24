@@ -4,6 +4,8 @@ use crate::{submodule, Repository};
 
 impl Repository {
     /// Open the `.gitmodules` file as present in the worktree, or return `None` if no such file is available.
+    /// Symlinked worktree `.gitmodules` files are silently ignored so content outside the repository
+    /// cannot become active submodule configuration by being linked into the worktree.
     /// Note that git configuration is also contributing to the result based on the current snapshot.
     ///
     /// Note that his method will not look in other places, like the index or the `HEAD` tree.
@@ -13,12 +15,18 @@ impl Repository {
             Some(path) => path,
             None => return Ok(None),
         };
-        let buf = match std::fs::read(&path) {
-            Ok(buf) => buf,
+        // TODO(ErrorKind): we want to use `ErrorKind::FilesystemLoop`, which otherwise happens
+        //                  when doing `gix_fs::options_no_follow()`,
+        //                  so we could catch NotFound along with it and save the extra check.
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-
+        if metadata.file_type().is_symlink() {
+            return Ok(None);
+        }
+        let buf = std::fs::read(&path)?;
         Ok(Some(gix_submodule::File::from_bytes(
             &buf,
             path,

@@ -84,9 +84,19 @@ struct IsActiveState {
 
 ///Access
 impl Submodule<'_> {
-    /// Return the submodule's name.
+    /// Return the submodule's configured name as it appears in `submodule.<name>.*`.
+    ///
+    /// Note that this name is not guaranteed to be valid and may contain traversal components if
+    /// the configuration was crafted manually.
+    ///
+    /// Use [`validated_name()`](Self::validated_name()) to obtain a validated submodule name.
     pub fn name(&self) -> &BStr {
         self.name.as_ref()
+    }
+
+    /// Return the submodule's name after validating it for safe use in paths like `.git/modules/<name>`.
+    pub fn validated_name(&self) -> Result<&BStr, gix_validate::submodule::name::Error> {
+        gix_validate::submodule::name(self.name())
     }
     /// Return the path at which the submodule can be found, relative to the repository.
     ///
@@ -194,13 +204,14 @@ impl Submodule<'_> {
 
     /// Return the path at which the repository of the submodule should be located.
     ///
-    /// The directory might not exist yet.
-    pub fn git_dir(&self) -> PathBuf {
-        self.state
+    /// The retunred directory might not exist yet.
+    pub fn git_dir(&self) -> Result<PathBuf, gix_validate::submodule::name::Error> {
+        Ok(self
+            .state
             .repo
             .common_dir()
             .join("modules")
-            .join(gix_path::from_bstr(self.name()))
+            .join(gix_path::from_bstr(self.validated_name()?)))
     }
 
     /// Return the path to the location at which the workdir would be checked out.
@@ -223,20 +234,21 @@ impl Submodule<'_> {
     /// invalid - it's left to the caller to try to open it.
     ///
     /// Also note that the returned path may not actually exist.
-    pub fn git_dir_try_old_form(&self) -> Result<PathBuf, config::path::Error> {
-        let worktree_gitdir_or_modules_gitdir = if self.worktree_gitdir()?.is_dir() {
-            self.worktree_gitdir()?
+    pub fn git_dir_try_old_form(&self) -> Result<PathBuf, git_dir_try_old_form::Error> {
+        let worktree_gitdir = self.worktree_gitdir()?;
+        let worktree_gitdir_or_modules_gitdir = if worktree_gitdir.is_dir() {
+            worktree_gitdir
         } else {
-            self.git_dir()
+            self.git_dir()?
         };
         Ok(worktree_gitdir_or_modules_gitdir)
     }
 
     /// Query various parts of the submodule and assemble it into state information.
     #[doc(alias = "status", alias = "git2")]
-    pub fn state(&self) -> Result<State, config::path::Error> {
+    pub fn state(&self) -> Result<State, state::Error> {
         let maybe_old_path = self.git_dir_try_old_form()?;
-        let git_dir = self.git_dir();
+        let git_dir = self.git_dir()?;
         let worktree_git = self.worktree_gitdir()?;
         let superproject_configuration = self
             .state
@@ -267,7 +279,9 @@ impl Submodule<'_> {
     /// The repository can also be used to learn about the submodule `HEAD`, i.e. where its working tree is at,
     /// which may differ compared to the superproject's index or `HEAD` commit.
     pub fn open(&self) -> Result<Option<Repository>, open::Error> {
-        match crate::open_opts(self.git_dir_try_old_form()?, self.state.repo.options.clone()) {
+        let mut options = self.state.repo.options.clone();
+        options.git_dir_trust = None;
+        match crate::open_opts(self.git_dir_try_old_form()?, options) {
             Ok(mut repo) => {
                 if repo.workdir().is_none() {
                     let wd = self.work_dir()?;
@@ -296,7 +310,7 @@ impl Submodule<'_> {
 pub mod status {
     use gix_submodule::config;
 
-    use super::{head_id, index_id, open, Status};
+    use super::{head_id, index_id, open, state, Status};
     use crate::Submodule;
 
     /// The error returned by [Submodule::status()].
@@ -304,7 +318,7 @@ pub mod status {
     #[allow(missing_docs)]
     pub enum Error {
         #[error(transparent)]
-        State(#[from] config::path::Error),
+        State(#[from] state::Error),
         #[error(transparent)]
         HeadId(#[from] head_id::Error),
         #[error(transparent)]

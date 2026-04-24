@@ -11,7 +11,10 @@ pub mod checksum {
 }
 
 /// Checksums and verify checksums
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// The checksum in the trailer of this pack data file
     pub fn checksum(&self) -> gix_hash::ObjectId {
         gix_hash::ObjectId::from_bytes_or_panic(&self.data[self.data.len() - self.hash_len..])

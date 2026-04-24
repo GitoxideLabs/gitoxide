@@ -231,7 +231,9 @@ unit-tests:
     cargo nextest run -p gix-packetline --features blocking-io,maybe-async/is_sync --test blocking-packetline --no-fail-fast
     cargo nextest run -p gix-packetline --features async-io --test async-packetline --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-curl,maybe-async/is_sync --no-fail-fast
+    cargo nextest run -p gix-transport --features http-client-curl,http-client-insecure-credentials,maybe-async/is_sync --test blocking-transport-http-only --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-reqwest,maybe-async/is_sync --no-fail-fast
+    cargo nextest run -p gix-transport --no-default-features --features blocking-client,http-client-reqwest,http-client-insecure-credentials,maybe-async/is_sync --test blocking-transport --no-fail-fast
     cargo nextest run -p gix-transport --features async-client --no-fail-fast
     cargo nextest run -p gix-protocol --features blocking-client --no-fail-fast
     cargo nextest run -p gix-protocol --features async-client --no-fail-fast

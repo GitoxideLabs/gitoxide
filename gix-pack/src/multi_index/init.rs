@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::multi_index::{chunk, File, Version};
 
@@ -36,22 +36,36 @@ mod error {
 pub use error::Error;
 
 /// Initialization
-impl File {
+impl File<crate::MMap> {
     /// Open the multi-index file at the given `path`.
-    pub fn at(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::try_from(path.as_ref())
+    ///
+    /// `alloc_limit_bytes` bounds each allocation caused by user-controlled on-disk data, useful for untrusted input.
+    /// Use `None` to disable the limit.
+    pub fn at(path: impl AsRef<Path>, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
+        Self::at_inner(path.as_ref(), alloc_limit_bytes)
     }
-}
 
-impl TryFrom<&Path> for File {
-    type Error = Error;
-
-    fn try_from(path: &Path) -> Result<Self, Self::Error> {
+    fn at_inner(path: &Path, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
         let data = crate::mmap::read_only(path).map_err(|source| Error::Io {
             source,
             path: path.to_owned(),
         })?;
+        Self::from_data(data, path.to_owned(), alloc_limit_bytes)
+    }
+}
 
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
+    /// Instantiate a multi-index file from `data` as assumed to be read or memory-mapped from `path`.
+    ///
+    /// `alloc_limit_bytes` bounds each allocation caused by untrusted on-disk multi-index data.
+    /// Use `None` to disable the limit.
+    ///
+    ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
+    ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
+    pub fn from_data(data: T, path: PathBuf, alloc_limit_bytes: Option<usize>) -> Result<Self, Error> {
         const TRAILER_LEN: usize = gix_hash::Kind::shortest().len_in_bytes(); /* trailing hash */
         if data.len()
             < Self::HEADER_LEN
@@ -94,11 +108,12 @@ impl TryFrom<&Path> for File {
         let chunks = gix_chunk::file::Index::from_bytes(&data, Self::HEADER_LEN, u32::from(num_chunks))?;
 
         let index_names = chunks.data_by_id(&data, chunk::index_names::ID)?;
-        let index_names = chunk::index_names::from_bytes(index_names, num_indices)?;
+        let index_names = chunk::index_names::from_bytes(index_names, num_indices, alloc_limit_bytes)?;
 
         let fan = chunks.data_by_id(&data, chunk::fanout::ID)?;
         let fan = chunk::fanout::from_bytes(fan).ok_or(Error::MultiPackFanSize)?;
         let num_objects = fan[255];
+        validate_fan(&fan)?;
 
         let lookup = chunks.validated_usize_offset_by_id(chunk::lookup::ID, |offset| {
             chunk::lookup::is_valid(&offset, object_hash, num_objects)
@@ -139,7 +154,7 @@ impl TryFrom<&Path> for File {
 
         Ok(File {
             data,
-            path: path.to_owned(),
+            path,
             version,
             hash_len: object_hash.len_in_bytes(),
             object_hash,
@@ -152,4 +167,13 @@ impl TryFrom<&Path> for File {
             num_indices,
         })
     }
+}
+
+fn validate_fan(fan: &[u32; 256]) -> Result<(), Error> {
+    if !crate::fan_is_monotonically_increasing(fan) {
+        return Err(Error::Corrupt {
+            message: "multi-index fan-out table must be monotonically increasing",
+        });
+    }
+    Ok(())
 }

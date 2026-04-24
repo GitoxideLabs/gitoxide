@@ -1,0 +1,4 @@
+# a sample .gitignore
+top-level-local-file-anywhere
+d/e/*
+e/f

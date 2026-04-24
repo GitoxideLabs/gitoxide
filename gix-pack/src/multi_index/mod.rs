@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use memmap2::Mmap;
+use crate::MMap;
 
 /// Known multi-index file versions
 #[derive(Default, PartialEq, Eq, Ord, PartialOrd, Debug, Hash, Clone, Copy)]
@@ -19,8 +19,8 @@ pub type EntryIndex = u32;
 
 /// A representation of an index file for multiple packs at the same time, typically stored in a file
 /// named 'multi-pack-index'.
-pub struct File {
-    data: Mmap,
+pub struct File<T = MMap> {
+    data: T,
     path: std::path::PathBuf,
     version: Version,
     hash_len: usize,
@@ -38,6 +38,7 @@ pub struct File {
 
 ///
 pub mod write;
+pub use write::function::write_from_index_paths;
 
 ///
 mod access;

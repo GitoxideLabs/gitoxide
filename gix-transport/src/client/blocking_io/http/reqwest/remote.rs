@@ -58,7 +58,12 @@ impl Default for Remote {
                             let prev_urls = attempt.previous();
 
                             match prev_urls.first() {
-                                Some(prev_url) if prev_url.host_str() != curr_url.host_str() => {
+                                Some(prev_url)
+                                    if !redirect::shares_authority_or_upgrades_scheme(
+                                        curr_url.as_str(),
+                                        prev_url.as_str(),
+                                    ) =>
+                                {
                                     // git does not want to be redirected to a different host.
                                     attempt.stop()
                                 }

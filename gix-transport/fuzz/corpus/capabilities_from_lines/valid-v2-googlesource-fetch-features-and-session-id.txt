@@ -1,0 +1,5 @@
+version 2
+ls-refs
+fetch=filter ref-in-want sideband-all packfile-uris wait-for-done shallow
+server-option
+session-id

@@ -27,6 +27,7 @@ pub use error::Error;
 pub(crate) fn all(
     maybe_beginning_of_extensions: &[u8],
     object_hash: gix_hash::Kind,
+    alloc_limit_bytes: Option<usize>,
 ) -> Result<(Outcome, &[u8]), Error> {
     let mut ext_iter = match extension::Iter::new_without_checksum(maybe_beginning_of_extensions, object_hash) {
         Some(iter) => iter,
@@ -37,13 +38,13 @@ pub(crate) fn all(
     for (signature, ext_data) in ext_iter.by_ref() {
         match signature {
             extension::tree::SIGNATURE => {
-                ext.tree = extension::tree::decode(ext_data, object_hash);
+                ext.tree = extension::tree::decode(ext_data, object_hash, alloc_limit_bytes);
             }
             extension::resolve_undo::SIGNATURE => {
                 ext.resolve_undo = extension::resolve_undo::decode(ext_data, object_hash);
             }
             extension::untracked_cache::SIGNATURE => {
-                ext.untracked = extension::untracked_cache::decode(ext_data, object_hash);
+                ext.untracked = extension::untracked_cache::decode(ext_data, object_hash, alloc_limit_bytes);
             }
             extension::fs_monitor::SIGNATURE => {
                 ext.fs_monitor = extension::fs_monitor::decode(ext_data);

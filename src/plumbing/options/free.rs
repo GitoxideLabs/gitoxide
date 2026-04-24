@@ -16,6 +16,12 @@ pub enum Subcommands {
     Index(index::Platform),
     /// Show information about repository discovery and when opening a repository at the current path.
     Discover,
+    /// Show the trust level implied by the ownership of one or more paths.
+    Trust {
+        /// The paths whose ownership-derived trust should be shown.
+        #[clap(required = true)]
+        paths: Vec<std::path::PathBuf>,
+    },
 }
 
 ///

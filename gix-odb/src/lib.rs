@@ -168,6 +168,8 @@ pub struct Store {
     use_multi_pack_index: bool,
     /// The hash kind to use for some operations
     object_hash: gix_hash::Kind,
+    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
+    alloc_limit_bytes: Option<usize>,
 }
 
 /// Create a new cached handle to the object store with support for additional options.

@@ -27,7 +27,10 @@ pub struct Entry {
 }
 
 /// Iteration and access
-impl index::File {
+impl<T> index::File<T>
+where
+    T: crate::FileData,
+{
     fn iter_v1(&self) -> impl Iterator<Item = Entry> + '_ {
         match self.version {
             index::Version::V1 => self.data[V1_HEADER_SIZE..]

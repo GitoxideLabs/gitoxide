@@ -161,6 +161,22 @@ pub mod streaming_peek_iter {
     }
 
     #[maybe_async::test(feature = "blocking-io", async(feature = "async-io", async_std::test))]
+    async fn oversized_packet_lengths_are_reported_instead_of_panicking() -> crate::Result {
+        let mut rd = StreamingPeekableIter::new(&b"ffff\n"[..], &[], false);
+        let err = rd
+            .read_line()
+            .await
+            .expect("a decode error instead of EOF")
+            .expect("no IO error expected")
+            .expect_err("decode should fail for oversized lengths");
+        assert!(matches!(
+            err,
+            gix_packetline::decode::Error::DataLengthLimitExceeded { length_in_bytes: 65535 }
+        ));
+        Ok(())
+    }
+
+    #[maybe_async::test(feature = "blocking-io", async(feature = "async-io", async_std::test))]
     async fn peek() -> crate::Result {
         let bytes = fixture_bytes("v1/fetch/01-many-refs.response");
         let mut rd = StreamingPeekableIter::new(&bytes[..], &[PacketLineRef::Flush], false);

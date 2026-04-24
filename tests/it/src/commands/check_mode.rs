@@ -83,9 +83,10 @@ pub(super) mod function {
             .to_os_str()
             .expect("oid field verified as hex digits, should be valid OsStr");
         let path = fields.get(3).expect("match should get path").as_bytes().as_bstr();
+        let is_in_fuzz_dir = path.split_str("/").any(|component| component == b"fuzz");
 
         match mode {
-            b"100644" if blob_has_shebang(root, oid)? => {
+            b"100644" if !is_in_fuzz_dir && blob_has_shebang(root, oid)? => {
                 println!("mode -x but has shebang: {path:?}");
                 Ok(true)
             }

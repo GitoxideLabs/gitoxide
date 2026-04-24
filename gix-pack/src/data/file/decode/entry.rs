@@ -73,7 +73,14 @@ impl Outcome {
 }
 
 /// Decompression of objects
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
+    fn decoded_object_size(&self, size: u64) -> Result<usize, Error> {
+        decoded_object_size(size, self.alloc_limit_bytes)
+    }
+
     /// Decompress the given `entry` into `out` and return the amount of bytes read from the pack data.
     /// Note that `inflate` is not reset after usage, but will be reset before using it.
     ///
@@ -97,7 +104,6 @@ impl File {
         );
 
         self.decompress_entry_from_data_offset(entry.data_offset, inflate, out)
-            .map_err(Into::into)
     }
 
     /// Obtain the [`Entry`][crate::data::Entry] at the given `offset` into the pack.
@@ -105,7 +111,11 @@ impl File {
     /// The `offset` is typically obtained from the pack index file.
     pub fn entry(&self, offset: data::Offset) -> Result<data::Entry, data::entry::decode::Error> {
         let pack_offset: usize = offset.try_into().expect("offset representable by machine");
-        assert!(pack_offset <= self.data.len(), "offset out of bounds");
+        if pack_offset > self.data.len() {
+            return Err(data::entry::decode::Error::Corrupt {
+                message: "an entry offset pointing beyond pack data",
+            });
+        }
 
         let object_data = &self.data[pack_offset..];
         data::Entry::from_bytes(object_data, offset, self.hash_len)
@@ -121,14 +131,20 @@ impl File {
         data_offset: data::Offset,
         inflate: &mut zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<usize, zlib::inflate::Error> {
+    ) -> Result<usize, Error> {
         let offset: usize = data_offset.try_into().expect("offset representable by machine");
-        assert!(offset < self.data.len(), "entry offset out of bounds");
+        if offset >= self.data.len() {
+            return Err(data::entry::decode::Error::Corrupt {
+                message: "an entry data offset pointing beyond pack data",
+            }
+            .into());
+        }
 
         inflate.reset();
         inflate
             .once(&self.data[offset..], out)
             .map(|(_status, consumed_in, _consumed_out)| consumed_in)
+            .map_err(Into::into)
     }
 
     /// Like `decompress_entry_from_data_offset`, but returns consumed input and output.
@@ -137,14 +153,20 @@ impl File {
         data_offset: data::Offset,
         inflate: &mut zlib::Inflate,
         out: &mut [u8],
-    ) -> Result<(usize, usize), zlib::inflate::Error> {
+    ) -> Result<(usize, usize), Error> {
         let offset: usize = data_offset.try_into().expect("offset representable by machine");
-        assert!(offset < self.data.len(), "entry offset out of bounds");
+        if offset >= self.data.len() {
+            return Err(data::entry::decode::Error::Corrupt {
+                message: "an entry data offset pointing beyond pack data",
+            }
+            .into());
+        }
 
         inflate.reset();
         inflate
             .once(&self.data[offset..], out)
             .map(|(_status, consumed_in, consumed_out)| (consumed_in, consumed_out))
+            .map_err(Into::into)
     }
 
     /// Decode an entry, resolving delta's as needed, while growing the `out` vector if there is not enough
@@ -169,7 +191,7 @@ impl File {
         use crate::data::entry::Header::*;
         match entry.header {
             Tree | Blob | Commit | Tag => {
-                let size: usize = entry.decompressed_size.try_into().map_err(|_| Error::OutOfMemory)?;
+                let size = self.decoded_object_size(entry.decompressed_size)?;
                 if let Some(additional) = size.checked_sub(out.len()) {
                     out.try_reserve(additional)?;
                 }
@@ -221,11 +243,10 @@ impl File {
             }
             // This is a pessimistic guess, as worst possible compression should not be bigger than the data itself.
             // TODO: is this assumption actually true?
-            total_delta_data_size += cursor.decompressed_size;
-            let decompressed_size = cursor
-                .decompressed_size
-                .try_into()
-                .expect("a single delta size small enough to fit a usize");
+            total_delta_data_size = total_delta_data_size
+                .checked_add(cursor.decompressed_size)
+                .ok_or(Error::OutOfMemory)?;
+            let decompressed_size = self.decoded_object_size(cursor.decompressed_size)?;
             chain.push(Delta {
                 data: Range {
                     start: 0,
@@ -238,7 +259,13 @@ impl File {
             });
             use crate::data::entry::Header;
             cursor = match cursor.header {
-                Header::OfsDelta { base_distance } => self.entry(cursor.base_pack_offset(base_distance))?,
+                Header::OfsDelta { base_distance } => {
+                    self.entry(cursor.checked_base_pack_offset(base_distance).ok_or(
+                        crate::data::entry::decode::Error::Corrupt {
+                            message: "an ofs-delta base distance pointing before pack start",
+                        },
+                    )?)?
+                }
                 Header::RefDelta { base_id } => match resolve(base_id.as_ref(), out) {
                     Some(ResolvedBase::InPack(entry)) => entry,
                     Some(ResolvedBase::OutOfPack { end, kind }) => {
@@ -265,7 +292,7 @@ impl File {
         // First pass will decompress all delta data and keep it in our output buffer
         // [<possibly resolved base object>]<delta-1..delta-n>...
         // so that we can find the biggest result size.
-        let total_delta_data_size: usize = total_delta_data_size.try_into().expect("delta data to fit in memory");
+        let total_delta_data_size: usize = total_delta_data_size.try_into().map_err(|_| Error::OutOfMemory)?;
 
         let chain_len = chain.len();
         let (first_buffer_end, second_buffer_end) = {
@@ -273,7 +300,9 @@ impl File {
 
             let delta_range = Range {
                 start: delta_start,
-                end: delta_start + total_delta_data_size,
+                end: delta_start
+                    .checked_add(total_delta_data_size)
+                    .ok_or(Error::OutOfMemory)?,
             };
             out.try_reserve(delta_range.end.saturating_sub(out.len()))?;
             out.resize(delta_range.end, 0);
@@ -292,15 +321,15 @@ impl File {
                     consumed_input = Some(consumed_from_data_offset);
                 }
 
-                let (base_size, offset) = delta::decode_header_size(instructions);
+                let (base_size, offset) = delta::decode_header_size(instructions)?;
                 let mut bytes_consumed_by_header = offset;
                 biggest_result_size = biggest_result_size.max(base_size);
-                delta.base_size = base_size.try_into().expect("base size fits into usize");
+                delta.base_size = self.decoded_object_size(base_size)?;
 
-                let (result_size, offset) = delta::decode_header_size(&instructions[offset..]);
+                let (result_size, offset) = delta::decode_header_size(&instructions[offset..])?;
                 bytes_consumed_by_header += offset;
                 biggest_result_size = biggest_result_size.max(result_size);
-                delta.result_size = result_size.try_into().expect("result size fits into usize");
+                delta.result_size = self.decoded_object_size(result_size)?;
 
                 // the absolute location into the instructions buffer, so we keep track of the end point of the last
                 delta.data.start = relative_delta_start + bytes_consumed_by_header;
@@ -313,29 +342,25 @@ impl File {
             // Now we can produce a buffer like this
             // [<biggest-result-buffer, possibly filled with resolved base object data>]<biggest-result-buffer><delta-1..delta-n>
             // from [<possibly resolved base object>]<delta-1..delta-n>...
-            let biggest_result_size: usize = biggest_result_size.try_into().map_err(|_| Error::OutOfMemory)?;
+            let biggest_result_size = self.decoded_object_size(biggest_result_size)?;
             let first_buffer_size = biggest_result_size;
             let second_buffer_size = first_buffer_size;
-            let out_size = first_buffer_size + second_buffer_size + total_delta_data_size;
+            let out_size = first_buffer_size
+                .checked_add(second_buffer_size)
+                .and_then(|size| size.checked_add(total_delta_data_size))
+                .ok_or(Error::OutOfMemory)?;
             out.try_reserve(out_size.saturating_sub(out.len()))?;
             out.resize(out_size, 0);
 
             // Now 'rescue' the deltas, because in the next step we possibly overwrite that portion
             // of memory with the base object (in the majority of cases)
             let second_buffer_end = {
-                let end = first_buffer_size + second_buffer_size;
-                if delta_range.start < end {
-                    // …this means that the delta size is even larger than two uncompressed worst-case
-                    // intermediate results combined. It would already be undesirable to have it bigger
-                    // then the target size (as you could just store the object in whole).
-                    // However, this just means that it reuses existing deltas smartly, which as we rightfully
-                    // remember stand for an object each. However, this means a lot of data is read to restore
-                    // a single object sometimes. Fair enough - package size is minimized that way.
-                    out.copy_within(delta_range, end);
-                } else {
-                    let (buffers, instructions) = out.split_at_mut(end);
-                    instructions.copy_from_slice(&buffers[delta_range]);
-                }
+                let end = first_buffer_size
+                    .checked_add(second_buffer_size)
+                    .ok_or(Error::OutOfMemory)?;
+                // Move the decompressed delta instructions behind the two work buffers so they remain intact
+                // while we repurpose the front of `out` for base-object materialization and delta application.
+                out.copy_within(delta_range, end);
                 end
             };
 
@@ -416,6 +441,15 @@ impl File {
             object_size: last_result_size as u64,
         })
     }
+}
+
+/// Convert user-controlled sizes from pack data into allocation sizes while enforcing the configured allocation cap.
+fn decoded_object_size(size: u64, alloc_limit_bytes: Option<usize>) -> Result<usize, Error> {
+    let size: usize = size.try_into().map_err(|_| Error::OutOfMemory)?;
+    if alloc_limit_bytes.is_some_and(|limit| size > limit) {
+        return Err(Error::OutOfMemory);
+    }
+    Ok(size)
 }
 
 #[cfg(test)]

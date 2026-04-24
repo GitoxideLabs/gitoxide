@@ -17,8 +17,9 @@ pub struct Permissions {
 ///
 /// ### Replacement Objects for the object database
 ///
-/// The environment variables `GIT_REPLACE_REF_BASE` and `GIT_NO_REPLACE_OBJECTS` are mapped to `gitoxide.objects.replaceRefBase`
-/// and `gitoxide.objects.noReplace` respectively and then interpreted exactly as their environment variable counterparts.
+/// The environment variables `GIT_REPLACE_REF_BASE`, `GIT_NO_REPLACE_OBJECTS`, and `GIT_ALLOC_LIMIT` are mapped to
+/// `gitoxide.objects.replaceRefBase`, `gitoxide.objects.noReplace`, and `gitoxide.objects.allocLimit` respectively and then
+/// interpreted exactly as their environment variable counterparts.
 ///
 /// Use [Permissions] to control which environment variables can be read, and config-overrides to control these values programmatically.
 #[derive(Clone)]

@@ -92,7 +92,7 @@ impl Link {
             let mut split_entry_index = 0;
 
             let mut err = None;
-            bitmaps.replace.for_each_set_bit(|replace_index| {
+            if bitmaps.replace.for_each_set_bit(|replace_index| {
                 let shared_entry = match shared_index.entries.get_mut(replace_index) {
                     Some(e) => e,
                     None => {
@@ -128,7 +128,9 @@ impl Link {
 
                 split_entry_index += 1;
                 Some(())
-            });
+            }).is_none() && err.is_none() {
+                err = decode::Error::Corrupt("replace bitmap is malformed").into();
+            }
             if let Some(err) = err {
                 return Err(err.into());
             }
@@ -146,7 +148,7 @@ impl Link {
                     .extend_from_slice(&split_index_path_backing[split_index_path]);
             }
 
-            bitmaps.delete.for_each_set_bit(|delete_index| {
+            if bitmaps.delete.for_each_set_bit(|delete_index| {
                 let shared_entry = match shared_index.entries.get_mut(delete_index) {
                     Some(e) => e,
                     None => {
@@ -156,7 +158,9 @@ impl Link {
                 };
                 shared_entry.flags.insert(crate::entry::Flags::REMOVE);
                 Some(())
-            });
+            }).is_none() && err.is_none() {
+                err = decode::Error::Corrupt("delete bitmap is malformed").into();
+            }
             if let Some(err) = err {
                 return Err(err.into());
             }

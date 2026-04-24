@@ -2,6 +2,7 @@ mod access;
 mod entry;
 mod file;
 mod fs;
+mod fuzzed;
 mod init;
 
 use std::path::{Path, PathBuf};

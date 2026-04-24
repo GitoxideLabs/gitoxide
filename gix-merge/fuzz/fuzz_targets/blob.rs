@@ -1,7 +1,7 @@
 #![no_main]
 use anyhow::Result;
 use arbitrary::Arbitrary;
-use gix_merge::blob::builtin_driver::text::{Conflict, ConflictStyle, Options};
+use gix_merge::blob::builtin_driver::text::{self, Conflict, ConflictStyle};
 use gix_merge::blob::Resolution;
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
@@ -17,50 +17,29 @@ fn fuzz_text_merge(
 ) -> Result<()> {
     let mut buf = Vec::new();
     let mut input = imara_diff::InternedInput::default();
-    for diff_algorithm in [
-        imara_diff::Algorithm::Histogram,
-        imara_diff::Algorithm::Myers,
-        imara_diff::Algorithm::MyersMinimal,
-    ] {
-        let mut opts = Options {
-            diff_algorithm,
-            conflict: Default::default(),
-        };
-        for (left, right) in [(ours, theirs), (theirs, ours)] {
-            let resolution = gix_merge::blob::builtin_driver::text(
-                &mut buf,
-                &mut input,
-                Default::default(),
-                left,
-                base,
-                right,
-                opts,
-            );
-            if resolution == Resolution::Conflict {
-                for conflict in [
-                    Conflict::ResolveWithOurs,
-                    Conflict::ResolveWithTheirs,
-                    Conflict::ResolveWithUnion,
-                    Conflict::Keep {
-                        style: ConflictStyle::Diff3,
-                        marker_size,
-                    },
-                    Conflict::Keep {
-                        style: ConflictStyle::ZealousDiff3,
-                        marker_size,
-                    },
-                ] {
-                    opts.conflict = conflict;
-                    gix_merge::blob::builtin_driver::text(
-                        &mut buf,
-                        &mut input,
-                        Default::default(),
-                        left,
-                        base,
-                        right,
-                        opts,
-                    );
-                }
+    // Fuzz this merge entrypoint with Histogram only. Repetitive adversarial text can drive the
+    // Myers-family algorithms into pathological runtimes under sanitizer and coverage
+    // instrumentation, which makes them unsuitable for this libFuzzer target and obscures
+    // gix-merge-specific bugs behind diff-algorithm timeouts.
+    for (left, right) in [(ours, theirs), (theirs, ours)] {
+        input.clear();
+        let prepared = text::Merge::new(&mut input, left, base, right, imara_diff::Algorithm::Histogram);
+        let resolution = prepared.run(&mut buf, Default::default(), Conflict::default());
+        if resolution == Resolution::Conflict {
+            for conflict in [
+                Conflict::ResolveWithOurs,
+                Conflict::ResolveWithTheirs,
+                Conflict::ResolveWithUnion,
+                Conflict::Keep {
+                    style: ConflictStyle::Diff3,
+                    marker_size,
+                },
+                Conflict::Keep {
+                    style: ConflictStyle::ZealousDiff3,
+                    marker_size,
+                },
+            ] {
+                prepared.run(&mut buf, Default::default(), conflict);
             }
         }
     }

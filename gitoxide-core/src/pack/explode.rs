@@ -121,7 +121,7 @@ impl gix::objs::Write for OutputWriter {
 impl OutputWriter {
     fn new(path: Option<impl AsRef<Path>>, compress: bool, object_hash: gix::hash::Kind) -> Self {
         match path {
-            Some(path) => OutputWriter::Loose(loose::Store::at(path.as_ref(), object_hash)),
+            Some(path) => OutputWriter::Loose(loose::Store::at(path.as_ref(), object_hash, None)),
             None => OutputWriter::Sink(odb::sink(object_hash).compress(compress)),
         }
     }
@@ -192,7 +192,7 @@ pub fn pack_or_pack_index(
                 let object_path = object_path.map(|p| p.as_ref().to_owned());
                 let out = OutputWriter::new(object_path.clone(), sink_compress, object_hash);
                 let loose_odb = verify
-                    .then(|| object_path.as_ref().map(|path| loose::Store::at(path, object_hash)))
+                    .then(|| object_path.as_ref().map(|path| loose::Store::at(path, object_hash, None)))
                     .flatten();
                 let mut read_buf = Vec::new();
                 move |object_kind, buf, index_entry, progress| {

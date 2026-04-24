@@ -34,6 +34,8 @@ pub mod integrity {
         Fan { index: usize },
         #[error("The multi-index claims to have no objects")]
         Empty,
+        #[error("The multi-index path '{path}' has no parent directory")]
+        InvalidPath { path: std::path::PathBuf },
         #[error("Interrupted")]
         Interrupted,
     }
@@ -73,7 +75,10 @@ pub mod checksum {
     pub type Error = crate::verify::checksum::Error;
 }
 
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// Validate that our [`checksum()`][File::checksum()] matches the actual contents
     /// of this index file, and return it if it does.
     pub fn verify_checksum(
@@ -139,7 +144,11 @@ impl File {
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
     {
-        let parent = self.path.parent().expect("must be in a directory");
+        let parent = self.path.parent().ok_or_else(|| {
+            index::traverse::Error::Processor(integrity::Error::InvalidPath {
+                path: self.path.clone(),
+            })
+        })?;
 
         let actual_index_checksum = self
             .verify_checksum(

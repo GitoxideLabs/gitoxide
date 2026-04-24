@@ -1,9 +1,4 @@
-use std::{io, sync::atomic::AtomicBool};
-
 pub use error::Error;
-use gix_features::progress::{self, prodash::DynNestedProgress, Count, Progress};
-
-use crate::cache::delta::{traverse, Tree};
 
 mod error;
 
@@ -12,7 +7,7 @@ pub(crate) struct TreeEntry {
     pub crc32: u32,
 }
 
-/// Information gathered while executing [`write_data_iter_to_stream()`][crate::index::File::write_data_iter_to_stream]
+/// Information gathered while executing [`write_data_iter_to_stream()`][crate::index::write_data_iter_to_stream]
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Outcome {
@@ -27,7 +22,7 @@ pub struct Outcome {
     pub num_objects: u32,
 }
 
-/// The progress ids used in [`write_data_iter_from_stream()`][crate::index::File::write_data_iter_to_stream()].
+/// The progress ids used in [`write_data_iter_to_stream()`][crate::index::write_data_iter_to_stream()].
 ///
 /// Use this information to selectively extract the progress of interest in case the parent application has custom visualization.
 #[derive(Debug, Copy, Clone)]
@@ -60,8 +55,15 @@ impl From<ProgressId> for gix_features::progress::Id {
     }
 }
 
-/// Various ways of writing an index file from pack entries
-impl crate::index::File {
+pub(super) mod function {
+    use std::{io, sync::atomic::AtomicBool};
+
+    use gix_features::progress::{self, prodash::DynNestedProgress, Count, Progress};
+
+    use crate::cache::delta::{traverse, Tree};
+
+    use super::{modify_base, Error, Outcome, ProgressId, TreeEntry};
+
     /// Write information about `entries` as obtained from a pack data file into a pack index file via the `out` stream.
     /// The resolver produced by `make_resolver` must resolve pack entries from the same pack data file that produced the
     /// `entries` iterator.

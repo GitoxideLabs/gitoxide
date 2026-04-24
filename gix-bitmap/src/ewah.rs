@@ -42,29 +42,99 @@ mod access {
     use super::Vec;
 
     impl Vec {
+        /// Create a bitmap from a sequence of bit values.
+        ///
+        /// The resulting bitmap uses a literal-only EWAH representation.
+        ///
+        /// Returns `None` if `bits.len()` exceeds `u32::MAX`.
+        pub fn from_bits(bits: &[bool]) -> Option<Self> {
+            let literal_words: std::vec::Vec<u64> = bits
+                .chunks(64)
+                .map(|chunk| {
+                    chunk.iter().enumerate().fold(
+                        0u64,
+                        |word, (idx, bit)| {
+                            if *bit {
+                                word | (1u64 << idx)
+                            } else {
+                                word
+                            }
+                        },
+                    )
+                })
+                .collect();
+            let num_bits = bits.len().try_into().ok()?;
+
+            Some(Vec {
+                num_bits,
+                bits: std::iter::once((literal_words.len() as u64) << (1 + RLW_RUNNING_BITS))
+                    .chain(literal_words)
+                    .collect(),
+                rlw: 0,
+            })
+        }
+
+        /// Write the bitmap as EWAH bytes to `out`.
+        ///
+        /// These bytes can be parsed again with [`decode()`](super::decode()).
+        pub fn write_to(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+            let len: u32 = self.bits.len().try_into().map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "bit word count exceeds u32::MAX")
+            })?;
+            let rlw: u32 = self.rlw.try_into().map_err(|_| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "run length word offset exceeds u32::MAX",
+                )
+            })?;
+
+            out.write_all(&self.num_bits.to_be_bytes())?;
+            out.write_all(&len.to_be_bytes())?;
+            for word in &self.bits {
+                out.write_all(&word.to_be_bytes())?;
+            }
+            out.write_all(&rlw.to_be_bytes())
+        }
+
         /// Call `f(index)` for each bit that is true, given the index of the bit that identifies it uniquely within the bit array.
         /// If `f` returns `None` the iteration will be stopped and `None` is returned.
         ///
         /// The index is sequential like in any other vector.
         pub fn for_each_set_bit(&self, mut f: impl FnMut(usize) -> Option<()>) -> Option<()> {
+            let num_bits = self.num_bits();
             let mut index = 0usize;
             let mut iter = self.bits.iter();
             while let Some(word) = iter.next() {
                 if rlw_runbit_is_set(word) {
-                    let len = rlw_running_len_bits(word);
+                    let len = usize::try_from(rlw_running_len_bits(word)).ok()?;
+                    let end = index.checked_add(len)?;
+                    if end > num_bits {
+                        return None;
+                    }
                     for _ in 0..len {
                         f(index)?;
                         index += 1;
                     }
                 } else {
-                    index += usize::try_from(rlw_running_len_bits(word)).ok()?;
+                    let len = usize::try_from(rlw_running_len_bits(word)).ok()?;
+                    let end = index.checked_add(len)?;
+                    if end > num_bits {
+                        return None;
+                    }
+                    index = end;
                 }
 
                 for _ in 0..rlw_literal_words(word) {
-                    let word = iter
-                        .next()
-                        .expect("BUG: ran out of words while going through uncompressed portion");
-                    for bit_index in 0..64 {
+                    let word = iter.next()?;
+                    let remaining = num_bits.checked_sub(index)?;
+                    if remaining == 0 {
+                        return None;
+                    }
+                    let bits_in_word = remaining.min(64);
+                    if bits_in_word < 64 && (word >> bits_in_word) != 0 {
+                        return None;
+                    }
+                    for bit_index in 0..bits_in_word {
                         if word & (1 << bit_index) != 0 {
                             f(index)?;
                         }

@@ -1,0 +1,1 @@
+:(attr:one,attr:two)some/path

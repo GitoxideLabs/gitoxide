@@ -63,9 +63,9 @@ mod impl_ {
 #[cfg(windows)]
 mod impl_ {
     use std::{
-        io,
+        io, mem,
         mem::MaybeUninit,
-        os::windows::io::{FromRawHandle as _, OwnedHandle},
+        os::windows::io::{AsRawHandle as _, FromRawHandle as _, OwnedHandle},
         path::Path,
         ptr,
     };
@@ -76,18 +76,92 @@ mod impl_ {
             error!(inner, $msg);
         }};
         ($inner:expr, $msg:expr) => {{
-            return Err(io::Error::new($inner.kind(), $msg));
+            return Err(io::Error::new($inner.kind(), format!("{}: {}", $msg, $inner)));
         }};
+    }
+
+    fn token_information(
+        token: windows_sys::Win32::Foundation::HANDLE,
+        class: i32,
+        class_name: &'static str,
+        subject: &'static str,
+        path: &Path,
+    ) -> io::Result<Vec<u8>> {
+        use windows_sys::Win32::{
+            Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER},
+            Security::GetTokenInformation,
+        };
+
+        #[allow(unsafe_code)]
+        unsafe {
+            let mut buffer_size = 36;
+            let mut heap_buf = vec![0; 36];
+
+            loop {
+                if GetTokenInformation(
+                    token,
+                    class,
+                    heap_buf.as_mut_ptr().cast(),
+                    heap_buf.len() as _,
+                    &mut buffer_size,
+                ) != 0
+                {
+                    return Ok(heap_buf);
+                }
+
+                if GetLastError() != ERROR_INSUFFICIENT_BUFFER {
+                    error!(format!(
+                        "Couldn't acquire {class_name} for the {subject} while checking ownership of '{}'",
+                        path.display()
+                    ));
+                }
+
+                heap_buf.resize(buffer_size as _, 0);
+            }
+        }
+    }
+
+    /// Read a fixed-size token information record of type `T` with `GetTokenInformation`.
+    ///
+    /// Use this for token information classes whose result fits exactly into `T`.
+    fn fixed_size_token_information<T: Copy>(
+        token: windows_sys::Win32::Foundation::HANDLE,
+        class: i32,
+        class_name: &'static str,
+        subject: &'static str,
+        path: &Path,
+    ) -> io::Result<T> {
+        use windows_sys::Win32::Security::GetTokenInformation;
+
+        #[allow(unsafe_code)]
+        unsafe {
+            let mut info = MaybeUninit::<T>::uninit();
+            let mut returned_size = 0;
+            if GetTokenInformation(
+                token,
+                class,
+                info.as_mut_ptr().cast(),
+                mem::size_of::<T>() as u32,
+                &mut returned_size,
+            ) == 0
+            {
+                error!(format!(
+                    "Couldn't acquire {class_name} for the {subject} while checking ownership of '{}'",
+                    path.display()
+                ));
+            }
+            Ok(info.assume_init())
+        }
     }
 
     pub fn is_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
         use windows_sys::Win32::{
-            Foundation::{GetLastError, LocalFree, ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_FUNCTION, ERROR_SUCCESS},
+            Foundation::{LocalFree, ERROR_INVALID_FUNCTION, ERROR_SUCCESS},
             Security::{
                 Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
-                CheckTokenMembership, EqualSid, GetTokenInformation, IsWellKnownSid, TokenOwner,
-                WinBuiltinAdministratorsSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, TOKEN_OWNER,
-                TOKEN_QUERY,
+                CheckTokenMembership, EqualSid, IsWellKnownSid, TokenElevationType, TokenElevationTypeLimited,
+                TokenLinkedToken, TokenUser, WinBuiltinAdministratorsSid, OWNER_SECURITY_INFORMATION,
+                PSECURITY_DESCRIPTOR, TOKEN_ELEVATION_TYPE, TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER,
             },
             System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
         };
@@ -131,10 +205,7 @@ mod impl_ {
                     let inner = io::Error::from_raw_os_error(result as _);
                     error!(
                         inner,
-                        format!(
-                            "Couldn't get security information for path '{}' with err {inner}",
-                            path.display()
-                        )
+                        format!("Couldn't get security information for path '{}'", path.display())
                     );
                 }
 
@@ -162,53 +233,68 @@ mod impl_ {
                 if OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, token.as_mut_ptr()) == 0
                     && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token.as_mut_ptr()) == 0
                 {
-                    error!("Couldn't acquire thread or process token");
+                    error!(format!(
+                        "Couldn't acquire a thread or process token while checking ownership of '{}'",
+                        path.display()
+                    ));
                 }
                 token.assume_init()
             };
 
             let _owned_token = OwnedHandle::from_raw_handle(token as _);
 
-            let buf = 'token_buf: {
-                let mut buffer_size = 36;
-                let mut heap_buf = vec![0; 36];
+            let user_info_buf = token_information(token, TokenUser, "TokenUser", "current token", path)?;
+            let token_user_info = ptr::read_unaligned(user_info_buf.as_ptr().cast::<TOKEN_USER>());
+            let token_user = token_user_info.User.Sid;
 
-                loop {
-                    if GetTokenInformation(
-                        token,
-                        TokenOwner,
-                        heap_buf.as_mut_ptr().cast(),
-                        heap_buf.len() as _,
-                        &mut buffer_size,
-                    ) != 0
-                    {
-                        break 'token_buf heap_buf;
-                    }
-
-                    if GetLastError() != ERROR_INSUFFICIENT_BUFFER {
-                        error!("Couldn't acquire token ownership");
-                    }
-
-                    heap_buf.resize(buffer_size as _, 0);
-                }
-            };
-
-            let token_owner = (*buf.as_ptr().cast::<TOKEN_OWNER>()).Owner;
-
-            // If the current user is the owner of the parent folder then they also
-            // own this file
-            if EqualSid(folder_owner, token_owner) != 0 {
+            if EqualSid(folder_owner, token_user) != 0 {
                 return Ok(true);
             }
 
-            // Admin-group owned folders are considered owned by the current user, if they are in the admin group
-            if IsWellKnownSid(token_owner, WinBuiltinAdministratorsSid) == 0 {
+            // Admin-group owned folders are considered owned by the current user, if they are in the admin group.
+            if IsWellKnownSid(folder_owner, WinBuiltinAdministratorsSid) == 0 {
                 return Ok(false);
             }
 
             let mut is_member = 0;
-            if CheckTokenMembership(std::ptr::null_mut(), token_owner, &mut is_member) == 0 {
-                error!("Couldn't check if user is an administrator");
+            if CheckTokenMembership(std::ptr::null_mut(), folder_owner, &mut is_member) == 0 {
+                error!(format!(
+                    "Couldn't check whether the current token is in the Administrators group while checking ownership of '{}'",
+                    path.display()
+                ));
+            }
+
+            if is_member != 0 {
+                return Ok(true);
+            }
+
+            let elevation_type = fixed_size_token_information::<TOKEN_ELEVATION_TYPE>(
+                token,
+                TokenElevationType,
+                "TokenElevationType",
+                "current token",
+                path,
+            )?;
+            if elevation_type != TokenElevationTypeLimited {
+                return Ok(false);
+            }
+
+            let linked_token_info = fixed_size_token_information::<TOKEN_LINKED_TOKEN>(
+                token,
+                TokenLinkedToken,
+                "TokenLinkedToken",
+                "limited current token",
+                path,
+            )?;
+            let linked_token = linked_token_info.LinkedToken;
+            let linked_token = OwnedHandle::from_raw_handle(linked_token as _);
+
+            let mut is_member = 0;
+            if CheckTokenMembership(linked_token.as_raw_handle() as _, folder_owner, &mut is_member) == 0 {
+                error!(format!(
+                    "Couldn't check whether the linked elevated token is in the Administrators group while checking ownership of '{}'",
+                    path.display()
+                ));
             }
 
             Ok(is_member != 0)

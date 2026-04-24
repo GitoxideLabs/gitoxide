@@ -129,7 +129,7 @@ impl super::Store {
                         if let Some(files) = bundle_mut.as_mut() {
                             // these are always expected to be set, unless somebody raced us. We handle this later by retrying.
                             let res = {
-                                let res = files.load_index(self.object_hash);
+                                let res = files.load_index(self.object_hash, self.alloc_limit_bytes);
                                 slot.files.store(bundle);
                                 index.loaded_indices.fetch_add(1, Ordering::SeqCst);
                                 res
@@ -229,7 +229,7 @@ impl super::Store {
             Arc::new(
                 db_paths
                     .iter()
-                    .map(|path| crate::loose::Store::at(path, self.object_hash))
+                    .map(|path| crate::loose::Store::at(path, self.object_hash, self.alloc_limit_bytes))
                     .collect::<Vec<_>>(),
             )
         } else {
@@ -240,6 +240,7 @@ impl super::Store {
             db_paths,
             index.slot_indices.len().into(),
             self.use_multi_pack_index.then_some(self.object_hash),
+            self.alloc_limit_bytes,
         )?;
         let mut idx_by_index_path: BTreeMap<_, _> = index
             .slot_indices
@@ -444,6 +445,7 @@ impl super::Store {
         db_paths: Vec<PathBuf>,
         initial_capacity: Option<usize>,
         multi_pack_index_object_hash: Option<gix_hash::Kind>,
+        alloc_limit_bytes: Option<usize>,
     ) -> Result<Vec<(Either, SystemTime, u64)>, Error> {
         let mut indices_by_modification_time = Vec::with_capacity(initial_capacity.unwrap_or_default());
         for db_path in db_paths {
@@ -471,7 +473,7 @@ impl super::Store {
                         is_multipack_index(p)
                             .then(|| {
                                 // we always open the multi-pack here to be able to remove indices
-                                gix_pack::multi_index::File::at(p)
+                                gix_pack::multi_index::File::at(p, alloc_limit_bytes)
                                     .ok()
                                     .filter(|midx| midx.object_hash() == hash)
                                     .map(|midx| (midx, *a, *b))

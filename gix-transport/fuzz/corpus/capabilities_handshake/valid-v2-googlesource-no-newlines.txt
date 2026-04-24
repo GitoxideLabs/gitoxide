@@ -1,0 +1,2 @@
+000dversion 2
+000bls-refs004dfetch=filter ref-in-want sideband-all packfile-uris wait-for-done shallow0011server-option000esession-id0000

@@ -1,0 +1,1 @@
+:(attr:+invalidAttr,attr:valid)some/path

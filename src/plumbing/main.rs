@@ -758,6 +758,15 @@ pub fn main() -> Result<()> {
                 None,
                 move |_progress, out, _err| core::discover(&repository_path, out),
             ),
+            free::Subcommands::Trust { paths } => prepare_and_run(
+                "trust",
+                trace,
+                verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| core::trust(&paths, out),
+            ),
             free::Subcommands::CommitGraph(cmd) => match cmd {
                 free::commitgraph::Subcommands::Verify { path, statistics } => prepare_and_run(
                     "commitgraph-verify",

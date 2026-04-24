@@ -7,8 +7,15 @@ use gix_odb::pack;
 
 use crate::{
     fixture_path, hex_to_id,
-    pack::{INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX},
+    pack::{leaked_fixture_bytes, pack_from_memory_at, INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX},
 };
+
+fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
+    let (data, path) = leaked_fixture_bytes(fixture_path(at));
+    gix_pack::index::File::from_data(data, path, gix_hash::Kind::Sha1).expect("valid index file")
+}
+
+mod fuzzed;
 
 mod version {
     mod v1 {
@@ -144,7 +151,7 @@ mod version {
                 let desired_kind = pack::index::Version::default();
                 let num_objects = pack_iter.len() as u32;
                 let pack_version = pack_iter.version();
-                let outcome = pack::index::File::write_data_iter_to_stream(
+                let outcome = pack::index::write_data_iter_to_stream(
                     desired_kind,
                     || {
                         let file = std::fs::File::open(fixture_path(data_path))?;
@@ -259,6 +266,40 @@ fn traverse_with_index_and_forward_ref_deltas() {
         )
         .unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 9, "we traverse all objects");
+}
+
+#[test]
+fn from_memory_backing_supports_verification_and_traversal() {
+    use gix_features::progress;
+
+    let index = memory_backed_index(SMALL_PACK_INDEX);
+    let data = pack_from_memory_at(SMALL_PACK);
+    assert_eq!(
+        index
+            .verify_checksum(&mut progress::Discard, &AtomicBool::new(false))
+            .unwrap(),
+        index.index_checksum()
+    );
+    assert_eq!(
+        data.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))
+            .unwrap(),
+        data.checksum()
+    );
+
+    let count = AtomicUsize::new(0);
+    index
+        .traverse_with_index(
+            &data,
+            |_, _, _, _| {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok::<_, std::io::Error>(())
+            },
+            &mut progress::Discard,
+            &AtomicBool::new(false),
+            gix_pack::index::traverse::with_index::Options::default(),
+        )
+        .unwrap();
+    assert_eq!(count.load(Ordering::SeqCst), index.num_objects() as usize);
 }
 
 use gix_features::progress;

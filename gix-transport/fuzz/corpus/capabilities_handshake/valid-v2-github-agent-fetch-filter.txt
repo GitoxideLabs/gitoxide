@@ -1,0 +1,6 @@
+000eversion 2
+0023agent=git/github-gdf51a71f0236
+000cls-refs
+0019fetch=shallow filter
+0012server-option
+0000

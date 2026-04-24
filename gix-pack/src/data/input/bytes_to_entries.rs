@@ -269,7 +269,10 @@ where
     }
 }
 
-impl crate::data::File {
+impl<T> crate::data::File<T>
+where
+    T: crate::FileData,
+{
     /// Returns an iterator over [`Entries`][crate::data::input::Entry], without making use of the memory mapping.
     pub fn streaming_iter(&self) -> Result<BytesToEntriesIter<impl io::BufRead>, input::Error> {
         let reader =

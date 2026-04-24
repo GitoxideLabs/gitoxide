@@ -284,7 +284,7 @@ impl crate::Bundle {
                 let directory = directory.as_ref();
                 let mut index_file = gix_tempfile::new(directory, ContainingDirectory::Exists, AutoRemove::Tempfile)?;
 
-                let outcome = crate::index::File::write_data_iter_to_stream(
+                let outcome = crate::index::write_data_iter_to_stream(
                     index_kind,
                     {
                         let data_file = Arc::clone(&data_file);
@@ -342,7 +342,7 @@ impl crate::Bundle {
                 }
             }
             None => WriteOutcome {
-                outcome: crate::index::File::write_data_iter_to_stream(
+                outcome: crate::index::write_data_iter_to_stream(
                     index_kind,
                     move || new_pack_file_resolver(data_file),
                     &mut pack_entries_iter,

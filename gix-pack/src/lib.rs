@@ -18,6 +18,16 @@
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 #![deny(missing_docs, rust_2018_idioms, unsafe_code)]
 
+use std::{borrow::Cow, ops::Deref, path::Path};
+
+/// The default memory-backed storage for pack data and index files.
+pub use memmap2::Mmap as MMap;
+
+/// A byte-oriented backing store for pack data and indices.
+pub trait FileData: Deref<Target = [u8]> {}
+
+impl<T> FileData for T where T: Deref<Target = [u8]> {}
+
 ///
 pub mod bundle;
 /// A bundle of pack data and the corresponding pack index
@@ -60,6 +70,19 @@ mod mmap {
     }
 }
 
+/// Return a display-friendly name for pack- or index-related progress messages.
+///
+/// Prefer the file name, but fall back to the full path for paths without a terminal component.
+fn source_name(path: &Path) -> Cow<'_, str> {
+    if path.as_os_str().is_empty() {
+        Cow::Borrowed("<memory>")
+    } else if let Some(name) = path.file_name() {
+        name.to_string_lossy()
+    } else {
+        path.as_os_str().to_string_lossy()
+    }
+}
+
 #[inline]
 fn read_u32(b: &[u8]) -> u32 {
     u32::from_be_bytes(b.try_into().unwrap())
@@ -74,4 +97,9 @@ fn exact_vec<T>(capacity: usize) -> Vec<T> {
     let mut v = Vec::new();
     v.reserve_exact(capacity);
     v
+}
+
+#[inline]
+fn fan_is_monotonically_increasing(fan: &[u32]) -> bool {
+    !fan.windows(2).any(|window| window[0] > window[1])
 }

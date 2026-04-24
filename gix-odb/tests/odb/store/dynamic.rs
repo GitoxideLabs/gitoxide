@@ -23,7 +23,7 @@ fn db_with_all_object_sources() -> crate::Result<(gix_odb::Handle, gix_testtools
         .write(true)
         .create_new(true)
         .open(objects_dir.path().join("pack/multi-pack-index"))?;
-    gix_odb::pack::multi_index::File::write_from_index_paths(
+    gix_odb::pack::multi_index::write_from_index_paths(
         vec![
             fixture_path_standalone("objects/pack/pack-a2bf8e71d8c18879e499335762dd95119d93d9f1.idx"),
             fixture_path_standalone("objects/pack/pack-c0438c19fb16422b6bbcce24387b3264416d485b.idx"),
@@ -141,6 +141,37 @@ fn multi_index_access() -> crate::Result {
         0,
         "there are no alternates"
     );
+    Ok(())
+}
+
+#[test]
+fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> crate::Result {
+    let dir = gix_testtools::scripted_fixture_writable_standalone("make_repo_multi_index.sh")?;
+    let handle = gix_odb::at_opts(
+        dir.path().join(".git/objects"),
+        Vec::new(),
+        gix_odb::store::init::Options {
+            alloc_limit_bytes: Some(1),
+            ..Default::default()
+        },
+    )?;
+
+    let mut count = 0;
+    for oid in handle.iter()? {
+        oid?;
+        count += 1;
+    }
+
+    assert_eq!(
+        count, 1732,
+        "packed objects remain reachable by falling back to plain indices"
+    );
+    let metrics = handle.store_ref().metrics();
+    assert!(
+        metrics.known_reachable_indices > 1,
+        "a multi-index open blocked by the allocation limit must fall back to loading plain indices"
+    );
+    assert_eq!(metrics.known_packs, 15);
     Ok(())
 }
 

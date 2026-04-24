@@ -35,7 +35,10 @@ pub struct Outcome {
 }
 
 /// Obtain object information quickly.
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// Resolve the object header information starting at `entry`, following the chain of entries as needed.
     ///
     /// The `entry` determines which object to decode, and is commonly obtained with the help of a pack index file or through pack iteration.
@@ -66,7 +69,11 @@ impl File {
                     if first_delta_decompressed_size.is_none() {
                         first_delta_decompressed_size = Some(self.decode_delta_object_size(inflate, &entry)?);
                     }
-                    entry = self.entry(entry.base_pack_offset(base_distance))?;
+                    entry = self.entry(entry.checked_base_pack_offset(base_distance).ok_or(
+                        crate::data::entry::decode::Error::Corrupt {
+                            message: "an ofs-delta base distance pointing before pack start",
+                        },
+                    )?)?;
                 }
                 RefDelta { base_id } => {
                     num_deltas += 1;
@@ -99,8 +106,8 @@ impl File {
             .decompress_entry_from_data_offset_2(entry.data_offset, inflate, &mut buf)?
             .1;
         let buf = &buf[..used];
-        let (_base_size, offset) = delta::decode_header_size(buf);
-        let (result_size, _offset) = delta::decode_header_size(&buf[offset..]);
+        let (_base_size, offset) = delta::decode_header_size(buf)?;
+        let (result_size, _offset) = delta::decode_header_size(&buf[offset..])?;
         Ok(result_size)
     }
 }

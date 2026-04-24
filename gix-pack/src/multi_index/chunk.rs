@@ -9,6 +9,8 @@ pub mod index_names {
 
     ///
     pub mod decode {
+        use std::collections::TryReserveError;
+
         use gix_object::bstr::BString;
 
         /// The error returned by [`from_bytes()`][super::from_bytes()].
@@ -19,21 +21,57 @@ pub mod index_names {
             NotOrderedAlphabetically,
             #[error("Each pack path name must be terminated with a null byte")]
             MissingNullByte,
+            #[error("Entry too large to fit in memory")]
+            OutOfMemory,
             #[error("Couldn't turn path '{path}' into OS path due to encoding issues")]
             PathEncoding { path: BString },
             #[error("non-padding bytes found after all paths were read.")]
             UnknownTrailerBytes,
         }
+
+        impl From<TryReserveError> for Error {
+            #[cold]
+            fn from(_: TryReserveError) -> Self {
+                Self::OutOfMemory
+            }
+        }
     }
 
-    /// Parse null-separated index names from the given `chunk` of bytes and the expected number of packs and indices.
-    /// Ignore padding bytes which are typically \0.
-    pub fn from_bytes(mut chunk: &[u8], num_packs: u32) -> Result<Vec<PathBuf>, decode::Error> {
+    /// Parse null-separated index names from the given `chunk` of bytes.
+    ///
+    /// `chunk`
+    ///: Contains `num_packs` null-terminated index names, optionally followed by padding bytes which are typically `\0`.
+    ///
+    /// `num_packs`
+    ///: The number of index names expected to be present in `chunk`.
+    ///
+    /// `alloc_limit_bytes`
+    ///: Limits allocations caused by attacker-controlled on-disk multi-index data.
+    ///  It is used to reject reserving the output `Vec<PathBuf>` if its capacity estimate exceeds the limit,
+    ///  and to reject any single path entry whose byte length exceeds the limit before turning it into a `PathBuf`.
+    ///  Use `None` to disable this limit.
+    pub fn from_bytes(
+        mut chunk: &[u8],
+        num_packs: u32,
+        alloc_limit_bytes: Option<usize>,
+    ) -> Result<Vec<PathBuf>, decode::Error> {
         let mut out = Vec::new();
+        let num_packs = usize::try_from(num_packs).map_err(|_| decode::Error::OutOfMemory)?;
+        let vec_allocation = num_packs
+            .checked_mul(std::mem::size_of::<PathBuf>())
+            .ok_or(decode::Error::OutOfMemory)?;
+        if alloc_limit_bytes.is_some_and(|limit| vec_allocation > limit) {
+            return Err(decode::Error::OutOfMemory);
+        }
+        out.try_reserve(num_packs)?;
+
         for _ in 0..num_packs {
             let null_byte_pos = chunk.find_byte(b'\0').ok_or(decode::Error::MissingNullByte)?;
 
             let path = &chunk[..null_byte_pos];
+            if alloc_limit_bytes.is_some_and(|limit| path.len() > limit) {
+                return Err(decode::Error::OutOfMemory);
+            }
             let path = gix_path::try_from_byte_slice(path)
                 .map_err(|_| decode::Error::PathEncoding {
                     path: BString::from(path),
@@ -165,7 +203,7 @@ pub mod lookup {
 
     /// Return true if the size of the `offset` range seems to match for a `hash` of the given kind and the amount of objects.
     pub fn is_valid(offset: &Range<usize>, hash: gix_hash::Kind, num_objects: u32) -> bool {
-        (offset.end - offset.start) / hash.len_in_bytes() == num_objects as usize
+        (offset.end - offset.start) == (num_objects as usize).saturating_mul(hash.len_in_bytes())
     }
 }
 
@@ -213,10 +251,10 @@ pub mod offsets {
         Ok(())
     }
 
-    /// Returns true if the `offset` range seems to match the size required for `num_objects`.
+    /// Returns true if the `offset` range seems to match the size required for the untrusted `num_objects`.
     pub fn is_valid(offset: &Range<usize>, num_objects: u32) -> bool {
         let entry_size = 4 /* pack-id */ + 4 /* pack-offset */;
-        ((offset.end - offset.start) / num_objects as usize) == entry_size
+        (offset.end - offset.start) == (num_objects as usize).saturating_mul(entry_size)
     }
 }
 

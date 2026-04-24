@@ -42,6 +42,11 @@ where
             Ok(decode::PacketLineOrWantedSize::Wanted(additional_bytes)) => additional_bytes as usize,
             Err(err) => return Ok(Err(err)),
         };
+        if num_data_bytes > data_bytes.len() {
+            return Ok(Err(decode::Error::DataLengthLimitExceeded {
+                length_in_bytes: num_data_bytes + U16_HEX_BYTES,
+            }));
+        }
 
         let (data_bytes, _) = data_bytes.split_at_mut(num_data_bytes);
         reader.read_exact(data_bytes)?;

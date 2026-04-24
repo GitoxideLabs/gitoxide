@@ -51,14 +51,17 @@ impl From<ProgressId> for gix_features::progress::Id {
 }
 
 /// Traversal with index
-impl index::File {
+impl<T> index::File<T>
+where
+    T: crate::FileData + Sync,
+{
     /// Iterate through all _decoded objects_ in the given `pack` and handle them with a `Processor`, using an index to reduce waste
     /// at the cost of memory.
     ///
     /// For more details, see the documentation on the [`traverse()`][index::File::traverse()] method.
-    pub fn traverse_with_index<Processor, E>(
+    pub fn traverse_with_index<Processor, E, D>(
         &self,
-        pack: &crate::data::File,
+        pack: &crate::data::File<D>,
         mut processor: Processor,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
@@ -69,21 +72,16 @@ impl index::File {
             + Send
             + Clone,
         E: std::error::Error + Send + Sync + 'static,
+        D: crate::FileData + Send + Sync,
     {
         let (verify_result, traversal_result) = parallel::join(
             {
                 let mut pack_progress = progress.add_child_with_id(
-                    format!(
-                        "Hash of pack '{}'",
-                        pack.path().file_name().expect("pack has filename").to_string_lossy()
-                    ),
+                    format!("Hash of pack '{}'", crate::source_name(pack.path())),
                     ProgressId::HashPackDataBytes.into(),
                 );
                 let mut index_progress = progress.add_child_with_id(
-                    format!(
-                        "Hash of index '{}'",
-                        self.path.file_name().expect("index has filename").to_string_lossy()
-                    ),
+                    format!("Hash of index '{}'", crate::source_name(&self.path)),
                     ProgressId::HashPackIndexBytes.into(),
                 );
                 move || {

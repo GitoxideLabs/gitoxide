@@ -1,0 +1,4 @@
+protocol=https
+unknown=value
+quit=yes
+username=bob

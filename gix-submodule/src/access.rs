@@ -166,7 +166,12 @@ impl File {
 
     /// Retrieve the `update` field of the submodule named `name`, if present.
     pub fn update(&self, name: &BStr) -> Result<Option<Update>, config::update::Error> {
-        let value: Update = match self.config.string(&format!("submodule.{name}.update")) {
+        let mut value_is_from_modules_file = None;
+        let our_meta = self.config.meta();
+        let value: Update = match self.config.string_filter(&format!("submodule.{name}.update"), |meta| {
+            value_is_from_modules_file = Some(std::ptr::eq(meta, our_meta));
+            true
+        }) {
             Some(v) => v.as_ref().try_into().map_err(|()| config::update::Error::Invalid {
                 submodule: name.to_owned(),
                 actual: v.into_owned(),
@@ -175,14 +180,7 @@ impl File {
         };
 
         if let Update::Command(cmd) = &value {
-            let ours = self.config.meta();
-            let has_value_from_foreign_section = self
-                .config
-                .sections_by_name("submodule")
-                .into_iter()
-                .flatten()
-                .any(|s| s.header().subsection_name() == Some(name) && !std::ptr::eq(s.meta(), ours));
-            if !has_value_from_foreign_section {
+            if value_is_from_modules_file.unwrap_or_default() {
                 return Err(config::update::Error::CommandForbiddenInModulesConfiguration {
                     submodule: name.to_owned(),
                     actual: cmd.to_owned(),

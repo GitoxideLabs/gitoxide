@@ -243,6 +243,20 @@ mod prepare {
     }
 
     #[test]
+    fn whitespace_only_without_shell() {
+        let cmd = std::process::Command::from(gix_command::prepare("   "));
+        assert_eq!(format!("{cmd:?}"), "\"   \"");
+    }
+
+    #[test]
+    fn whitespace_only_commands_with_auto_split_fall_back_to_shell() {
+        let cmd = std::process::Command::from(
+            gix_command::prepare("   ").command_may_be_shell_script_allow_manual_argument_splitting(),
+        );
+        assert_eq!(format!("{cmd:?}"), quoted(&[*SH, "-c", "   ", "--"]));
+    }
+
+    #[test]
     fn single_and_multiple_arguments() {
         let cmd = std::process::Command::from(gix_command::prepare("ls").arg("first").args(["second", "third"]));
         assert_eq!(format!("{cmd:?}"), quoted(&["ls", "first", "second", "third"]));

@@ -1,0 +1,43 @@
+[package]
+name = "gix-transport-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.gix-packetline]
+path = "../../gix-packetline"
+features = ["blocking-io"]
+
+[dependencies.gix-transport]
+path = ".."
+features = ["blocking-client"]
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "capabilities_from_bytes"
+path = "fuzz_targets/capabilities_from_bytes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capabilities_from_lines"
+path = "fuzz_targets/capabilities_from_lines.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "capabilities_handshake"
+path = "fuzz_targets/capabilities_handshake.rs"
+test = false
+doc = false

@@ -1,38 +1,22 @@
 use std::io::Read;
 
 /// Decode variable int numbers from a `Read` implementation.
-///
-/// Note: currently overflow checks are only done in debug mode.
 #[inline]
 pub fn leb64_from_read(mut r: impl Read) -> Result<(u64, usize), std::io::Error> {
-    let mut b = [0u8; 1];
-    let mut i = 0;
-    r.read_exact(&mut b)?;
-    i += 1;
-    let mut value = u64::from(b[0]) & 0x7f;
-    while b[0] & 0x80 != 0 {
-        r.read_exact(&mut b)?;
-        i += 1;
-        debug_assert!(i <= 10, "Would overflow value at 11th iteration");
-        value += 1;
-        value = (value << 7) + (u64::from(b[0]) & 0x7f);
-    }
-    Ok((value, i))
-}
-
-/// Decode variable int numbers.
-#[inline]
-pub fn leb64(d: &[u8]) -> (u64, usize) {
-    let mut i = 0;
-    let mut c = d[i];
-    i += 1;
+    let mut byte = [0u8; 1];
+    r.read_exact(&mut byte)?;
+    let mut c = byte[0];
+    let mut i = 1;
     let mut value = u64::from(c) & 0x7f;
     while c & 0x80 != 0 {
-        c = d[i];
+        r.read_exact(&mut byte)?;
+        c = byte[0];
         i += 1;
-        debug_assert!(i <= 10, "Would overflow value at 11th iteration");
-        value += 1;
-        value = (value << 7) + (u64::from(c) & 0x7f);
+        value = value
+            .checked_add(1)
+            .and_then(|value| value.checked_shl(7))
+            .and_then(|value| value.checked_add(u64::from(c) & 0x7f))
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "LEB64 value overflowed"))?;
     }
-    (value, i)
+    Ok((value, i))
 }

@@ -177,14 +177,14 @@ where
 
         for mut child in base.into_child_iter() {
             let (mut child_entry, entry_end) = decompress_from_resolver(child.entry_slice(), delta_bytes)?;
-            let (base_size, consumed) = data::delta::decode_header_size(delta_bytes);
+            let (base_size, consumed) = data::delta::decode_header_size(delta_bytes)?;
             let mut header_ofs = consumed;
             assert_eq!(
                 base_bytes.len(),
                 base_size as usize,
                 "recorded base size in delta does match the actual one"
             );
-            let (result_size, consumed) = data::delta::decode_header_size(&delta_bytes[consumed..]);
+            let (result_size, consumed) = data::delta::decode_header_size(&delta_bytes[consumed..])?;
             header_ofs += consumed;
 
             fully_resolved_delta_bytes.resize(result_size as usize, 0);
@@ -351,7 +351,7 @@ where
                                 for mut child in base.into_child_iter() {
                                     let (mut child_entry, entry_end) =
                                         decompress_from_resolver(child.entry_slice(), &mut delta_bytes)?;
-                                    let (base_size, consumed) = data::delta::decode_header_size(&delta_bytes);
+                                    let (base_size, consumed) = data::delta::decode_header_size(&delta_bytes)?;
                                     let mut header_ofs = consumed;
                                     assert_eq!(
                                         base_bytes.len(),
@@ -359,7 +359,7 @@ where
                                         "recorded base size in delta does match the actual one"
                                     );
                                     let (result_size, consumed) =
-                                        data::delta::decode_header_size(&delta_bytes[consumed..]);
+                                        data::delta::decode_header_size(&delta_bytes[consumed..])?;
                                     header_ofs += consumed;
 
                                     fully_resolved_delta_bytes.resize(result_size as usize, 0);

@@ -1,6 +1,4 @@
-Could not find matching pack file at 'index.pack' - only index file will be verified, error was: Could not open pack file at 'index.pack'
-Error: Verification failure
+Error: Could not open pack index file
 
 Caused by:
-    0: Failed to verify index file checksum
-    1: Hash was fa9a8a630eacc2d3df00aff604bec2451ccbc8ff, but should have been 0eba66e6b391eb83efc3ec9fc8a3087788911c0a
+    Pack index size is incorrect, expected 1912 bytes for 30 objects in version V2, but got 1913 bytes

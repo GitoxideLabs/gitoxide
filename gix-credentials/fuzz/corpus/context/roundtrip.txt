@@ -1,0 +1,6 @@
+protocol=https
+host=github.com
+path=byron/gitoxide
+username=user
+password=pass
+url=https://github.com/byron/gitoxide

@@ -14,6 +14,56 @@ pub struct Outcome {
     pub is_sparse: bool,
 }
 
+fn entries_block_size_in_bytes(
+    on_disk_size: usize,
+    offset_to_extensions: Option<usize>,
+    object_hash: gix_hash::Kind,
+) -> usize {
+    offset_to_extensions
+        .unwrap_or_else(|| on_disk_size.saturating_sub(object_hash.len_in_bytes()))
+        .saturating_sub(header::SIZE)
+}
+
+const fn on_disk_entry_sans_path(object_hash: gix_hash::Kind) -> usize {
+    8 + // ctime
+    8 + // mtime
+    (4 * 6) + // various stat fields
+    2 + // flag, ignore extended flag as we'd rather overallocate a bit
+    object_hash.len_in_bytes()
+}
+
+/// Return a lower bound for the number of on-disk bytes one entry must occupy,
+/// based on `object_hash` and `version`.
+///
+/// This is used to reject impossible entry counts and to cap estimates derived from untrusted data.
+/// For V2/V3, entries are padded to 8-byte boundaries, so the fixed payload is rounded up to the
+/// next multiple of 8. For V4, paths are delta-encoded, but each entry still
+/// needs at least a one-byte strip-length varint plus the trailing NUL of the path suffix, hence
+/// `size + 2`.
+const fn min_entry_size_in_bytes(object_hash: gix_hash::Kind, version: Version) -> usize {
+    let size = on_disk_entry_sans_path(object_hash);
+    match version {
+        Version::V2 | Version::V3 => size.next_multiple_of(8),
+        Version::V4 => size + 2,
+    }
+}
+
+/// Compute an upper bound for how many entries can physically fit into the on-disk entries block.
+///
+/// The entries block is the index payload after the header and before extensions or, if there are no
+/// extensions, before the trailing checksum. We divide that byte budget by [`min_entry_size_in_bytes()`]
+/// to obtain the largest plausible entry count for the declared index version. This is intentionally a
+/// coarse upper bound used to reject corrupt headers that claim more entries than the remaining bytes
+/// could possibly encode.
+pub fn max_entries_possible(
+    on_disk_size: usize,
+    offset_to_extensions: Option<usize>,
+    object_hash: gix_hash::Kind,
+    version: Version,
+) -> usize {
+    entries_block_size_in_bytes(on_disk_size, offset_to_extensions, object_hash)
+        / min_entry_size_in_bytes(object_hash, version)
+}
 pub fn estimate_path_storage_requirements_in_bytes(
     num_entries: u32,
     on_disk_size: usize,
@@ -21,21 +71,21 @@ pub fn estimate_path_storage_requirements_in_bytes(
     object_hash: gix_hash::Kind,
     version: Version,
 ) -> usize {
-    const fn on_disk_entry_sans_path(object_hash: gix_hash::Kind) -> usize {
-        8 + // ctime
-        8 + // mtime
-        (4 * 6) +  // various stat fields
-        2 + // flag, ignore extended flag as we'd rather overallocate a bit
-        object_hash.len_in_bytes()
-    }
+    let size_of_entries_block = entries_block_size_in_bytes(on_disk_size, offset_to_extensions, object_hash);
     match version {
         Version::V3 | Version::V2 => {
-            let size_of_entries_block = offset_to_extensions.unwrap_or(on_disk_size);
-            size_of_entries_block
-                .saturating_sub(num_entries as usize * on_disk_entry_sans_path(object_hash))
-                .saturating_sub(header::SIZE)
+            // V2/V3 store full paths in the entries block, so whatever remains after subtracting the fixed
+            // entry header portion is an upper bound for path bytes we may copy into memory.
+            size_of_entries_block.saturating_sub(num_entries as usize * on_disk_entry_sans_path(object_hash))
         }
-        Version::V4 => num_entries as usize * AVERAGE_V4_DELTA_PATH_LEN_IN_BYTES,
+        Version::V4 => size_of_entries_block
+            // V4 stores delta-compressed paths on disk. Subtract the minimum per-entry non-path payload to
+            // validate how many on-disk bytes could plausibly remain for path suffixes at all.
+            .saturating_sub(num_entries as usize * (on_disk_entry_sans_path(object_hash) + 2))
+            // The in-memory backing stores expanded paths, so the on-disk remainder is not a good estimate by
+            // itself. Keep the historic per-entry heuristic, but clamp it to what the entries block can plausibly
+            // contain so corrupt entry counts cannot drive an excessive preallocation.
+            .min(num_entries as usize * AVERAGE_V4_DELTA_PATH_LEN_IN_BYTES),
     }
 }
 
@@ -129,7 +179,7 @@ fn load_one<'a>(
         } else {
             let path_len = (flags.bits() & entry::Flags::PATH_LEN.bits()) as usize;
             let (path, data) = data.split_at_checked(path_len)?;
-            (path, skip_padding(data, first_byte_of_entry))
+            (path, skip_padding(data, first_byte_of_entry)?)
         };
 
         // TODO(perf): for some reason, this causes tremendous `memmove` time even though the backing
@@ -167,12 +217,12 @@ fn load_one<'a>(
 }
 
 #[inline]
-fn skip_padding(data: &[u8], first_byte_of_entry: usize) -> &[u8] {
+fn skip_padding(data: &[u8], first_byte_of_entry: usize) -> Option<&[u8]> {
     let current_offset = data.as_ptr() as usize;
     let c_padding = (current_offset - first_byte_of_entry + 8) & !7;
     let skip = (first_byte_of_entry + c_padding) - current_offset;
 
-    &data[skip..]
+    data.get(skip..)
 }
 
 #[inline]

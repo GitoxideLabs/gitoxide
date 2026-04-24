@@ -372,7 +372,7 @@ mod write_blob {
 #[test]
 fn writes_avoid_io_using_duplicate_check() -> crate::Result {
     let mut repo = crate::named_repo("make_packed_and_loose.sh")?;
-    let store = gix::odb::loose::Store::at(repo.git_dir().join("objects"), repo.object_hash());
+    let store = gix::odb::loose::Store::at(repo.git_dir().join("objects"), repo.object_hash(), None);
     let loose_count = store.iter().count();
     assert_eq!(loose_count, 3, "there are some loose objects");
     assert_eq!(

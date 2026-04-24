@@ -125,6 +125,19 @@ impl Default for Conflict {
         }
     }
 }
+///
+/// Prepared merge state for rendering the same merge with multiple conflict strategies.
+///
+/// Construct this with [`Merge::new()`] to compute the expensive diff state once, then call
+/// [`Merge::run()`] repeatedly with different [`Conflict`] values. It keeps a reference to the
+/// [`imara_diff::InternedInput`] used to construct it so rendering cannot accidentally use a
+/// different interner than the one the stored tokens were derived from.
+#[derive(Clone)]
+pub struct Merge<'input, 'data> {
+    input: &'input imara_diff::InternedInput<&'data [u8]>,
+    current_tokens: Vec<imara_diff::Token>,
+    hunks: Vec<utils::Hunk>,
+}
 
 pub(super) mod function;
 mod utils;

@@ -285,9 +285,12 @@ mod prepare {
                             .find_byteset(b"\\|&;<>()$`\n*?[#~%")
                             .is_none()
                         {
-                            prep.command
-                                .to_str()
-                                .and_then(|args| shell_words::split(args).ok().map(Vec::into_iter))
+                            prep.command.to_str().and_then(|args| {
+                                shell_words::split(args)
+                                    .ok()
+                                    .filter(|args| !args.is_empty())
+                                    .map(Vec::into_iter)
+                            })
                         } else {
                             None
                         }

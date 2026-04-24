@@ -52,7 +52,10 @@ pub struct Outcome {
 }
 
 /// Traversal of pack data files using an index file
-impl index::File {
+impl<T> index::File<T>
+where
+    T: crate::FileData + Sync,
+{
     /// Iterate through all _decoded objects_ in the given `pack` and handle them with a `Processor`.
     /// The return value is (pack-checksum, [`Outcome`], `progress`), thus the pack traversal will always verify
     /// the whole packs checksum to assure it was correct. In case of bit-rod, the operation will abort early without
@@ -73,9 +76,9 @@ impl index::File {
     ///
     /// Use [`thread_limit`][Options::thread_limit] to further control parallelism and [`check`][SafetyCheck] to define how much the passed
     /// objects shall be verified beforehand.
-    pub fn traverse<C, Processor, E, F>(
+    pub fn traverse<C, Processor, E, F, D>(
         &self,
-        pack: &crate::data::File,
+        pack: &crate::data::File<D>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
         processor: Processor,
@@ -91,6 +94,7 @@ impl index::File {
         E: std::error::Error + Send + Sync + 'static,
         Processor: FnMut(gix_object::Kind, &[u8], &index::Entry, &dyn Progress) -> Result<(), E> + Send + Clone,
         F: Fn() -> C + Send + Clone,
+        D: crate::FileData + Send + Sync,
     {
         match traversal {
             Algorithm::Lookup => self.traverse_with_lookup(
@@ -114,9 +118,9 @@ impl index::File {
         }
     }
 
-    fn possibly_verify<E>(
+    fn possibly_verify<E, D>(
         &self,
-        pack: &crate::data::File,
+        pack: &crate::data::File<D>,
         check: SafetyCheck,
         pack_progress: &mut dyn Progress,
         index_progress: &mut dyn Progress,
@@ -124,6 +128,7 @@ impl index::File {
     ) -> Result<gix_hash::ObjectId, Error<E>>
     where
         E: std::error::Error + Send + Sync + 'static,
+        D: crate::FileData + Send + Sync,
     {
         Ok(if check.file_checksum() {
             pack.checksum()
@@ -141,10 +146,10 @@ impl index::File {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn decode_and_process_entry<C, E>(
+    fn decode_and_process_entry<C, E, D>(
         &self,
         check: SafetyCheck,
-        pack: &crate::data::File,
+        pack: &crate::data::File<D>,
         cache: &mut C,
         buf: &mut Vec<u8>,
         inflate: &mut zlib::Inflate,
@@ -155,6 +160,7 @@ impl index::File {
     where
         C: crate::cache::DecodeEntry,
         E: std::error::Error + Send + Sync + 'static,
+        D: crate::FileData + Send + Sync,
     {
         let pack_entry = pack.entry(index_entry.pack_offset)?;
         let pack_entry_data_offset = pack_entry.data_offset;

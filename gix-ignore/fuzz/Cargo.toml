@@ -1,0 +1,30 @@
+[package]
+name = "gix-ignore-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bstr = "1.12.0"
+
+[dependencies.gix-glob]
+path = "../../gix-glob"
+
+[dependencies.gix-ignore]
+path = ".."
+
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "ignore"
+path = "fuzz_targets/ignore.rs"
+test = false
+doc = false

@@ -21,7 +21,7 @@ fn from_paths() -> crate::Result {
         .write(true)
         .create_new(true)
         .open(&output_path)?;
-    let outcome = gix_pack::multi_index::File::write_from_index_paths(
+    let outcome = gix_pack::multi_index::write_from_index_paths(
         input_indices.clone(),
         &mut out,
         &mut progress::Discard,
@@ -36,7 +36,7 @@ fn from_paths() -> crate::Result {
         hex_to_id("d34d327039a3554f8a644b29e07b903fa71ef269")
     );
 
-    let file = gix_pack::multi_index::File::at(output_path)?;
+    let file = gix_pack::multi_index::File::at(output_path, None)?;
     assert_eq!(file.num_indices(), 3);
     assert_eq!(
         file.index_names(),

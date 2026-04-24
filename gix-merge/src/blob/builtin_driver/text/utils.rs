@@ -36,12 +36,12 @@ pub fn contains_lines(hunks: &[Hunk]) -> bool {
 /// to understand what's going on there without investing more time than it seemed worth.
 pub fn detect_line_ending(
     hunks: &[Hunk],
-    input: &mut imara_diff::InternedInput<&[u8]>,
+    input: &imara_diff::InternedInput<&[u8]>,
     current_tokens: &[imara_diff::Token],
 ) -> Option<&'static BStr> {
     fn is_eol_crlf(
         hunks: &[Hunk],
-        input: &mut imara_diff::InternedInput<&[u8]>,
+        input: &imara_diff::InternedInput<&[u8]>,
         current_tokens: &[imara_diff::Token],
     ) -> Option<bool> {
         let (range, side) = hunks.iter().rev().find_map(|h| {
@@ -71,7 +71,7 @@ pub fn detect_line_ending(
 
 pub fn detect_line_ending_or_nl(
     hunks: &[Hunk],
-    input: &mut imara_diff::InternedInput<&[u8]>,
+    input: &imara_diff::InternedInput<&[u8]>,
     current_tokens: &[imara_diff::Token],
 ) -> &'static BStr {
     detect_line_ending(hunks, input, current_tokens).unwrap_or(b"\n".into())

@@ -30,10 +30,21 @@ impl Location {
 
 /// Access
 impl Entry {
-    /// Compute the pack offset to the base entry of the object represented by this entry.
-    pub fn base_pack_offset(&self, distance: u64) -> data::Offset {
+    /// Compute the pack offset to the base entry of the object represented by this entry, or
+    /// return `None` if the distance would underflow or is invalid.
+    pub fn checked_base_pack_offset(&self, distance: u64) -> Option<data::Offset> {
         let pack_offset = self.data_offset - self.header_size() as u64;
-        pack_offset.checked_sub(distance).expect("in-bound distance of deltas")
+        Header::verified_base_pack_offset(pack_offset, distance)
+    }
+
+    /// Compute the pack offset to the base entry of the object represented by this entry.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the `distance` will cause an underflow or is invalid.
+    pub fn base_pack_offset(&self, distance: u64) -> data::Offset {
+        self.checked_base_pack_offset(distance)
+            .expect("in-bound distance of deltas")
     }
     /// The pack offset at which this entry starts
     pub fn pack_offset(&self) -> data::Offset {

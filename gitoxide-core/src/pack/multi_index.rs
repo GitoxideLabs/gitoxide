@@ -12,7 +12,8 @@ pub fn verify(
     mut progress: impl NestedProgress + 'static,
     should_interrupt: &AtomicBool,
 ) -> anyhow::Result<()> {
-    gix::odb::pack::multi_index::File::at(multi_index_path)?.verify_integrity_fast(&mut progress, should_interrupt)?;
+    gix::odb::pack::multi_index::File::at(multi_index_path, None)?
+        .verify_integrity_fast(&mut progress, should_interrupt)?;
     Ok(())
 }
 
@@ -28,7 +29,7 @@ pub fn create(
         gix::lock::acquire::Fail::Immediately,
         None,
     )?);
-    gix::odb::pack::multi_index::File::write_from_index_paths(
+    gix::odb::pack::multi_index::write_from_index_paths(
         index_paths,
         &mut out,
         &mut progress,
@@ -64,7 +65,7 @@ pub fn info(
     }
     #[cfg(feature = "serde")]
     {
-        let file = gix::odb::pack::multi_index::File::at(&multi_index_path)?;
+        let file = gix::odb::pack::multi_index::File::at(&multi_index_path, None)?;
         serde_json::to_writer_pretty(
             out,
             &info::Statistics {
@@ -82,7 +83,7 @@ pub fn entries(multi_index_path: PathBuf, format: OutputFormat, mut out: impl st
     if format != OutputFormat::Human {
         bail!("Only human format is supported right now");
     }
-    let file = gix::odb::pack::multi_index::File::at(multi_index_path)?;
+    let file = gix::odb::pack::multi_index::File::at(multi_index_path, None)?;
     for entry in file.iter() {
         writeln!(out, "{} {} {}", entry.oid, entry.pack_index, entry.pack_offset)?;
     }

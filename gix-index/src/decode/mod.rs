@@ -7,8 +7,8 @@ mod entries;
 pub mod header;
 
 mod error {
-
     use crate::{decode, extension};
+    use std::collections::TryReserveError;
 
     /// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
     #[derive(Debug, thiserror::Error)]
@@ -18,6 +18,8 @@ mod error {
         Header(#[from] decode::header::Error),
         #[error("Could not hash index data")]
         Hasher(#[from] gix_hash::hasher::Error),
+        #[error("Index data would require more memory than can be reserved")]
+        OutOfMemory,
         #[error("Could not parse entry at index {index}")]
         Entry { index: u32 },
         #[error("Mandatory extension wasn't implemented or malformed.")]
@@ -26,6 +28,13 @@ mod error {
         UnexpectedTrailerLength { expected: usize, actual: usize },
         #[error("Shared index checksum mismatch")]
         Verify(#[from] gix_hash::verify::Error),
+    }
+
+    impl From<TryReserveError> for Error {
+        #[cold]
+        fn from(_: TryReserveError) -> Self {
+            Self::OutOfMemory
+        }
     }
 }
 pub use error::Error;
@@ -49,6 +58,10 @@ pub struct Options {
     ///
     /// We will abort reading this file if it doesn't match.
     pub expected_checksum: Option<gix_hash::ObjectId>,
+    /// Configure the maximum size of a single allocation caused by untrusted on-disk index data.
+    ///
+    /// Use `None` to disable the limit, which is also the default.
+    pub alloc_limit_bytes: Option<usize>,
 }
 
 impl State {
@@ -62,11 +75,15 @@ impl State {
             thread_limit,
             min_extension_block_in_bytes_for_threading,
             expected_checksum,
+            alloc_limit_bytes,
         }: Options,
     ) -> Result<(Self, Option<gix_hash::ObjectId>), Error> {
         let _span = gix_features::trace::detail!("gix_index::State::from_bytes()", options = ?_options);
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
         let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)?;
+        if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
+            return Err(header::Error::Corrupt("Declared entry count exceeds possible entries for file size").into());
+        }
 
         let mut num_threads = gix_features::parallel::num_threads(thread_limit);
         let path_backing_buffer_size = entries::estimate_path_storage_requirements_in_bytes(
@@ -76,6 +93,13 @@ impl State {
             object_hash,
             version,
         );
+        ensure_in_alloc_limit(
+            (num_entries as usize)
+                .checked_mul(std::mem::size_of::<Entry>())
+                .ok_or(Error::OutOfMemory)?,
+            alloc_limit_bytes,
+        )?;
+        ensure_in_alloc_limit(path_backing_buffer_size, alloc_limit_bytes)?;
 
         let (entries, ext, data) = match start_of_extensions {
             Some(offset) if num_threads > 1 => {
@@ -88,7 +112,9 @@ impl State {
                             || {
                                 gix_features::parallel::build_thread()
                                     .name("gix-index.from_bytes.load-extensions".into())
-                                    .spawn_scoped(scope, || extension::decode::all(extensions_data, object_hash))
+                                    .spawn_scoped(scope, || {
+                                        extension::decode::all(extensions_data, object_hash, alloc_limit_bytes)
+                                    })
                                     .expect("valid name")
                             }
                         });
@@ -106,7 +132,7 @@ impl State {
                                         .spawn_scoped(scope, move || {
                                             let num_entries_for_chunks =
                                                 chunks.iter().map(|c| c.num_entries).sum::<u32>() as usize;
-                                            let mut entries = Vec::with_capacity(num_entries_for_chunks);
+                                            let mut entries = vec_with_capacity(num_entries_for_chunks)?;
                                             let path_backing_buffer_size_for_chunks =
                                                 entries::estimate_path_storage_requirements_in_bytes(
                                                     num_entries_for_chunks as u32,
@@ -116,7 +142,7 @@ impl State {
                                                     version,
                                                 );
                                             let mut path_backing =
-                                                Vec::with_capacity(path_backing_buffer_size_for_chunks);
+                                                vec_with_capacity(path_backing_buffer_size_for_chunks)?;
                                             let mut is_sparse = false;
                                             for offset in chunks {
                                                 let (
@@ -185,7 +211,7 @@ impl State {
                         ),
                     };
                     let ext_res = extension_loading.map_or_else(
-                        || extension::decode::all(extensions_data, object_hash),
+                        || extension::decode::all(extensions_data, object_hash, alloc_limit_bytes),
                         |thread| thread.join().unwrap(),
                     );
                     (entries_res, ext_res)
@@ -201,7 +227,7 @@ impl State {
                     object_hash,
                     version,
                 )?;
-                let (ext, data) = extension::decode::all(data, object_hash)?;
+                let (ext, data) = extension::decode::all(data, object_hash, alloc_limit_bytes)?;
                 (entries, ext, data)
             }
         };
@@ -263,6 +289,12 @@ struct EntriesOutcome {
     pub is_sparse: bool,
 }
 
+fn vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
+    let mut vec = Vec::new();
+    vec.try_reserve(capacity).map_err(|_| Error::OutOfMemory)?;
+    Ok(vec)
+}
+
 fn entries(
     post_header_data: &[u8],
     path_backing_buffer_size: usize,
@@ -270,8 +302,8 @@ fn entries(
     object_hash: gix_hash::Kind,
     version: Version,
 ) -> Result<(EntriesOutcome, &[u8]), Error> {
-    let mut entries = Vec::with_capacity(num_entries as usize);
-    let mut path_backing = Vec::with_capacity(path_backing_buffer_size);
+    let mut entries = vec_with_capacity(num_entries as usize)?;
+    let mut path_backing = vec_with_capacity(path_backing_buffer_size)?;
     entries::chunk(
         post_header_data,
         &mut entries,
@@ -320,4 +352,11 @@ pub(crate) fn stat(data: &[u8]) -> Option<(entry::Stat, &[u8])> {
         },
         data,
     ))
+}
+
+fn ensure_in_alloc_limit(size: usize, alloc_limit_bytes: Option<usize>) -> Result<(), Error> {
+    if alloc_limit_bytes.is_some_and(|limit| size > limit) {
+        return Err(Error::OutOfMemory);
+    }
+    Ok(())
 }

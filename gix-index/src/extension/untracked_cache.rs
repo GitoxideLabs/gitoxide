@@ -39,7 +39,7 @@ pub const SIGNATURE: Signature = *b"UNTR";
 
 // #[allow(unused)]
 /// Decode an untracked cache extension from `data`, assuming object hashes are of type `object_hash`.
-pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Option<UntrackedCache> {
+pub fn decode(data: &[u8], object_hash: gix_hash::Kind, alloc_limit_bytes: Option<usize>) -> Option<UntrackedCache> {
     if data.last().is_none_or(|b| *b != 0) {
         return None;
     }
@@ -66,11 +66,19 @@ pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Option<UntrackedCache
         return data.is_empty().then_some(res);
     }
 
-    let num_directory_blocks = num_directory_blocks.try_into().ok()?;
+    let num_directory_blocks: usize = num_directory_blocks.try_into().ok()?;
+    if num_directory_blocks > data.len() {
+        return None;
+    }
+    if alloc_limit_bytes
+        .is_some_and(|limit| num_directory_blocks.saturating_mul(std::mem::size_of::<Directory>()) > limit)
+    {
+        return None;
+    }
     let directories = &mut res.directories;
-    directories.reserve(num_directory_blocks);
+    directories.try_reserve(num_directory_blocks).ok()?;
 
-    let data = decode_directory_block(data, directories)?;
+    let data = decode_directory_block(data, directories, alloc_limit_bytes)?;
     if directories.len() != num_directory_blocks {
         return None;
     }
@@ -86,21 +94,24 @@ pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Option<UntrackedCache
     }
 
     check_only.for_each_set_bit(|index| {
-        directories[index].check_only = true;
+        let directory = directories.get_mut(index)?;
+        directory.check_only = true;
         Some(())
     })?;
     valid.for_each_set_bit(|index| {
+        let directory = directories.get_mut(index)?;
         let (stat, rest) = crate::decode::stat(data)?;
-        directories[index].stat = stat.into();
+        directory.stat = stat.into();
         data = rest;
         Some(())
-    });
+    })?;
     hash_valid.for_each_set_bit(|index| {
+        let directory = directories.get_mut(index)?;
         let (hash, rest) = data.split_at_checked(hash_len)?;
         data = rest;
-        directories[index].exclude_file_oid = ObjectId::from_bytes_or_panic(hash).into();
+        directory.exclude_file_oid = ObjectId::from_bytes_or_panic(hash).into();
         Some(())
-    });
+    })?;
 
     // null-byte checked in the beginning
     if data.len() != 1 {
@@ -109,11 +120,30 @@ pub fn decode(data: &[u8], object_hash: gix_hash::Kind) -> Option<UntrackedCache
     res.into()
 }
 
-fn decode_directory_block<'a>(data: &'a [u8], directories: &mut Vec<Directory>) -> Option<&'a [u8]> {
+fn decode_directory_block<'a>(
+    data: &'a [u8],
+    directories: &mut Vec<Directory>,
+    alloc_limit_bytes: Option<usize>,
+) -> Option<&'a [u8]> {
     let (num_untracked, data) = var_int(data)?;
     let (num_dirs, data) = var_int(data)?;
     let (name, mut data) = split_at_byte_exclusive(data, 0)?;
-    let mut untracked_entries = Vec::<BString>::with_capacity(num_untracked.try_into().ok()?);
+    // Untracked names are encoded as `name\0name\0...`, and we assume names are non-empty:
+    // `a\0b\0` is 4 bytes for 2 entries, so each entry needs at least 2 bytes.
+    let max_entries_from_remaining_data = data.len() / 2;
+    let num_untracked: usize = num_untracked.try_into().ok()?;
+    let num_dirs: usize = num_dirs.try_into().ok()?;
+    if num_untracked > max_entries_from_remaining_data || num_dirs > max_entries_from_remaining_data {
+        return None;
+    }
+    if alloc_limit_bytes.is_some_and(|limit| {
+        num_untracked.saturating_mul(std::mem::size_of::<BString>()) > limit
+            || num_dirs.saturating_mul(std::mem::size_of::<usize>()) > limit
+    }) {
+        return None;
+    }
+    let mut untracked_entries = Vec::<BString>::new();
+    untracked_entries.try_reserve(num_untracked).ok()?;
     for _ in 0..num_untracked {
         let (name, rest) = split_at_byte_exclusive(data, 0)?;
         data = rest;
@@ -124,7 +154,11 @@ fn decode_directory_block<'a>(data: &'a [u8], directories: &mut Vec<Directory>) 
     directories.push(Directory {
         name: name.into(),
         untracked_entries,
-        sub_directories: Vec::with_capacity(num_dirs.try_into().ok()?),
+        sub_directories: {
+            let mut sub_directories = Vec::new();
+            sub_directories.try_reserve(num_dirs).ok()?;
+            sub_directories
+        },
         // the following are set later through their bitmaps
         stat: None,
         exclude_file_oid: None,
@@ -133,7 +167,7 @@ fn decode_directory_block<'a>(data: &'a [u8], directories: &mut Vec<Directory>) 
 
     for _ in 0..num_dirs {
         let subdir_index = directories.len();
-        let rest = decode_directory_block(data, directories)?;
+        let rest = decode_directory_block(data, directories, alloc_limit_bytes)?;
         data = rest;
         directories[index].sub_directories.push(subdir_index);
     }

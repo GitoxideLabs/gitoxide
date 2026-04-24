@@ -136,9 +136,9 @@ mod dirwalk {
 #[test]
 fn size_in_memory() {
     let actual_size = std::mem::size_of::<Repository>();
-    // Windows currently lays out `Repository` slightly larger than other platforms.
-    // Keep the tighter limit elsewhere so regular growth still gets noticed quickly.
-    let limit = if cfg!(windows) { 1280 } else { 1250 };
+    // Network-client features add protocol permission caching to `Repository::config`,
+    // which grows the type by one more cached cell.
+    let limit = 1300;
     assert!(
         actual_size <= limit,
         "size of Repository shouldn't change without us noticing, it's meant to be cloned: should have been below {limit:?}, was {actual_size}"

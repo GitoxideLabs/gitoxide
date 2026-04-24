@@ -1,0 +1,4 @@
+# a lone slash does nothing
+/
+# a file that was never ignored to begin
+!file

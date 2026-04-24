@@ -24,8 +24,10 @@ impl super::Store {
             path: &Path,
             id: types::PackId,
             object_hash: gix_hash::Kind,
+            alloc_limit_bytes: Option<usize>,
         ) -> std::io::Result<Arc<gix_pack::data::File>> {
             gix_pack::data::File::at(path, object_hash)
+                .map(|pack| pack.with_alloc_limit_bytes(alloc_limit_bytes))
                 .map(|mut pack| {
                     pack.id = id.to_intrinsic_pack_id();
                     Arc::new(pack)
@@ -56,9 +58,11 @@ impl super::Store {
                                 let mut files = slot.files.load_full();
                                 let files_mut = Arc::make_mut(&mut files);
                                 let pack = match files_mut {
-                                    Some(types::IndexAndPacks::Index(bundle)) => bundle
-                                        .data
-                                        .load_with_recovery(|path| load_pack(path, id, self.object_hash))?,
+                                    Some(types::IndexAndPacks::Index(bundle)) => {
+                                        bundle.data.load_with_recovery(|path| {
+                                            load_pack(path, id, self.object_hash, self.alloc_limit_bytes)
+                                        })?
+                                    }
                                     Some(types::IndexAndPacks::MultiIndex(_)) => {
                                         // something changed between us getting the lock, trigger a complete index refresh.
                                         None
@@ -100,7 +104,9 @@ impl super::Store {
                                             .data
                                             .get_mut(pack_index as usize)
                                             .expect("BUG: must set this handle to be stable")
-                                            .load_with_recovery(|path| load_pack(path, id, self.object_hash))?,
+                                            .load_with_recovery(|path| {
+                                                load_pack(path, id, self.object_hash, self.alloc_limit_bytes)
+                                            })?,
                                         None => {
                                             unreachable!("BUG: must set this handle to be stable to avoid slots to be cleared/changed")
                                         }

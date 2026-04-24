@@ -156,7 +156,7 @@ impl Cache {
         )?;
         #[cfg(feature = "revision")]
         let object_kind_hint = util::disambiguate_hint(&config, lenient_config)?;
-        let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes) =
+        let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes) =
             util::parse_object_caches(&config, lenient_config, filter_config_section)?;
         // NOTE: When adding a new initial cache, consider adjusting `reread_values_and_clear_caches()` as well.
         Ok(Cache {
@@ -168,6 +168,7 @@ impl Cache {
             static_pack_cache_limit_bytes,
             pack_cache_bytes,
             object_cache_bytes,
+            alloc_limit_bytes,
             reflog,
             refs_namespace,
             is_bare,
@@ -245,6 +246,7 @@ impl Cache {
             self.static_pack_cache_limit_bytes,
             self.pack_cache_bytes,
             self.object_cache_bytes,
+            self.alloc_limit_bytes,
         ) = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
         #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
         {
@@ -520,6 +522,10 @@ fn apply_environment_overrides(
                 },
                 {
                     let key = &gitoxide::Objects::CACHE_LIMIT;
+                    (env(key), key.name)
+                },
+                {
+                    let key = &gitoxide::Objects::ALLOC_LIMIT;
                     (env(key), key.name)
                 },
             ],

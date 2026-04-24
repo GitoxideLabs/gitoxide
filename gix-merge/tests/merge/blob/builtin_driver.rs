@@ -31,7 +31,7 @@ mod text {
     use bstr::ByteSlice;
     use gix_merge::blob::{
         builtin_driver,
-        builtin_driver::text::{Conflict, ConflictStyle},
+        builtin_driver::text::{self, Conflict, ConflictStyle},
         Resolution,
     };
     use pretty_assertions::assert_str_eq;
@@ -142,74 +142,64 @@ mod text {
         }
     }
 
-    /// This test reproduces what the fuzzer does, allowing it to accept `Arbitrary` input produced by the fuzzer.
-    #[test]
-    fn clusterfuzz_timeout_regression() {
-        #[derive(Debug, Arbitrary)]
-        struct FuzzCtx<'a> {
-            base: &'a [u8],
-            ours: &'a [u8],
-            theirs: &'a [u8],
-            marker_size: NonZero<u8>,
-        }
-        fn run_fuzz_case(ours: &[u8], base: &[u8], theirs: &[u8], marker_size: NonZero<u8>) {
-            let mut out = Vec::new();
-            let mut input = imara_diff::InternedInput::default();
-            for diff_algorithm in [
-                imara_diff::Algorithm::Histogram,
-                imara_diff::Algorithm::Myers,
-                imara_diff::Algorithm::MyersMinimal,
-            ] {
-                let mut options = builtin_driver::text::Options {
-                    diff_algorithm,
-                    conflict: Default::default(),
-                };
-                for (left, right) in [(ours, theirs), (theirs, ours)] {
-                    let resolution = gix_merge::blob::builtin_driver::text(
-                        &mut out,
-                        &mut input,
-                        Default::default(),
-                        left,
-                        base,
-                        right,
-                        options,
-                    );
-                    if resolution == Resolution::Conflict {
-                        for conflict in [
-                            Conflict::ResolveWithOurs,
-                            Conflict::ResolveWithTheirs,
-                            Conflict::ResolveWithUnion,
-                            Conflict::Keep {
-                                style: ConflictStyle::Diff3,
-                                marker_size,
-                            },
-                            Conflict::Keep {
-                                style: ConflictStyle::ZealousDiff3,
-                                marker_size,
-                            },
-                        ] {
-                            options.conflict = conflict;
-                            gix_merge::blob::builtin_driver::text(
-                                &mut out,
-                                &mut input,
-                                Default::default(),
-                                left,
-                                base,
-                                right,
-                                options,
-                            );
-                        }
-                    }
+    #[derive(Debug, Arbitrary)]
+    struct FuzzCtx<'a> {
+        base: &'a [u8],
+        ours: &'a [u8],
+        theirs: &'a [u8],
+        marker_size: NonZero<u8>,
+    }
+
+    fn run_fuzz_case(ours: &[u8], base: &[u8], theirs: &[u8], marker_size: NonZero<u8>) {
+        let mut out = Vec::new();
+        let mut input = imara_diff::InternedInput::default();
+        // Keep this in sync with the fuzz target. Histogram remains enabled here because it is the
+        // diff algorithm we fuzz through gix-merge itself. Myers-family algorithms have
+        // pathological cases that are expensive enough under fuzz instrumentation to turn the
+        // target into a timeout reproducer for the diff backend instead of a useful gix-merge
+        // fuzz harness.
+        for (left, right) in [(ours, theirs), (theirs, ours)] {
+            input.clear();
+            let merge = text::Merge::new(&mut input, left, base, right, imara_diff::Algorithm::Histogram);
+            let resolution = merge.run(&mut out, Default::default(), Conflict::default());
+            if resolution == Resolution::Conflict {
+                for conflict in [
+                    Conflict::ResolveWithOurs,
+                    Conflict::ResolveWithTheirs,
+                    Conflict::ResolveWithUnion,
+                    Conflict::Keep {
+                        style: ConflictStyle::Diff3,
+                        marker_size,
+                    },
+                    Conflict::Keep {
+                        style: ConflictStyle::ZealousDiff3,
+                        marker_size,
+                    },
+                ] {
+                    merge.run(&mut out, Default::default(), conflict);
                 }
             }
         }
+    }
 
-        let ctx = FuzzCtx::arbitrary(&mut arbitrary::Unstructured::new(include_bytes!(
-            "../../fixtures/clusterfuzz-testcase-minimized-gix-merge-blob-6377298803884032"
-        )))
-        .expect("testcase matches the historical fuzz target input layout");
-
-        run_fuzz_case(ctx.ours, ctx.base, ctx.theirs, ctx.marker_size);
+    #[test]
+    fn clusterfuzz_timeout_regression() {
+        for (name, data) in [
+            (
+                "clusterfuzz-testcase-minimized-gix-merge-blob-6377298803884032",
+                include_bytes!("../../fixtures/clusterfuzz-testcase-minimized-gix-merge-blob-6377298803884032")
+                    .as_slice(),
+            ),
+            (
+                "clusterfuzz-testcase-minimized-gix-merge-blob-5577413097750528",
+                include_bytes!("../../fixtures/clusterfuzz-testcase-minimized-gix-merge-blob-5577413097750528")
+                    .as_slice(),
+            ),
+        ] {
+            let ctx = FuzzCtx::arbitrary(&mut arbitrary::Unstructured::new(data))
+                .unwrap_or_else(|_| panic!("{name}: testcase matches the historical fuzz target input layout"));
+            run_fuzz_case(ctx.ours, ctx.base, ctx.theirs, ctx.marker_size);
+        }
     }
 
     #[test]

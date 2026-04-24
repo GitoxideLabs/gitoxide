@@ -620,6 +620,8 @@ pub(crate) struct Cache {
     pub(crate) pack_cache_bytes: Option<usize>,
     /// The amount of bytes to use for caching whole objects, or 0 to turn it off entirely.
     pub(crate) object_cache_bytes: usize,
+    /// The maximum size of a single allocation caused by user-controlled on-disk packed object data.
+    pub(crate) alloc_limit_bytes: Option<usize>,
     /// The amount of bytes we can hold in our static LRU cache. Otherwise, go with the defaults.
     pub(crate) static_pack_cache_limit_bytes: Option<usize>,
     /// The config section filter from the options used to initialize this instance. Keep these in sync!

@@ -1,0 +1,4 @@
+# everything is excluded by default
+*
+# And negations are used as an allow-list
+!file

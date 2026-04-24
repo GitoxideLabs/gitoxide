@@ -23,7 +23,10 @@ pub struct Entry {
 }
 
 /// Access methods
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// Returns the version of the multi-index file.
     pub fn version(&self) -> Version {
         self.version
@@ -61,7 +64,10 @@ impl File {
     }
 }
 
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// Return the object id at the given `index`, which ranges from 0 to [File::num_objects()].
     pub fn oid_at_index(&self, index: EntryIndex) -> &gix_hash::oid {
         debug_assert!(index < self.num_objects, "index out of bounds");

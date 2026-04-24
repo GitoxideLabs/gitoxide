@@ -108,15 +108,18 @@ pub enum Mode {
 }
 
 /// Information to allow verifying the integrity of an index with the help of its corresponding pack.
-pub struct PackContext<'a, F> {
+pub struct PackContext<'a, F, D = crate::MMap> {
     /// The pack data file itself.
-    pub data: &'a crate::data::File,
+    pub data: &'a crate::data::File<D>,
     /// The options further configuring the pack traversal and verification
     pub options: integrity::Options<F>,
 }
 
 /// Verify and validate the content of the index file
-impl index::File {
+impl<T> index::File<T>
+where
+    T: crate::FileData + Sync,
+{
     /// Returns the trailing hash stored at the end of this index file.
     ///
     /// It's a hash over all bytes of the index.
@@ -166,15 +169,16 @@ impl index::File {
     ///
     /// The given `progress` is inevitably consumed if there is an error, which is a tradeoff chosen to easily allow using `?` in the
     /// error case.
-    pub fn verify_integrity<C, F>(
+    pub fn verify_integrity<C, F, D>(
         &self,
-        pack: Option<PackContext<'_, F>>,
+        pack: Option<PackContext<'_, F, D>>,
         progress: &mut dyn DynNestedProgress,
         should_interrupt: &AtomicBool,
     ) -> Result<integrity::Outcome, index::traverse::Error<index::verify::integrity::Error>>
     where
         C: crate::cache::DecodeEntry,
         F: Fn() -> C + Send + Clone,
+        D: crate::FileData + Send + Sync,
     {
         if let Some(first_invalid) = crate::verify::fan(&self.fan) {
             return Err(index::traverse::Error::Processor(integrity::Error::Fan {

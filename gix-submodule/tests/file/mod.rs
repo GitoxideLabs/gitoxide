@@ -301,6 +301,29 @@ mod update {
             "forbidden unless it's an override"
         );
     }
+
+    /// Reproducer for GHSA-f26g-jm89-4g65 and GHSA-97pq-9mjg-9fcj: `.gitmodules` may carry
+    /// `submodule.<name>.update = !command`, while a same-named local section without the winning
+    /// `update` value makes `File::update()` treat the command as trusted and expose it as
+    /// `Update::Command`.
+    #[test]
+    fn modules_command_is_authorized_by_unrelated_same_named_override() -> crate::Result {
+        let mut module = submodule("[submodule.a]\n update = !dangerous");
+        let repo_config = gix_config::File::from_str("[submodule.a]\n url = trusted-local-override")?;
+        module.append_submodule_overrides(&repo_config);
+
+        assert!(
+            matches!(
+                module.update("a".into()),
+                Err(Error::CommandForbiddenInModulesConfiguration {
+                    actual,
+                    ..
+                }) if actual == "dangerous"
+            ),
+            "a same-named local section must not authorize a command that still originates from .gitmodules"
+        );
+        Ok(())
+    }
 }
 
 mod fetch_recurse {

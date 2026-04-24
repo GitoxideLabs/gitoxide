@@ -1,0 +1,5 @@
+version 2
+agent=git/github-gdf51a71f0236
+ls-refs
+fetch=shallow filter
+server-option

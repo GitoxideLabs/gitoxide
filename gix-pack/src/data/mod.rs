@@ -1,4 +1,5 @@
 //! a pack data file
+use crate::MMap;
 use std::path::Path;
 
 /// The offset to an entry into the pack data file, relative to its beginning.
@@ -6,8 +7,6 @@ pub type Offset = u64;
 
 /// An identifier to uniquely identify all packs loaded within a known context or namespace.
 pub type Id = u32;
-
-use memmap2::Mmap;
 
 /// An representing an full- or delta-object within a pack
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
@@ -60,8 +59,8 @@ pub enum Version {
 }
 
 /// A pack data file
-pub struct File {
-    data: Mmap,
+pub struct File<T = MMap> {
+    data: T,
     path: std::path::PathBuf,
     /// A value to represent this pack uniquely when used with cache lookup, or a way to identify this pack by its location on disk.
     /// The same location on disk should yield the same id.
@@ -77,10 +76,17 @@ pub struct File {
     /// based on their configuration.
     hash_len: usize,
     object_hash: gix_hash::Kind,
+    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
+    ///
+    /// If `None`, no additional limit is enforced.
+    alloc_limit_bytes: Option<usize>,
 }
 
 /// Information about the pack data file itself
-impl File {
+impl<T> File<T>
+where
+    T: crate::FileData,
+{
     /// The pack data version of this file
     pub fn version(&self) -> Version {
         self.version
@@ -96,6 +102,12 @@ impl File {
     /// The kind of hash we use internally.
     pub fn object_hash(&self) -> gix_hash::Kind {
         self.object_hash
+    }
+    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
+    ///
+    /// A value of `None` means no additional limit is enforced.
+    pub fn alloc_limit_bytes(&self) -> Option<usize> {
+        self.alloc_limit_bytes
     }
     /// The position of the byte one past the last pack entry, or in other terms, the first byte of the trailing hash.
     pub fn pack_end(&self) -> usize {

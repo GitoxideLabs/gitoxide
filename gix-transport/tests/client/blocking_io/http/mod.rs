@@ -9,9 +9,12 @@ use std::{
 };
 
 use bstr::ByteSlice;
-use gix_packetline::read::ProgressAction;
 use gix_transport::{
-    client::{self, http, SetServiceResponse, Transport, TransportV2Ext, TransportWithoutIO},
+    client::{
+        self,
+        blocking_io::{http, SetServiceResponse, Transport, TransportV2Ext},
+        TransportWithoutIO,
+    },
     Protocol, Service,
 };
 
@@ -19,10 +22,15 @@ use crate::fixture_bytes;
 
 mod mock;
 
+#[cfg(feature = "http-client-curl")]
+type Remote = http::curl::Curl;
+#[cfg(all(feature = "http-client-reqwest", not(feature = "http-client-curl")))]
+type Remote = http::reqwest::Remote;
+
 fn assert_error_status(
     status: usize,
     kind: std::io::ErrorKind,
-) -> Result<(mock::Server, http::Transport<http::Impl>), crate::Error> {
+) -> Result<(mock::Server, http::Transport<Remote>), crate::Error> {
     let (server, mut client) =
         mock::serve_and_connect(&format!("http-{status}.response"), "path/not-important", Protocol::V1)?;
     let error = client
@@ -49,14 +57,18 @@ fn http_status_500_is_communicated_via_special_io_error() -> crate::Result {
 
 #[test]
 fn http_identity_is_picked_up_from_url() -> crate::Result {
-    let transport =
-        gix_transport::client::http::connect("https://user:pass@example.com/repo".try_into()?, Protocol::V2, false);
+    let transport = gix_transport::client::blocking_io::http::connect::<Remote>(
+        "https://user:pass@example.com/repo".try_into()?,
+        Protocol::V2,
+        false,
+    );
     assert_eq!(transport.to_url().as_ref(), "https://user:pass@example.com/repo");
     assert_eq!(
         transport.identity(),
         Some(&gix_sec::identity::Account {
             username: "user".into(),
-            password: "pass".into()
+            password: "pass".into(),
+            oauth_refresh_token: None,
         })
     );
     Ok(())
@@ -87,9 +99,12 @@ fn http_will_use_pipelining() {
                     b"HTTP/1.1 401 Unauthorized\r\n\
               WWW-Authenticate: Basic realm=\"wheee\"\r\n\
               Content-Length: 0\r\n\
+              Connection: close\r\n\
               \r\n",
                 )
                 .unwrap();
+            conn.get_mut().flush().unwrap();
+            conn.get_mut().shutdown(std::net::Shutdown::Both).ok();
             assert_eq!(
                 req,
                 vec![
@@ -101,14 +116,19 @@ fn http_will_use_pipelining() {
                 .collect()
             );
 
+            let mut conn = std::io::BufReader::new(server.accept().unwrap().0);
             let req = headers(&mut conn);
             conn.get_mut()
                 .write_all(
                     b"HTTP/1.1 401 Unauthorized\r\n\
               WWW-Authenticate: Basic realm=\"testenv\"\r\n\
+              Content-Length: 0\r\n\
+              Connection: close\r\n\
               \r\n",
                 )
                 .unwrap();
+            conn.get_mut().flush().unwrap();
+            conn.get_mut().shutdown(std::net::Shutdown::Both).ok();
             assert_eq!(
                 req,
                 vec![
@@ -124,8 +144,11 @@ fn http_will_use_pipelining() {
     });
 
     let url = format!("http://{}:{}/reponame", &addr.ip().to_string(), &addr.port());
-    let mut client =
-        gix_transport::client::http::connect(url.try_into().expect("valid url"), gix_transport::Protocol::V2, false);
+    let mut client = gix_transport::client::blocking_io::http::connect::<Remote>(
+        url.try_into().expect("valid url"),
+        gix_transport::Protocol::V2,
+        false,
+    );
     match client.handshake(gix_transport::Service::UploadPack, &[]) {
         Ok(_) => unreachable!("expecting permission denied to be detected"),
         Err(gix_transport::client::Error::Io(err)) if err.kind() == std::io::ErrorKind::PermissionDenied => {}
@@ -135,6 +158,7 @@ fn http_will_use_pipelining() {
         .set_identity(gix_sec::identity::Account {
             username: "foo".into(),
             password: "bar".into(),
+            oauth_refresh_token: None,
         })
         .unwrap();
     match client.handshake(gix_transport::Service::UploadPack, &[]) {
@@ -152,6 +176,7 @@ fn http_authentication_error_can_be_differentiated_and_identity_is_transmitted()
     client.set_identity(gix_sec::identity::Account {
         username: "user".into(),
         password: "password".into(),
+        oauth_refresh_token: None,
     })?;
     client.handshake(Service::UploadPack, &[])?;
 
@@ -214,6 +239,194 @@ Authorization: Basic dXNlcjpwYXNzd29yZA==
         "the authentication information is used in subsequent calls"
     );
 
+    Ok(())
+}
+
+/// Reproducer for GHSA-9857-6mw7-fq2m: after an initial cross-host redirect, neither the
+/// redirected handshake nor any follow-up POST may forward `Authorization` derived from the
+/// original URL or configured identity to the redirected host, regardless of HTTP backend.
+///
+/// A minimal sketch of the vulnerable flow is:
+///
+/// ```text
+/// [victim -> origin]
+///   GET /repo/info/refs?service=git-upload-pack HTTP/1.1
+///   Host: origin.example
+///   Authorization: Basic <victim-credentials>
+///
+/// [origin -> victim]
+///   HTTP/1.1 302 Found
+///   Location: http://attacker.example/repo/info/refs?service=git-upload-pack
+///
+/// [victim -> attacker] redirected handshake GET
+///   GET /repo/info/refs?service=git-upload-pack HTTP/1.1
+///   Host: attacker.example
+///   Accept: */*
+///   User-Agent: git/oxide-0.55.0
+///   Authorization: <must be absent>
+///
+/// [attacker -> victim]
+///   HTTP/1.1 200 OK
+///   Content-Type: application/x-git-upload-pack-advertisement
+///
+/// [victim -> attacker] follow-up POST
+///   POST /repo/git-upload-pack HTTP/1.1
+///   Host: attacker.example
+///   Authorization: <must be absent>
+///
+/// Before the fix, the redirected POST still carried the original Basic credentials, e.g.
+/// `Authorization: Basic dmljdGltLXVzZXI6c3VwZXItc2VjcmV0LXRva2Vu`, leaking them to the attacker.
+/// ```
+#[test]
+fn redirected_post_does_not_forward_basic_auth_to_the_new_host() -> crate::Result {
+    fn response_with_connection_close(response: &[u8]) -> Vec<u8> {
+        let split = response
+            .windows(2)
+            .position(|window| window == b"\n\n")
+            .expect("response fixture with header/body separator");
+        let (headers, body) = response.split_at(split);
+        let body = &body[2..];
+        let headers = std::str::from_utf8(headers).expect("fixture headers are UTF-8");
+
+        let mut out = Vec::with_capacity(response.len() + 64);
+        for line in headers.lines() {
+            out.extend_from_slice(line.as_bytes());
+            out.extend_from_slice(b"\r\n");
+        }
+        out.extend_from_slice(b"Connection: close\r\n\r\n");
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn read_request_lines(reader: &mut dyn BufRead) -> Vec<String> {
+        reader
+            .lines()
+            .map(Result::unwrap)
+            .take_while(|line| !line.is_empty() && line != "\r")
+            .map(|line| line.trim().to_string())
+            .collect()
+    }
+
+    fn has_authorization(lines: &[String]) -> bool {
+        lines
+            .iter()
+            .any(|line| line.to_ascii_lowercase().starts_with("authorization: basic "))
+    }
+
+    fn accept_request(
+        listener: &std::net::TcpListener,
+        timeout: std::time::Duration,
+    ) -> Option<std::io::BufReader<std::net::TcpStream>> {
+        let deadline = std::time::Instant::now() + timeout;
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener can be configured");
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => return Some(std::io::BufReader::new(stream)),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept should work: {err}"),
+            }
+        }
+    }
+
+    let redirected_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let redirected_addr = redirected_listener.local_addr()?;
+    let redirect_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let redirect_addr = redirect_listener.local_addr()?;
+
+    let redirected = std::thread::spawn(move || -> (Vec<String>, Vec<String>) {
+        let mut get = Vec::new();
+        let mut post = Vec::new();
+
+        if let Some(mut reader) = accept_request(&redirected_listener, std::time::Duration::from_secs(1)) {
+            get = read_request_lines(&mut reader);
+            reader
+                .get_mut()
+                .write_all(&response_with_connection_close(&fixture_bytes(
+                    "v1/http-handshake.response",
+                )))
+                .expect("write handshake response");
+            reader.get_mut().shutdown(std::net::Shutdown::Both).ok();
+        }
+
+        if let Some(mut reader) = accept_request(&redirected_listener, std::time::Duration::from_millis(250)) {
+            post = read_request_lines(&mut reader);
+            reader
+                .get_mut()
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/x-git-upload-pack-result\r\nContent-Length: 4\r\nConnection: close\r\n\r\n0000",
+                )
+                .expect("write POST response");
+            reader.get_mut().shutdown(std::net::Shutdown::Both).ok();
+        }
+        (get, post)
+    });
+
+    let redirect = std::thread::spawn(move || -> Vec<String> {
+        let (stream, _) = redirect_listener.accept().expect("accept redirecting GET");
+        let mut reader = std::io::BufReader::new(stream);
+        let request = read_request_lines(&mut reader);
+        reader
+            .get_mut()
+            .write_all(
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{}/repo/info/refs?service=git-upload-pack\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    redirected_addr.port()
+                )
+                .as_bytes(),
+            )
+            .expect("write redirect response");
+        reader.get_mut().shutdown(std::net::Shutdown::Both).ok();
+        request
+    });
+
+    let mut client = gix_transport::client::blocking_io::http::connect::<Remote>(
+        format!("http://127.0.0.1:{}/repo", redirect_addr.port()).try_into()?,
+        Protocol::V1,
+        false,
+    );
+    client.set_identity(gix_sec::identity::Account {
+        username: "user".into(),
+        password: "password".into(),
+        oauth_refresh_token: None,
+    })?;
+
+    let handshake_result = client.handshake(Service::UploadPack, &[]).map(|_| ());
+    let request_result: Result<(), client::Error> = match handshake_result {
+        Ok(()) => match client.request(client::WriteMode::Binary, client::MessageKind::Flush, false) {
+            Ok(mut request) => match request.write_all(b"0000") {
+                Ok(()) => request.into_read().map(|_| ()).map_err(client::Error::from),
+                Err(err) => Err(client::Error::from(err)),
+            },
+            Err(err) => Err(err),
+        },
+        Err(err) => Err(err),
+    };
+
+    let original_get = redirect.join().expect("thread");
+    let (redirected_get, redirected_post) = redirected.join().expect("thread");
+    assert!(
+        has_authorization(&original_get),
+        "the original host still receives the configured credentials"
+    );
+    assert!(
+        !has_authorization(&redirected_get),
+        "the redirected GET should not leak credentials to the new host"
+    );
+    assert!(
+        !has_authorization(&redirected_post),
+        "the redirected POST must not forward credentials to the new host, got {redirected_post:?} with transport result {request_result:?}"
+    );
+    assert!(
+        !redirected_get.is_empty() || !redirected_post.is_empty() || request_result.is_err(),
+        "either a redirected request must be observed, or the backend must reject the redirect explicitly"
+    );
     Ok(())
 }
 

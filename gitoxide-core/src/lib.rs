@@ -84,6 +84,16 @@ pub mod repository;
 mod discover;
 pub use discover::discover;
 
+pub fn trust(paths: &[std::path::PathBuf], mut out: impl std::io::Write) -> anyhow::Result<()> {
+    let trust_width = "Reduced".len();
+    for path in paths {
+        let trust = gix::sec::Trust::from_path_ownership(path)?;
+        let trust = format!("{trust:?}");
+        writeln!(out, "{trust:<trust_width$} {}", path.display())?;
+    }
+    Ok(())
+}
+
 pub fn env(mut out: impl std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Human {
         bail!("JSON output isn't supported");

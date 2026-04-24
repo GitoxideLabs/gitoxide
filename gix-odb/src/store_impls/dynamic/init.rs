@@ -16,6 +16,10 @@ pub struct Options {
     pub object_hash: gix_hash::Kind,
     /// If false, no multi-pack indices will be used. If true, they will be used if their hash matches `object_hash`.
     pub use_multi_pack_index: bool,
+    /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
+    ///
+    /// If `None`, no additional limit is enforced.
+    pub alloc_limit_bytes: Option<usize>,
     /// The current directory of the process at the time of instantiation.
     /// If unset, it will be retrieved using `gix_fs::current_dir(false)`.
     pub current_dir: Option<std::path::PathBuf>,
@@ -27,6 +31,7 @@ impl Default for Options {
             slots: Default::default(),
             object_hash: Default::default(),
             use_multi_pack_index: true,
+            alloc_limit_bytes: None,
             current_dir: None,
         }
     }
@@ -76,6 +81,7 @@ impl Store {
             slots,
             object_hash,
             use_multi_pack_index,
+            alloc_limit_bytes,
             current_dir,
         }: Options,
     ) -> std::io::Result<Self> {
@@ -99,9 +105,10 @@ impl Store {
                 let mut db_paths =
                     crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(std::io::Error::other)?;
                 db_paths.insert(0, objects_dir.clone());
-                let num_slots = Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None)
-                    .map_err(std::io::Error::other)?
-                    .len();
+                let num_slots =
+                    Store::collect_indices_and_mtime_sorted_by_size(db_paths, None, None, alloc_limit_bytes)
+                        .map_err(std::io::Error::other)?
+                        .len();
 
                 let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);
                 if candidate > crate::store::types::PackId::max_indices() {
@@ -130,6 +137,7 @@ impl Store {
             index: ArcSwap::new(Arc::new(SlotMapIndex::default())),
             use_multi_pack_index,
             object_hash,
+            alloc_limit_bytes,
             num_handles_stable: Default::default(),
             num_handles_unstable: Default::default(),
             num_disk_state_consolidation: Default::default(),

@@ -75,9 +75,39 @@ pub mod open {
         #[error(transparent)]
         OpenRepository(#[from] crate::open::Error),
         #[error(transparent)]
+        GitDir(#[from] crate::submodule::git_dir_try_old_form::Error),
+        #[error(transparent)]
         PathConfiguration(#[from] gix_submodule::config::path::Error),
         #[error(transparent)]
         WorktreeDirInaccessible(#[from] std::io::Error),
+    }
+}
+
+///
+pub mod git_dir_try_old_form {
+    /// The error returned by [Submodule::git_dir_try_old_form()](crate::Submodule::git_dir_try_old_form()).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error(transparent)]
+        PathConfiguration(#[from] gix_submodule::config::path::Error),
+        #[error(transparent)]
+        GitDir(#[from] gix_validate::submodule::name::Error),
+    }
+}
+
+///
+pub mod state {
+    /// The error returned by [Submodule::state()](crate::Submodule::state()).
+    #[derive(Debug, thiserror::Error)]
+    #[allow(missing_docs)]
+    pub enum Error {
+        #[error(transparent)]
+        GitDirTryOldForm(#[from] crate::submodule::git_dir_try_old_form::Error),
+        #[error(transparent)]
+        GitDir(#[from] gix_validate::submodule::name::Error),
+        #[error(transparent)]
+        PathConfiguration(#[from] gix_submodule::config::path::Error),
     }
 }
 

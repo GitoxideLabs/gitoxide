@@ -13,7 +13,7 @@ mod method {
 
     use crate::{
         hex_to_id,
-        pack::{data::file::pack_at, SMALL_PACK},
+        pack::{data::file::pack_at, pack_from_memory_at, SMALL_PACK},
     };
 
     #[test]
@@ -30,6 +30,54 @@ mod method {
             p.checksum()
         );
         Ok(())
+    }
+
+    #[test]
+    fn verify_checksum_from_memory() -> Result<(), Box<dyn std::error::Error>> {
+        let p = pack_from_memory_at(SMALL_PACK);
+        assert_eq!(
+            p.verify_checksum(&mut progress::Discard, &AtomicBool::new(false))?,
+            p.checksum()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decode_entry_respects_alloc_limit_bytes() {
+        let entry_offset = 1968;
+        let mut buf = Vec::new();
+        let mut inflate = Default::default();
+
+        let pack = pack_at(SMALL_PACK);
+        let entry = pack.entry(entry_offset).expect("valid object type");
+        assert!(
+            pack.decode_entry(
+                entry.clone(),
+                &mut buf,
+                &mut inflate,
+                &|_, _| None,
+                &mut gix_odb::pack::cache::Never
+            )
+            .is_ok(),
+            "without an explicit allocation limit decoding succeeds"
+        );
+
+        buf.clear();
+        let pack = pack_at(SMALL_PACK).with_alloc_limit_bytes(Some(64));
+        let entry = pack.entry(entry_offset).expect("valid object type");
+        assert!(
+            matches!(
+                pack.decode_entry(
+                    entry,
+                    &mut buf,
+                    &mut inflate,
+                    &|_, _| None,
+                    &mut gix_odb::pack::cache::Never
+                ),
+                Err(gix_odb::pack::data::decode::Error::OutOfMemory)
+            ),
+            "pack-controlled allocations larger than the configured limit are rejected"
+        );
     }
 
     #[test]

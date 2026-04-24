@@ -1,15 +1,9 @@
-use std::{
-    path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
-    time::{Instant, SystemTime},
-};
-
-use gix_features::progress::{Count, DynNestedProgress, Progress};
+use std::time::SystemTime;
 
 use crate::multi_index;
 
 mod error {
-    /// The error returned by [`multi_index::File::write_from_index_paths()`][super::multi_index::File::write_from_index_paths()]..
+    /// The error returned by [`crate::multi_index::write_from_index_paths()`].
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
@@ -32,19 +26,19 @@ pub(crate) struct Entry {
     index_mtime: SystemTime,
 }
 
-/// Options for use in [`multi_index::File::write_from_index_paths()`].
+/// Options for use in [`multi_index::write_from_index_paths()`].
 pub struct Options {
     /// The kind of hash to use for objects and to expect in the input files.
     pub object_hash: gix_hash::Kind,
 }
 
-/// The result of [`multi_index::File::write_from_index_paths()`].
+/// The result of [`multi_index::write_from_index_paths()`].
 pub struct Outcome {
     /// The calculated multi-index checksum of the file at `multi_index_path`.
     pub multi_index_checksum: gix_hash::ObjectId,
 }
 
-/// The progress ids used in [`write_from_index_paths()`][multi_index::File::write_from_index_paths()].
+/// The progress ids used in [`crate::multi_index::write_from_index_paths()`].
 ///
 /// Use this information to selectively extract the progress of interest in case the parent application has custom visualization.
 #[derive(Debug, Copy, Clone)]
@@ -64,7 +58,7 @@ impl From<ProgressId> for gix_features::progress::Id {
     }
 }
 
-impl multi_index::File {
+impl<T> multi_index::File<T> {
     pub(crate) const SIGNATURE: &'static [u8] = b"MIDX";
     pub(crate) const HEADER_LEN: usize = 4 /*signature*/ +
         1 /*version*/ +
@@ -72,6 +66,20 @@ impl multi_index::File {
         1 /*num chunks */ +
         1 /*num base files */ +
         4 /*num pack files*/;
+}
+
+pub(super) mod function {
+    use std::{
+        path::PathBuf,
+        sync::atomic::{AtomicBool, Ordering},
+        time::{Instant, SystemTime},
+    };
+
+    use gix_features::progress::{Count, DynNestedProgress, Progress};
+
+    use crate::{multi_index, MMap};
+
+    use super::{Entry, Error, Options, Outcome, ProgressId};
 
     /// Create a new multi-index file for writing to `out` from the pack index files at `index_paths`.
     ///
@@ -168,7 +176,7 @@ impl multi_index::File {
             progress.add_child_with_id("Writing multi-index".into(), ProgressId::BytesWritten.into());
         let write_start = Instant::now();
         write_progress.init(
-            Some(cf.planned_storage_size() as usize + Self::HEADER_LEN),
+            Some(cf.planned_storage_size() as usize + multi_index::File::<MMap>::HEADER_LEN),
             gix_features::progress::bytes(),
         );
         let mut out = gix_features::progress::Write {
@@ -176,7 +184,7 @@ impl multi_index::File {
             progress: write_progress,
         };
 
-        let bytes_written = Self::write_header(
+        let bytes_written = multi_index::File::<MMap>::write_header(
             &mut out,
             cf.num_chunks().try_into().expect("BUG: wrote more than 256 chunks"),
             index_paths_sorted.len() as u32,
@@ -226,7 +234,9 @@ impl multi_index::File {
 
         Ok(Outcome { multi_index_checksum })
     }
+}
 
+impl multi_index::File<crate::MMap> {
     fn write_header(
         out: &mut dyn std::io::Write,
         num_chunks: u8,

@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashSet, fs, io::Read, path::PathBuf};
+use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 
 use gix_features::zlib;
 
@@ -29,7 +29,7 @@ pub enum Error {
 
 /// Object lookup
 impl Store {
-    const OPEN_ACTION: &'static str = "open";
+    const OPEN_OR_MAP_ACTION: &'static str = "open or map";
 
     /// Returns true if the given id is contained in our repository.
     pub fn contains(&self, id: &gix_hash::oid) -> bool {
@@ -111,63 +111,24 @@ impl Store {
         out: &'a mut Vec<u8>,
     ) -> Result<Option<gix_object::Data<'a>>, Error> {
         debug_assert_eq!(self.object_hash, id.kind());
-        match self.find_inner(id, out) {
-            Ok(obj) => Ok(Some(obj)),
-            Err(err) => match err {
-                Error::Io {
-                    source: err,
-                    action,
-                    path,
-                } => {
-                    if action == Self::OPEN_ACTION && err.kind() == std::io::ErrorKind::NotFound {
-                        Ok(None)
-                    } else {
-                        Err(Error::Io {
-                            source: err,
-                            action,
-                            path,
-                        })
-                    }
-                }
-                err => Err(err),
-            },
-        }
+        self.find_inner(id, out)
     }
 
     /// Return only the decompressed size of the object and its kind without fully reading it into memory as tuple of `(size, kind)`.
     /// Returns `None` if `id` does not exist in the database.
     pub fn try_header(&self, id: &gix_hash::oid) -> Result<Option<(u64, gix_object::Kind)>, Error> {
-        const BUF_SIZE: usize = 256;
-        let mut buf = [0_u8; BUF_SIZE];
         let path = hash_path(id, self.path.clone());
-
-        let mut inflate = zlib::Inflate::default();
-        let mut istream = match fs::File::open(&path) {
-            Ok(f) => f,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => {
-                return Err(Error::Io {
-                    source: err,
-                    action: Self::OPEN_ACTION,
-                    path,
-                })
-            }
+        let map = match self.map_loose_object(&path)? {
+            Some(map) => map,
+            None => return Ok(None),
         };
-
-        let (compressed_buf, _) = buf.split_at_mut(BUF_SIZE - HEADER_MAX_SIZE);
-        let bytes_read = istream.read(compressed_buf).map_err(|e| Error::Io {
-            source: e,
-            action: "read",
-            path: path.to_owned(),
-        })?;
-        let (compressed_buf, header_buf) = buf.split_at_mut(bytes_read);
+        let mut header = [0_u8; HEADER_MAX_SIZE];
+        let mut inflate = zlib::Inflate::default();
         let (status, _consumed_in, consumed_out) =
-            inflate
-                .once(compressed_buf, header_buf)
-                .map_err(|e| Error::DecompressFile {
-                    source: e,
-                    path: path.to_owned(),
-                })?;
+            inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
+                source: e,
+                path: path.to_owned(),
+            })?;
 
         if status == zlib::Status::BufError {
             return Err(Error::DecompressFile {
@@ -175,39 +136,24 @@ impl Store {
                 path,
             });
         }
-        let (kind, size, _header_size) = gix_object::decode::loose_header(&header_buf[..consumed_out])?;
+        let (kind, size, _header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
         Ok(Some((size, kind)))
     }
 
-    fn find_inner<'a>(&self, id: &gix_hash::oid, buf: &'a mut Vec<u8>) -> Result<gix_object::Data<'a>, Error> {
+    fn find_inner<'a>(&self, id: &gix_hash::oid, out: &'a mut Vec<u8>) -> Result<Option<gix_object::Data<'a>>, Error> {
         let path = hash_path(id, self.path.clone());
+        let map = match self.map_loose_object(&path)? {
+            Some(map) => map,
+            None => return Ok(None),
+        };
+        let mut header = [0_u8; HEADER_MAX_SIZE];
 
         let mut inflate = zlib::Inflate::default();
-        let ((status, consumed_in, consumed_out), bytes_read) = {
-            let mut istream = fs::File::open(&path).map_err(|e| Error::Io {
+        let (status, consumed_in, consumed_out) =
+            inflate.once(&map, &mut header).map_err(|e| Error::DecompressFile {
                 source: e,
-                action: Self::OPEN_ACTION,
                 path: path.to_owned(),
             })?;
-
-            buf.clear();
-            let bytes_read = istream.read_to_end(buf).map_err(|e| Error::Io {
-                source: e,
-                action: "read",
-                path: path.to_owned(),
-            })?;
-            buf.resize(bytes_read + HEADER_MAX_SIZE, 0);
-            let (input, output) = buf.split_at_mut(bytes_read);
-            (
-                inflate
-                    .once(&input[..bytes_read], output)
-                    .map_err(|e| Error::DecompressFile {
-                        source: e,
-                        path: path.to_owned(),
-                    })?,
-                bytes_read,
-            )
-        };
         if status == zlib::Status::BufError {
             return Err(Error::DecompressFile {
                 source: zlib::inflate::Error::Status(status),
@@ -215,14 +161,28 @@ impl Store {
             });
         }
 
-        let decompressed_start = bytes_read;
-        let (kind, size, header_size) =
-            gix_object::decode::loose_header(&buf[decompressed_start..decompressed_start + consumed_out])?;
+        let (kind, size, header_size) = gix_object::decode::loose_header(&header[..consumed_out])?;
+        self.ensure_in_alloc_limit(size)?;
+        let size_usize = usize::try_from(size).map_err(|_| Error::OutOfMemory { size })?;
+        let decompressed_body_prefix_len = consumed_out.checked_sub(header_size).ok_or(Error::SizeMismatch {
+            actual: consumed_out as u64,
+            expected: header_size as u64,
+            path: path.clone(),
+        })?;
 
+        if decompressed_body_prefix_len > size_usize {
+            return Err(Error::SizeMismatch {
+                expected: size,
+                actual: decompressed_body_prefix_len as u64,
+                path,
+            });
+        }
+
+        // If the first inflate already reached the end of the stream, the fixed-size `header` buffer
+        // contains the complete decompressed object. In that case we can avoid allocating the full
+        // output buffer and a second streaming inflate pass.
+        out.clear();
         if status == zlib::Status::StreamEnd {
-            let decompressed_body_bytes_sans_header =
-                decompressed_start + header_size..decompressed_start + consumed_out;
-
             if consumed_out as u64 != size + header_size as u64 {
                 return Err(Error::SizeMismatch {
                     expected: size + header_size as u64,
@@ -230,41 +190,75 @@ impl Store {
                     path,
                 });
             }
-            buf.copy_within(decompressed_body_bytes_sans_header, 0);
+            out.extend_from_slice(&header[header_size..consumed_out]);
         } else {
-            let new_len = bytes_read as u64 + size + header_size as u64;
-            buf.resize(new_len.try_into().map_err(|_| Error::OutOfMemory { size: new_len })?, 0);
-            {
-                let (input, output) = buf.split_at_mut(bytes_read);
-                let num_decompressed_bytes = zlib::stream::inflate::read(
-                    &mut &input[consumed_in..],
-                    &mut inflate.state,
-                    &mut output[consumed_out..],
-                )
-                .map_err(|e| Error::Io {
+            out.resize(size_usize, 0);
+            out[..decompressed_body_prefix_len].copy_from_slice(&header[header_size..consumed_out]);
+
+            let mut input = &map[consumed_in..];
+            let num_decompressed_bytes =
+                zlib::stream::inflate::read(&mut input, &mut inflate.state, &mut out[decompressed_body_prefix_len..])
+                    .map_err(|e| Error::Io {
                     source: e,
-                    action: "deflate",
+                    action: "inflate",
                     path: path.to_owned(),
                 })?;
-                if num_decompressed_bytes as u64 + consumed_out as u64 != size + header_size as u64 {
-                    return Err(Error::SizeMismatch {
-                        expected: size + header_size as u64,
-                        actual: num_decompressed_bytes as u64 + consumed_out as u64,
-                        path,
-                    });
-                }
-            };
-            buf.copy_within(decompressed_start + header_size.., 0);
+
+            if num_decompressed_bytes as u64 + decompressed_body_prefix_len as u64 != size {
+                return Err(Error::SizeMismatch {
+                    expected: size,
+                    actual: num_decompressed_bytes as u64 + decompressed_body_prefix_len as u64,
+                    path,
+                });
+            }
         }
-        buf.resize(
-            size.try_into()
-                .expect("BUG: here the size is already confirmed to fit into memory"),
-            0,
-        );
-        Ok(gix_object::Data {
+        Ok(Some(gix_object::Data {
             kind,
             hash_kind: id.kind(),
-            data: buf,
-        })
+            data: out,
+        }))
+    }
+
+    fn ensure_in_alloc_limit(&self, size: u64) -> Result<(), Error> {
+        if self.alloc_limit_bytes.is_some_and(|limit| size > limit as u64) {
+            return Err(Error::OutOfMemory { size });
+        }
+        Ok(())
+    }
+
+    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>, Error> {
+        let map = match mmap::read_only(path) {
+            Ok(map) => map,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => {
+                return Err(Error::Io {
+                    action: Self::OPEN_OR_MAP_ACTION,
+                    source: err,
+                    path: path.to_owned(),
+                })
+            }
+        };
+
+        if map.is_empty() {
+            return Err(Error::Io {
+                source: io::Error::other("empty loose object file"),
+                action: Self::OPEN_OR_MAP_ACTION,
+                path: path.to_owned(),
+            });
+        }
+        Ok(Some(map))
+    }
+}
+
+mod mmap {
+    use std::path::Path;
+
+    pub fn read_only(path: &Path) -> std::io::Result<memmap2::Mmap> {
+        let file = std::fs::File::open(path)?;
+        // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
+        #[allow(unsafe_code)]
+        unsafe {
+            memmap2::MmapOptions::new().map_copy_read_only(&file)
+        }
     }
 }
