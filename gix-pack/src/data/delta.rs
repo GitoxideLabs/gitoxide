@@ -184,10 +184,12 @@ where
     }
 
     let mut insts = Vec::new();
-    insts.push(Instruction::Copy {
-        offset: 0,
-        size: common_prefix_len,
-    });
+    if common_prefix_len > 0 {
+        insts.push(Instruction::Copy {
+            offset: 0,
+            size: common_prefix_len,
+        });
+    }
     for chunk in target[common_prefix_len..].chunks(127) {
         insts.push(Instruction::Add { data: chunk });
     }
