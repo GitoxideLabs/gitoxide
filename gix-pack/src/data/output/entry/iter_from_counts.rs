@@ -9,6 +9,7 @@ pub(crate) mod function {
             Progress,
         },
     };
+    use gix_hash::ObjectId;
 
     use super::{reduce, util, Error, Mode, Options, Outcome, ProgressId};
     use crate::data::output;
@@ -217,7 +218,10 @@ pub(crate) mod function {
             }
             #[cfg(feature = "pack-cache-lru-dynamic")]
             Mode::CustomizedDeltaTopo { topo, cache_capacity } => {
-                let sorted_counts = Arc::new(counts);
+                let sorted_counts = {
+                    topo_sort(counts.as_mut_slice(), &topo).expect("no loop in delta topo");
+                    Arc::new(counts)
+                };
                 let progress = Arc::new(parking_lot::Mutex::new(progress));
                 let chunks = util::ChunkRanges::new(chunk_size, sorted_counts.len());
 
@@ -354,6 +358,70 @@ pub(crate) mod function {
 
         index
     }
+
+    /// Topological sort `counts` in place, parents first.
+    /// If there is a loop, returns Err(usize), meaning how many ObjectID are in loops indicated in the `to_parent`.
+    fn topo_sort(
+        counts: &mut [output::Count],
+        to_parent: &std::collections::HashMap<ObjectId, ObjectId>,
+    ) -> Result<(), usize> {
+        // firstly sort `vertexes` as children first, then reverse `vertexex`
+        use std::collections::HashMap;
+
+        type CountIndex = usize;
+
+        let n = counts.len();
+        if n == 0 {
+            return Ok(());
+        }
+
+        let oid_to_idx: HashMap<ObjectId, CountIndex> = counts
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (c.id.to_owned(), idx))
+            .collect();
+
+        let mut idx_to_child_count: HashMap<CountIndex, usize> = (0..n).into_iter().map(|c| (c, 0)).collect();
+        for (child, parent) in to_parent {
+            let child = oid_to_idx.get(child).unwrap();
+            let parent = oid_to_idx.get(parent).unwrap();
+            if idx_to_child_count.contains_key(child) {
+                if let Some(count) = idx_to_child_count.get_mut(parent) {
+                    *count += 1;
+                }
+            }
+        }
+
+        // leaf vertex collection
+        let mut stack: Vec<CountIndex> = idx_to_child_count
+            .iter()
+            .filter_map(|(&c, count)| (*count == 0).then_some(c))
+            .collect();
+
+        let mut sorted = Vec::with_capacity(n);
+        while let Some(curr) = stack.pop() {
+            if let Some(parent) = to_parent.get(&counts[curr].id) {
+                let parent = oid_to_idx.get(parent).unwrap();
+                if let Some(count) = idx_to_child_count.get_mut(parent) {
+                    *count -= 1;
+                    if *count == 0 {
+                        stack.push(*parent);
+                    }
+                }
+            }
+            sorted.push(curr);
+        }
+
+        if sorted.len() < n {
+            Err(n - sorted.len())
+        } else if sorted.len() == n {
+            sorted.reverse();
+            super::util::apply_permutation(counts, &sorted);
+            Ok(())
+        } else {
+            unreachable!("sorted counts")
+        }
+    }
 }
 
 mod util {
@@ -385,6 +453,24 @@ mod util {
                 let range = self.cursor..upper;
                 self.cursor = upper;
                 Some(range)
+            }
+        }
+    }
+
+    pub fn apply_permutation<T>(data: &mut [T], indices: &[usize]) {
+        let n = data.len();
+
+        // inverse transformation: indices[i] = j => indices[j] = i
+        let mut inv = vec![0; n];
+        for (i, &j) in indices.iter().enumerate() {
+            inv[j] = i;
+        }
+
+        for i in 0..n {
+            while inv[i] != i {
+                let target = inv[i];
+                data.swap(i, target);
+                inv.swap(i, target);
             }
         }
     }
