@@ -94,7 +94,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                 let end = ofs.checked_add(size as usize).ok_or(ApplyError::Corrupt {
                     message: "delta copy range overflows",
                 })?;
-                std::io::Write::write(
+                std::io::Write::write_all(
                     &mut target,
                     base.get(ofs..end).ok_or(ApplyError::Corrupt {
                         message: "delta copy range exceeds base object size",
@@ -111,7 +111,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
                 let end = i.checked_add(*size as usize).ok_or(ApplyError::Corrupt {
                     message: "delta insert range overflows",
                 })?;
-                std::io::Write::write(
+                std::io::Write::write_all(
                     &mut target,
                     data.get(i..end).ok_or(ApplyError::Corrupt {
                         message: "delta insert data is truncated",
