@@ -208,7 +208,7 @@ impl Instruction<'_> {
     }
 }
 
-/// Calcuate delta instructions from `source` to `target`.
+/// Calculate delta instructions from `source` to `target`.
 pub fn compute_delta<'a, 'b>(source: &'a [u8], target: &'b [u8]) -> Vec<Instruction<'a>>
 where
     'b: 'a,
