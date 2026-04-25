@@ -301,12 +301,14 @@ pub(crate) mod function {
                                                 inst.encode(&mut delta_data_buf)
                                                     .expect("delta instruction should valid");
                                             }
-                                            // Header will be encoded by `output::Entry::to_entry_header`
+                                            // Header with encoded size and will be encoded by `output::Entry::to_entry_header`
                                             target.data = delta_data_buf.as_slice();
                                             output::Entry::from_delta_ref(
                                                 count,
                                                 &target,
-                                                *oid_index_mapping.get(source_oid).unwrap(),
+                                                *oid_index_mapping
+                                                    .get(source_oid)
+                                                    .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
                                             )
                                         } else {
                                             Ok(output::Entry::invalid())
