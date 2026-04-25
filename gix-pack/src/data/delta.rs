@@ -18,12 +18,14 @@ pub enum ApplyError {
 #[derive(thiserror::Error, Debug)]
 #[allow(missing_docs)]
 pub enum EncodeError {
-    #[error("Failed to write bytes")]
-    IOError,
-    #[error("Too large size in Copy instruction, should <= 0x00ffffff")]
-    TooLargeSize,
-    #[error("Too large data in Add instruction, length should <= 127")]
-    TooLargeData,
+    #[error("Failed to write bytes: {0}")]
+    IOError(std::io::Error),
+    #[error("Too large offset in Copy instruction, should <= 0xffffffff, got {0}")]
+    TooLargeOffset(usize),
+    #[error("Too large size in Copy instruction, should <= 0x00ffffff, got {0}")]
+    TooLargeSize(usize),
+    #[error("Too large data in Add instruction, length should <= 127, got {0}")]
+    TooLargeData(usize),
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)
@@ -165,7 +167,10 @@ impl Instruction<'_> {
                 if size == 0x10000 {
                     size = 0;
                 } else if size > 0x00ffffff {
-                    return Err(EncodeError::TooLargeSize);
+                    return Err(EncodeError::TooLargeSize(size));
+                }
+                if offset > 0xffffffff {
+                    return Err(EncodeError::TooLargeOffset(offset));
                 }
 
                 for i in 0..4 {
@@ -185,18 +190,18 @@ impl Instruction<'_> {
                     }
                 }
 
-                writer.write_all(&[header]).map_err(|_| EncodeError::IOError)?;
-                writer.write_all(&buf[..n]).map_err(|_| EncodeError::IOError)?;
+                writer.write_all(&[header]).map_err(EncodeError::IOError)?;
+                writer.write_all(&buf[..n]).map_err(EncodeError::IOError)?;
                 Ok(())
             }
             Self::Add { data } => {
                 if data.len() > 127 {
-                    return Err(EncodeError::TooLargeData);
+                    return Err(EncodeError::TooLargeData(data.len()));
                 }
 
                 let header = data.len() as u8;
-                writer.write_all(&[header]).map_err(|_| EncodeError::IOError)?;
-                writer.write_all(data).map_err(|_| EncodeError::IOError)?;
+                writer.write_all(&[header]).map_err(EncodeError::IOError)?;
+                writer.write_all(data).map_err(EncodeError::IOError)?;
                 Ok(())
             }
         }
