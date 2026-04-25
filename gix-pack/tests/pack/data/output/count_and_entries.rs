@@ -458,10 +458,9 @@ fn customized_delta_topo() -> crate::Result {
         // Get commits for testing
         let head = hex_to_id("dfcb5e39ac6eb30179808bbab721e8a28ce1b52e");
         let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head), db.clone())
-            .map(Result::unwrap)
-            .map(|c| c.id)
             .take(3)
-            .collect();
+            .map(|commit| commit.map(|c| c.id))
+            .collect::<Result<_, _>>()?;
 
         // Count objects
         let (counts, _) = output::count::objects(
@@ -505,7 +504,7 @@ fn customized_delta_topo() -> crate::Result {
             });
 
             // All should be base objects since topo is empty
-            assert!(actual_count.delta_ref == 0 || actual_count.delta_oid == 0);
+            assert!(actual_count.delta_ref == 0 && actual_count.delta_oid == 0);
         }
 
         // Test with non-empty topo
