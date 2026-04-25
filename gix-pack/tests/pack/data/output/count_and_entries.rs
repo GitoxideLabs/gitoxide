@@ -509,24 +509,23 @@ fn customized_delta_topo() -> crate::Result {
 
         // Test with non-empty topo
         {
+            let commits = commits.to_owned();
+
             // Skip if not enough commits for delta test
             if commits.len() < 2 {
                 continue;
             }
 
-            // Save source_oid before commits is moved
-            let source_oid = commits[0];
-
             let topo_with_deltas = {
                 let mut m = std::collections::HashMap::new();
-                // Map commit[1] -> commit[0] as delta
-                m.insert(commits[1], source_oid);
+                m.insert(commits[0], commits[1]);
+                m.insert(commits[2], commits[1]);
                 m
             };
 
             let (counts2, _) = output::count::objects(
                 db.clone(),
-                Box::new(commits.into_iter().map(Ok)),
+                Box::new(commits.to_owned().into_iter().map(Ok)),
                 &progress::Discard,
                 &AtomicBool::new(false),
                 count::objects::Options {
@@ -555,40 +554,45 @@ fn customized_delta_topo() -> crate::Result {
                 .flatten()
                 .collect();
 
-            // Should have at least some base objects
-            assert!(!entries2.is_empty());
-
-            // Find the index of source object in counts2 for verification
-            let source_index = counts2
-                .iter()
-                .position(|c| c.id == source_oid)
-                .expect("source commit should be in counts");
-
-            // Verify object_index in DeltaRef entries is valid and correct
-            let count_len = counts2.len();
-            let mut found_delta_ref = false;
-            for entry in &entries2 {
-                if let gix_pack::data::output::entry::Kind::DeltaRef { object_index } = entry.kind {
-                    found_delta_ref = true;
-                    assert!(
-                        object_index < count_len,
-                        "DeltaRef object_index {} should be < count_len {}",
-                        object_index,
-                        count_len
-                    );
-                    // Verify it points to the expected source
-                    assert_eq!(
-                        object_index, source_index,
-                        "DeltaRef should point to source commit, expected {} but got {}",
-                        source_index, object_index
-                    );
+            assert_eq!(entries2.len(), counts2.len(), "length of input and output should equal");
+            for entry in entries2.iter() {
+                if entry.id == commits[0] || entry.id == commits[2] {
+                    assert!(matches!(entry.kind, entry::Kind::DeltaRef { .. }));
+                } else if entry.id == commits[1] {
+                    assert!(matches!(entry.kind, entry::Kind::Base(..)));
                 }
             }
-            // We created topo with commit[1] -> source, so there should be DeltaRef entries
-            assert!(found_delta_ref, "Should have DeltaRef entries from customized topo");
 
-            // Verify finalize works
-            let _stats = entries_iter2.finalize_boxed()?;
+            // Directly write to a pack file
+            let tmp_dir = gix_testtools::tempfile::TempDir::new()?;
+            let pack_file_path = tmp_dir.path().join("new.pack");
+            let mut pack_file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&pack_file_path)?;
+            let (_num_written_bytes, _pack_hash) = {
+                let num_entries = entries2.len();
+                let mut pack_writer = output::bytes::FromEntriesIter::new(
+                    std::iter::once(Ok::<_, entry::iter_from_counts::Error>(entries2)),
+                    &mut pack_file,
+                    num_entries as u32,
+                    pack::data::Version::V2,
+                    gix_hash::Kind::Sha1,
+                );
+                let mut n = pack_writer.next().expect("one entries bundle was written")?;
+                n += pack_writer.next().expect("the trailer was written")?;
+                assert!(
+                    pack_writer.next().is_none(),
+                    "there is nothing more to iterate this time"
+                );
+                // verify we can still get the original parts back
+                let hash = pack_writer.digest().expect("digest is available when iterator is done");
+                let _ = pack_writer.input;
+                let _ = pack_writer.into_write();
+                (n, hash)
+            };
+
+            // TODO: parse pack file
         }
     }
 
