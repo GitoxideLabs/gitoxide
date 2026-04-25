@@ -381,7 +381,7 @@ pub(crate) mod function {
             .map(|(idx, c)| (c.id.to_owned(), idx))
             .collect();
 
-        let mut idx_to_child_count: HashMap<CountIndex, usize> = (0..n).into_iter().map(|c| (c, 0)).collect();
+        let mut idx_to_child_count: HashMap<CountIndex, usize> = (0..n).map(|c| (c, 0)).collect();
         for (child, parent) in to_parent {
             let child = oid_to_idx.get(child).unwrap();
             let parent = oid_to_idx.get(parent).unwrap();
@@ -412,14 +412,16 @@ pub(crate) mod function {
             sorted.push(curr);
         }
 
-        if sorted.len() < n {
-            Err(n - sorted.len())
-        } else if sorted.len() == n {
-            sorted.reverse();
-            super::util::apply_permutation(counts, &sorted);
-            Ok(())
-        } else {
-            unreachable!("sorted counts")
+        match sorted.len().cmp(&n) {
+            Ordering::Less => Err(n - sorted.len()),
+            Ordering::Equal => {
+                sorted.reverse();
+                super::util::apply_permutation(counts, &sorted);
+                Ok(())
+            }
+            Ordering::Greater => {
+                unreachable!("sorted counts should less or equal than all counts")
+            }
         }
     }
 }
