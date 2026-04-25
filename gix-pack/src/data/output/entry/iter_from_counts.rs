@@ -13,24 +13,6 @@ pub(crate) mod function {
     use super::{reduce, util, Error, Mode, Options, Outcome, ProgressId};
     use crate::data::output;
 
-    type Item = Result<(SequenceId, Vec<output::Entry>), Error>;
-    type Stats = reduce::Statistics<Error>;
-    type StatsOutput = <Stats as gix_features::parallel::Reduce>::Output;
-    type StatsError = <Stats as gix_features::parallel::Reduce>::Error;
-
-    pub trait DynFinalizeIterator: Iterator<Item = Item> {
-        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError>;
-    }
-
-    impl<T> DynFinalizeIterator for T
-    where
-        T: Iterator<Item = Item> + parallel::reduce::Finalize<Reduce = Stats>,
-    {
-        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError> {
-            self.finalize()
-        }
-    }
-
     /// Given a known list of object `counts`, calculate entries ready to be put into a data pack.
     ///
     /// This allows objects to be written quite soon without having to wait for the entire pack to be built in memory.
@@ -71,7 +53,7 @@ pub(crate) mod function {
             thread_limit,
             chunk_size,
         }: Options,
-    ) -> Box<dyn DynFinalizeIterator>
+    ) -> Box<dyn super::types::DynFinalizeIterator>
     where
         Find: crate::Find + Send + Clone + 'static,
     {
@@ -568,6 +550,24 @@ mod types {
                 ProgressId::ResolveCounts => *b"ECRC",
                 ProgressId::SortEntries => *b"ECSE",
             }
+        }
+    }
+
+    type Item = Result<(gix_features::parallel::SequenceId, Vec<crate::data::output::Entry>), Error>;
+    type Stats = super::reduce::Statistics<Error>;
+    type StatsOutput = <Stats as gix_features::parallel::Reduce>::Output;
+    type StatsError = <Stats as gix_features::parallel::Reduce>::Error;
+
+    pub trait DynFinalizeIterator: Iterator<Item = Item> {
+        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError>;
+    }
+
+    impl<T> DynFinalizeIterator for T
+    where
+        T: Iterator<Item = Item> + gix_features::parallel::reduce::Finalize<Reduce = Stats>,
+    {
+        fn finalize_boxed(self: Box<Self>) -> Result<StatsOutput, StatsError> {
+            self.finalize()
         }
     }
 }
