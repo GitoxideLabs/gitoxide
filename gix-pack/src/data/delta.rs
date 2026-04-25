@@ -209,10 +209,7 @@ impl Instruction<'_> {
 }
 
 /// Calculate delta instructions from `source` to `target`.
-pub fn compute_delta<'a, 'b>(source: &'a [u8], target: &'b [u8]) -> Vec<Instruction<'a>>
-where
-    'b: 'a,
-{
+pub fn compute_delta<'a>(source: &[u8], target: &'a [u8]) -> Vec<Instruction<'a>> {
     // TODO: more efficient
     // TODO: more configurable
     let mut common_prefix_len: usize = 0;
