@@ -455,17 +455,18 @@ fn customized_delta_topo() -> crate::Result {
     ] {
         let db = db(db_kind)?;
 
-        // Get commits for testing
-        let head = hex_to_id("dfcb5e39ac6eb30179808bbab721e8a28ce1b52e");
-        let commits: Vec<_> = gix_traverse::commit::Simple::new(Some(head), db.clone())
-            .take(3)
-            .map(|commit| commit.map(|c| c.id))
-            .collect::<Result<_, _>>()?;
+        // Get objects for testing
+        let objects: Vec<_> = vec![
+            hex_to_id("dc805c143bc9f4fcf6d333a7676f95a7f67651d8"), // base
+            hex_to_id("29484d17f163832a63fcc6c81f86d87bf7e56d40"), // delta @ 1
+            hex_to_id("10d63474c0a8c66d24ad44b9673fe7e2d5bc2189"), // delta @ 2
+            hex_to_id("c707160576c571775f9963c4efc97ba1b3ded920"), // delta @ 3
+        ];
 
         // Count objects
         let (counts, _) = output::count::objects(
             db.clone(),
-            Box::new(commits.clone().into_iter().map(Ok)),
+            Box::new(objects.clone().into_iter().map(Ok)),
             &progress::Discard,
             &AtomicBool::new(false),
             count::objects::Options {
@@ -475,8 +476,8 @@ fn customized_delta_topo() -> crate::Result {
             },
         )?;
 
+        // Empty topo: every object is base
         {
-            // Empty topo: every object is base
             let topo = std::collections::HashMap::new();
 
             let mut entries_iter = output::entry::iter_from_counts(
@@ -509,23 +510,17 @@ fn customized_delta_topo() -> crate::Result {
 
         // Test with non-empty topo
         {
-            let commits = commits.to_owned();
-
-            // Skip if not enough commits for delta test
-            if commits.len() < 2 {
-                continue;
-            }
-
+            let objects = objects.to_owned();
             let topo_with_deltas = {
                 let mut m = std::collections::HashMap::new();
-                m.insert(commits[0], commits[1]);
-                m.insert(commits[2], commits[1]);
+                m.insert(objects[3], objects[2]);
+                m.insert(objects[1], objects[2]);
                 m
             };
 
             let (counts2, _) = output::count::objects(
                 db.clone(),
-                Box::new(commits.to_owned().into_iter().map(Ok)),
+                Box::new(objects.to_owned().into_iter().map(Ok)),
                 &progress::Discard,
                 &AtomicBool::new(false),
                 count::objects::Options {
@@ -555,10 +550,11 @@ fn customized_delta_topo() -> crate::Result {
                 .collect();
 
             assert_eq!(entries2.len(), counts2.len(), "length of input and output should equal");
+            let delta_oids = std::collections::HashSet::from([objects[1], objects[3]]);
             for entry in entries2.iter() {
-                if entry.id == commits[0] || entry.id == commits[2] {
+                if delta_oids.contains(&entry.id) {
                     assert!(matches!(entry.kind, entry::Kind::DeltaRef { .. }));
-                } else if entry.id == commits[1] {
+                } else {
                     assert!(matches!(entry.kind, entry::Kind::Base(..)));
                 }
             }
