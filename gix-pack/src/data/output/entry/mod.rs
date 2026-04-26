@@ -61,6 +61,7 @@ impl output::Entry {
     }
 
     /// Create an Entry from a previously counted object which is located in a pack. It's `entry` is provided here.
+    /// `potential_bases` should be sorted by `Count.entry_pack_location.pack_offset`.
     /// The `version` specifies what kind of target `Entry` version the caller desires.
     pub fn from_pack_entry(
         mut entry: find::Entry,
@@ -152,19 +153,16 @@ impl output::Entry {
     }
 
     /// Like [`output::Entry::from_base()`], but with type OfsDelta.
+    /// `delta_data` is encoded instructions. Header with encoded size and will be encoded by `output::Entry::to_entry_header`
     /// `object_index` is the absolute index to the object.
-    pub fn from_delta_ref(
-        count: &output::Count,
-        obj: &gix_object::Data<'_>,
-        object_index: usize,
-    ) -> Result<Self, Error> {
+    pub fn from_delta_ref(count: &output::Count, delta_data: &[u8], object_index: usize) -> Result<Self, Error> {
         Ok(output::Entry {
             id: count.id.to_owned(),
             kind: Kind::DeltaRef { object_index },
-            decompressed_size: obj.data.len(),
+            decompressed_size: delta_data.len(),
             compressed_data: {
                 let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());
-                if let Err(err) = std::io::copy(&mut &*obj.data, &mut out) {
+                if let Err(err) = std::io::copy(&mut &*delta_data, &mut out) {
                     match err.kind() {
                         std::io::ErrorKind::Other => return Err(Error::ZlibDeflate(err)),
                         err => unreachable!("Should never see other errors than zlib, but got {:?}", err),

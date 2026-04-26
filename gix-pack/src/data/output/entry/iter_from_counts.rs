@@ -218,6 +218,10 @@ pub(crate) mod function {
             }
             #[cfg(feature = "pack-cache-lru-dynamic")]
             Mode::CustomizedDeltaTopo { topo, cache_capacity } => {
+                if allow_thin_pack {
+                    todo!("support allow_thin_pack");
+                }
+
                 let sorted_counts = {
                     topo_sort(counts.as_mut_slice(), &topo).expect("no loop in delta topo");
                     Arc::new(counts)
@@ -225,12 +229,8 @@ pub(crate) mod function {
                 let progress = Arc::new(parking_lot::Mutex::new(progress));
                 let chunks = util::ChunkRanges::new(chunk_size, sorted_counts.len());
 
-                // TODO: reuse delta
-                if allow_thin_pack {
-                    todo!("support allow_thin_pack");
-                }
-
-                let cache = Arc::new(std::sync::Mutex::new(crate::cache::lru::MemoryCappedHashmap::new(
+                // Cache decompressed data for Find::try_find_cached
+                let object_cache = Arc::new(std::sync::Mutex::new(crate::cache::lru::MemoryCappedHashmap::new(
                     cache_capacity,
                 ))); // TODO: use parking_lot::Mutex
                 let oid_index_mapping = Arc::new(
@@ -247,8 +247,12 @@ pub(crate) mod function {
                         let progress = Arc::clone(&progress);
                         move |n| {
                             (
-                                Vec::new(), // buffer object data for target
-                                Vec::new(), // buffer object data for source
+                                // Cache entries object ID and offset for packs
+                                std::collections::HashMap::<u32, Vec<(crate::data::Offset, gix_hash::ObjectId)>>::new(),
+                                // buffer object data for target
+                                Vec::new(),
+                                // buffer object data for source
+                                Vec::new(),
                                 progress
                                     .lock()
                                     .add_child_with_id(format!("thread {n}"), gix_features::progress::UNKNOWN),
@@ -258,14 +262,15 @@ pub(crate) mod function {
                     {
                         let sorted_counts = Arc::clone(&sorted_counts);
                         let oid_index_mapping = Arc::clone(&oid_index_mapping);
-                        let cache = Arc::clone(&cache);
+                        let cache = Arc::clone(&object_cache);
                         move |(chunk_id, chunk_range): (SequenceId, std::ops::Range<usize>),
-                              (buf_t, buf_s, progress)| {
+                              (pack_index_cache, buf_t, buf_s, progress)| {
                             let mut out = Vec::new();
                             let chunk = &sorted_counts[chunk_range];
-                            let stats = Outcome::default();
+                            let mut stats = Outcome::default();
                             progress.init(Some(chunk.len()), gix_features::progress::count("objects"));
 
+                            // TODO: refactor needed
                             for count in chunk.iter() {
                                 let oid = count.id;
                                 let db_find_cached = |oid, buf| {
@@ -277,7 +282,47 @@ pub(crate) mod function {
                                     .map_err(Error::Find)
                                 };
                                 let entry = if let Some(source_oid) = topo.get(&oid) {
-                                    if let Some((mut target, _)) = db_find_cached(&oid, buf_t)? {
+                                    let mut find_existing_delta = || -> Option<_> {
+                                        let (_location, pack_entry) = count
+                                            .entry_pack_location
+                                            .as_ref()
+                                            .and_then(|l| db.entry_by_location(l).map(|pe| (l, pe)))?;
+                                        let delta = find_delta(
+                                            count,
+                                            &pack_entry,
+                                            source_oid,
+                                            |pack_id, base_offset| {
+                                                let offsets_oid_mapping =
+                                                    pack_index_cache.entry(pack_id).or_insert_with(|| {
+                                                        db.pack_offsets_and_oid(pack_id)
+                                                            .map(|mut v| {
+                                                                v.sort_by_key(|e| e.0);
+                                                                v
+                                                            })
+                                                            .expect("pack used for counts is still available")
+                                                    });
+                                                offsets_oid_mapping
+                                                    .binary_search_by_key(&base_offset, |e| e.0)
+                                                    .ok()
+                                                    .map(|idx| offsets_oid_mapping[idx].1)
+                                            },
+                                            version,
+                                        )?;
+                                        Some(output::Entry::from_delta_ref(
+                                            count,
+                                            &delta,
+                                            *oid_index_mapping
+                                                .get(source_oid)
+                                                .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
+                                        ))
+                                    };
+                                    // Find existing delta
+                                    if let Some(entry) = find_existing_delta() {
+                                        stats.objects_copied_from_pack += 1;
+                                        entry
+                                    }
+                                    // Build delta
+                                    else if let Some((target, _)) = db_find_cached(&oid, buf_t)? {
                                         if let Some((source, _)) = db_find_cached(source_oid, buf_s)? {
                                             let delta_insts =
                                                 crate::data::delta::compute_delta(source.data, target.data);
@@ -287,11 +332,9 @@ pub(crate) mod function {
                                                 inst.encode(&mut delta_data_buf)
                                                     .expect("delta instruction should valid");
                                             }
-                                            // Header with encoded size and will be encoded by `output::Entry::to_entry_header`
-                                            target.data = delta_data_buf.as_slice();
                                             output::Entry::from_delta_ref(
                                                 count,
-                                                &target,
+                                                &delta_data_buf.as_slice(),
                                                 *oid_index_mapping
                                                     .get(source_oid)
                                                     .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
@@ -423,6 +466,38 @@ pub(crate) mod function {
                 unreachable!("sorted counts should less or equal than all counts")
             }
         }
+    }
+
+    fn find_delta<'a>(
+        count: &output::Count,
+        entry: &'a crate::find::Entry,
+        source_oid: &ObjectId,
+        mut pack_offset_to_oid: impl FnMut(u32, u64) -> Option<ObjectId>,
+        target_version: crate::data::Version,
+    ) -> Option<&'a [u8]> {
+        if entry.version != target_version {
+            return None;
+        }
+
+        let pack_offset_must_be_zero = 0;
+        let pack_entry =
+            crate::data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.as_slice().len()).ok()?;
+
+        use crate::data::entry::Header::*;
+        match pack_entry.header {
+            OfsDelta { base_distance } => {
+                let pack_location = count.entry_pack_location.as_ref().expect("packed");
+                let base_offset = pack_location
+                    .pack_offset
+                    .checked_sub(base_distance)
+                    .expect("pack-offset - distance is firmly within the pack");
+                pack_offset_to_oid(pack_location.pack_id, base_offset)
+            }
+            RefDelta { base_id } => Some(base_id),
+            _ => None,
+        }
+        .filter(|id| id == source_oid)
+        .map(|_| &entry.data[pack_entry.data_offset as usize..])
     }
 }
 

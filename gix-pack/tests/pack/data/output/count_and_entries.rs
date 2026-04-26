@@ -456,11 +456,12 @@ fn customized_delta_topo() -> crate::Result {
         let db = db(db_kind)?;
 
         // Get objects for testing
+        // TODO: delta chain may not stable
         let objects: Vec<_> = vec![
-            hex_to_id("dc805c143bc9f4fcf6d333a7676f95a7f67651d8"), // base
-            hex_to_id("29484d17f163832a63fcc6c81f86d87bf7e56d40"), // delta @ 1
-            hex_to_id("10d63474c0a8c66d24ad44b9673fe7e2d5bc2189"), // delta @ 2
-            hex_to_id("c707160576c571775f9963c4efc97ba1b3ded920"), // delta @ 3
+            hex_to_id("a63e479f22985d08b5debd6567e15999123d25a4"), // base
+            hex_to_id("d1ff3f36411c6eead64400062a7c8e30886b94ff"), // delta @ 1
+            hex_to_id("37fbc9660088c6afad4b48169e80fe59670190d1"), // delta @ 2
+            hex_to_id("dc2da8bbf4d82a654b35a2a43c0d714d4d7afbf9"), // delta @ 3
         ];
 
         // Count objects
@@ -529,6 +530,24 @@ fn customized_delta_topo() -> crate::Result {
                     ..Default::default()
                 },
             )?;
+
+            // Test reuse delta
+            {
+                let entries_iter2 = output::entry::iter_from_counts(
+                    counts2.clone(),
+                    db.clone(),
+                    Box::new(progress::Discard),
+                    Options {
+                        mode: Mode::CustomizedDeltaTopo {
+                            topo: topo_with_deltas.to_owned(),
+                            cache_capacity: 1024 * 1024,
+                        },
+                        ..Default::default()
+                    },
+                );
+                let stat = entries_iter2.finalize_boxed().unwrap();
+                assert_eq!(stat.objects_copied_from_pack, 1);
+            }
 
             let mut entries_iter2 = output::entry::iter_from_counts(
                 counts2.clone(),
