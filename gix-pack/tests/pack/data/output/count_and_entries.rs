@@ -481,15 +481,14 @@ fn customized_delta_topo() -> crate::Result {
         {
             let topo = std::collections::HashMap::new();
 
-            let mut entries_iter = output::entry::iter_from_counts(
+            let mut entries_iter = output::entry::iter_from_counts::customized::iter_from_counts_with_topo(
                 counts,
                 db.clone(),
                 Box::new(progress::Discard),
+                topo,
+                1024 * 1024, // 1MB cache
                 Options {
-                    mode: Mode::CustomizedDeltaTopo {
-                        topo,
-                        cache_capacity: 1024 * 1024, // 1MB cache
-                    },
+                    mode: Mode::Customized,
                     ..Default::default()
                 },
             );
@@ -533,15 +532,14 @@ fn customized_delta_topo() -> crate::Result {
 
             // Test reuse delta
             {
-                let entries_iter2 = output::entry::iter_from_counts(
+                let entries_iter2 = output::entry::iter_from_counts::customized::iter_from_counts_with_topo(
                     counts2.clone(),
                     db.clone(),
                     Box::new(progress::Discard),
+                    topo_with_deltas.to_owned(),
+                    1024 * 1024,
                     Options {
-                        mode: Mode::CustomizedDeltaTopo {
-                            topo: topo_with_deltas.to_owned(),
-                            cache_capacity: 1024 * 1024,
-                        },
+                        mode: Mode::Customized,
                         ..Default::default()
                     },
                 );
@@ -549,15 +547,14 @@ fn customized_delta_topo() -> crate::Result {
                 assert_eq!(stat.objects_copied_from_pack, 1);
             }
 
-            let mut entries_iter2 = output::entry::iter_from_counts(
+            let mut entries_iter2 = output::entry::iter_from_counts::customized::iter_from_counts_with_topo(
                 counts2.clone(),
                 db.clone(),
                 Box::new(progress::Discard),
+                topo_with_deltas,
+                1024 * 1024,
                 Options {
-                    mode: Mode::CustomizedDeltaTopo {
-                        topo: topo_with_deltas,
-                        cache_capacity: 1024 * 1024,
-                    },
+                    mode: Mode::Customized,
                     ..Default::default()
                 },
             );
