@@ -691,6 +691,12 @@ pub mod clone {
         #[clap(flatten)]
         pub shallow: ShallowOptions,
 
+        /// Request the remote to omit certain objects when cloning, similar to `git clone --filter`.
+        ///
+        /// Currently supports `blob:none` and `blob:limit=<n>`.
+        #[clap(long, value_name = "FILTER-SPEC")]
+        pub filter: Option<gix::remote::fetch::ObjectFilter>,
+
         /// The url of the remote to connect to, like `https://github.com/byron/gitoxide`.
         pub remote: OsString,
 

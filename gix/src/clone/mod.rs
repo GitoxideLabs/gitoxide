@@ -39,6 +39,9 @@ pub struct PrepareFetch {
     /// How to handle shallow clones
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
     shallow: remote::fetch::Shallow,
+    /// Optional object filter to request from the remote.
+    #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
+    filter: Option<remote::fetch::ObjectFilter>,
     /// The name of the reference to fetch. If `None`, the reference pointed to by `HEAD` will be checked out.
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
     ref_name: Option<gix_ref::PartialName>,
@@ -121,6 +124,7 @@ impl PrepareFetch {
             #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
             configure_connection: None,
             shallow: remote::fetch::Shallow::NoChange,
+            filter: None,
             ref_name: None,
         })
     }

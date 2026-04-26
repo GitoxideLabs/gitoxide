@@ -703,3 +703,223 @@ title "gix commit-graph"
     )
   )
 )
+
+if [[ "$kind" != "small" && "$kind" != "async" ]]; then
+# Testing repository - local reproduction of https://github.com/staehle/gitoxide-testing
+testrepo_name="gitoxide-testing"
+# Path relative to tests/fixtures/ for use with jtt run-script
+testrepo_fixture_script="scripts/make_gitoxide_testing_repo.sh"
+# This repo has various tags with noted differences in README.md, all in form `vN`
+# `v5` is latest on main and should be the default cloned
+testrepo_v5_tag="v5"
+testrepo_v4_tag="v4"
+testrepo_v3_tag="v3"
+testrepo_v2_tag="v2"
+testrepo_v1_tag="v1"
+# This file exists in all versions, but with different content:
+testrepo_common_file_name="version.txt"
+# gix options:
+gix_clone_blobless="--filter=blob:none"
+gix_clone_limit="--filter=blob:limit=1024"
+
+title "gix clone (functional tests)"
+(when "running functional clone tests"
+  title "gix clone with partial clone filters"
+  (with "blobless clone of $testrepo_name repository"
+    snapshot="$snapshot/blobless-clone"
+    testrepo_path="${testrepo_name}-bare-blobless"
+    testworktree_path="${testrepo_name}-worktree"
+
+    (sandbox
+      # Create/reuse the source repository using the fixture script (cached read-only)
+      testrepo_source=$("$jtt" run-script "$root/.." "$testrepo_fixture_script")
+      testrepo_url="file://${testrepo_source}"
+
+      # Resolve commit hashes from tags dynamically
+      testrepo_v5_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v5_tag})
+      testrepo_v4_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v4_tag})
+      testrepo_v3_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v3_tag})
+      testrepo_v2_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v2_tag})
+      testrepo_v1_commit=$(cd "${testrepo_source}" && git rev-parse ${testrepo_v1_tag})
+
+      # Test blobless bare clone with --filter=blob:none
+      it "creates a blobless (${gix_clone_blobless}) bare clone successfully" && {
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose clone --bare ${gix_clone_blobless} ${testrepo_url} ${testrepo_path}
+      }
+      (with "the cloned blobless bare repository"
+        (cd ${testrepo_path}
+          it "should be a bare repository" && {
+            expect_run $SUCCESSFULLY test -f HEAD
+            expect_run $SUCCESSFULLY test -d objects
+            expect_run $SUCCESSFULLY test -d refs
+            expect_run $WITH_FAILURE test -d .git
+          }
+          it "gix can see remote.origin.partialclonefilter configuration" && {
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose config remote.origin.promisor
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose config remote.origin.partialclonefilter
+          }
+          it "real git client also sees partialclonefilter" && {
+            WITH_SNAPSHOT="$snapshot/filter-config" \
+            expect_run $SUCCESSFULLY git --no-pager config remote.origin.partialclonefilter
+          }
+          it "tag ${testrepo_v5_tag} has appropriate tree entries (all missing)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v5_tag}-tree-entries-missing" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v5_tag}
+          }
+          it "tag ${testrepo_v4_tag} has appropriate tree entries (all missing)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v4_tag}-tree-entries-missing" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v4_tag}
+          }
+          it "tag ${testrepo_v2_tag} has appropriate tree entries (all missing)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v2_tag}-tree-entries-missing" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v2_tag}
+          }
+          it "real git client can detect all the missing blobs" && {
+            WITH_SNAPSHOT="$snapshot/git-reported-missing-blobs" \
+            expect_run $SUCCESSFULLY git --no-pager rev-list --objects --quiet --missing=print HEAD
+          }
+        )
+      )
+
+      # Test creating a worktree from the bare blobless clone, using non-default tag
+      it "can create a worktree from the bare blobless clone for tag ${testrepo_v4_tag}" && {
+        (cd ${testrepo_path}
+          # Once gix supports 'worktree add', we can use that directly:
+          # expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose worktree add ../${testworktree_path} ${testrepo_v4_tag}
+          # Until then, use the real git client:
+          expect_run $SUCCESSFULLY git --no-pager worktree add ../${testworktree_path} ${testrepo_v4_tag}
+        )
+      }
+
+      (with "the created worktree (on tag ${testrepo_v4_tag})"
+        (cd ${testworktree_path}
+          it "should be a valid worktree" && {
+            expect_run $SUCCESSFULLY test -f .git
+            expect_run $SUCCESSFULLY test -f ${testrepo_common_file_name}
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose status
+          }
+
+          WORKTREE_HEAD=$("$exe_plumbing" --no-verbose rev resolve HEAD)
+          it "HEAD should NOT match the bare repo" && {
+            BARE_HEAD=$(cd ../${testrepo_path} && "$exe_plumbing" --no-verbose rev resolve HEAD)
+            expect_run $SUCCESSFULLY test "$BARE_HEAD" != "$WORKTREE_HEAD"
+          }
+          it "HEAD should match the tag ${testrepo_v4_tag}'s commit" && {
+            expect_run $SUCCESSFULLY test "$WORKTREE_HEAD" = "${testrepo_v4_commit}"
+          }
+
+          it "should pass fsck validation" && {
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose fsck
+          }
+
+          it "real git client can detect all the missing blobs for ${testrepo_v4_tag}" && {
+            WITH_SNAPSHOT="$snapshot/git-reported-missing-blobs-${testrepo_v4_tag}" \
+            expect_run $SUCCESSFULLY git --no-pager rev-list --objects --quiet --missing=print ${testrepo_v4_tag}
+          }
+          it "real git client can detect all the missing blobs for ${testrepo_v5_tag}" && {
+            WITH_SNAPSHOT="$snapshot/git-reported-missing-blobs-${testrepo_v5_tag}" \
+            expect_run $SUCCESSFULLY git --no-pager rev-list --objects --quiet --missing=print ${testrepo_v5_tag}
+          }
+          it "tag ${testrepo_v4_tag} has appropriate tree entries (all populated)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v4_tag}-tree-entries-populated" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v4_tag}
+          }
+          it "tag ${testrepo_v5_tag} has appropriate tree entries (partially populated)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v5_tag}-tree-entries-partial" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v5_tag}
+          }
+          it "tag ${testrepo_v2_tag} has appropriate tree entries (partially populated)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v2_tag}-tree-entries-partial" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v2_tag}
+          }
+
+          it "accessing blobs for '${testrepo_common_file_name}' from different commits..." && {
+            (with "the gix client"
+              # try to access the current version.txt blob
+              it "succeeds in finding the ${testrepo_v4_tag} tag's blob for this file" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v4_tag}" \
+                expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose cat HEAD:${testrepo_common_file_name}
+              }
+              # try to access an old revision of ${testrepo_common_file_name}
+              # the gix plumbing version should not have the blob, so it should fail
+              it "fails to find a blob for an older tag '${testrepo_v2_tag}' (${testrepo_v2_commit}) as we are blobless" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v2_tag}-blobless-failure" \
+                expect_run $WITH_FAILURE "$exe_plumbing" --no-verbose cat ${testrepo_v2_commit}:${testrepo_common_file_name}
+              }
+            )
+            (with "the git client"
+              # however, the real git client should be able to fetch the old revision:
+              it "real git succeeds in finding the ${testrepo_v2_tag} blob as it fetches by default" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v2_tag}" \
+                expect_run $SUCCESSFULLY git --no-pager cat-file blob ${testrepo_v2_commit}:${testrepo_common_file_name}
+              }
+            )
+            (with "the gix client (round 2)"
+              # try to access the newly fetched by the real git client ${testrepo_v2_commit} blob
+              it "succeeds in finding the ${testrepo_v2_tag} blob just populated by real git" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v2_tag}" \
+                expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose cat ${testrepo_v2_commit}:${testrepo_common_file_name}
+              }
+              ## Now, we're going to do the same thing again, but for an even older revision, except use
+              ## the new gix explicit fetch functionality:
+              it "fails to find a blob for an older tag ${testrepo_v1_tag} (${testrepo_v1_commit})" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v1_tag}-blobless-failure" \
+                expect_run $WITH_FAILURE "$exe_plumbing" --no-verbose cat ${testrepo_v1_commit}:${testrepo_common_file_name}
+              }
+              it "gix explicit fetch succeeds (and hopefully gets all blobs for this commit)" && {
+                expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose fetch ${testrepo_v1_commit}
+              }
+              it "succeeds in finding the ${testrepo_v1_tag} blob" && {
+                WITH_SNAPSHOT="$snapshot/cat-${testrepo_v1_tag}" \
+                expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose cat ${testrepo_v1_commit}:${testrepo_common_file_name}
+              }
+            )
+          }
+
+          it "tag ${testrepo_v2_tag} has appropriate tree entries (more partially populated)" && {
+            WITH_SNAPSHOT="$snapshot/${testrepo_v2_tag}-tree-entries-partial2" \
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose tree entries -r -e ${testrepo_v2_tag}
+          }
+        )
+      )
+    )
+  )
+
+  (with "blob-limit clone of gitoxide repository"
+    snapshot="$snapshot/bloblimit-clone"
+    testrepo_path="${testrepo_name}-bare-bloblimit"
+
+    (sandbox
+      # Create/reuse the source repository using the fixture script (cached read-only)
+      testrepo_source=$("$jtt" run-script "$root/.." "$testrepo_fixture_script")
+      testrepo_url="file://${testrepo_source}"
+
+      # Test blob-limit (--filter=blob:limit=1024) bare clone
+      it "creates a blob-limit (${gix_clone_limit}) bare clone successfully" && {
+        expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose clone --bare ${gix_clone_limit} ${testrepo_url} ${testrepo_path}
+      }
+
+      (with "the blob-limit cloned repository"
+        (cd ${testrepo_path}
+          it "should be a bare repository" && {
+            expect_run $SUCCESSFULLY test -f HEAD
+            expect_run $SUCCESSFULLY test -d objects
+            expect_run $SUCCESSFULLY test -d refs
+            expect_run $WITH_FAILURE test -d .git
+          }
+
+          it "should have partial clone configuration with blob limit" && {
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose config remote.origin.promisor
+            expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose config remote.origin.partialclonefilter
+          }
+
+          it "should have the expected blob limit filter configuration" && {
+            WITH_SNAPSHOT="$snapshot/blob-limit-config" \
+            expect_run $SUCCESSFULLY git --no-pager config remote.origin.partialclonefilter
+          }
+        )
+      )
+    )
+  )
+)
+fi
