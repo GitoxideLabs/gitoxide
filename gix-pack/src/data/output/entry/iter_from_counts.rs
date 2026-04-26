@@ -310,7 +310,7 @@ pub(crate) mod function {
                                         )?;
                                         Some(output::Entry::from_delta_ref(
                                             count,
-                                            &delta,
+                                            delta,
                                             *oid_index_mapping
                                                 .get(source_oid)
                                                 .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
@@ -334,7 +334,7 @@ pub(crate) mod function {
                                             }
                                             output::Entry::from_delta_ref(
                                                 count,
-                                                &delta_data_buf.as_slice(),
+                                                delta_data_buf.as_slice(),
                                                 *oid_index_mapping
                                                     .get(source_oid)
                                                     .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
@@ -345,12 +345,10 @@ pub(crate) mod function {
                                     } else {
                                         Ok(output::Entry::invalid())
                                     }
+                                } else if let Some((data, _)) = db_find_cached(&oid, buf_t)? {
+                                    output::Entry::from_base(count, &data)
                                 } else {
-                                    if let Some((data, _)) = db_find_cached(&oid, buf_t)? {
-                                        output::Entry::from_base(count, &data)
-                                    } else {
-                                        Ok(output::Entry::invalid())
-                                    }
+                                    Ok(output::Entry::invalid())
                                 }?;
                                 out.push(entry);
                                 progress.inc();
