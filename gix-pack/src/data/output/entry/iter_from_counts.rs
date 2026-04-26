@@ -207,7 +207,7 @@ pub mod customized {
 
     type Topo = std::collections::HashMap<gix_hash::ObjectId, gix_hash::ObjectId>;
 
-    /// Like [`function::iter_from_counts`], but can determine
+    /// Like [`super::function::iter_from_counts`], but can determine
     /// whether an object is a base or a delta based on topological relationships.
     ///
     /// Key object refers to delta target, value object refers to delta source.
