@@ -64,39 +64,7 @@ pub(crate) mod function {
         );
         let (chunk_size, thread_limit, _) =
             parallel::optimize_chunk_size_and_thread_limit(chunk_size, Some(counts.len()), thread_limit, None);
-        {
-            let progress = Arc::new(parking_lot::Mutex::new(
-                progress.add_child_with_id("resolving".into(), ProgressId::ResolveCounts.into()),
-            ));
-            progress.lock().init(None, gix_features::progress::count("counts"));
-            let enough_counts_present = counts.len() > 4_000;
-            let start = std::time::Instant::now();
-            parallel::in_parallel_if(
-                || enough_counts_present,
-                counts.chunks_mut(chunk_size),
-                thread_limit,
-                |_n| Vec::<u8>::new(),
-                {
-                    let progress = Arc::clone(&progress);
-                    let db = db.clone();
-                    move |chunk, buf| {
-                        let chunk_size = chunk.len();
-                        for count in chunk {
-                            use crate::data::output::count::PackLocation::*;
-                            match count.entry_pack_location {
-                                LookedUp(_) => continue,
-                                NotLookedUp => count.entry_pack_location = LookedUp(db.location_by_oid(&count.id, buf)),
-                            }
-                        }
-                        progress.lock().inc_by(chunk_size);
-                        Ok::<_, ()>(())
-                    }
-                },
-                parallel::reduce::IdentityWithResult::<(), ()>::default(),
-            )
-            .expect("infallible - we ignore none-existing objects");
-            progress.lock().show_throughput(start);
-        }
+        resolve_counts(counts.as_mut_slice(), &db, &mut progress, thread_limit, chunk_size);
         match mode {
             Mode::PackCopyAndBaseObjects => {
                 let counts_range_by_pack_id = rearrange_counts_by_pack_id(&mut counts, &mut progress);
@@ -360,6 +328,48 @@ pub(crate) mod function {
                 ))
             }
         }
+    }
+
+    fn resolve_counts<Find>(
+        counts: &mut [output::Count],
+        db: &Find,
+        progress: &mut Box<dyn DynNestedProgress + 'static>,
+        thread_limit: Option<usize>,
+        chunk_size: usize,
+    ) where
+        Find: crate::Find + Send + Clone + 'static,
+    {
+        let progress = Arc::new(parking_lot::Mutex::new(
+            progress.add_child_with_id("resolving".into(), ProgressId::ResolveCounts.into()),
+        ));
+        progress.lock().init(None, gix_features::progress::count("counts"));
+        let enough_counts_present = counts.len() > 4_000;
+        let start = std::time::Instant::now();
+        parallel::in_parallel_if(
+            || enough_counts_present,
+            counts.chunks_mut(chunk_size),
+            thread_limit,
+            |_n| Vec::<u8>::new(),
+            {
+                let progress = Arc::clone(&progress);
+                let db = db.clone();
+                move |chunk, buf| {
+                    let chunk_size = chunk.len();
+                    for count in chunk {
+                        use crate::data::output::count::PackLocation::*;
+                        match count.entry_pack_location {
+                            LookedUp(_) => continue,
+                            NotLookedUp => count.entry_pack_location = LookedUp(db.location_by_oid(&count.id, buf)),
+                        }
+                    }
+                    progress.lock().inc_by(chunk_size);
+                    Ok::<_, ()>(())
+                }
+            },
+            parallel::reduce::IdentityWithResult::<(), ()>::default(),
+        )
+        .expect("infallible - we ignore none-existing objects");
+        progress.lock().show_throughput(start);
     }
 
     fn rearrange_counts_by_pack_id(
