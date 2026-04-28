@@ -114,34 +114,50 @@ impl PrepareFetch {
             && self.fetch_options.extra_refspecs.is_empty();
 
         let target_ref = if use_single_branch_for_shallow {
-            // Determine target branch from user-specified ref_name or default branch
-            if let Some(ref_name) = &self.ref_name {
-                Some(Category::LocalBranch.to_full_name(ref_name.as_ref().as_bstr())?)
-            } else {
-                // For shallow clones without a specified ref, we need to determine the ref to clone.
-                // Just fetch HEAD for that.
-                let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
-                let mut connection = remote.connect(remote::Direction::Fetch).await?;
-                if let Some(f) = self.configure_connection.as_mut() {
-                    f(&mut connection).map_err(Error::RemoteConnection)?;
-                }
-                let refmap = connection
-                    .ref_map_by_ref(
-                        &mut progress,
-                        remote::ref_map::Options {
-                            extra_refspecs: vec![gix_refspec::parse(
-                                "HEAD".into(),
-                                gix_refspec::parse::Operation::Fetch,
-                            )
-                            .expect("valid")
-                            .to_owned()],
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
+            // For shallow clones, we need to determine the actual remote ref to build a
+            // single-branch refspec. Connect to the remote to discover refs.
+            let prev_tags = std::mem::replace(&mut remote.fetch_tags, remote::fetch::Tags::None);
+            let mut connection = remote.connect(remote::Direction::Fetch).await?;
+            if let Some(f) = self.configure_connection.as_mut() {
+                f(&mut connection).map_err(Error::RemoteConnection)?;
+            }
 
+            let extra_refspec = if let Some(ref_name) = &self.ref_name {
+                // Use the user-specified ref_name as the refspec to discover what it resolves to.
+                gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                    .expect("partial names are valid refspecs")
+                    .to_owned()
+            } else {
+                gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
+                    .expect("valid")
+                    .to_owned()
+            };
+
+            let refmap = connection
+                .ref_map_by_ref(
+                    &mut progress,
+                    remote::ref_map::Options {
+                        extra_refspecs: vec![extra_refspec],
+                        ..Default::default()
+                    },
+                )
+                .await?;
+
+            let target = if let Some(ref_name) = &self.ref_name {
+                // Find the ref matching ref_name in the remote refs
+                let found = util::find_custom_refname(&refmap, ref_name)?;
+                found
+                    .1
+                    .map(|name| {
+                        gix_ref::FullName::try_from(name).map_err(|err| Error::InvalidHeadRef {
+                            head_ref_name: name.to_owned(),
+                            source: err,
+                        })
+                    })
+                    .transpose()?
+            } else {
                 // Find HEAD in the remote refs (works for both Protocol V1 and V2)
-                let target = refmap
+                refmap
                     .remote_refs
                     .iter()
                     .find_map(|r| match r {
@@ -158,17 +174,20 @@ impl PrepareFetch {
                             .into(),
                         _ => None,
                     })
-                    .transpose()?;
+                    .transpose()?
+            };
 
-                let target = target.ok_or_else(|| Error::RefNameMissing {
-                    wanted: "HEAD".try_into().expect("valid partial name"),
-                })?;
+            let target = target.ok_or_else(|| Error::RefNameMissing {
+                wanted: self
+                    .ref_name
+                    .clone()
+                    .unwrap_or_else(|| "HEAD".try_into().expect("valid partial name")),
+            })?;
 
-                drop(connection);
-                remote.fetch_tags = prev_tags;
+            drop(connection);
+            remote.fetch_tags = prev_tags;
 
-                Some(target)
-            }
+            Some(target)
         } else {
             None
         };
@@ -177,13 +196,20 @@ impl PrepareFetch {
         // which requires a single ref to match Git unless it's overridden.
         if remote.fetch_specs.is_empty() {
             if let Some(target_ref) = &target_ref {
-                // Single-branch refspec for shallow clones
-                let short_name = target_ref.shorten();
+                // Single-branch refspec for shallow clones.
+                // For tags, git maps them as +refs/tags/X:refs/tags/X.
+                // For branches, git maps them as +refs/heads/X:refs/remotes/origin/X.
+                let refspec = match target_ref.category() {
+                    Some(Category::Tag) => {
+                        format!("+{target_ref}:{target_ref}")
+                    }
+                    _ => {
+                        let short_name = target_ref.shorten();
+                        format!("+{target_ref}:refs/remotes/{remote_name}/{short_name}")
+                    }
+                };
                 remote = remote
-                    .with_refspecs(
-                        Some(format!("+{target_ref}:refs/remotes/{remote_name}/{short_name}").as_str()),
-                        remote::Direction::Fetch,
-                    )
+                    .with_refspecs(Some(refspec.as_str()), remote::Direction::Fetch)
                     .expect("valid refspec");
             } else {
                 // Wildcard refspec for non-shallow clones or when target couldn't be determined

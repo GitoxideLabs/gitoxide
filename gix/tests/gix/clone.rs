@@ -120,6 +120,35 @@ mod blocking_io {
     }
 
     #[test]
+    fn shallow_clone_with_tag_ref_name_uses_tag_refspec() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, _out) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
+            .with_shallow(Shallow::DepthAtRemote(1.try_into()?))
+            .with_ref_name(Some("b-tag"))?
+            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        assert!(repo.is_shallow(), "repository should be shallow");
+
+        // Verify that the refspec maps as a tag (same src and dst), not as a branch
+        let remote = repo.find_remote("origin")?;
+        let refspecs: Vec<_> = remote
+            .refspecs(Direction::Fetch)
+            .iter()
+            .map(|spec| spec.to_ref().to_bstring())
+            .collect();
+
+        assert_eq!(refspecs.len(), 1, "shallow clone should have only one fetch refspec");
+
+        let refspec_str = refspecs[0].to_str().expect("valid utf8");
+        assert_eq!(
+            refspec_str, "+refs/tags/b-tag:refs/tags/b-tag",
+            "shallow clone with tag ref_name should use tag-style refspec: {refspec_str}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn from_shallow_prohibited_with_option() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let err = gix::clone::PrepareFetch::new(
