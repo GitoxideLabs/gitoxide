@@ -1489,6 +1489,7 @@ dependencies = [
  "gix",
  "gix-archive",
  "gix-error",
+ "gix-features",
  "gix-fsck",
  "gix-pack",
  "gix-status",
