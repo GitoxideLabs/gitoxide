@@ -1,4 +1,3 @@
-// NOTE: copied from create.rs
 use std::{collections::HashMap, io, path::Path, time::Instant};
 
 use anyhow::anyhow;
@@ -10,6 +9,8 @@ use gix::{
 use crate::OutputFormat;
 
 /// A general purpose context for many operations provided here
+///
+/// NOTE: copied from create.rs
 pub struct Context<W> {
     /// If `Some(threads)`, use this amount of `threads` to accelerate the counting phase at the cost of losing
     /// determinism as the order of objects during expansion changes with multiple threads unless no expansion is performed.
@@ -38,6 +39,7 @@ pub struct Context<W> {
     pub out: W,
 }
 
+/// NOTE: part copied from create.rs
 pub fn delta_create<W, P>(
     repository_path: impl AsRef<Path>,
     input: impl io::BufRead + Send + 'static,
@@ -203,6 +205,7 @@ where
     Ok(())
 }
 
+/// NOTE: copied from create.rs
 fn print(stats: Statistics, format: OutputFormat, out: impl std::io::Write) -> anyhow::Result<()> {
     match format {
         OutputFormat::Human => human_output(stats, out).map_err(Into::into),
@@ -211,6 +214,7 @@ fn print(stats: Statistics, format: OutputFormat, out: impl std::io::Write) -> a
     }
 }
 
+/// NOTE: copied from create.rs
 fn human_output(
     Statistics {
         counts:
@@ -263,20 +267,6 @@ struct Statistics {
     entries: pack::data::output::entry::iter_from_counts::Outcome,
 }
 
-pub mod input_iteration {
-    use gix::{hash, traverse};
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error("input objects couldn't be iterated completely")]
-        Iteration(#[from] traverse::commit::simple::Error),
-        #[error("An error occurred while reading hashes from standard input")]
-        InputLinesIo(#[from] std::io::Error),
-        #[error("Could not decode hex hash provided on standard input")]
-        HashDecode(#[from] hash::decode::Error),
-    }
-}
-
-// NOTE: copied from gix-pack/src/data/output/entry/iter_from_counts.rs
 mod iter_from_counts {
     use std::{cmp::Ordering, collections::HashMap, io::Write, sync::Arc};
 
@@ -300,6 +290,7 @@ mod iter_from_counts {
         pub version: pack::data::Version,
     }
 
+    // NOTE: part copied from gix-pack/src/data/output/entry/iter_from_counts.rs
     pub fn iter_from_counts<Find>(
         mut counts: Vec<output::Count>,
         topo: HashMap<ObjectId, ObjectId>,
@@ -592,6 +583,7 @@ mod iter_from_counts {
         Some((compressed, pack_entry.decompressed_size as usize))
     }
 
+    /// NOTE: except `apply_permutation`, copied from gix-pack/src/data/output/entry/iter_from_counts.rs
     mod util {
         #[derive(Clone)]
         pub struct ChunkRanges {
@@ -643,6 +635,7 @@ mod iter_from_counts {
             }
         }
     }
+    /// NOTE: copied from gix-pack/src/data/output/entry/iter_from_counts.rs
     mod reduce {
         use std::marker::PhantomData;
 
