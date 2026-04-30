@@ -100,6 +100,24 @@ fn metadata_to_mode(meta: Metadata) -> Mode {
     }
 }
 
+fn index_suppresses_exclude_match(index: &gix_index::State, path: &BStr, mode: Option<Mode>) -> bool {
+    let path = path_without_trailing_slashes(path);
+    if path.is_empty() {
+        return false;
+    }
+    if mode.is_some_and(|mode| mode.is_sparse() || mode.is_submodule()) {
+        index.path_is_directory(path)
+    } else {
+        index.entry_by_path(path).is_some()
+    }
+}
+
+fn path_without_trailing_slashes(path: &BStr) -> &BStr {
+    let bytes = path.as_bytes();
+    let end = bytes.iter().rposition(|b| *b != b'/').map_or(0, |idx| idx + 1);
+    bytes[..end].as_bstr()
+}
+
 #[test]
 fn check_against_baseline() -> crate::Result {
     let dir = gix_testtools::scripted_fixture_read_only_standalone("make_ignore_and_attributes_setup.sh")?;
@@ -127,6 +145,7 @@ fn check_against_baseline() -> crate::Result {
     );
     let paths_storage = index.take_path_backing();
     let attribute_files_in_index = state.id_mappings_from_index(&index, &paths_storage, case);
+    index.return_path_backing(paths_storage);
     assert_eq!(
         attribute_files_in_index,
         vec![(
@@ -136,7 +155,7 @@ fn check_against_baseline() -> crate::Result {
     );
     let mut cache = Stack::new(&worktree_dir, state, case, buf, attribute_files_in_index);
 
-    let baseline = std::fs::read(git_dir.parent().unwrap().join("git-check-ignore.baseline"))?;
+    let baseline = std::fs::read(dir.join("git-check-ignore.baseline"))?;
     let expectations = IgnoreExpectations {
         lines: baseline.lines(),
     };
@@ -146,8 +165,11 @@ fn check_against_baseline() -> crate::Result {
 
         let platform = cache.at_entry(relative_entry, is_dir, &odb)?;
 
-        let match_ = platform.matching_exclude_pattern();
-        let is_excluded = platform.is_excluded();
+        let mut match_ = platform.matching_exclude_pattern();
+        if match_.is_some() && index_suppresses_exclude_match(&index, relative_entry, is_dir) {
+            match_ = None;
+        }
+        let is_excluded = match_.as_ref().is_some_and(|m| !m.pattern.is_negative());
         match (match_, source_and_line) {
             (None, None) => {
                 assert!(!is_excluded);
