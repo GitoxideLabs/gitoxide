@@ -428,14 +428,16 @@ mod iter_from_counts {
                                     },
                                     version,
                                 )?;
-                                Some(entry::from_delta_ref(
-                                    count,
-                                    compressed_delta.to_vec(),
-                                    decompressed_size as usize,
-                                    *oid_index_mapping
-                                        .get(source_oid)
-                                        .expect("all target and source objects should in ONE pack"),
-                                ))
+                                Some(Ok(output::Entry {
+                                    id: oid.to_owned(),
+                                    kind: output::entry::Kind::DeltaRef {
+                                        object_index: *oid_index_mapping
+                                            .get(source_oid)
+                                            .expect("all target and source objects should in ONE pack"),
+                                    },
+                                    decompressed_size: decompressed_size as usize,
+                                    compressed_data: compressed_delta.to_vec(),
+                                }))
                             };
                             // Find existing delta
                             if let Some(entry) = find_existing_delta() {
@@ -452,14 +454,16 @@ mod iter_from_counts {
                                         .map_err(|e| Error::NewEntry(e.into()))?;
                                     deflate.flush().map_err(|e| Error::NewEntry(e.into()))?;
                                     let compressed_delta = deflate.into_inner();
-                                    entry::from_delta_ref(
-                                        count,
-                                        compressed_delta,
-                                        delta_data.len(),
-                                        *oid_index_mapping
-                                            .get(source_oid)
-                                            .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
-                                    )
+                                    Ok(output::Entry {
+                                        id: oid.to_owned(),
+                                        kind: output::entry::Kind::DeltaRef {
+                                            object_index: *oid_index_mapping
+                                                .get(source_oid)
+                                                .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
+                                        },
+                                        decompressed_size: delta_data.len(),
+                                        compressed_data: compressed_delta,
+                                    })
                                 } else {
                                     Ok(output::Entry::invalid())
                                 }
@@ -585,32 +589,6 @@ mod iter_from_counts {
 
         let compressed = &entry.data[pack_entry.data_offset as usize..];
         Some((compressed, pack_entry.decompressed_size))
-    }
-
-    // NOTE: copied from gix-pack/src/data/output/entry/mod.rs
-    mod entry {
-        use gix::odb::pack;
-
-        use pack::data::output::{self, entry::Error, Entry};
-
-        /// Like [`output::Entry::from_base()`], but with type OfsDelta.
-        /// `compressed_delta_data` is already zlib-compressed delta data (header + instructions).
-        /// `decompressed_size` is the size of the delta data after decompression.
-        /// `object_index` is the absolute index to the base object.
-        pub fn from_delta_ref(
-            count: &output::Count,
-            compressed_delta_data: Vec<u8>,
-            decompressed_size: usize,
-            object_index: usize,
-        ) -> Result<Entry, Error> {
-            // FIXIT: too trivial to exists as a function
-            Ok(output::Entry {
-                id: count.id.to_owned(),
-                kind: output::entry::Kind::DeltaRef { object_index },
-                decompressed_size,
-                compressed_data: compressed_delta_data,
-            })
-        }
     }
 
     mod util {
