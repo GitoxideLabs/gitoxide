@@ -212,10 +212,24 @@ pub(super) fn find_custom_refname<'a>(
             wanted: ref_name.clone(),
         }),
         1 => {
-            let item = filtered_items[res.mappings[0]
-                .item_index
-                .expect("we map by name only and have no object-id in refspec")];
-            Ok((Some(item.target), Some(item.full_ref_name)))
+            let mapping = &res.mappings[0];
+            match (mapping.item_index, &mapping.lhs) {
+                (Some(idx), _) => {
+                    let item = filtered_items[idx];
+                    Ok((Some(item.target), Some(item.full_ref_name)))
+                }
+                (None, gix_refspec::match_group::SourceRef::ObjectId(id)) => {
+                    let target = ref_map
+                        .mappings
+                        .iter()
+                        .find_map(|m| m.remote.as_id().filter(|remote_id| *remote_id == *id))
+                        .expect("if it matched, it must be in the mappings");
+                    Ok((Some(target), None))
+                }
+                (None, gix_refspec::match_group::SourceRef::FullName(_)) => {
+                    unreachable!("only object ids have no item index")
+                }
+            }
         }
         _ => Err(Error::RefNameAmbiguous {
             wanted: ref_name.clone(),
