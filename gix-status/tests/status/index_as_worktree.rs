@@ -833,7 +833,12 @@ fn refresh() {
     assert_eq!(
         fixture_with_index(
             "status_changed",
-            |index| { index.entries_mut().iter_mut().for_each(|e| e.stat = Default::default()) },
+            |index| {
+                index
+                    .entries_mut_keep_tree_cache()
+                    .iter_mut()
+                    .for_each(|e| e.stat = Default::default())
+            },
             #[cfg(not(windows))]
             &[
                 (
@@ -1033,7 +1038,7 @@ fn racy_git() {
     // change.
     // This case doesn't happen in the realworld (except for file corruption) but
     // makes sure we are actually hitting the right codepath.
-    index.entries_mut()[0].stat.mtime.secs = timestamp;
+    index.entries_mut_keep_tree_cache()[0].stat.mtime.secs = timestamp;
     set_file_mtime(
         worktree.join("content"),
         FileTime::from_unix_time(i64::from(timestamp), 0),

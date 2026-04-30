@@ -284,6 +284,46 @@ fn remove_entries() {
 }
 
 #[test]
+fn entries_mut_invalidates_tree_cache() {
+    let mut file = Fixture::Generated("v2_more_files").open();
+    assert!(file
+        .tree()
+        .expect("TREE extension is present")
+        .children
+        .iter()
+        .all(|tree| tree.num_entries.is_some()));
+
+    file.entries_mut()[0].stat.size = 42;
+
+    let tree = file.tree().expect("TREE extension remains present");
+    assert_tree_cache_is_invalid(tree);
+}
+
+#[test]
+fn entries_mut_keep_tree_cache_preserves_tree_cache() {
+    let mut file = Fixture::Generated("v2_more_files").open();
+    let tree_before = file.tree().expect("TREE extension is present").clone();
+
+    file.entries_mut_keep_tree_cache()[0].stat.size = 42;
+
+    assert_eq!(
+        file.tree(),
+        Some(&tree_before),
+        "tree-neutral mutations may preserve the TREE extension"
+    );
+}
+
+#[test]
+fn take_path_backing_invalidates_tree_cache() {
+    let mut file = Fixture::Generated("v2_more_files").open();
+
+    let _backing = file.take_path_backing();
+
+    let tree = file.tree().expect("TREE extension remains present");
+    assert_tree_cache_is_invalid(tree);
+}
+
+#[test]
 fn remove_entry_at_index() {
     let mut file = Fixture::Loose("conflicting-file").open();
 
@@ -293,6 +333,13 @@ fn remove_entry_at_index() {
     assert_eq!(file.entries().len(), 1);
     file.remove_entry_at_index(0);
     assert_eq!(file.entries().len(), 0);
+}
+
+fn assert_tree_cache_is_invalid(tree: &gix_index::extension::Tree) {
+    assert_eq!(tree.num_entries, None);
+    for child in &tree.children {
+        assert_tree_cache_is_invalid(child);
+    }
 }
 
 #[test]
