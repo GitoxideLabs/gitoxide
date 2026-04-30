@@ -48,7 +48,7 @@ async-client = ["gix/async-network-client-async-std", "gix-transport-configurati
 serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
 ## The experimental ability to create a pack with delta compression.
-experimental-delta-create = ["gix-features"]
+experimental-delta-create = ["gix-features", "dep:parking_lot"]
 
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.

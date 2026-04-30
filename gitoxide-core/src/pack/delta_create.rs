@@ -278,7 +278,7 @@ pub mod input_iteration {
 
 // NOTE: copied from gix-pack/src/data/output/entry/iter_from_counts.rs
 mod iter_from_counts {
-    use std::{cmp::Ordering, collections::HashMap, sync::Arc};
+    use std::{cmp::Ordering, collections::HashMap, io::Write, sync::Arc};
 
     use gix::{hash::ObjectId, odb::pack, parallel, parallel::SequenceId, progress, Count, Progress};
 
@@ -407,7 +407,7 @@ mod iter_from_counts {
                                     .entry_pack_location
                                     .as_ref()
                                     .and_then(|l| db.entry_by_location(l).map(|pe| (l, pe)))?;
-                                let delta = find_delta(
+                                let (compressed_delta, decompressed_size) = find_delta(
                                     count,
                                     &pack_entry,
                                     source_oid,
@@ -430,7 +430,8 @@ mod iter_from_counts {
                                 )?;
                                 Some(entry::from_delta_ref(
                                     count,
-                                    delta,
+                                    compressed_delta.to_vec(),
+                                    decompressed_size as usize,
                                     *oid_index_mapping
                                         .get(source_oid)
                                         .expect("all target and source objects should in ONE pack"),
@@ -444,16 +445,17 @@ mod iter_from_counts {
                             // Build delta
                             else if let Some((target, _)) = db_find_cached(&oid, buf_t)? {
                                 if let Some((source, _)) = db_find_cached(source_oid, buf_s)? {
-                                    let delta_insts = delta_diff::compute_delta(source.data, target.data);
-                                    let mut delta_data_buf = Vec::new();
-                                    for inst in delta_insts {
-                                        // Panic here because delta algorithm is incorrect, should fast fail
-                                        inst.encode(&mut delta_data_buf)
-                                            .expect("delta instruction should valid");
-                                    }
+                                    let delta_data = delta_diff::diff(source.data, target.data)
+                                        .expect("delta diff algorithm should valid");
+                                    let mut deflate = gix_features::zlib::stream::deflate::Write::new(Vec::new());
+                                    std::io::copy(&mut delta_data.as_slice(), &mut deflate)
+                                        .map_err(|e| Error::NewEntry(e.into()))?;
+                                    deflate.flush().map_err(|e| Error::NewEntry(e.into()))?;
+                                    let compressed_delta = deflate.into_inner();
                                     entry::from_delta_ref(
                                         count,
-                                        delta_data_buf.as_slice(),
+                                        compressed_delta,
+                                        delta_data.len(),
                                         *oid_index_mapping
                                             .get(source_oid)
                                             .expect("all target and source objects should in ONE pack"), // TODO: allow ref delta in thin pack
@@ -545,13 +547,15 @@ mod iter_from_counts {
         }
     }
 
+    /// Returns `(compressed_delta_data, decompressed_size)` if the pack entry is a delta pointing to `source_oid`.
+    /// The compressed data is borrowed as-is from the pack (no decompression/recompression round-trip).
     fn find_delta<'a>(
         count: &output::Count,
-        entry: &'a pack::find::Entry,
+        entry: &'a pack::find::Entry, // FIXIT: use `db: Find` instead of `Entry`
         source_oid: &ObjectId,
         mut pack_offset_to_oid: impl FnMut(u32, u64) -> Option<ObjectId>,
         target_version: pack::data::Version,
-    ) -> Option<&'a [u8]> {
+    ) -> Option<(&'a [u8], u64)> {
         if entry.version != target_version {
             return None;
         }
@@ -561,7 +565,7 @@ mod iter_from_counts {
             pack::data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.as_slice().len()).ok()?;
 
         use pack::data::entry::Header::*;
-        match pack_entry.header {
+        let source_matches = match pack_entry.header {
             OfsDelta { base_distance } => {
                 let pack_location = count.entry_pack_location.as_ref().expect("packed");
                 let base_offset = pack_location
@@ -573,37 +577,38 @@ mod iter_from_counts {
             RefDelta { base_id } => Some(base_id),
             _ => None,
         }
-        .filter(|id| id == source_oid)
-        .map(|_| &entry.data[pack_entry.data_offset as usize..])
+        .filter(|id| id == source_oid);
+
+        if source_matches.is_none() {
+            return None;
+        }
+
+        let compressed = &entry.data[pack_entry.data_offset as usize..];
+        Some((compressed, pack_entry.decompressed_size))
     }
 
     // NOTE: copied from gix-pack/src/data/output/entry/mod.rs
     mod entry {
-        use std::io::Write;
-
         use gix::odb::pack;
 
         use pack::data::output::{self, entry::Error, Entry};
 
         /// Like [`output::Entry::from_base()`], but with type OfsDelta.
-        /// `delta_data` is encoded instructions. Header with encoded size and will be encoded by `output::Entry::to_entry_header`
-        /// `object_index` is the absolute index to the object.
-        pub fn from_delta_ref(count: &output::Count, delta_data: &[u8], object_index: usize) -> Result<Entry, Error> {
+        /// `compressed_delta_data` is already zlib-compressed delta data (header + instructions).
+        /// `decompressed_size` is the size of the delta data after decompression.
+        /// `object_index` is the absolute index to the base object.
+        pub fn from_delta_ref(
+            count: &output::Count,
+            compressed_delta_data: Vec<u8>,
+            decompressed_size: usize,
+            object_index: usize,
+        ) -> Result<Entry, Error> {
+            // FIXIT: too trivial to exists as a function
             Ok(output::Entry {
                 id: count.id.to_owned(),
                 kind: output::entry::Kind::DeltaRef { object_index },
-                decompressed_size: delta_data.len(),
-                compressed_data: {
-                    let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());
-                    if let Err(err) = std::io::copy(&mut &*delta_data, &mut out) {
-                        match err.kind() {
-                            std::io::ErrorKind::Other => return Err(Error::ZlibDeflate(err)),
-                            err => unreachable!("Should never see other errors than zlib, but got {:?}", err),
-                        }
-                    }
-                    out.flush()?;
-                    out.into_inner()
-                },
+                decompressed_size,
+                compressed_data: compressed_delta_data,
             })
         }
     }
@@ -790,10 +795,27 @@ mod iter_from_counts {
             }
         }
 
-        /// Calculate delta instructions from `source` to `target`.
-        pub fn compute_delta<'a>(source: &[u8], target: &'a [u8]) -> Vec<Instruction<'a>> {
-            // TODO: more efficient
-            // TODO: more configurable
+        /// Encode a variable-length integer for the delta header (7 bits per byte, MSB = continuation).
+        fn encode_delta_varint(mut value: usize, buf: &mut impl Write) -> Result<(), Error> {
+            loop {
+                let mut byte = (value & 0x7f) as u8;
+                value >>= 7;
+                if value > 0 {
+                    byte |= 0x80;
+                }
+                buf.write_all(&[byte]).map_err(Error::IOError)?;
+                if value == 0 {
+                    break;
+                }
+            }
+            Ok(())
+        }
+
+        /// Calculate delta from `source` to `target`, returning the instructions
+        /// (header + instructions) as expected by the Git pack format.
+        fn compute_delta<'a>(source: &[u8], target: &'a [u8]) -> Vec<Instruction<'a>> {
+            let mut insts = Vec::new();
+
             let mut common_prefix_len: usize = 0;
             for (s, t) in source.iter().zip(target) {
                 if s == t {
@@ -802,18 +824,29 @@ mod iter_from_counts {
                     break;
                 }
             }
-
-            let mut insts = Vec::new();
             if common_prefix_len > 0 {
                 insts.push(Instruction::Copy {
                     offset: 0,
                     size: common_prefix_len,
                 });
             }
+
             for chunk in target[common_prefix_len..].chunks(127) {
                 insts.push(Instruction::Add { data: chunk });
             }
             insts
+        }
+
+        /// Calculate delta from `source` to `target`, returning the instructions
+        /// (header + instructions) as expected by the Git pack format.
+        pub fn diff(source: &[u8], target: &[u8]) -> Result<Vec<u8>, Error> {
+            let mut delta_data = Vec::new();
+            encode_delta_varint(source.len(), &mut delta_data)?;
+            encode_delta_varint(target.len(), &mut delta_data)?;
+            for inst in compute_delta(source, target) {
+                inst.encode(&mut delta_data)?;
+            }
+            Ok(delta_data)
         }
     }
 }
