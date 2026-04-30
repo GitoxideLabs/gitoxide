@@ -1,0 +1,15 @@
+a2c6eb76193fba6f5993ff94f0e9d64e59c27535.pack
+{
+  "counts": {
+    "input_objects": 2,
+    "expanded_objects": 0,
+    "decoded_objects": 2,
+    "total_objects": 2
+  },
+  "entries": {
+    "decoded_and_recompressed_objects": 0,
+    "missing_objects": 0,
+    "objects_copied_from_pack": 0,
+    "ref_delta_objects": 0
+  }
+}

@@ -292,6 +292,12 @@ journey-tests-async:
     cargo build -p gix-testtools
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" async
 
+# Run journey tests with delta-create feature enabled
+journey-tests-delta-create:
+    cargo build --no-default-features --features max-pure,gitoxide-core-tools-delta-create
+    cargo build -p gix-testtools --bin jtt
+    dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" delta-create
+
 # Build a customized `cross` container image for testing
 cross-image target:
     docker build --build-arg "TARGET={{ target }}" \
