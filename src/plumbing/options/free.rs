@@ -184,6 +184,53 @@ pub mod pack {
             /// Otherwise the expansion mode is 'tree-traversal' by default.
             tips: Vec<OsString>,
         },
+        #[cfg(feature = "gitoxide-core-tools-delta-create")]
+        /// Create a new pack with customized delta topological relationships. NOTE: This is an experimental feature and may change in the future.
+        DeltaCreate {
+            #[clap(long, short = 'r')]
+            /// the directory containing the '.git' repository from which objects should be read.
+            repository: Option<PathBuf>,
+
+            #[clap(long, default_value_t = 3, requires = "nondeterministic_count")]
+            /// The amount of threads to use when counting and the `--nondeterminisitc-count` flag is set, defaulting
+            /// to the globally configured threads.
+            ///
+            /// Use it to have different trade-offs between counting performance and cost in terms of CPU, as the scaling
+            /// here is everything but linear. The effectiveness of each core seems to be no more than 30%.
+            counting_threads: usize,
+
+            #[clap(long)]
+            /// if set, the counting phase may be accelerated using multithreading.
+            ///
+            /// On the flip side, however, one will loose deterministic counting results which affects the
+            /// way the resulting pack is structured.
+            nondeterministic_count: bool,
+
+            #[clap(long, short = 's')]
+            /// If set statistical information will be presented to inform about pack creation details.
+            /// It's a form of instrumentation for developers to help improve pack generation.
+            statistics: bool,
+
+            #[clap(long)]
+            /// The size in megabytes for a cache to speed up pack access for packs with long delta chains.
+            /// It is shared among all threads, so 4 threads would use their own cache 1/4th of the size.
+            ///
+            /// If unset, no cache will be used.
+            pack_cache_size_mb: Option<usize>,
+
+            #[clap(long)]
+            /// The size in megabytes for a cache to speed up accessing entire objects, bypassing object database access when hit.
+            /// It is shared among all threads, so 4 threads would use their own cache 1/4th of the size.
+            ///
+            /// This cache type is currently only effective when using the 'diff-tree' object expansion.
+            ///
+            /// If unset, no cache will be used.
+            object_cache_size_mb: Option<usize>,
+
+            /// The directory into which to write the pack file.
+            #[clap(long, short = 'o')]
+            output_directory: Option<PathBuf>,
+        },
         /// Use the gix-protocol to receive a pack, emulating a clone.
         #[cfg(any(feature = "gitoxide-core-async-client", feature = "gitoxide-core-blocking-client"))]
         Receive {
