@@ -154,8 +154,10 @@ fn to_tree_rejects_missing_objects_unless_allowed() -> crate::Result {
     let err = state.to_tree(&objects, Default::default()).unwrap_err();
     assert!(matches!(err, gix_index::init::to_tree::Error::MissingObject { .. }));
 
-    let mut options = gix_index::init::to_tree::Options::default();
-    options.missing_ok = true;
+    let options = gix_index::init::to_tree::Options {
+        missing_ok: true,
+        ..Default::default()
+    };
     let actual = state.to_tree(&objects, options)?;
     assert_ne!(actual, gix_hash::Kind::Sha1.null());
     Ok(())

@@ -836,7 +836,7 @@ fn refresh() {
                 index
                     .entries_mut_keep_tree_cache()
                     .iter_mut()
-                    .for_each(|e| e.stat = Default::default())
+                    .for_each(|e| e.stat = Default::default());
             },
             #[cfg(not(windows))]
             &[
