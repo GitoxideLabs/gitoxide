@@ -403,13 +403,9 @@ mod iter_from_counts {
                         let db_find_cached = |oid, buf| db.try_find(oid, buf).map_err(Error::Find);
                         let entry = if let Some(source_oid) = topo.get(&oid) {
                             let mut find_existing_delta = || -> Option<_> {
-                                let (_location, pack_entry) = count
-                                    .entry_pack_location
-                                    .as_ref()
-                                    .and_then(|l| db.entry_by_location(l).map(|pe| (l, pe)))?;
-                                let (compressed_delta, decompressed_size) = find_delta(
+                                let (compressed_data, decompressed_size) = find_delta(
                                     count,
-                                    &pack_entry,
+                                    &db,
                                     source_oid,
                                     |pack_id, base_offset| {
                                         let offsets_oid_mapping =
@@ -435,8 +431,8 @@ mod iter_from_counts {
                                             .get(source_oid)
                                             .expect("all target and source objects should in ONE pack"),
                                     },
-                                    decompressed_size: decompressed_size as usize,
-                                    compressed_data: compressed_delta.to_vec(),
+                                    decompressed_size,
+                                    compressed_data,
                                 }))
                             };
                             // Find existing delta
@@ -552,14 +548,19 @@ mod iter_from_counts {
     }
 
     /// Returns `(compressed_delta_data, decompressed_size)` if the pack entry is a delta pointing to `source_oid`.
-    /// The compressed data is borrowed as-is from the pack (no decompression/recompression round-trip).
-    fn find_delta<'a>(
+    /// The compressed data is extracted as-is from the pack (no decompression/recompression round-trip).
+    fn find_delta(
         count: &output::Count,
-        entry: &'a pack::find::Entry, // FIXIT: use `db: Find` instead of `Entry`
+        db: &impl pack::Find,
         source_oid: &ObjectId,
         mut pack_offset_to_oid: impl FnMut(u32, u64) -> Option<ObjectId>,
         target_version: pack::data::Version,
-    ) -> Option<(&'a [u8], u64)> {
+    ) -> Option<(Vec<u8>, usize)> {
+        let entry = count
+            .entry_pack_location
+            .as_ref()
+            .and_then(|l| db.entry_by_location(l))?;
+
         if entry.version != target_version {
             return None;
         }
@@ -587,8 +588,8 @@ mod iter_from_counts {
             return None;
         }
 
-        let compressed = &entry.data[pack_entry.data_offset as usize..];
-        Some((compressed, pack_entry.decompressed_size))
+        let compressed = entry.data[pack_entry.data_offset as usize..].to_vec();
+        Some((compressed, pack_entry.decompressed_size as usize))
     }
 
     mod util {
