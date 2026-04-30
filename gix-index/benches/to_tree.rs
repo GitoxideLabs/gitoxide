@@ -79,9 +79,10 @@ fn memory_db() -> MemoryDb {
 }
 
 fn missing_ok() -> gix_index::init::to_tree::Options {
-    let mut options = gix_index::init::to_tree::Options::default();
-    options.missing_ok = true;
-    options
+    gix_index::init::to_tree::Options {
+        missing_ok: true,
+        ..Default::default()
+    }
 }
 
 fn repeated_id(byte: u8) -> gix_hash::ObjectId {

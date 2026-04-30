@@ -286,12 +286,13 @@ fn remove_entries() {
 #[test]
 fn entries_mut_invalidates_tree_cache() {
     let mut file = Fixture::Generated("v2_more_files").open();
-    assert!(file
-        .tree()
-        .expect("TREE extension is present")
-        .children
-        .iter()
-        .all(|tree| tree.num_entries.is_some()));
+    assert!(
+        file.tree()
+            .expect("TREE extension is present")
+            .children
+            .iter()
+            .all(|tree| tree.num_entries.is_some())
+    );
 
     file.entries_mut()[0].stat.size = 42;
 

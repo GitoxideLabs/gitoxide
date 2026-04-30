@@ -96,8 +96,9 @@ fn to_tree_roundtrips_to_fixture_tree() -> crate::Result {
         let worktree_dir = scripted_fixture_read_only(fixture)?;
         let expected_tree_id = tree_id(&worktree_dir);
         let git_dir = worktree_dir.join(".git");
-        let mut index = gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default())?;
-        let objects = memory_db();
+        let object_hash = gix_testtools::object_hash();
+        let mut index = gix_index::File::at(git_dir.join("index"), object_hash, false, Default::default())?;
+        let objects = memory_db(object_hash);
 
         let actual_tree_id = index.to_tree(&objects, missing_ok())?;
         assert_eq!(actual_tree_id, expected_tree_id, "tree mismatch in {fixture:?}");
@@ -108,7 +109,7 @@ fn to_tree_roundtrips_to_fixture_tree() -> crate::Result {
 #[test]
 fn to_tree_empty_index_is_empty_tree() -> crate::Result {
     let mut state = State::new(gix_hash::Kind::Sha1);
-    let objects = memory_db();
+    let objects = memory_db(gix_hash::Kind::Sha1);
 
     let actual = state.to_tree(&objects, Default::default())?;
 
@@ -120,7 +121,7 @@ fn to_tree_empty_index_is_empty_tree() -> crate::Result {
 #[test]
 fn to_tree_rejects_unmerged_entries() {
     let mut index = super::Fixture::Loose("conflicting-file").open();
-    let objects = memory_db();
+    let objects = memory_db(gix_hash::Kind::Sha1);
 
     let err = index.to_tree(&objects, Default::default()).unwrap_err();
 
@@ -130,7 +131,7 @@ fn to_tree_rejects_unmerged_entries() {
 #[test]
 fn to_tree_rejects_file_directory_conflicts() {
     let mut state = state_with_entries(["a", "a.b", "a/b"]);
-    let objects = memory_db();
+    let objects = memory_db(gix_hash::Kind::Sha1);
 
     let err = state.to_tree(&objects, missing_ok()).unwrap_err();
 
@@ -143,7 +144,7 @@ fn to_tree_rejects_file_directory_conflicts() {
 #[test]
 fn to_tree_rejects_invalid_components() {
     let mut state = state_with_entries(["a//b"]);
-    let objects = memory_db();
+    let objects = memory_db(gix_hash::Kind::Sha1);
 
     let err = state.to_tree(&objects, Default::default()).unwrap_err();
 
@@ -153,13 +154,15 @@ fn to_tree_rejects_invalid_components() {
 #[test]
 fn to_tree_rejects_missing_objects_unless_allowed() -> crate::Result {
     let mut state = state_with_entries(["file"]);
-    let objects = memory_db();
+    let objects = memory_db(gix_hash::Kind::Sha1);
 
     let err = state.to_tree(&objects, Default::default()).unwrap_err();
     assert!(matches!(err, gix_index::init::to_tree::Error::MissingObject { .. }));
 
-    let mut options = gix_index::init::to_tree::Options::default();
-    options.missing_ok = true;
+    let options = gix_index::init::to_tree::Options {
+        missing_ok: true,
+        ..Default::default()
+    };
     let actual = state.to_tree(&objects, options)?;
     assert_ne!(actual, gix_hash::Kind::Sha1.null());
     Ok(())
@@ -169,8 +172,8 @@ fn to_tree_rejects_missing_objects_unless_allowed() -> crate::Result {
 fn to_tree_refreshes_existing_tree_extension() -> crate::Result {
     let mut index = super::Fixture::Generated("v2").open();
     let original_cached_tree = index.tree().expect("fixture has TREE extension").id;
-    index.entries_mut()[0].id = repeated_id(b'b');
-    let objects = memory_db();
+    index.entries_mut()[0].id = repeated_id(b'b', gix_testtools::object_hash());
+    let objects = memory_db(gix_testtools::object_hash());
 
     let actual = index.to_tree(&objects, missing_ok())?;
 
@@ -187,16 +190,19 @@ fn to_tree_refreshes_existing_tree_extension() -> crate::Result {
 
 #[test]
 fn to_tree_reuses_fully_valid_tree_extension() -> crate::Result {
-    let mut index = super::Fixture::Generated("v2").open();
+    let worktree_dir = scripted_fixture_read_only("make_index/v2.sh")?;
+    let git_dir = worktree_dir.join(".git");
+    let object_hash = gix_testtools::object_hash();
+    let mut index = gix_index::File::at(git_dir.join("index"), object_hash, false, Default::default())?;
     let original_cached_tree = index.tree().expect("fixture has TREE extension").id;
     index.entries_mut_keep_tree_cache()[0].stat.size = 42;
-    let objects = MemoryDb::exists_all(gix_hash::Kind::Sha1);
+    let objects = gix_odb::memory::Proxy::new(odb_at(git_dir.join("objects"))?, object_hash);
 
     let actual = index.to_tree(&objects, Default::default())?;
 
     assert_eq!(actual, original_cached_tree);
     assert!(
-        objects.written.borrow().is_empty(),
+        objects.num_objects_in_memory() == 0,
         "a fully-valid TREE cache can be reused without writing objects"
     );
     Ok(())
@@ -205,10 +211,10 @@ fn to_tree_reuses_fully_valid_tree_extension() -> crate::Result {
 #[test]
 fn to_tree_does_not_create_missing_tree_extension() -> crate::Result {
     let worktree_dir = scripted_fixture_read_only("make_index/v2.sh")?;
-    let odb = gix_odb::at(worktree_dir.join(".git").join("objects"))?;
+    let odb = odb_at(worktree_dir.join(".git").join("objects"))?;
     let mut state = State::from_tree(&tree_id(&worktree_dir), &odb, Default::default())?;
     assert!(state.tree().is_none());
-    let objects = memory_db();
+    let objects = memory_db(gix_testtools::object_hash());
 
     state.to_tree(&objects, missing_ok())?;
 
@@ -273,7 +279,7 @@ fn state_with_entries<const N: usize>(paths: [&str; N]) -> State {
     for path in paths {
         state.dangerously_push_entry(
             Default::default(),
-            repeated_id(b'a'),
+            repeated_id(b'a', gix_hash::Kind::Sha1),
             gix_index::entry::Flags::empty(),
             gix_index::entry::Mode::FILE,
             path.as_bytes().as_bstr(),
@@ -283,18 +289,19 @@ fn state_with_entries<const N: usize>(paths: [&str; N]) -> State {
     state
 }
 
-fn repeated_id(byte: u8) -> gix_hash::ObjectId {
-    gix_hash::ObjectId::from_hex(&vec![byte; gix_hash::Kind::Sha1.len_in_hex()]).expect("valid hex")
+fn repeated_id(byte: u8, object_hash: gix_hash::Kind) -> gix_hash::ObjectId {
+    gix_hash::ObjectId::from_hex(&vec![byte; object_hash.len_in_hex()]).expect("valid hex")
 }
 
 type MemoryDb = gix_odb::memory::Proxy<gix_object::find::Never>;
 
-fn memory_db() -> MemoryDb {
-    gix_odb::memory::Proxy::new(gix_object::find::Never, gix_hash::Kind::Sha1)
+fn memory_db(object_hash: gix_hash::Kind) -> MemoryDb {
+    gix_odb::memory::Proxy::new(gix_object::find::Never, object_hash)
 }
 
 fn missing_ok() -> gix_index::init::to_tree::Options {
-    let mut options = gix_index::init::to_tree::Options::default();
-    options.missing_ok = true;
-    options
+    gix_index::init::to_tree::Options {
+        missing_ok: true,
+        ..Default::default()
+    }
 }
