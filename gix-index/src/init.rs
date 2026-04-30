@@ -293,6 +293,9 @@ pub mod to_tree {
         {
             let _span = gix_features::trace::coarse!("gix_index::State::to_tree()");
             self.verify_entries()?;
+            if let Some(tree) = self.tree.as_ref().filter(|tree| tree.is_fully_valid(&objects)) {
+                return Ok(tree.id);
+            }
             let update_tree_cache = self.tree.is_some();
 
             let mut builder = Builder {

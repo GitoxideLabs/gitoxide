@@ -172,7 +172,9 @@ fn state_comparisons_with_various_extension_configurations() {
 fn extended_flags_automatically_upgrade_the_version_to_avoid_data_loss() -> crate::Result {
     let mut expected = Generated("v2").open();
     assert_eq!(expected.version(), Version::V2);
-    expected.entries_mut()[0].flags.insert(entry::Flags::EXTENDED);
+    expected.entries_mut_keep_tree_cache()[0]
+        .flags
+        .insert(entry::Flags::EXTENDED);
 
     let mut buf = Vec::new();
     let (actual_version, _digest) = expected.write_to(&mut buf, Default::default())?;

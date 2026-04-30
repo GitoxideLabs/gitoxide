@@ -182,6 +182,23 @@ fn to_tree_refreshes_existing_tree_extension() -> crate::Result {
 }
 
 #[test]
+fn to_tree_reuses_fully_valid_tree_extension() -> crate::Result {
+    let mut index = super::Fixture::Generated("v2").open();
+    let original_cached_tree = index.tree().expect("fixture has TREE extension").id;
+    index.entries_mut_keep_tree_cache()[0].stat.size = 42;
+    let objects = MemoryDb::exists_all(gix_hash::Kind::Sha1);
+
+    let actual = index.to_tree(&objects, Default::default())?;
+
+    assert_eq!(actual, original_cached_tree);
+    assert!(
+        objects.written.borrow().is_empty(),
+        "a fully-valid TREE cache can be reused without writing objects"
+    );
+    Ok(())
+}
+
+#[test]
 fn to_tree_does_not_create_missing_tree_extension() -> crate::Result {
     let worktree_dir = scripted_fixture_read_only_standalone("make_index/v2.sh")?;
     let odb = gix_odb::at(worktree_dir.join(".git").join("objects"))?;
