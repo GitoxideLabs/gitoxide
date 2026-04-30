@@ -301,7 +301,7 @@ pub fn try_collect_filtered_opts(
     );
     if fresh_index {
         index
-            .entries_mut()
+            .entries_mut_keep_tree_cache()
             .iter_mut()
             .filter(|e| {
                 // relevant for partial checkouts, all related entries will have skip-worktree set,
