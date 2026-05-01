@@ -10,7 +10,7 @@ use crate::OutputFormat;
 
 /// A general purpose context for many operations provided here
 ///
-/// NOTE: copied from create.rs
+/// NOTE: copied from create.rs, but removed `expansion` and `thin` fields
 pub struct Context<W> {
     /// If `Some(threads)`, use this amount of `threads` to accelerate the counting phase at the cost of losing
     /// determinism as the order of objects during expansion changes with multiple threads unless no expansion is performed.
@@ -39,7 +39,10 @@ pub struct Context<W> {
     pub out: W,
 }
 
-/// NOTE: part copied from create.rs
+/// NOTE: copied from create.rs, but:
+/// - rewrite `input` transform
+/// - remove parallel speedup in building `counts`
+/// - use rewriten `iter_from_counts`
 pub fn delta_create<W, P>(
     repository_path: impl AsRef<Path>,
     input: impl io::BufRead + Send + 'static,
@@ -260,6 +263,7 @@ fn human_output(
     Ok(())
 }
 
+/// NOTE: copied from create.rs
 #[derive(Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Statistics {
@@ -290,7 +294,8 @@ mod iter_from_counts {
         pub version: pack::data::Version,
     }
 
-    // NOTE: part copied from gix-pack/src/data/output/entry/iter_from_counts.rs
+    // NOTE: copied from gix-pack/src/data/output/entry/iter_from_counts.rs,
+    // but rewrote parameters in parallel::reduce::Stepwise::new
     pub fn iter_from_counts<Find>(
         mut counts: Vec<output::Count>,
         topo: HashMap<ObjectId, ObjectId>,
@@ -474,11 +479,15 @@ mod iter_from_counts {
 
     /// Topological sort `counts` in place, parents first.
     /// If there is a loop, returns Err(usize), meaning how many ObjectID are in loops indicated in the `to_parent`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any ObjectId in `to_parent` is not present in `counts`, which would indicate
+    /// that the parent-child relationship map references objects outside the given count set.
     fn topo_sort(
         counts: &mut [output::Count],
         to_parent: &std::collections::HashMap<ObjectId, ObjectId>,
     ) -> Result<(), usize> {
-        // firstly sort `vertexes` as children first, then reverse `vertexex`
         use std::collections::HashMap;
 
         type CountIndex = usize;
@@ -488,16 +497,20 @@ mod iter_from_counts {
             return Ok(());
         }
 
+        // Firstly sort `vertexes` as children first via Kahn method...
         let oid_to_idx: HashMap<ObjectId, CountIndex> = counts
             .iter()
             .enumerate()
             .map(|(idx, c)| (c.id.to_owned(), idx))
             .collect();
-
         let mut idx_to_child_count: HashMap<CountIndex, usize> = (0..n).map(|c| (c, 0)).collect();
         for (child, parent) in to_parent {
-            let child = oid_to_idx.get(child).unwrap();
-            let parent = oid_to_idx.get(parent).unwrap();
+            let child = oid_to_idx
+                .get(child)
+                .expect("child ObjectId in to_parent should exist in counts");
+            let parent = oid_to_idx
+                .get(parent)
+                .expect("parent ObjectId in to_parent should exist in counts");
             if idx_to_child_count.contains_key(child) {
                 if let Some(count) = idx_to_child_count.get_mut(parent) {
                     *count += 1;
@@ -505,12 +518,10 @@ mod iter_from_counts {
             }
         }
 
-        // leaf vertex collection
         let mut stack: Vec<CountIndex> = idx_to_child_count
             .iter()
-            .filter_map(|(&c, count)| (*count == 0).then_some(c))
+            .filter_map(|(&c, count)| (*count == 0).then_some(c)) // Collect leaf vertex
             .collect();
-
         let mut sorted = Vec::with_capacity(n);
         while let Some(curr) = stack.pop() {
             if let Some(parent) = to_parent.get(&counts[curr].id) {
@@ -528,6 +539,7 @@ mod iter_from_counts {
         match sorted.len().cmp(&n) {
             Ordering::Less => Err(n - sorted.len()),
             Ordering::Equal => {
+                // ...then reverse `vertexex`, and returns as parents first
                 sorted.reverse();
                 util::apply_permutation(counts, &sorted);
                 Ok(())
