@@ -20,7 +20,7 @@ sha1 = ["gix-hash/sha1"]
 
 [dependencies]
 parking_lot = "0.12.4"
-hashbrown = { version = "0.16.0", default-features = false, features = ["inline-more"] }
+hashbrown = { version = "0.17.0", default-features = false, features = ["inline-more"] }
 gix-hash = { version = "^0.25.0", path = "../gix-hash" }
 
 [dev-dependencies]

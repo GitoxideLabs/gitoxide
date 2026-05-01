@@ -41,7 +41,7 @@ gix-lock = { version = "^23.0.0", path = "../gix-lock" }
 gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-utils = { version = "^0.3.2", path = "../gix-utils" }
 
-hashbrown = "0.16.0"
+hashbrown = "0.17.0"
 fnv = "1.0.7"
 thiserror = "2.0.18"
 memmap2 = "0.9.10"
@@ -62,7 +62,7 @@ rustix = { version = "1.1.2", default-features = false, features = [
     "std",
     "fs",
 ] }
-libc = { version = "0.2.182" }
+libc = { version = "0.2.186" }
 
 [dev-dependencies]
 criterion = "0.8.2"

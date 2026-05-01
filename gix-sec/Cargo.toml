@@ -28,7 +28,7 @@ bitflags = "2"
 document-features = { version = "0.2.1", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-libc = "0.2.182"
+libc = "0.2.186"
 
 [target.'cfg(windows)'.dependencies]
 gix-path = { version = "^0.12.0", path = "../gix-path" }
