@@ -41,7 +41,6 @@ pub struct Context<W> {
 
 /// NOTE: copied from create.rs, but:
 /// - rewrite `input` transform
-/// - remove parallel speedup in building `counts`
 /// - use rewriten `iter_from_counts`
 pub fn delta_create<W, P>(
     repository_path: impl AsRef<Path>,
@@ -49,6 +48,7 @@ pub fn delta_create<W, P>(
     output_directory: Option<impl AsRef<Path>>,
     mut progress: P,
     Context {
+        nondeterministic_thread_count,
         thread_limit,
         statistics,
         pack_cache_size_in_bytes,
@@ -62,71 +62,94 @@ where
     P: NestedProgress,
     P::SubProgress: 'static,
 {
-    type ObjectIdIter<'a> =
-        dyn Iterator<Item = Result<(ObjectId, Option<ObjectId>), Box<dyn std::error::Error + Send + Sync>>> + Send + 'a;
-
     let repo = gix::discover(repository_path)?.into_sync();
     progress.init(Some(2), progress::steps());
     let make_cancellation_err = || anyhow!("Cancelled by user");
     let mut topo = HashMap::new();
-    let (mut handle, input): (_, Box<ObjectIdIter<'_>>) = {
+    let parsed_input: Vec<Result<(ObjectId, Option<ObjectId>), Box<dyn std::error::Error + Send + Sync>>> = {
         let mut progress = progress.add_child("iterating");
         progress.init(None, progress::count("objects"));
-        let handle = repo.objects.into_shared_arc().to_cache_arc();
-        (
-            handle,
-            Box::new(
-                input
-                    .lines()
-                    .map(|line| {
-                        line.map_err(|err| Box::new(err) as Box<_>).and_then(|line| {
-                            let hex2oid = |hex: &str| {
-                                ObjectId::from_hex(hex.as_bytes())
-                                    .map_err(Into::<Box<dyn std::error::Error + Send + Sync>>::into)
-                            };
-                            if let Some((target, source)) = line.split_once(' ') {
-                                Ok((hex2oid(target)?, Some(hex2oid(source)?)))
-                            } else {
-                                Ok((hex2oid(&line)?, None))
-                            }
-                        })
-                    })
-                    .inspect(move |_| progress.inc())
-                    .inspect(|res| {
-                        if let Ok((target, Some(source))) = res {
-                            topo.insert(target.clone(), source.clone());
-                        }
-                    }),
-            ),
-        )
+        input
+            .lines()
+            .map(|line| {
+                line.map_err(|err| Box::new(err) as Box<_>).and_then(|line| {
+                    let hex2oid = |hex: &str| {
+                        ObjectId::from_hex(hex.as_bytes())
+                            .map_err(Into::<Box<dyn std::error::Error + Send + Sync>>::into)
+                    };
+                    if let Some((target, source)) = line.split_once(' ') {
+                        Ok((hex2oid(target)?, Some(hex2oid(source)?)))
+                    } else {
+                        Ok((hex2oid(&line)?, None))
+                    }
+                })
+            })
+            .inspect(move |_| progress.inc())
+            .collect()
     };
+    for res in &parsed_input {
+        if let Ok((target, Some(source))) = res {
+            topo.insert(target.clone(), source.clone());
+        }
+    }
+    let mut handle = repo.objects.into_shared_arc().to_cache_arc();
+    let mut input: Box<dyn Iterator<Item = Result<ObjectId, Box<dyn std::error::Error + Send + Sync>>> + Send> =
+        Box::new(parsed_input.into_iter().map(|res| res.map(|(target, _)| target)));
 
     let mut stats = Statistics::default();
     let chunk_size = 1000; // What's a good value for this?
     let counts = {
-        // TODO: parallel speedup
         let mut progress = progress.add_child("counting");
         progress.init(None, progress::count("objects"));
+        let may_use_multiple_threads = nondeterministic_thread_count.is_some();
+        let thread_limit = if may_use_multiple_threads {
+            nondeterministic_thread_count.or(thread_limit)
+        } else {
+            Some(1)
+        };
+        if nondeterministic_thread_count.is_some() && !may_use_multiple_threads {
+            progress.fail("Cannot use multi-threaded counting in tree-diff object expansion mode as it may yield way too many objects.".into());
+        }
+        let (_, _, thread_count) = gix::parallel::optimize_chunk_size_and_thread_limit(50, None, thread_limit, None);
         let progress = progress::ThroughputOnDrop::new(progress);
 
         {
-            handle
-                .set_pack_cache(move || Box::new(pack::cache::lru::MemoryCappedHashmap::new(pack_cache_size_in_bytes)));
+            // Maybe should disable cache in some cases
+            handle.set_pack_cache(move || {
+                Box::new(pack::cache::lru::MemoryCappedHashmap::new(
+                    pack_cache_size_in_bytes / thread_count,
+                ))
+            });
             handle.set_object_cache(move || {
                 Box::new(pack::cache::object::MemoryCappedHashmap::new(
-                    object_cache_size_in_bytes,
+                    object_cache_size_in_bytes / thread_count,
                 ))
             });
         }
         handle.prevent_pack_unload();
         handle.ignore_replacements = true;
-        let (mut counts, count_stats) = pack::data::output::count::objects_unthreaded(
-            &handle,
-            &mut input.map(|res| res.map(|(target, _)| target)),
-            &progress,
-            &interrupt::IS_INTERRUPTED,
-            pack::data::output::count::objects::ObjectExpansion::AsIs,
-        )?;
+        let input_object_expansion = pack::data::output::count::objects::ObjectExpansion::AsIs;
+        let (mut counts, count_stats) = if may_use_multiple_threads {
+            pack::data::output::count::objects(
+                handle.clone(),
+                input,
+                &progress,
+                &interrupt::IS_INTERRUPTED,
+                pack::data::output::count::objects::Options {
+                    thread_limit,
+                    chunk_size,
+                    input_object_expansion,
+                },
+            )?
+        } else {
+            pack::data::output::count::objects_unthreaded(
+                &handle,
+                &mut input,
+                &progress,
+                &interrupt::IS_INTERRUPTED,
+                input_object_expansion,
+            )?
+        };
         stats.counts = count_stats;
         counts.shrink_to_fit();
         counts
