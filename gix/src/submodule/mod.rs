@@ -238,19 +238,26 @@ impl Submodule<'_> {
     /// Also note that the returned path may not actually exist.
     pub fn git_dir_try_old_form(&self) -> Result<PathBuf, git_dir_try_old_form::Error> {
         let worktree_gitdir = self.worktree_gitdir()?;
-        let worktree_gitdir_or_modules_gitdir = if worktree_gitdir.is_dir() {
-            worktree_gitdir
-        } else {
-            self.git_dir()?
-        };
-        Ok(worktree_gitdir_or_modules_gitdir)
+        if worktree_gitdir.is_dir() {
+            return Ok(worktree_gitdir);
+        }
+        // Modern submodules use a gitlink file at `<sub>/.git` whose `gitdir:` pointer
+        // is the authoritative location of the gitdir, matching git's
+        // `setup.c::read_gitfile_gently`. The pointer can diverge from the name-derived
+        // `<common>/modules/<name>` path when the submodule was renamed or its gitdir
+        // was relocated, so we must follow it rather than re-derive from the name.
+        if worktree_gitdir.is_file() {
+            if let Ok(target) = gix_discover::path::from_gitdir_file(&worktree_gitdir) {
+                return Ok(target);
+            }
+        }
+        Ok(self.git_dir()?)
     }
 
     /// Query various parts of the submodule and assemble it into state information.
     #[doc(alias = "status", alias = "git2")]
     pub fn state(&self) -> Result<State, state::Error> {
         let maybe_old_path = self.git_dir_try_old_form()?;
-        let git_dir = self.git_dir()?;
         let worktree_git = self.worktree_gitdir()?;
         let superproject_configuration = self
             .state
@@ -263,7 +270,9 @@ impl Submodule<'_> {
             .any(|section| section.header().subsection_name() == Some(self.name.as_ref()));
         Ok(State {
             repository_exists: maybe_old_path.is_dir(),
-            is_old_form: maybe_old_path != git_dir,
+            // Old form means the gitdir lives inside the worktree as `<sub>/.git/`.
+            // Modern form has `<sub>/.git` as a gitlink file (or absent if uninitialized).
+            is_old_form: worktree_git.is_dir(),
             worktree_checkout: worktree_git.exists(),
             superproject_configuration,
         })

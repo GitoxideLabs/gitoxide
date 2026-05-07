@@ -24,7 +24,16 @@ fn on_nested_symlink() -> gix_testtools::Result {
         "the workdir remains relative and is available"
     );
     let sm_repo = sm.open()?.expect("repo is present and accessible");
-    assert_eq!(sm_repo.git_dir(), "../../.git/modules/m1");
+    let sm_git_dir = sm_repo.git_dir();
+    assert!(
+        sm_git_dir.is_relative(),
+        "the gitdir stays relative through symlink discovery, got {sm_git_dir:?}"
+    );
+    assert_eq!(
+        sm_git_dir.canonicalize()?,
+        std::path::Path::new("../../.git/modules/m1").canonicalize()?,
+        "the gitdir resolves to the submodule's actual repository"
+    );
     assert_eq!(
         sm_repo.workdir().expect("worktree present as we have one"),
         p("../../m1")
