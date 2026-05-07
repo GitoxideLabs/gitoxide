@@ -39,6 +39,7 @@ impl From<Options> for gix_dir::walk::Options<'static> {
             emit_collapsed: v.emit_collapsed,
             symlinks_to_directories_are_ignored_like_directories: v
                 .symlinks_to_directories_are_ignored_like_directories,
+            use_untracked_cache: false,
             worktree_relative_worktree_dirs: None,
         }
     }

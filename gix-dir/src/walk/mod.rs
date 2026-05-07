@@ -190,6 +190,10 @@ pub struct Options<'a> {
     ///
     /// In other words, for Git compatibility this flag should be `false`, the default, for `git2` compatibility it should be `true`.
     pub symlinks_to_directories_are_ignored_like_directories: bool,
+    /// If `true`, consult the untracked cache if it is present and otherwise applicable.
+    ///
+    /// Defaults to `false`; the higher-level `gix` layer opts in based on `core.untrackedCache`.
+    pub use_untracked_cache: bool,
     /// A set of all git worktree checkouts that are located within the main worktree directory.
     ///
     /// They will automatically be detected as 'tracked', but without providing index information (as there is no actual index entry).
@@ -271,6 +275,12 @@ pub struct Outcome {
     pub returned_entries: usize,
     /// The amount of entries, prior to pathspecs filtering them out or otherwise excluding them.
     pub seen_entries: u32,
+    /// The number of directories whose contents were served entirely from the untracked cache,
+    /// avoiding a `read_dir` syscall.
+    pub untracked_cache_hits: u32,
+    /// The number of directories skipped by the untracked cache due to a failed per-directory
+    /// stat validation, falling back to a real `read_dir` call instead.
+    pub untracked_cache_misses: u32,
 }
 
 /// The error returned by [`walk()`](function::walk()).
