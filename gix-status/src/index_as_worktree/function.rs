@@ -12,6 +12,8 @@ use gix_filter::pipeline::convert::ToGitOutcome;
 use gix_object::FindExt;
 
 use crate::index_as_worktree::types::ConflictIndexEntry;
+#[cfg(windows)]
+use crate::metadata_cache::{CachedMetadata, MetadataCache};
 use crate::{
     AtomicU64, SymlinkCheck,
     index_as_worktree::{
@@ -21,8 +23,6 @@ use crate::{
     },
     is_dir_to_mode,
 };
-#[cfg(windows)]
-use crate::metadata_cache::{self, CachedMetadata, MetadataCache};
 
 /// Windows-only union of live `lstat` metadata and pre-cached metadata, so
 /// `compute_status` sees one shape. Other platforms use `gix_index::fs::Metadata`
@@ -448,14 +448,14 @@ impl<'index> State<'_, 'index> {
         // only fall back to a syscall on miss; on other platforms per-file
         // `lstat` is already fast, so we just do the syscall directly.
         #[cfg(windows)]
-        let metadata = if let Some(cached) = self.metadata_cache.and_then(|c| metadata_cache::lookup(c, rela_path)) {
+        let metadata = if let Some(cached) = self.metadata_cache.and_then(|c| c.get(rela_path)) {
             FileMetadata::Cached(cached)
         } else {
             self.symlink_metadata_calls.fetch_add(1, Ordering::Relaxed);
             match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
                 Ok(m) => FileMetadata::Live(m),
                 Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
-                    return Ok(Some(Change::Removed.into()))
+                    return Ok(Some(Change::Removed.into()));
                 }
                 Err(err) => return Err(Error::Io(err.into())),
             }
@@ -466,7 +466,7 @@ impl<'index> State<'_, 'index> {
             match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
                 Ok(m) => m,
                 Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
-                    return Ok(Some(Change::Removed.into()))
+                    return Ok(Some(Change::Removed.into()));
                 }
                 Err(err) => return Err(Error::Io(err.into())),
             }
@@ -499,12 +499,12 @@ impl<'index> State<'_, 'index> {
         let new_stat = gix_index::entry::Stat::from_fs(&metadata)?;
 
         #[cfg(windows)]
-        let mode_change =
-            metadata.mode_change(entry.mode, self.options.fs.symlink, self.options.fs.executable_bit);
+        let mode_change = metadata.mode_change(entry.mode, self.options.fs.symlink, self.options.fs.executable_bit);
         #[cfg(not(windows))]
-        let mode_change = entry
-            .mode
-            .change_to_match_fs(&metadata, self.options.fs.symlink, self.options.fs.executable_bit);
+        let mode_change =
+            entry
+                .mode
+                .change_to_match_fs(&metadata, self.options.fs.symlink, self.options.fs.executable_bit);
         let executable_bit_changed = match mode_change {
             Some(gix_index::entry::mode::Change::Type { new_mode }) => {
                 return Ok(Some(

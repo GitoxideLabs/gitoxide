@@ -84,44 +84,18 @@ impl CachedMetadata {
     }
 }
 
-/// Metadata cache: maps worktree-relative paths (forward-slashed, case-normalized
-/// per [`normalize_path`]) to cached metadata.
-pub type MetadataCache = hashbrown::HashMap<BString, CachedMetadata>;
-
-/// Normalize a path for use as a cache key. Lower-cases on Windows (case-
-/// insensitive filesystem), which is the only target this module compiles on.
-#[inline]
-pub fn normalize_path(path: &[u8]) -> BString {
-    use bstr::ByteSlice;
-    path.to_str_lossy().to_lowercase().into()
-}
-
-/// Look up cached metadata for a worktree-relative path, avoiding per-lookup heap
-/// allocations on the common (ASCII) fast path.
+/// Metadata cache: maps worktree-relative paths (forward-slashed, in the exact
+/// case as enumerated from disk) to cached metadata.
 ///
-/// This is the hot path called once per index entry in `index_as_worktree`. A
-/// naive `cache.get(&normalize_path(rela_path))` allocates a fresh `BString`
-/// for the lowercased key 90 k+ times per status run — under multi-threaded
-/// allocator contention that shows up in wall-clock. This helper lowercases
-/// into a stack buffer when the path is ASCII and short, and falls back to
-/// [`normalize_path`] for the rare non-ASCII / oversized case.
-#[inline]
-pub fn lookup<'a>(cache: &'a MetadataCache, rela_path: &[u8]) -> Option<&'a CachedMetadata> {
-    const STACK_BUF: usize = 256;
-    if rela_path.len() <= STACK_BUF && rela_path.is_ascii() {
-        let mut buf = [0u8; STACK_BUF];
-        for (dst, &src) in buf.iter_mut().zip(rela_path.iter()) {
-            // ASCII-only fast lowercase: bit 0x20 toggles case for A-Z.
-            *dst = if src.is_ascii_uppercase() { src | 0x20 } else { src };
-        }
-        return cache.get(&buf[..rela_path.len()] as &[u8]);
-    }
-    // Slow path: non-ASCII (needs Unicode case folding) or path longer than
-    // the stack buffer. Cache stores Unicode-lowercased keys, so we match
-    // that here.
-    let key = normalize_path(rela_path);
-    cache.get(key.as_slice())
-}
+/// Lookups are case-sensitive: callers must query with the same case the walker
+/// emitted. On a case-insensitive worktree where the index path's case differs
+/// from disk, the lookup misses and `index_as_worktree` falls back to a live
+/// `lstat` — a few extra syscalls in a rare scenario. Folding cases together
+/// would silently merge distinct files on case-sensitive volumes (Windows
+/// per-directory case-sensitivity, NTFS POSIX mode), which would let the cache
+/// return one file's stat for a query about another and silently misreport
+/// tracked-file status. That's strictly worse than a few cache misses.
+pub type MetadataCache = hashbrown::HashMap<BString, CachedMetadata>;
 
 /// Prepare a metadata cache by walking the worktree in parallel using
 /// `GetFileInformationByHandleEx` with `FileIdBothDirectoryInfo`, skipping
@@ -327,13 +301,11 @@ mod windows {
                     };
 
                     let meta = cached_from_info(info);
-                    let normalized = normalize_path(rel_path.as_bytes());
-                    files.push((normalized, meta));
-
                     if is_dir && !is_reparse {
                         let child = join_utf16(dir_path, name_slice);
-                        subdirs.push((child, rel_path));
+                        subdirs.push((child, rel_path.clone()));
                     }
+                    files.push((rel_path.into_bytes().into(), meta));
                 }
 
                 if info.NextEntryOffset == 0 {
@@ -484,12 +456,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_normalize_path() {
-        assert_eq!(normalize_path(b"Foo/Bar.txt"), BString::from("foo/bar.txt"));
-        assert_eq!(normalize_path(b"UPPER/CASE"), BString::from("upper/case"));
-    }
-
-    #[test]
     fn test_cached_metadata_to_stat() {
         let cached = CachedMetadata {
             is_dir: false,
@@ -518,23 +484,22 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_round_trips_through_normalize_path() {
-        // Insert using the same path normalization the walker uses.
+    fn test_lookup_is_case_sensitive() {
+        // The cache is keyed by the exact path bytes the walker emits.
+        // Mixed-case lookups miss rather than silently aliasing onto the wrong
+        // file — a case-insensitive worktree falls back to a live `lstat` on miss.
         let mut cache = MetadataCache::default();
         let meta = CachedMetadata {
             size: 42,
             ..Default::default()
         };
-        cache.insert(normalize_path(b"src/foo.rs"), meta.clone());
+        cache.insert(BString::from(b"src/foo.rs".as_slice()), meta.clone());
 
-        // Exact-case and mixed-case both hit (Windows is case-insensitive).
-        assert!(lookup(&cache, b"src/foo.rs").is_some());
-        assert!(lookup(&cache, b"SRC/Foo.rs").is_some());
+        assert!(cache.get(&b"src/foo.rs"[..]).is_some());
+        assert!(cache.get(&b"SRC/Foo.rs"[..]).is_none());
 
-        // Non-ASCII path routes through the fallback allocating path; exact-key
-        // round-trip still works.
-        cache.insert(normalize_path("ünïcode.txt".as_bytes()), meta);
-        assert!(lookup(&cache, "ünïcode.txt".as_bytes()).is_some());
+        cache.insert(BString::from("ünïcode.txt".as_bytes()), meta);
+        assert!(cache.get("ünïcode.txt".as_bytes()).is_some());
     }
 
     #[test]
@@ -556,8 +521,8 @@ mod tests {
         let cache = prepare(&temp_dir, Some(1), || |_: &bstr::BStr| false).unwrap();
 
         assert!(!cache.is_empty());
-        assert!(cache.contains_key(&normalize_path(b"test.txt")));
-        assert!(cache.contains_key(&normalize_path(b"subdir/nested.txt")));
+        assert!(cache.contains_key(&b"test.txt"[..]));
+        assert!(cache.contains_key(&b"subdir/nested.txt"[..]));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
