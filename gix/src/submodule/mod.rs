@@ -237,6 +237,11 @@ impl Submodule<'_> {
     ///
     /// Also note that the returned path may not actually exist.
     pub fn git_dir_try_old_form(&self) -> Result<PathBuf, git_dir_try_old_form::Error> {
+        // Validate the submodule name eagerly to preserve the modules-directory
+        // traversal guard (GHSA-fr8x-3vfx-f45h, GHSA-p3hw-mv63-rf9w) even when the
+        // gitlink branch below would otherwise return without going through
+        // `self.git_dir()` / `validated_name()`.
+        self.validated_name()?;
         let worktree_gitdir = self.worktree_gitdir()?;
         if worktree_gitdir.is_dir() {
             return Ok(worktree_gitdir);

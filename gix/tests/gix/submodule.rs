@@ -574,6 +574,26 @@ mod advisory {
             "the attacker-controlled repository does indeex exist at {}",
             redirected_repo.display()
         );
+
+        // Defense-in-depth: even if a parseable `.git` gitlink is planted in the
+        // submodule's worktree, the name validation must still reject the malicious
+        // entry rather than short-circuiting via the gitlink-following path.
+        let worktree_dot_git = repo_dir.join("deps").join("demo").join(".git");
+        std::fs::write(&worktree_dot_git, b"gitdir: ../../../escaped-target.git\n")?;
+        assert!(matches!(
+            sm.git_dir_try_old_form(),
+            Err(gix::submodule::git_dir_try_old_form::Error::GitDir(
+                gix_validate::submodule::name::Error::ParentComponent
+            ))
+        ));
+        assert!(matches!(
+            sm.open(),
+            Err(gix::submodule::open::Error::GitDir(
+                gix::submodule::git_dir_try_old_form::Error::GitDir(
+                    gix_validate::submodule::name::Error::ParentComponent
+                )
+            ))
+        ));
         Ok(())
     }
 
