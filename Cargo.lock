@@ -1831,6 +1831,7 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "pretty_assertions",
+ "rustix",
  "thiserror 2.0.18",
 ]
 

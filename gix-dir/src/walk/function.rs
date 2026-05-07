@@ -7,7 +7,7 @@ use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
     EntryRef, entry,
-    walk::{Action, Context, Delegate, Error, ForDeletionMode, Options, Outcome, classify, readdir},
+    walk::{Action, Context, Delegate, Error, ForDeletionMode, Options, Outcome, classify, readdir, untracked_cache},
 };
 
 /// A function to perform a git-style, unsorted, directory walk.
@@ -105,6 +105,10 @@ pub fn walk(
     }
 
     let mut state = readdir::State::new(worktree_root, ctx.current_dir, options.for_deletion.is_some());
+    let untracked_cache = options
+        .use_untracked_cache
+        .then(|| untracked_cache::validate(worktree_root, ctx.index, &ctx, options))
+        .flatten();
     let may_collapse = root != worktree_root && state.may_collapse(&current);
     let (action, _) = readdir::recursive(
         may_collapse,
@@ -116,6 +120,10 @@ pub fn walk(
         delegate,
         &mut out,
         &mut state,
+        untracked_cache.as_ref(),
+        untracked_cache
+            .as_ref()
+            .map(|cache: &untracked_cache::Validated<'_>| cache.root_dir()),
     )?;
     if action.is_continue() {
         state.emit_remaining(may_collapse, options, &mut out, delegate);
