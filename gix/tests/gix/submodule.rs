@@ -127,6 +127,41 @@ mod open {
         Ok(())
     }
 
+    /// Reproducer: when the submodule's worktree `.git` is a gitlink file,
+    /// `git_dir_try_old_form()` must follow the `gitdir:` pointer rather than
+    /// re-deriving the path from the submodule's name. If the submodule was
+    /// renamed or its gitdir relocated, name-derivation opens the wrong repo.
+    #[test]
+    fn gitlink_target_takes_precedence_over_name_in_git_dir_resolution() -> crate::Result {
+        let repo = repo("submodule-with-divergent-gitlink")?;
+        let sm = repo
+            .submodules()?
+            .expect("modules present")
+            .next()
+            .expect("one submodule");
+
+        let resolved = sm.git_dir_try_old_form()?;
+        let expected = repo.common_dir().join("modules").join("inner");
+
+        assert_eq!(
+            resolved.canonicalize()?,
+            expected.canonicalize()?,
+            "git_dir_try_old_form() must follow the `gitdir:` pointer in the worktree's `.git` file; \
+             got {resolved:?}"
+        );
+
+        // A modern gitlink-form submodule whose target diverges from the name-derived
+        // path must still be classified as modern, not old-form. Old-form means the
+        // gitdir lives *inside* the worktree directory, which is not the case here.
+        let state = sm.state()?;
+        assert!(state.repository_exists, "the gitlink target exists on disk");
+        assert!(
+            !state.is_old_form,
+            "modern gitlink-form submodule must not be classified as old form"
+        );
+        Ok(())
+    }
+
     /// Reproducer for GHSA-p3hw-mv63-rf9w: `Submodule::open()` must not inherit
     /// `git_dir_trust` from the parent repository because doing so skips recomputing
     /// trust for the submodule git-dir and can bypass ownership-based trust checks.

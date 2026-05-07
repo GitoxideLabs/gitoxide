@@ -167,4 +167,28 @@ git clone with-submodules not-a-submodule
   git add m1 && git commit -m "no submodule in index and commit, but in configuration"
 )
 
+git init submodule-with-divergent-gitlink
+(cd submodule-with-divergent-gitlink
+  # Add a submodule under a nested path so the name-derived gitdir is
+  # `.git/modules/outer/inner`.
+  git submodule add ../module1 outer/inner
+  git commit -m "add submodule outer/inner"
+
+  # Relocate the actual gitdir to `.git/modules/inner` (no `outer/` segment).
+  mv .git/modules/outer/inner .git/modules/inner
+  rmdir .git/modules/outer
+
+  # Fix `core.worktree` for the new gitdir location (operate on the config
+  # file directly to avoid worktree discovery via the now-stale value).
+  git config --file .git/modules/inner/config core.worktree ../../../outer/inner
+
+  # Rewrite the worktree's `.git` gitlink to point at the new gitdir.
+  printf 'gitdir: ../../.git/modules/inner\n' > outer/inner/.git
+
+  # Plant a *different* repo at the original name-derived path with a
+  # different HEAD so opening the wrong place is observable.
+  git clone --bare ../module1 .git/modules/outer/inner
+  git -C .git/modules/outer/inner update-ref HEAD "$(git -C ../module1 rev-parse @~1)"
+)
+
 git init unborn
