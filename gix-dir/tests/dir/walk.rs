@@ -1,5 +1,6 @@
-use std::{collections::BTreeSet, sync::atomic::AtomicBool};
+use std::{collections::BTreeSet, process::Command, sync::atomic::AtomicBool};
 
+use bstr::ByteSlice;
 use gix_dir::{
     EntryRef, entry,
     entry::{Kind::*, PathspecMatch::*, Property::*, Status::*},
@@ -3013,6 +3014,572 @@ fn worktree_root_can_be_symlink() -> crate::Result {
     );
     Ok(())
 }
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn untracked_cache_can_avoid_read_dir_calls() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+    let ((uncached_out, _root), uncached_entries) = collect_with_repo_globals(&root, opts, false)?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "a valid UNTR cache should satisfy the walk without opening directories"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the fallback implementation should still hit the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "cached and uncached walks should produce identical output"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "collapsed untracked entries should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+fn invalidated_untracked_cache_falls_back_to_the_filesystem() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    std::fs::write(root.join("later"), "later")?;
+
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing the root directory contents must invalidate the cache"
+    );
+    assert!(
+        entries.iter().any(|(entry, _)| entry.rela_path.as_bstr() == "later"),
+        "the fallback traversal should see newly added files"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "fallback output should still match git status after invalidation"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn global_excludes_change_disables_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let excludes_file = root.join("global-excludes");
+    std::fs::write(&excludes_file, "global-ignored/\n")?;
+    git(
+        &root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("core.excludesFile"),
+            excludes_file.as_os_str(),
+        ],
+    )?;
+    std::fs::create_dir_all(root.join("global-ignored"))?;
+    std::fs::write(root.join("global-ignored/file"), "ignored")?;
+    refresh_untracked_cache(&root)?;
+
+    std::fs::write(&excludes_file, "")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, Some(&excludes_file), &[])?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing core.excludesFile contents must disable the UNTR fast path"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "global-ignored"),
+        "the filesystem fallback should see entries that were formerly hidden by a global exclude"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "global exclude changes should still produce git-compatible output"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn info_exclude_change_disables_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let info_dir = root.join(".git/info");
+    std::fs::create_dir_all(&info_dir)?;
+    let info_exclude = info_dir.join("exclude");
+    std::fs::write(&info_exclude, "info-excluded/\n")?;
+    std::fs::create_dir_all(root.join("info-excluded"))?;
+    std::fs::write(root.join("info-excluded/file"), "excluded")?;
+    refresh_untracked_cache(&root)?;
+
+    // Now change info/exclude so the cache's recorded stat+OID no longer matches.
+    std::fs::write(&info_exclude, "")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing .git/info/exclude contents must disable the UNTR fast path"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "info-excluded"),
+        "the filesystem fallback should see entries that were formerly hidden by info/exclude"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "info/exclude changes should still produce git-compatible output"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn global_excludes_file_present_and_unchanged_allows_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let excludes_file = root.join("global-excludes");
+    std::fs::write(&excludes_file, "global-ignored/\n")?;
+    std::fs::create_dir_all(root.join("global-ignored"))?;
+    std::fs::write(root.join("global-ignored/file"), "ignored")?;
+    git(
+        &root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("core.excludesFile"),
+            excludes_file.as_os_str(),
+        ],
+    )?;
+    refresh_untracked_cache(&root)?;
+
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, Some(&excludes_file), &[])?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "cache must serve all directories without read_dir when excludes_file is present but unchanged"
+    );
+    assert_eq!(
+        out.untracked_cache_hits,
+        out.untracked_cache_hits, // at least one hit
+        "cache hits should be non-zero"
+    );
+    assert!(
+        out.untracked_cache_hits > 0,
+        "expected cache hits but got 0 — the UNTR decode or excludes_file stat validation is broken"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "global-ignored"),
+        "globally-ignored directory must not appear in output"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "output with unchanged global excludes should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn nested_gitignore_change_invalidates_cached_subtree() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    std::fs::write(root.join("tracked/.gitignore"), "")?;
+    git(&root, ["add", "tracked/.gitignore"])?;
+    git(&root, ["commit", "-m", "tracked ignore"])?;
+    refresh_untracked_cache(&root)?;
+
+    std::fs::write(root.join("tracked/.gitignore"), "new/\n")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing a nested .gitignore should invalidate the cached subtree"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "tracked/new"),
+        "the fallback traversal should honor the updated ignore file"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "nested .gitignore invalidation should still agree with git status"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn non_empty_pathspec_never_uses_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, None, &["tracked/"])?;
+    let ((uncached_out, _root), uncached_entries) =
+        collect_with_repo_globals_opts(&root, opts, false, None, &["tracked/"])?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "a non-empty pathspec should disable the UNTR fast path"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the uncached comparison should still traverse the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "pathspec filtering should match the uncached traversal"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &["tracked/"])?,
+        "pathspec-filtered collapsed output should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+// On Windows, NTFS flushes directory metadata asynchronously. A directory that was
+// recently modified (like `tracked` here, after `tracked/new` was created) may report
+// a different `LastWriteTime` via different APIs or at different instants. This causes
+// the IOUC stat check for `tracked` to fail even after two `git status` runs, making
+// `read_dir_calls` flaky. Skip rather than accept a racy assertion.
+#[cfg_attr(windows, ignore)]
+fn matching_mode_with_tracked_intermediate_dirs_matches_uncached() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: Matching,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+    let ((uncached_out, _root), uncached_entries) = collect_with_repo_globals(&root, opts, false)?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "matching mode should still use a valid UNTR cache"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the comparison path should still hit the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "matching mode output should match the uncached traversal"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Matching, &[])?,
+        "matching-mode untracked entries should match git status -uall"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn emit_tracked_true_bypasses_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        emit_tracked: true,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "emit_tracked=true must disable the UNTR fast path since the cache only records untracked entries"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "tracked/keep"),
+        "tracked file must appear in output when emit_tracked=true"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn cached_subdir_becoming_repository_is_emitted() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    // Turn `new/` (a regular untracked dir in the cache) into a nested repo.
+    // This changes `new/`'s mtime but not root's, so root's cache entry stays valid.
+    git(&root, ["init", "new"])?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert!(
+        entries.iter().any(|(entry, _)| {
+            entry.rela_path.as_bstr() == "new" && entry.disk_kind == Some(gix_dir::entry::Kind::Repository)
+        }),
+        "a cached subdir that became a repository must still appear in output, but entries were: {:?}",
+        entries
+            .iter()
+            .map(|(e, _)| e.rela_path.as_bstr().to_owned())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "output must match git status after subdir becomes a repository"
+    );
+    let _ = out;
+    Ok(())
+}
+
+fn repo_with_untracked_cache() -> crate::Result<std::path::PathBuf> {
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let base = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+    let root = base.join("repo");
+    std::fs::create_dir(&root)?;
+    git(&root, ["init"])?;
+    git(&root, ["config", "status.showUntrackedFiles", "all"])?;
+    git(&root, ["config", "user.name", "a"])?;
+    git(&root, ["config", "user.email", "a@example.com"])?;
+    std::fs::create_dir(root.join("tracked"))?;
+    std::fs::write(root.join("tracked/keep"), "keep")?;
+    git(&root, ["add", "tracked/keep"])?;
+    git(&root, ["commit", "-m", "init"])?;
+    std::fs::create_dir_all(root.join("tracked/new"))?;
+    std::fs::create_dir_all(root.join("new"))?;
+    std::fs::write(root.join("tracked/new/file"), "tracked-new")?;
+    std::fs::write(root.join("new/file"), "new")?;
+    refresh_untracked_cache(&root)?;
+    Ok(root)
+}
+
+fn git(cwd: &std::path::Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> crate::Result {
+    let status = Command::new("git").args(args).current_dir(cwd).status()?;
+    assert!(status.success());
+    Ok(())
+}
+
+fn git_output(
+    cwd: &std::path::Path,
+    args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+) -> crate::Result<std::process::Output> {
+    Ok(Command::new("git").args(args).current_dir(cwd).output()?)
+}
+
+fn effective_excludes_file(root: &std::path::Path) -> crate::Result<Option<std::path::PathBuf>> {
+    let output = git_output(
+        root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("--path"),
+            std::ffi::OsStr::new("core.excludesFile"),
+        ],
+    )?;
+    if output.status.success() {
+        let path = gix_path::try_from_bstr(output.stdout.as_bstr().trim().as_bstr())
+            .ok()
+            .map(std::borrow::Cow::into_owned);
+        return Ok(path);
+    }
+    // No core.excludesFile configured — fall back to the XDG default, matching gix's
+    // `assemble_exclude_globals` which calls `xdg_config_path("ignore")`.
+    let xdg_ignore = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .map(|base| base.join("git").join("ignore"));
+    Ok(xdg_ignore.filter(|p| p.exists()))
+}
+
+fn refresh_untracked_cache(root: &std::path::Path) -> crate::Result {
+    git(root, ["update-index", "--force-untracked-cache"])?;
+    git(root, ["status", "--porcelain"])?;
+    // Run a second time so git validates the recorded directory stats and sets the valid
+    // bitmap. Some git versions only populate the structure on the first run and mark
+    // entries valid on the second. The double-run also lets the filesystem settle so the
+    // recorded stats match what gix will read.
+    git(root, ["status", "--porcelain"])?;
+    assert!(
+        index_has_untracked_cache(root),
+        "test repository must have a UNTR extension"
+    );
+    Ok(())
+}
+
+fn index_has_untracked_cache(root: &std::path::Path) -> bool {
+    std::fs::read(root.join(".git/index"))
+        .ok()
+        .and_then(|bytes| {
+            gix_index::State::from_bytes(
+                &bytes,
+                std::time::UNIX_EPOCH.into(),
+                gix_index::hash::Kind::Sha1,
+                Default::default(),
+            )
+            .ok()
+            .map(|(state, _)| state.untracked().is_some())
+        })
+        .unwrap_or(false)
+}
+
+type CollectedEntries = Vec<(gix_dir::Entry, Option<entry::Status>)>;
+type CollectOutcome = ((gix_dir::walk::Outcome, std::path::PathBuf), CollectedEntries);
+
+#[derive(Clone, Copy)]
+enum GitUntrackedMode {
+    Collapsed,
+    Matching,
+}
+
+fn git_untracked_paths(
+    root: &std::path::Path,
+    mode: GitUntrackedMode,
+    pathspecs: &[&str],
+) -> crate::Result<BTreeSet<String>> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root).arg("status").arg("--porcelain").arg(match mode {
+        GitUntrackedMode::Collapsed => "--untracked-files=normal",
+        GitUntrackedMode::Matching => "--untracked-files=all",
+    });
+    if !pathspecs.is_empty() {
+        cmd.arg("--");
+        cmd.args(pathspecs);
+    }
+    let output = cmd.output()?;
+    assert!(output.status.success());
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .map(|path| path.trim_end_matches('/').to_owned())
+        .collect())
+}
+
+fn untracked_paths(entries: &[(gix_dir::Entry, Option<entry::Status>)]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|(entry, _)| entry.status == Untracked)
+        .map(|(entry, _)| entry.rela_path.to_string())
+        .collect()
+}
+
+fn collect_with_repo_globals(
+    root: &std::path::Path,
+    opts: gix_dir::walk::Options<'static>,
+    use_cache: bool,
+) -> crate::Result<CollectOutcome> {
+    collect_with_repo_globals_opts(root, opts, use_cache, None, &[])
+}
+
+fn collect_with_repo_globals_opts(
+    root: &std::path::Path,
+    opts: gix_dir::walk::Options<'static>,
+    use_cache: bool,
+    excludes_file: Option<&std::path::Path>,
+    pathspecs: &[&str],
+) -> crate::Result<CollectOutcome> {
+    let git_dir = root.join(".git");
+    let bytes = std::fs::read(git_dir.join("index"))?;
+    let (mut index, _) = gix_index::State::from_bytes(
+        &bytes,
+        std::time::UNIX_EPOCH.into(),
+        gix_index::hash::Kind::Sha1,
+        Default::default(),
+    )
+    .expect("valid index");
+    for entry in index
+        .entries_mut()
+        .iter_mut()
+        .filter(|entry| !entry.flags.contains(gix_index::entry::Flags::SKIP_WORKTREE))
+    {
+        entry.flags |= gix_index::entry::Flags::UPTODATE;
+    }
+
+    let parse = gix_ignore::search::Ignore { support_precious: true };
+    let mut buf = Vec::new();
+    let excludes_file = match excludes_file {
+        Some(path) => Some(path.to_owned()),
+        None => effective_excludes_file(root)?,
+    };
+    let globals = gix_ignore::Search::from_git_dir(&git_dir, excludes_file, &mut buf, parse)?;
+    let mut stack = gix_worktree::Stack::from_state_and_ignore_case(
+        root,
+        false,
+        gix_worktree::stack::State::IgnoreStack(gix_worktree::stack::state::Ignore::new(
+            Default::default(),
+            globals,
+            None,
+            gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            parse,
+        )),
+        &index,
+        index.path_backing(),
+    );
+    let pathspecs = pathspecs
+        .iter()
+        .map(|pattern| {
+            gix_pathspec::Pattern::from_bytes(pattern.as_bytes(), Default::default()).expect("valid pathspec")
+        })
+        .collect::<Vec<_>>();
+    let mut search =
+        gix_pathspec::Search::from_specs(pathspecs, None::<&std::path::Path>, root).expect("empty pathspec is valid");
+    let git_dir_realpath = gix_path::realpath_opts(&git_dir, root, gix_path::realpath::MAX_SYMLINKS)?;
+    let lookup = index.prepare_icase_backing();
+    let mut collect = gix_dir::walk::delegate::Collect::default();
+    let opts = gix_dir::walk::Options {
+        use_untracked_cache: use_cache,
+        ..opts
+    };
+    let out = walk(
+        root,
+        gix_dir::walk::Context {
+            should_interrupt: None,
+            git_dir_realpath: &git_dir_realpath,
+            current_dir: root,
+            index: &index,
+            ignore_case_index_lookup: Some(&lookup),
+            pathspec: &mut search,
+            pathspec_attributes: &mut |_, _, _, _| false,
+            excludes: Some(&mut stack),
+            objects: &gix_object::find::Never,
+            explicit_traversal_root: None,
+        },
+        opts,
+        &mut collect,
+    )?;
+    Ok((out, collect.into_entries_by_path()))
+}
+
 #[test]
 fn root_may_not_go_through_dot_git() -> crate::Result {
     let root = fixture("with-nested-dot-git");
