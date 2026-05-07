@@ -120,7 +120,7 @@ interrupt = ["dep:signal-hook", "gix-tempfile/signals", "dep:parking_lot"]
 index = ["dep:gix-index"]
 
 ## Support directory walks with Git-style annoations.
-dirwalk = ["dep:gix-dir", "attributes", "excludes"]
+dirwalk = ["dep:gix-dir", "gix-dir?/attributes", "attributes", "excludes"]
 
 ## Access to credential helpers, which provide credentials for URLs.
 # Note that `gix-negotiate` just piggibacks here, as 'credentials' is equivalent to 'fetch & push' right now.

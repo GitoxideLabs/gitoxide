@@ -68,9 +68,7 @@ impl Default for Submodule {
 #[allow(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    DirwalkOptions(#[from] config::boolean::Error),
-    #[error(transparent)]
-    ConfigureUntrackedFiles(#[from] config::key::GenericErrorWithValue),
+    DirwalkOptions(#[from] config::untracked_cache::Error),
 }
 
 /// Status

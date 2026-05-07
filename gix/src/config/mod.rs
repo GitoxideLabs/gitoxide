@@ -473,6 +473,12 @@ pub mod boolean {
 }
 
 ///
+pub mod untracked_cache {
+    /// The error produced when failing to parse `core.untrackedCache` from configuration.
+    pub type Error = super::key::GenericErrorWithValue;
+}
+
+///
 pub mod unsigned_integer {
     /// The error produced when failing to parse a signed integer from configuration.
     pub type Error = super::key::Error<gix_config::value::Error, 'k', 'u'>;
