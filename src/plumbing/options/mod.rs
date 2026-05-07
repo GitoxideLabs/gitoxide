@@ -679,6 +679,7 @@ pub mod fetch {
 pub mod clone {
     use std::{ffi::OsString, num::NonZeroU32, path::PathBuf};
 
+    use gix::bstr::BString;
     use gix::remote::fetch::Shallow;
 
     #[derive(Debug, clap::Parser)]
@@ -704,6 +705,13 @@ pub mod clone {
         /// The name of the reference to check out.
         #[clap(long = "ref", value_parser = crate::shared::AsPartialRefName, value_name = "REF_NAME")]
         pub ref_name: Option<gix::refs::PartialName>,
+
+        /// The revision to check out after cloning.
+        ///
+        /// This is useful if you want to clone a specific commit that is not a branch tip.
+        /// It will fetch the default branch and then attempt to check out this revision.
+        #[clap(long = "revision", visible_alias = "rev", value_parser = crate::shared::AsBString, value_name = "REVISION")]
+        pub revision: Option<BString>,
 
         /// The directory to initialize with the new repository and to which all data should be written.
         pub directory: Option<PathBuf>,

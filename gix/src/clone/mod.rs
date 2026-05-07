@@ -42,6 +42,9 @@ pub struct PrepareFetch {
     /// The name of the reference to fetch. If `None`, the reference pointed to by `HEAD` will be checked out.
     #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
     ref_name: Option<gix_ref::PartialName>,
+    /// The revision to check out after fetching. If `None`, the reference pointed to by `HEAD` or `ref_name` will be checked out.
+    #[cfg_attr(not(feature = "blocking-network-client"), allow(dead_code))]
+    revision: Option<BString>,
 }
 
 /// The error returned by [`PrepareFetch::new()`].
@@ -122,6 +125,7 @@ impl PrepareFetch {
             configure_connection: None,
             shallow: remote::fetch::Shallow::NoChange,
             ref_name: None,
+            revision: None,
         })
     }
 }

@@ -60,6 +60,17 @@ impl PrepareFetch {
         self.ref_name = name.map(TryInto::try_into).transpose()?.map(ToOwned::to_owned);
         Ok(self)
     }
+
+    /// Set the revision to check out after fetching.
+    ///
+    /// If `None`, the `HEAD` will be used, which is the default.
+    pub fn with_revision<T>(mut self, revision: Option<T>) -> Self
+    where
+        T: Into<BString>,
+    {
+        self.revision = revision.map(Into::into);
+        self
+    }
 }
 
 /// Consumption

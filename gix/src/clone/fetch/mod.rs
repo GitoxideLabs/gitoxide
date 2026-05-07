@@ -52,6 +52,12 @@ pub enum Error {
     RefMap(#[from] crate::remote::ref_map::Error),
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
+    #[cfg(feature = "revision")]
+    #[error(transparent)]
+    RevisionResolve(#[from] crate::revision::spec::parse::single::Error),
+    #[cfg(feature = "revision")]
+    #[error(transparent)]
+    RevisionParse(#[from] gix_error::Error),
 }
 
 /// Modification
@@ -298,6 +304,24 @@ impl PrepareFetch {
             remote_name.as_ref(),
             self.ref_name.as_ref(),
         )?;
+
+        #[cfg(feature = "revision")]
+        if let Some(rev) = &self.revision {
+            let id = repo.rev_parse_single(rev.as_bstr())?;
+            repo.edit_reference(gix_ref::transaction::RefEdit {
+                change: gix_ref::transaction::Change::Update {
+                    log: gix_ref::transaction::LogChange {
+                        mode: gix_ref::transaction::RefLog::AndReference,
+                        force_create_reflog: false,
+                        message: reflog_message.clone(),
+                    },
+                    expected: gix_ref::transaction::PreviousValue::Any,
+                    new: gix_ref::Target::Object(id.detach()),
+                },
+                name: "HEAD".try_into().expect("valid"),
+                deref: false,
+            })?;
+        }
 
         Ok((self.repo.take().expect("still present"), outcome))
     }

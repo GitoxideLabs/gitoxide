@@ -173,6 +173,19 @@ mod blocking_io {
     }
 
     #[test]
+    fn clone_by_object_id() -> crate::Result {
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let hex_id = "2d9d136fb0765f2e24c44a0f91984318d580d03b";
+        let (repo, _out) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
+            .with_ref_name(Some(hex_id))?
+            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        assert!(repo.head()?.is_detached());
+        assert_eq!(repo.head_id()?.to_string(), hex_id);
+        Ok(())
+    }
+
+    #[test]
     fn from_non_shallow_then_deepen_then_deepen_since_to_unshallow() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
