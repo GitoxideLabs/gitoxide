@@ -1,7 +1,6 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 use gix_features::{
-    parallel::in_parallel_with_slice,
     progress::{self, DynNestedProgress, Progress},
     threading,
     threading::{Mutable, OwnShared},
@@ -139,47 +138,24 @@ where
         let (mut root_items, mut child_items_vec) = self.take_root_and_child();
         let child_items = ItemSliceSync::new(&mut child_items_vec);
         let child_items = &child_items;
-        in_parallel_with_slice(
-            &mut root_items,
-            thread_limit,
-            {
-                {
-                    let object_progress = object_progress.clone();
-                    move |thread_index| resolve::State {
-                        delta_bytes: Vec::<u8>::with_capacity(4096),
-                        fully_resolved_delta_bytes: Vec::<u8>::with_capacity(4096),
-                        progress: Box::new(
-                            threading::lock(&object_progress).add_child(format!("thread {thread_index}")),
-                        ),
-                        resolve: resolve.clone(),
-                        modify_base: inspect_object.clone(),
-                        child_items,
-                    }
-                }
-            },
-            {
-                move |node, state, threads_left, should_interrupt| {
-                    // SAFETY: This invariant is upheld since `child_items` and `node` come from the same Tree.
-                    // This means we can rely on Tree's invariant that node.children will be the only `children` array in
-                    // for nodes in this tree that will contain any of those children.
-                    #[allow(unsafe_code)]
-                    unsafe {
-                        resolve::deltas(
-                            object_counter.clone(),
-                            size_counter.clone(),
-                            node,
-                            state,
-                            resolve_data,
-                            object_hash.len_in_bytes(),
-                            threads_left,
-                            should_interrupt,
-                        )
-                    }
-                }
-            },
-            || (!should_interrupt.load(Ordering::Relaxed)).then(|| std::time::Duration::from_millis(50)),
-            |_| (),
-        )?;
+
+        // SAFETY: root_items and child_items come from the same Tree — the Tree invariant holds.
+        #[allow(unsafe_code)]
+        unsafe {
+            resolve::resolve_all_nodes(
+                &mut root_items,
+                child_items,
+                thread_limit,
+                object_counter,
+                size_counter,
+                &gix_features::progress::Discard,
+                resolve,
+                resolve_data,
+                inspect_object,
+                object_hash.len_in_bytes(),
+                should_interrupt,
+            )?;
+        }
 
         threading::lock(&object_progress).show_throughput(start);
         size_progress.show_throughput(start);
