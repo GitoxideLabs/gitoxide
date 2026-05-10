@@ -65,13 +65,13 @@ where
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
         let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
+        // Best-effort: if the prep walk fails (missing workdir, syscall error),
+        // silently fall through to stat-based status rather than abort.
         #[cfg(windows)]
-        let metadata_cache = match self.metadata_cache {
-            crate::status::MetadataCacheConfig::Provided(cache) => Some(cache),
-            crate::status::MetadataCacheConfig::Disabled => None,
-            // Best-effort: if the prep walk fails (missing workdir, syscall error),
-            // silently fall through to stat-based status rather than abort.
-            crate::status::MetadataCacheConfig::Auto => crate::status::build_metadata_cache(self.repo, None).ok(),
+        let worktree_stats = if self.precompute_worktree_stats {
+            crate::status::precomputed_worktree_stats(self.repo, &index, None)
+        } else {
+            None
         };
         #[cfg(feature = "parallel")]
         {
@@ -143,7 +143,7 @@ where
                             &should_interrupt,
                             options,
                             #[cfg(windows)]
-                            metadata_cache.as_ref(),
+                            worktree_stats.as_ref(),
                         )?;
                         Ok(Outcome {
                             index_worktree: out,
@@ -208,7 +208,7 @@ where
                 &should_interrupt,
                 options,
                 #[cfg(windows)]
-                metadata_cache.as_ref(),
+                worktree_stats.as_ref(),
             )?;
             let mut iter = Iter {
                 items: Vec::new().into_iter(),

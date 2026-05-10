@@ -13,7 +13,7 @@ use gix_object::FindExt;
 
 use crate::index_as_worktree::types::ConflictIndexEntry;
 #[cfg(windows)]
-use crate::metadata_cache::{CachedMetadata, MetadataCache};
+use crate::worktree_stats::{FileMetadata, WorktreeStats};
 use crate::{
     AtomicU64, SymlinkCheck,
     index_as_worktree::{
@@ -23,65 +23,6 @@ use crate::{
     },
     is_dir_to_mode,
 };
-
-/// Windows-only union of live `lstat` metadata and pre-cached metadata, so
-/// `compute_status` sees one shape. Other platforms use `gix_index::fs::Metadata`
-/// directly.
-#[cfg(windows)]
-enum FileMetadata<'a> {
-    Live(gix_index::fs::Metadata),
-    Cached(&'a CachedMetadata),
-}
-
-#[cfg(windows)]
-impl FileMetadata<'_> {
-    fn is_dir(&self) -> bool {
-        match self {
-            Self::Live(m) => m.is_dir(),
-            Self::Cached(c) => c.is_dir,
-        }
-    }
-
-    fn is_symlink(&self) -> bool {
-        match self {
-            Self::Live(m) => m.is_symlink(),
-            Self::Cached(c) => c.is_symlink,
-        }
-    }
-
-    fn len(&self) -> u64 {
-        match self {
-            Self::Live(m) => m.len(),
-            Self::Cached(c) => c.size,
-        }
-    }
-
-    fn to_stat(&self) -> Result<gix_index::entry::Stat, std::time::SystemTimeError> {
-        match self {
-            Self::Live(m) => gix_index::entry::Stat::from_fs(m),
-            Self::Cached(c) => Ok(c.to_stat()),
-        }
-    }
-
-    fn mode_change(
-        &self,
-        entry_mode: gix_index::entry::Mode,
-        has_symlinks: bool,
-        executable_bit: bool,
-    ) -> Option<gix_index::entry::mode::Change> {
-        match self {
-            Self::Live(m) => entry_mode.change_to_match_fs(m, has_symlinks, executable_bit),
-            Self::Cached(c) => entry_mode.change_to_match_fs_with_values(
-                !c.is_dir && !c.is_symlink, // is_file: regular file (not dir, not symlink)
-                c.is_dir,
-                c.is_symlink,
-                c.is_executable,
-                has_symlinks,
-                executable_bit,
-            ),
-        }
-    }
-}
 
 /// Calculates the changes that need to be applied to an `index` to match the state of the `worktree` and makes them
 /// observable in `collector`, along with information produced by `compare` which gets to see blobs that may have changes, and
@@ -125,7 +66,7 @@ pub fn index_as_worktree<'index, T, U, Find, E>(
         filter,
         should_interrupt,
         #[cfg(windows)]
-        metadata_cache,
+        worktree_stats,
     }: Context<'_>,
     options: Options,
 ) -> Result<Outcome, Error>
@@ -186,7 +127,7 @@ where
                     filter,
                     options,
                     #[cfg(windows)]
-                    metadata_cache,
+                    worktree_stats,
 
                     skipped_by_pathspec,
                     skipped_by_entry_flags,
@@ -293,10 +234,10 @@ struct State<'a, 'b> {
     filter: gix_filter::Pipeline,
     path_backing: &'b gix_index::PathStorageRef,
     options: &'a Options,
-    /// Optional pre-populated metadata cache for faster status checks on Windows.
-    /// Cache lookups happen before falling back to per-file syscalls.
+    /// Optional precomputed worktree stats for faster status checks on Windows.
+    /// Lookups happen before falling back to per-file syscalls.
     #[cfg(windows)]
-    metadata_cache: Option<&'a MetadataCache>,
+    worktree_stats: Option<&'a WorktreeStats>,
 
     skipped_by_pathspec: &'a AtomicUsize,
     skipped_by_entry_flags: &'a AtomicUsize,
@@ -444,11 +385,11 @@ impl<'index> State<'_, 'index> {
             Err(err) => return Err(Error::Io(err.into())),
         };
 
-        // Acquire metadata. On Windows we consult the metadata cache first and
+        // Acquire metadata. On Windows we consult the precomputed stats first and
         // only fall back to a syscall on miss; on other platforms per-file
         // `lstat` is already fast, so we just do the syscall directly.
         #[cfg(windows)]
-        let metadata = if let Some(cached) = self.metadata_cache.and_then(|c| c.get(rela_path)) {
+        let metadata = if let Some(cached) = self.worktree_stats.and_then(|c| c.get(rela_path)) {
             FileMetadata::Cached(cached)
         } else {
             self.symlink_metadata_calls.fetch_add(1, Ordering::Relaxed);

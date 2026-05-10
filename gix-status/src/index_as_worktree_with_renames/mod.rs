@@ -154,7 +154,7 @@ pub(super) mod function {
                                 filter,
                                 should_interrupt: ctx.should_interrupt,
                                 #[cfg(windows)]
-                                metadata_cache: ctx.metadata_cache,
+                                worktree_stats: ctx.worktree_stats,
                             },
                             options.tracked_file_modifications,
                         )

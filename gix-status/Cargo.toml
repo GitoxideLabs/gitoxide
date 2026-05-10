@@ -52,7 +52,8 @@ portable-atomic = "1"
 windows-sys = { version = "0.61.1", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
-    # For SECURITY_ATTRIBUTES in CreateFileW (used by metadata_cache::prepare on Windows).
+    # Needed for `SECURITY_ATTRIBUTES` in the signature of `CreateFileW`,
+    # which is gated behind this windows-sys feature even when the call passes null.
     "Win32_Security",
 ] }
 

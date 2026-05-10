@@ -37,18 +37,14 @@ use portable_atomic::AtomicU64;
 pub mod index_as_worktree;
 pub use index_as_worktree::function::index_as_worktree;
 
-/// The metadata cache is a **Windows-only** optimization. Its job is to skip
-/// per-file `lstat` calls by pre-populating stat results via one batched
-/// directory enumeration. That trade only pays off where per-file stat is
-/// expensive (Windows), not on Linux/macOS where `lstat` is sub-microsecond.
-/// A Linux-friendly cache would almost certainly be keyed by *directory* (à la
-/// git's `UNTRACKED_CACHE`) rather than by file path, so forcing this type to
-/// exist there would encourage the wrong abstraction. Keep the two separate;
-/// lift this gate if a cross-platform use case actually appears.
+/// **Windows-only** worktree metadata preprocessing. Before per-entry
+/// modification checks, one batched parallel directory walk gathers stat
+/// results so that `index_as_worktree` can look them up instead of issuing a
+/// per-file `lstat`. This trade only pays off where per-file stat is expensive
+/// (Windows); on Linux/macOS `lstat` is sub-microsecond and the walk would be
+/// pure overhead.
 #[cfg(windows)]
-pub mod metadata_cache;
-#[cfg(windows)]
-pub use metadata_cache::{CachedMetadata, MetadataCache};
+pub mod worktree_stats;
 
 #[cfg(feature = "worktree-rewrites")]
 pub mod index_as_worktree_with_renames;

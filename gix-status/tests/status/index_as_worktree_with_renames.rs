@@ -340,7 +340,7 @@ fn fixture_filtered_detailed(
             ignore_case_index_lookup: None,
         },
         #[cfg(windows)]
-        metadata_cache: None,
+        worktree_stats: None,
     };
     let options = Options {
         object_hash,

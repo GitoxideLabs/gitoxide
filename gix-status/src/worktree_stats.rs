@@ -1,39 +1,37 @@
-//! Windows-only metadata cache — see the gate on `pub mod metadata_cache` in
-//! [`crate`] for why this is Windows-only.
+//! Windows-only worktree metadata preprocessing — see the gate on
+//! `pub mod worktree_stats` in [`crate`] for why this is Windows-only.
 //!
-//! [`prepare`] batches a parallel GetFileInformationByHandleEx walk of the
-//! worktree (~30 ms / 90 k files) into a [`MetadataCache`] keyed by
-//! worktree-relative path. index_as_worktree looks up each index entry
-//! there instead of calling lstat (~1 s for the same tree).
-//!
-//! The cache is **transparent**: empty/partial/extra entries change speed
-//! only, never correctness — misses fall through to a live syscall.
+//! [`prepare`] runs a single parallel `GetFileInformationByHandleEx` walk
+//! of the worktree (~30 ms / 90 k files) and returns a [`WorktreeStats`]
+//! map keyed by worktree-relative path. `index_as_worktree` then looks up
+//! each index entry there instead of issuing a per-file `lstat` (~1 s for
+//! the same tree). The map is **not a long-lived cache**: it is built once
+//! per status call and discarded with the iterator. Lookups are
+//! transparent — empty, partial, or extra entries change speed only, never
+//! correctness, since misses fall through to a live syscall.
 
 use std::path::Path;
 
 use bstr::BString;
 
-/// Cached file metadata.
+/// Pre-computed file metadata produced by [`prepare`] for one worktree entry.
 ///
 /// Carries enough information to determine file type, detect mode changes,
 /// build a [`gix_index::entry::Stat`] for comparison, and short-circuit content
 /// reads via file size.
 ///
-/// All fields are platform-agnostic. When populating from a source that doesn't
-/// provide some fields (e.g. Windows directory enumeration doesn't expose
-/// `ino`/`uid`/`gid`), leave those as `0`/`false`. The status pipeline's stat
-/// comparison on Windows treats zeros as "equal-by-default" for those fields.
+/// Windows-only fields: this module is `#[cfg(windows)]`, and Windows batch
+/// directory enumeration doesn't expose `dev`/`ino`/`uid`/`gid` or the
+/// executable bit. The status pipeline's stat comparison on Windows compares
+/// those `Stat` fields against matching zeros from
+/// [`gix_index::entry::Stat::from_fs`]'s Windows branch, and git on Windows
+/// defaults to `core.filemode=false`, so all five are simply omitted here.
 #[derive(Debug, Clone, Default)]
-pub struct CachedMetadata {
+pub struct WorktreeStat {
     /// Whether this is a directory.
     pub is_dir: bool,
     /// Whether this is a symlink (or reparse point on Windows).
     pub is_symlink: bool,
-    /// Whether the file has the executable bit set.
-    ///
-    /// Always `false` when populated from Windows batch enumeration — git on
-    /// Windows defaults to `core.filemode=false`, so the bit isn't tracked there.
-    pub is_executable: bool,
     /// File size in bytes.
     pub size: u64,
     /// Modification time — seconds since Unix epoch.
@@ -49,22 +47,15 @@ pub struct CachedMetadata {
     pub ctime_secs: u32,
     /// Status/creation time — nanoseconds component.
     pub ctime_nsecs: u32,
-    /// Device ID. Set to 0 if not available (always 0 on Windows).
-    pub dev: u64,
-    /// Inode number. Set to 0 if not available (always 0 on Windows).
-    pub ino: u64,
-    /// User ID. Set to 0 if not available (always 0 on Windows).
-    pub uid: u32,
-    /// Group ID. Set to 0 if not available (always 0 on Windows).
-    pub gid: u32,
 }
 
-impl CachedMetadata {
+impl WorktreeStat {
     /// Convert to gitoxide's [`Stat`](gix_index::entry::Stat) struct for index comparison.
     ///
-    /// Truncates `dev`, `ino`, and `size` from 64 to 32 bits — matching what
+    /// Truncates `size` from 64 to 32 bits — matching what
     /// [`gix_index::entry::stat::Stat::from_fs`] does on Unix, so both code
-    /// paths compare the same quantities.
+    /// paths compare the same quantities. `dev`/`ino`/`uid`/`gid` are zeroed
+    /// here to match what `from_fs` produces on Windows.
     pub fn to_stat(&self) -> gix_index::entry::Stat {
         gix_index::entry::Stat {
             mtime: gix_index::entry::stat::Time {
@@ -75,35 +66,94 @@ impl CachedMetadata {
                 secs: self.ctime_secs,
                 nsecs: self.ctime_nsecs,
             },
-            dev: self.dev as u32,
-            ino: self.ino as u32,
-            uid: self.uid,
-            gid: self.gid,
+            dev: 0,
+            ino: 0,
+            uid: 0,
+            gid: 0,
             size: self.size as u32,
         }
     }
 }
 
-/// Metadata cache: maps worktree-relative paths (forward-slashed, in the exact
-/// case as enumerated from disk) to cached metadata.
+/// Map of worktree-relative paths (forward-slashed, in the exact case as
+/// enumerated from disk) to their pre-computed [`WorktreeStat`].
 ///
 /// Lookups are case-sensitive: callers must query with the same case the walker
 /// emitted. On a case-insensitive worktree where the index path's case differs
 /// from disk, the lookup misses and `index_as_worktree` falls back to a live
 /// `lstat` — a few extra syscalls in a rare scenario. Folding cases together
 /// would silently merge distinct files on case-sensitive volumes (Windows
-/// per-directory case-sensitivity, NTFS POSIX mode), which would let the cache
+/// per-directory case-sensitivity, NTFS POSIX mode), which would let the map
 /// return one file's stat for a query about another and silently misreport
 /// tracked-file status. That's strictly worse than a few cache misses.
-pub type MetadataCache = hashbrown::HashMap<BString, CachedMetadata>;
+pub type WorktreeStats = hashbrown::HashMap<BString, WorktreeStat>;
 
-/// Prepare a metadata cache by walking the worktree in parallel using
+/// Either a live `lstat` result or a precomputed [`WorktreeStat`] from
+/// [`prepare`]. Lets [`crate::index_as_worktree`] treat both shapes uniformly
+/// without branching at every per-entry use site.
+pub(crate) enum FileMetadata<'a> {
+    Live(gix_index::fs::Metadata),
+    Cached(&'a WorktreeStat),
+}
+
+impl FileMetadata<'_> {
+    pub(crate) fn is_dir(&self) -> bool {
+        match self {
+            Self::Live(m) => m.is_dir(),
+            Self::Cached(c) => c.is_dir,
+        }
+    }
+
+    pub(crate) fn is_symlink(&self) -> bool {
+        match self {
+            Self::Live(m) => m.is_symlink(),
+            Self::Cached(c) => c.is_symlink,
+        }
+    }
+
+    pub(crate) fn len(&self) -> u64 {
+        match self {
+            Self::Live(m) => m.len(),
+            Self::Cached(c) => c.size,
+        }
+    }
+
+    pub(crate) fn to_stat(&self) -> Result<gix_index::entry::Stat, std::time::SystemTimeError> {
+        match self {
+            Self::Live(m) => gix_index::entry::Stat::from_fs(m),
+            Self::Cached(c) => Ok(c.to_stat()),
+        }
+    }
+
+    pub(crate) fn mode_change(
+        &self,
+        entry_mode: gix_index::entry::Mode,
+        has_symlinks: bool,
+        executable_bit: bool,
+    ) -> Option<gix_index::entry::mode::Change> {
+        match self {
+            Self::Live(m) => entry_mode.change_to_match_fs(m, has_symlinks, executable_bit),
+            // Windows batch enumeration doesn't expose the executable bit; pass `false`.
+            // Git on Windows defaults to `core.filemode=false` so this is unused anyway.
+            Self::Cached(c) => entry_mode.change_to_match_fs_with_values(
+                !c.is_dir && !c.is_symlink, // is_file: regular file (not dir, not symlink)
+                c.is_dir,
+                c.is_symlink,
+                false,
+                has_symlinks,
+                executable_bit,
+            ),
+        }
+    }
+}
+
+/// Prepare a [`WorktreeStats`] map by walking the worktree in parallel using
 /// `GetFileInformationByHandleEx` with `FileIdBothDirectoryInfo`, skipping
 /// subtrees flagged by the per-thread predicate produced by `make_excludes`.
 ///
-/// The returned cache can be attached to the status pipeline via
-/// [`Context::metadata_cache`](crate::index_as_worktree::Context::metadata_cache)
-/// — cache hits skip per-file syscalls.
+/// The returned map can be attached to the status pipeline via
+/// [`Context::worktree_stats`](crate::index_as_worktree::Context::worktree_stats)
+/// — hits skip per-file syscalls.
 ///
 /// `thread_limit` caps parallelism. `None` uses all available cores; `Some(1)`
 /// is single-threaded.
@@ -114,8 +164,9 @@ pub type MetadataCache = hashbrown::HashMap<BString, CachedMetadata>;
 /// the worktree-relative path; returning `true` skips that subtree. Callers
 /// that don't need gitignore pruning can pass `|| |_: &bstr::BStr| false`, but
 /// for typical projects with fat ignored dirs (`node_modules`, `target`) the
-/// wasted enumeration makes the cache net-slower than plain per-file stats.
-pub fn prepare<F, E>(worktree: &Path, thread_limit: Option<usize>, make_excludes: F) -> std::io::Result<MetadataCache>
+/// wasted enumeration makes the preprocessing pass net-slower than plain
+/// per-file stats.
+pub fn prepare<F, E>(worktree: &Path, thread_limit: Option<usize>, make_excludes: F) -> std::io::Result<WorktreeStats>
 where
     F: Fn() -> E + Sync,
     E: FnMut(&bstr::BStr) -> bool,
@@ -152,8 +203,8 @@ mod windows {
     /// allocation without re-traversing `PathBuf`/`OsStr` each time.
     type WorkItem = (Vec<u16>, String);
 
-    /// Convert FILE_ID_BOTH_DIR_INFO to CachedMetadata.
-    fn cached_from_info(info: &FILE_ID_BOTH_DIR_INFO) -> CachedMetadata {
+    /// Convert FILE_ID_BOTH_DIR_INFO to a [`WorktreeStat`].
+    fn stat_from_info(info: &FILE_ID_BOTH_DIR_INFO) -> WorktreeStat {
         let size = info.EndOfFile as u64;
 
         // FILETIME values are LARGE_INTEGER holding 100ns intervals since 1601-01-01 UTC.
@@ -167,23 +218,14 @@ mod windows {
         let is_dir = (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         let is_symlink = (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 
-        // The executable bit, dev, ino, uid, and gid aren't exposed by Windows
-        // directory enumeration. Git on Windows defaults to core.filemode=false
-        // (so is_executable is ignored anyway); the remaining fields are only
-        // compared against matching zeros from `Stat::from_fs`'s Windows branch.
-        CachedMetadata {
+        WorktreeStat {
             is_dir,
             is_symlink,
-            is_executable: false,
             size,
             mtime_secs,
             mtime_nsecs,
             ctime_secs,
             ctime_nsecs,
-            dev: 0,
-            ino: 0,
-            uid: 0,
-            gid: 0,
         }
     }
 
@@ -219,9 +261,9 @@ mod windows {
 
     /// Check if a UTF-16 name equals exactly ASCII ".git" (case-sensitive, matching the
     /// prior behaviour). This is intentional: on Windows a mis-cased `.Git` is the same
-    /// file to the filesystem but conventionally never appears, and the cache is
-    /// look-through — a missed skip just means one extra cached entry that will be
-    /// ignored by the status pipeline.
+    /// file to the filesystem but conventionally never appears, and the preprocessing pass
+    /// is look-through — a missed skip just means one extra entry that will be ignored
+    /// by the status pipeline.
     fn name_is_dotgit(name: &[u16]) -> bool {
         name.len() == 4
             && name[0] == b'.' as u16
@@ -231,12 +273,12 @@ mod windows {
     }
 
     /// Result type for directory walking to simplify the return type.
-    type WalkResult = (Vec<(BString, CachedMetadata)>, Vec<WorkItem>);
+    type WalkResult = (Vec<(BString, WorktreeStat)>, Vec<WorkItem>);
 
     /// Walk a single directory using `GetFileInformationByHandleEx` with
     /// `FileIdBothDirectoryInfo`.
     ///
-    /// Returns (cacheable entries, subdirectories to recurse into). `buffer` is a
+    /// Returns (entries to record, subdirectories to recurse into). `buffer` is a
     /// reusable 64 KiB u64-aligned scratch buffer; reusing it across calls avoids
     /// a heap allocation per directory (6k+ per worktree on the Linux kernel).
     fn walk_directory(dir_path: &[u16], rel_prefix: &str, buffer: &mut [u64]) -> std::io::Result<WalkResult> {
@@ -256,7 +298,7 @@ mod windows {
         };
 
         if handle == INVALID_HANDLE_VALUE {
-            // Directory doesn't exist or can't be read - not an error for a look-through cache.
+            // Directory doesn't exist or can't be read — not an error for a look-through preprocess.
             return Ok((files, subdirs));
         }
 
@@ -273,7 +315,7 @@ mod windows {
             };
             if success == 0 {
                 // End of enumeration (ERROR_NO_MORE_FILES) or access denied / similar.
-                // Either way, stop: the cache is best-effort and correctness falls back
+                // Either way, stop: the preprocess is best-effort and correctness falls back
                 // to per-file syscalls in `index_as_worktree`.
                 break;
             }
@@ -300,12 +342,12 @@ mod windows {
                         format!("{rel_prefix}/{name_str}")
                     };
 
-                    let meta = cached_from_info(info);
+                    let stat = stat_from_info(info);
                     if is_dir && !is_reparse {
                         let child = join_utf16(dir_path, name_slice);
                         subdirs.push((child, rel_path.clone()));
                     }
-                    files.push((rel_path.into_bytes().into(), meta));
+                    files.push((rel_path.into_bytes().into(), stat));
                 }
 
                 if info.NextEntryOffset == 0 {
@@ -331,7 +373,7 @@ mod windows {
         worktree: &Path,
         thread_limit: Option<usize>,
         make_excludes: F,
-    ) -> std::io::Result<MetadataCache>
+    ) -> std::io::Result<WorktreeStats>
     where
         F: Fn() -> E + Sync,
         E: FnMut(&bstr::BStr) -> bool,
@@ -353,33 +395,33 @@ mod windows {
             active_workers: 0,
         });
         let cvar = Condvar::new();
-        let shared_cache = Mutex::new(MetadataCache::default());
+        let shared = Mutex::new(WorktreeStats::default());
 
         thread::scope(|s| {
             for _ in 0..num_threads {
                 let make_excludes = &make_excludes;
-                s.spawn(|| worker(&queue_mutex, &cvar, &shared_cache, make_excludes()));
+                s.spawn(|| worker(&queue_mutex, &cvar, &shared, make_excludes()));
             }
         });
 
-        Ok(shared_cache.into_inner().unwrap())
+        Ok(shared.into_inner().unwrap())
     }
 
     /// One worker of the parallel walker. Grabs batches of directories from the
-    /// shared queue, walks them into a thread-local cache, and pushes any discovered
+    /// shared queue, walks them into a thread-local map, and pushes any discovered
     /// subdirectories back onto the queue. Exits when the queue is drained and no
     /// worker is still producing.
     ///
     /// `is_excluded` is a thread-local predicate that returns true for directories
     /// whose contents should be skipped (gitignored). The excluded directory's own
-    /// metadata entry is still cached; only recursion is avoided.
+    /// metadata entry is still recorded; only recursion is avoided.
     fn worker<E: FnMut(&bstr::BStr) -> bool>(
         queue_mutex: &Mutex<WorkQueue>,
         cvar: &Condvar,
-        shared_cache: &Mutex<MetadataCache>,
+        shared: &Mutex<WorktreeStats>,
         mut is_excluded: E,
     ) {
-        let mut local_cache = MetadataCache::default();
+        let mut local = WorktreeStats::default();
         let mut local_stack: Vec<WorkItem> = Vec::new();
         let mut buffer = vec![0u64; BUFFER_U64S];
 
@@ -399,7 +441,7 @@ mod windows {
                     if queue.active_workers == 0 {
                         // Queue is empty and no one is producing more work: we're done.
                         cvar.notify_all();
-                        shared_cache.lock().unwrap().extend(local_cache);
+                        shared.lock().unwrap().extend(local);
                         return;
                     }
                     queue = cvar.wait(queue).unwrap();
@@ -410,7 +452,7 @@ mod windows {
             let mut new_dirs: Vec<WorkItem> = Vec::new();
             while let Some((dir, rel_prefix)) = local_stack.pop() {
                 if let Ok((files, subdirs)) = walk_directory(&dir, &rel_prefix, &mut buffer) {
-                    local_cache.extend(files);
+                    local.extend(files);
                     for (child_path, child_rel) in subdirs {
                         if !is_excluded(child_rel.as_bytes().into()) {
                             new_dirs.push((child_path, child_rel));
@@ -431,14 +473,14 @@ mod windows {
     fn walk_worktree_single_threaded<E: FnMut(&bstr::BStr) -> bool>(
         worktree: &Path,
         mut is_excluded: E,
-    ) -> std::io::Result<MetadataCache> {
-        let mut cache = MetadataCache::default();
+    ) -> std::io::Result<WorktreeStats> {
+        let mut stats = WorktreeStats::default();
         let mut dir_stack: Vec<WorkItem> = vec![(utf16_null_terminated(worktree), String::new())];
         let mut buffer = vec![0u64; BUFFER_U64S];
 
         while let Some((dir, rel_prefix)) = dir_stack.pop() {
             if let Ok((files, subdirs)) = walk_directory(&dir, &rel_prefix, &mut buffer) {
-                cache.extend(files);
+                stats.extend(files);
                 for (child_path, child_rel) in subdirs {
                     if !is_excluded(child_rel.as_bytes().into()) {
                         dir_stack.push((child_path, child_rel));
@@ -447,7 +489,7 @@ mod windows {
             }
         }
 
-        Ok(cache)
+        Ok(stats)
     }
 }
 
@@ -456,54 +498,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_cached_metadata_to_stat() {
-        let cached = CachedMetadata {
+    fn worktree_stat_to_stat() {
+        let stat = WorktreeStat {
             is_dir: false,
             is_symlink: false,
-            is_executable: true,
             size: 1234,
             mtime_secs: 1700000000,
             mtime_nsecs: 500_000_000,
             ctime_secs: 1699999999,
             ctime_nsecs: 100_000_000,
-            dev: 123,
-            ino: 456,
-            uid: 1000,
-            gid: 1000,
         };
-        let stat = cached.to_stat();
-        assert_eq!(stat.size, 1234);
-        assert_eq!(stat.mtime.secs, 1700000000);
-        assert_eq!(stat.mtime.nsecs, 500_000_000);
-        assert_eq!(stat.ctime.secs, 1699999999);
-        assert_eq!(stat.ctime.nsecs, 100_000_000);
-        assert_eq!(stat.dev, 123);
-        assert_eq!(stat.ino, 456);
-        assert_eq!(stat.uid, 1000);
-        assert_eq!(stat.gid, 1000);
+        let s = stat.to_stat();
+        assert_eq!(s.size, 1234);
+        assert_eq!(s.mtime.secs, 1700000000);
+        assert_eq!(s.mtime.nsecs, 500_000_000);
+        assert_eq!(s.ctime.secs, 1699999999);
+        assert_eq!(s.ctime.nsecs, 100_000_000);
+        // dev/ino/uid/gid are always zero on Windows — `Stat::from_fs` zeros them too.
+        assert_eq!(s.dev, 0);
+        assert_eq!(s.ino, 0);
+        assert_eq!(s.uid, 0);
+        assert_eq!(s.gid, 0);
     }
 
     #[test]
-    fn test_lookup_is_case_sensitive() {
-        // The cache is keyed by the exact path bytes the walker emits.
+    fn lookup_is_case_sensitive() {
+        // The map is keyed by the exact path bytes the walker emits.
         // Mixed-case lookups miss rather than silently aliasing onto the wrong
         // file — a case-insensitive worktree falls back to a live `lstat` on miss.
-        let mut cache = MetadataCache::default();
-        let meta = CachedMetadata {
+        let mut stats = WorktreeStats::default();
+        let stat = WorktreeStat {
             size: 42,
             ..Default::default()
         };
-        cache.insert(BString::from(b"src/foo.rs".as_slice()), meta.clone());
+        stats.insert(BString::from(b"src/foo.rs".as_slice()), stat.clone());
 
-        assert!(cache.get(&b"src/foo.rs"[..]).is_some());
-        assert!(cache.get(&b"SRC/Foo.rs"[..]).is_none());
+        assert!(stats.get(&b"src/foo.rs"[..]).is_some());
+        assert!(stats.get(&b"SRC/Foo.rs"[..]).is_none());
 
-        cache.insert(BString::from("ünïcode.txt".as_bytes()), meta);
-        assert!(cache.get("ünïcode.txt".as_bytes()).is_some());
+        stats.insert(BString::from("ünïcode.txt".as_bytes()), stat);
+        assert!(stats.get("ünïcode.txt".as_bytes()).is_some());
     }
 
     #[test]
-    fn test_prepare_returns_cache() {
+    fn prepare_returns_stats() {
         // Use a unique temp directory to avoid walking other files.
         use std::time::{SystemTime, UNIX_EPOCH};
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
@@ -518,11 +556,11 @@ mod tests {
         let nested_file = subdir.join("nested.txt");
         std::fs::write(&nested_file, b"world").unwrap();
 
-        let cache = prepare(&temp_dir, Some(1), || |_: &bstr::BStr| false).unwrap();
+        let stats = prepare(&temp_dir, Some(1), || |_: &bstr::BStr| false).unwrap();
 
-        assert!(!cache.is_empty());
-        assert!(cache.contains_key(&b"test.txt"[..]));
-        assert!(cache.contains_key(&b"subdir/nested.txt"[..]));
+        assert!(!stats.is_empty());
+        assert!(stats.contains_key(&b"test.txt"[..]));
+        assert!(stats.contains_key(&b"subdir/nested.txt"[..]));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

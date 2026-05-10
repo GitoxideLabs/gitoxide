@@ -15,23 +15,12 @@ where
     index_worktree_options: index_worktree::Options,
     tree_index_renames: tree_index::TrackRenames,
     should_interrupt: Option<OwnedOrStaticAtomicBool>,
+    /// Windows-only: when `true` (default), run a single batched parallel
+    /// directory walk before status to precompute worktree stats so that the
+    /// per-entry pipeline can skip per-file `lstat`. Ignored on non-Windows.
+    /// See [`crate::status::Platform::index_worktree_stats_preprocessing`].
     #[cfg(windows)]
-    metadata_cache: MetadataCacheConfig,
-}
-
-/// Windows-only: controls the metadata cache. `Auto` (default) trades a
-/// one-shot gitignore-aware worktree walk (~30 ms / 90 k files) for avoiding
-/// per-file `lstat` during status (~1 s for the same tree).
-#[cfg(windows)]
-#[derive(Default)]
-pub enum MetadataCacheConfig {
-    /// Prepare the cache lazily inside the iterator using all cores.
-    #[default]
-    Auto,
-    /// Skip the cache.
-    Disabled,
-    /// Use this pre-built cache.
-    Provided(gix_status::MetadataCache),
+    precompute_worktree_stats: bool,
 }
 
 /// How to obtain a submodule's status.
@@ -132,7 +121,7 @@ impl Repository {
                 thread_limit: None,
             },
             #[cfg(windows)]
-            metadata_cache: MetadataCacheConfig::default(),
+            precompute_worktree_stats: true,
         };
 
         let untracked = self
@@ -251,24 +240,24 @@ pub mod into_iter {
     }
 }
 
-/// Build a gitignore-aware Windows metadata cache. Shared between the explicit
-/// `prepare_index_worktree_metadata_cache` and the Auto branch in `into_iter`.
+/// Run the gitignore-aware Windows worktree stats preprocessing pass.
+/// One internal helper, called from the iterator on Windows unless
+/// preprocessing is disabled. Returns `None` when the repo lacks a workdir
+/// or the walk fails — callers fall through to live `lstat` either way, so
+/// surfacing the failure as a hard error would be unhelpful.
 #[cfg(windows)]
-pub(crate) fn build_metadata_cache(
+pub(crate) fn precomputed_worktree_stats(
     repo: &Repository,
+    index: &gix_index::State,
     thread_limit: Option<usize>,
-) -> Result<gix_status::MetadataCache, crate::status::index_worktree::Error> {
-    let workdir = repo
-        .workdir()
-        .ok_or(crate::status::index_worktree::Error::MissingWorkDir)?;
+) -> Option<gix_status::worktree_stats::WorktreeStats> {
+    let workdir = repo.workdir()?;
     let sync_repo = repo.clone().into_sync();
-    let index = repo.index_or_empty()?;
-    let index_state: &gix_index::State = &index;
 
     let make_excludes = || -> Box<dyn FnMut(&crate::bstr::BStr) -> bool> {
         let thread_repo = sync_repo.to_thread_local();
         let Ok(stack) = thread_repo.excludes(
-            index_state,
+            index,
             None,
             gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
         ) else {
@@ -284,11 +273,7 @@ pub(crate) fn build_metadata_cache(
         })
     };
 
-    Ok(gix_status::metadata_cache::prepare(
-        workdir,
-        thread_limit,
-        make_excludes,
-    )?)
+    gix_status::worktree_stats::prepare(workdir, thread_limit, make_excludes).ok()
 }
 
 mod platform;

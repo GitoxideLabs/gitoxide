@@ -188,7 +188,7 @@ fn fixture_filtered_detailed(
         ),
         should_interrupt: &AtomicBool::default(),
         #[cfg(windows)]
-        metadata_cache: None,
+        worktree_stats: None,
     };
     let options = Options {
         fs: fs_capabilities.map_or_else(|| gix_fs::Capabilities::probe(&git_dir), |new| new(&git_dir)),
@@ -1057,7 +1057,7 @@ fn racy_git() {
         filter: Default::default(),
         should_interrupt: &AtomicBool::default(),
         #[cfg(windows)]
-        metadata_cache: None,
+        worktree_stats: None,
     };
     let out = index_as_worktree(
         &index,
