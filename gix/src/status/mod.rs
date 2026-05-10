@@ -15,6 +15,23 @@ where
     index_worktree_options: index_worktree::Options,
     tree_index_renames: tree_index::TrackRenames,
     should_interrupt: Option<OwnedOrStaticAtomicBool>,
+    #[cfg(windows)]
+    metadata_cache: MetadataCacheConfig,
+}
+
+/// Windows-only: controls the metadata cache. `Auto` (default) trades a
+/// one-shot gitignore-aware worktree walk (~30 ms / 90 k files) for avoiding
+/// per-file `lstat` during status (~1 s for the same tree).
+#[cfg(windows)]
+#[derive(Default)]
+pub enum MetadataCacheConfig {
+    /// Prepare the cache lazily inside the iterator using all cores.
+    #[default]
+    Auto,
+    /// Skip the cache.
+    Disabled,
+    /// Use this pre-built cache.
+    Provided(gix_status::MetadataCache),
 }
 
 /// How to obtain a submodule's status.
@@ -114,6 +131,8 @@ impl Repository {
                 rewrites: None,
                 thread_limit: None,
             },
+            #[cfg(windows)]
+            metadata_cache: MetadataCacheConfig::default(),
         };
 
         let untracked = self
@@ -230,6 +249,46 @@ pub mod into_iter {
         #[error(transparent)]
         HeadTreeDiff(#[from] crate::status::tree_index::Error),
     }
+}
+
+/// Build a gitignore-aware Windows metadata cache. Shared between the explicit
+/// `prepare_index_worktree_metadata_cache` and the Auto branch in `into_iter`.
+#[cfg(windows)]
+pub(crate) fn build_metadata_cache(
+    repo: &Repository,
+    thread_limit: Option<usize>,
+) -> Result<gix_status::MetadataCache, crate::status::index_worktree::Error> {
+    let workdir = repo
+        .workdir()
+        .ok_or(crate::status::index_worktree::Error::MissingWorkDir)?;
+    let sync_repo = repo.clone().into_sync();
+    let index = repo.index_or_empty()?;
+    let index_state: &gix_index::State = &index;
+
+    let make_excludes = || -> Box<dyn FnMut(&crate::bstr::BStr) -> bool> {
+        let thread_repo = sync_repo.to_thread_local();
+        let Ok(stack) = thread_repo.excludes(
+            index_state,
+            None,
+            gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+        ) else {
+            return Box::new(|_| false);
+        };
+        let mut stack = stack.detach();
+        let objects = thread_repo.objects.clone();
+        Box::new(move |path: &crate::bstr::BStr| -> bool {
+            stack
+                .at_entry(path, Some(gix_index::entry::Mode::DIR), &objects)
+                .map(|p| p.is_excluded())
+                .unwrap_or(false)
+        })
+    };
+
+    Ok(gix_status::metadata_cache::prepare(
+        workdir,
+        thread_limit,
+        make_excludes,
+    )?)
 }
 
 mod platform;

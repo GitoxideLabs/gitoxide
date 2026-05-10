@@ -125,3 +125,36 @@ where
         self
     }
 }
+
+/// Windows-only metadata-cache builder methods. See
+/// [`crate::status::MetadataCacheConfig`] for the default-on behaviour.
+#[cfg(windows)]
+impl<Progress> Platform<'_, Progress>
+where
+    Progress: gix_features::progress::Progress,
+{
+    /// Use `cache` instead of building one. For out-of-band prep (e.g. file-
+    /// watcher refresh) reused across status calls.
+    pub fn index_worktree_metadata_cache(mut self, cache: gix_status::MetadataCache) -> Self {
+        self.metadata_cache = crate::status::MetadataCacheConfig::Provided(cache);
+        self
+    }
+
+    /// Skip the metadata cache. Prefer the Auto default unless measured.
+    pub fn disable_index_worktree_metadata_cache(mut self) -> Self {
+        self.metadata_cache = crate::status::MetadataCacheConfig::Disabled;
+        self
+    }
+
+    /// Eagerly prepare the cache with a specific `thread_limit` (`Some(1)` =
+    /// single-threaded, `None` = all cores). Use this to pick parallelism or
+    /// to fail-fast before building the iterator.
+    pub fn prepare_index_worktree_metadata_cache(
+        mut self,
+        thread_limit: Option<usize>,
+    ) -> Result<Self, crate::status::index_worktree::Error> {
+        let cache = crate::status::build_metadata_cache(self.repo, thread_limit)?;
+        self.metadata_cache = crate::status::MetadataCacheConfig::Provided(cache);
+        Ok(self)
+    }
+}

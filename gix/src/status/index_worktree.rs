@@ -28,6 +28,12 @@ pub enum Error {
     StatOptions(#[from] config::stat_options::Error),
     #[error(transparent)]
     ResourceCache(#[from] crate::diff::resource_cache::Error),
+    #[cfg(windows)]
+    #[error("Failed to prepare metadata cache")]
+    PrepareMetadataCache(#[from] std::io::Error),
+    #[cfg(windows)]
+    #[error(transparent)]
+    OpenIndex(#[from] crate::worktree::open_index::Error),
 }
 
 /// Options for use with [Repository::index_worktree_status()].
@@ -82,6 +88,8 @@ impl Repository {
     ///     - A flag to stop the whole operation.
     /// * `options`
     ///     - Additional configuration for all parts of the operation.
+    /// * `metadata_cache` *(Windows only)*
+    ///     - Optional pre-populated metadata cache; see gix_status::metadata_cache.
     ///
     /// ### Note
     ///
@@ -101,6 +109,7 @@ impl Repository {
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &AtomicBool,
         options: Options,
+        #[cfg(windows)] metadata_cache: Option<&gix_status::MetadataCache>,
     ) -> Result<gix_status::index_as_worktree_with_renames::Outcome, Error>
     where
         T: Send + Clone,
@@ -149,6 +158,8 @@ impl Repository {
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
                 },
+                #[cfg(windows)]
+                metadata_cache,
             },
             gix_status::index_as_worktree_with_renames::Options {
                 sorting: options.sorting,

@@ -153,6 +153,8 @@ pub(super) mod function {
                                 stack,
                                 filter,
                                 should_interrupt: ctx.should_interrupt,
+                                #[cfg(windows)]
+                                metadata_cache: ctx.metadata_cache,
                             },
                             options.tracked_file_modifications,
                         )
