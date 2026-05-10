@@ -121,11 +121,19 @@ impl<'a, T: Send> WorkQueue<'a, T> {
         }
     }
 
-    /// Mark one item done. Must be called for every `pop`, including error paths.
     fn finish_item(&self) {
         let _guard = self.items.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.in_progress.fetch_sub(1, Ordering::SeqCst);
         self.cvar.notify_all();
+    }
+}
+
+/// RAII guard that calls `finish_item` on drop, ensuring the in-progress counter
+/// is decremented even if the worker panics.
+struct FinishOnDrop<'q, 'a, T: Send>(&'q WorkQueue<'a, T>);
+impl<'q, 'a, T: Send> Drop for FinishOnDrop<'q, 'a, T> {
+    fn drop(&mut self) {
+        self.0.finish_item();
     }
 }
 
@@ -228,6 +236,7 @@ where
                                 };
 
                             while let Some((level, mut base, parent_arc)) = queue.pop() {
+                                let _finish = FinishOnDrop(queue);
                                 let result: Result<(), Error> = (|| {
                                     if should_interrupt.load(Ordering::Relaxed) {
                                         return Err(Error::Interrupted);
@@ -291,7 +300,6 @@ where
                                     Ok(())
                                 })();
 
-                                queue.finish_item();
                                 result?;
                             }
                             Ok(())
