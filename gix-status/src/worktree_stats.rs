@@ -180,8 +180,8 @@ where
 mod windows {
     use super::*;
     use std::collections::VecDeque;
-    use std::ffi::{OsString, c_void};
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
     use std::sync::{Condvar, Mutex};
     use std::thread;
 
@@ -335,19 +335,25 @@ mod windows {
                     let is_dir = (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
                     let is_reparse = (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
 
-                    let name_str = OsString::from_wide(name_slice).to_string_lossy().into_owned();
-                    let rel_path = if rel_prefix.is_empty() {
-                        name_str
-                    } else {
-                        format!("{rel_prefix}/{name_str}")
-                    };
+                    // Decode the UTF-16 name fallibly: skip on ill-formed sequences rather than
+                    // substituting U+FFFD. Lossy substitution can collapse two distinct invalid
+                    // names onto the same key (one overwriting the other in the map) and never
+                    // matches what `gix-index` stored anyway, so a miss + live `lstat` fallback
+                    // is strictly cleaner.
+                    if let Ok(name_str) = String::from_utf16(name_slice) {
+                        let rel_path = if rel_prefix.is_empty() {
+                            name_str
+                        } else {
+                            format!("{rel_prefix}/{name_str}")
+                        };
 
-                    let stat = stat_from_info(info);
-                    if is_dir && !is_reparse {
-                        let child = join_utf16(dir_path, name_slice);
-                        subdirs.push((child, rel_path.clone()));
+                        let stat = stat_from_info(info);
+                        if is_dir && !is_reparse {
+                            let child = join_utf16(dir_path, name_slice);
+                            subdirs.push((child, rel_path.clone()));
+                        }
+                        files.push((rel_path.into_bytes().into(), stat));
                     }
-                    files.push((rel_path.into_bytes().into(), stat));
                 }
 
                 if info.NextEntryOffset == 0 {
@@ -404,7 +410,7 @@ mod windows {
             }
         });
 
-        Ok(shared.into_inner().unwrap())
+        Ok(shared.into_inner().unwrap_or_else(|err| err.into_inner()))
     }
 
     /// One worker of the parallel walker. Grabs batches of directories from the
