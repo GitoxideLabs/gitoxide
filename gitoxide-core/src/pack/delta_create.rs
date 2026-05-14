@@ -2,8 +2,8 @@ use std::{collections::HashMap, io, path::Path, time::Instant};
 
 use anyhow::anyhow;
 use gix::{
-    hash, hash::ObjectId, interrupt, odb::pack, parallel::InOrderIter, prelude::Finalize, progress, Count,
-    NestedProgress, Progress,
+    Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, odb::pack, parallel::InOrderIter,
+    prelude::Finalize, progress,
 };
 
 use crate::OutputFormat;
@@ -297,7 +297,7 @@ struct Statistics {
 mod iter_from_counts {
     use std::{cmp::Ordering, collections::HashMap, io::Write, sync::Arc};
 
-    use gix::{hash::ObjectId, odb::pack, parallel, parallel::SequenceId, progress, Count, Progress};
+    use gix::{Count, Progress, hash::ObjectId, odb::pack, parallel, parallel::SequenceId, progress};
 
     use pack::data::output::{
         self,
@@ -330,7 +330,7 @@ mod iter_from_counts {
             version,
         }: Options,
     ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), Error>>
-           + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
+    + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
     where
         Find: pack::Find + Send + Clone + 'static,
     {
@@ -674,8 +674,8 @@ mod iter_from_counts {
     mod reduce {
         use std::marker::PhantomData;
 
-        use super::pack::data::output;
         use super::Outcome;
+        use super::pack::data::output;
         use super::{parallel, parallel::SequenceId};
 
         pub struct Statistics<E> {
