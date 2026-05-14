@@ -2,17 +2,17 @@ use std::sync::atomic::AtomicBool;
 
 use gix_features::progress;
 use gix_odb::loose::Store;
-use gix_testtools::fixture_path_standalone;
+use gix_testtools::fixture_path;
 use pretty_assertions::assert_eq;
 
 use crate::hex_to_id;
 
 fn ldb() -> Store {
-    Store::at(fixture_path_standalone("objects"), gix_hash::Kind::Sha1, None)
+    Store::at(fixture_path("objects"), gix_hash::Kind::Sha1, None)
 }
 
 fn limited_ldb(limit: usize) -> Store {
-    Store::at(fixture_path_standalone("objects"), gix_hash::Kind::Sha1, Some(limit))
+    Store::at(fixture_path("objects"), gix_hash::Kind::Sha1, Some(limit))
 }
 
 pub fn object_ids() -> Vec<gix_hash::ObjectId> {
@@ -82,7 +82,7 @@ mod write {
     fn it_writes_objects_with_similar_permissions() -> crate::Result {
         let hk = gix_hash::Kind::Sha1;
         let git_store = loose::Store::at(
-            gix_testtools::scripted_fixture_read_only_standalone("repo_with_loose_objects.sh")?.join(".git/objects"),
+            crate::scripted_fixture_read_only("repo_with_loose_objects.sh")?.join(".git/objects"),
             hk,
             None,
         );
@@ -150,10 +150,10 @@ mod contains {
 mod lookup_prefix {
     use std::collections::HashSet;
 
-    use gix_testtools::fixture_path_standalone;
+    use gix_testtools::fixture_path;
     use maplit::hashset;
 
-    use crate::{odb::hex_to_id, store::loose::ldb};
+    use crate::{hex_to_id, store::loose::ldb};
 
     #[test]
     fn returns_none_for_prefixes_without_any_match() {
@@ -172,7 +172,7 @@ mod lookup_prefix {
     #[test]
     fn returns_some_err_for_prefixes_with_more_than_one_match() {
         let objects_dir = gix_testtools::tempfile::tempdir().unwrap();
-        gix_testtools::copy_recursively_into_existing_dir(fixture_path_standalone("objects"), &objects_dir).unwrap();
+        gix_testtools::copy_recursively_into_existing_dir(fixture_path("objects"), &objects_dir).unwrap();
         std::fs::write(
             objects_dir
                 .path()
@@ -228,7 +228,7 @@ mod lookup_prefix {
 }
 
 mod find {
-    use gix_object::{bstr::ByteSlice, tree::EntryKind, BlobRef, CommitRef, Kind, TagRef, TreeRef};
+    use gix_object::{BlobRef, CommitRef, Kind, TagRef, TreeRef, bstr::ByteSlice, tree::EntryKind};
     use gix_odb::loose;
 
     use crate::{
@@ -410,7 +410,7 @@ cjHJZXWmV4CcRfmLsXzU8s2cR9A0DBvOxhPD1TlKC2JhBFXigjuL9U4Rbq9tdegB
     }
 
     mod header {
-        use crate::odb::{hex_to_id, store::loose::ldb};
+        use crate::{hex_to_id, store::loose::ldb};
 
         #[test]
         fn existing() -> crate::Result {

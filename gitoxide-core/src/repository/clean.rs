@@ -26,16 +26,16 @@ pub(crate) mod function {
     use gix::{
         bstr::{BString, ByteSlice},
         dir::{
+            EntryRef,
             entry::{Kind, Status},
             walk,
             walk::{EmissionMode::CollapseDirectory, ForDeletionMode::*},
-            EntryRef,
         },
     };
 
     use crate::{
-        repository::clean::{FindRepository, Options},
         OutputFormat,
+        repository::clean::{FindRepository, Options},
     };
 
     pub fn clean(
@@ -375,11 +375,7 @@ pub(crate) mod function {
     }
 
     fn plural<'a>(one: &'a str, many: &'a str, number: usize) -> &'a str {
-        if number == 1 {
-            one
-        } else {
-            many
-        }
+        if number == 1 { one } else { many }
     }
 
     #[derive(Default)]

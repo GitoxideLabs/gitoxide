@@ -1,16 +1,16 @@
 use std::{
     io,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use futures_io::AsyncWrite;
 use futures_lite::AsyncWriteExt;
 
 use crate::{
-    encode::{u16_to_hex, Error},
-    BandRef, Channel, ErrorRef, PacketLineRef, TextRef, DELIMITER_LINE, ERR_PREFIX, FLUSH_LINE, MAX_DATA_LEN,
-    RESPONSE_END_LINE,
+    BandRef, Channel, DELIMITER_LINE, ERR_PREFIX, ErrorRef, FLUSH_LINE, MAX_DATA_LEN, PacketLineRef, RESPONSE_END_LINE,
+    TextRef,
+    encode::{Error, u16_to_hex},
 };
 
 pin_project_lite::pin_project! {

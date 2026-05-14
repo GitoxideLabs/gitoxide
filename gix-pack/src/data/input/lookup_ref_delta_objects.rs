@@ -55,7 +55,7 @@ where
             size_change_in_bytes: size_change,
             oid: oid.unwrap_or_else(||
                 // NOTE: this value acts as sentinel and the actual hash kind doesn't matter.
-                gix_hash::Kind::Sha1.null()),
+                gix_hash::Kind::shortest().null()),
         });
         self.inserted_entries_length_in_bytes += size_change;
     }

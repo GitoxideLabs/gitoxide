@@ -1,4 +1,4 @@
-use crate::{write, File, Version};
+use crate::{File, Version, write};
 
 /// The error produced by [`File::write()`].
 #[derive(Debug, thiserror::Error)]

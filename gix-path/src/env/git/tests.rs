@@ -3,14 +3,13 @@ use std::path::Path;
 #[cfg(windows)]
 mod locations {
     use std::{
-        ffi::{c_void, OsStr, OsString},
+        ffi::{OsStr, OsString, c_void},
         io::ErrorKind,
         os::windows::ffi::OsStringExt,
         path::{Path, PathBuf},
     };
 
     use windows::{
-        core::{Result as WindowsResult, BOOL, GUID, PWSTR},
         Win32::{
             System::{
                 Com::CoTaskMemFree,
@@ -18,13 +17,14 @@ mod locations {
             },
             UI::Shell::{
                 FOLDERID_LocalAppData, FOLDERID_ProgramFiles, FOLDERID_ProgramFilesX86, FOLDERID_UserProgramFiles,
-                SHGetKnownFolderPath, KF_FLAG_DEFAULT, KF_FLAG_DONT_VERIFY, KNOWN_FOLDER_FLAG,
+                KF_FLAG_DEFAULT, KF_FLAG_DONT_VERIFY, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath,
             },
         },
+        core::{BOOL, GUID, PWSTR, Result as WindowsResult},
     };
     use winreg::{
-        enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE},
         RegKey,
+        enums::{HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE},
     };
 
     macro_rules! var_os_stub {
@@ -745,7 +745,7 @@ mod exe_info {
     use gix_testtools::tempfile;
     use serial_test::serial;
 
-    use crate::env::git::{exe_info, NULL_DEVICE};
+    use crate::env::git::{NULL_DEVICE, exe_info};
 
     /// Wrapper for a valid path to a plausible location, kept from accidentally existing (until drop).
     #[derive(Debug)]
@@ -988,14 +988,11 @@ mod exe_info {
 
     #[test]
     fn first_file_from_config_with_origin() {
-        let macos =
-            "file:/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig\0credential.helper\0file:/Users/byron/.gitconfig\0push.default\0";
+        let macos = "file:/Applications/Xcode.app/Contents/Developer/usr/share/git-core/gitconfig\0credential.helper\0file:/Users/byron/.gitconfig\0push.default\0";
         let win_msys =
             "file:C:/git-sdk-64/etc/gitconfig\0core.symlinks\0file:C:/git-sdk-64/etc/gitconfig\0core.autocrlf\0";
-        let win_cmd =
-            "file:C:/Program Files/Git/etc/gitconfig\0diff.astextplain.textconv\0file:C:/Program Files/Git/etc/gitconfig\0filter.lfs.clean\0";
-        let win_msys_old =
-            "file:C:\\ProgramData/Git/config\0diff.astextplain.textconv\0file:C:\\ProgramData/Git/config\0filter.lfs.clean\0";
+        let win_cmd = "file:C:/Program Files/Git/etc/gitconfig\0diff.astextplain.textconv\0file:C:/Program Files/Git/etc/gitconfig\0filter.lfs.clean\0";
+        let win_msys_old = "file:C:\\ProgramData/Git/config\0diff.astextplain.textconv\0file:C:\\ProgramData/Git/config\0filter.lfs.clean\0";
         let linux = "file:/home/parallels/.gitconfig\0core.excludesfile\0";
         let bogus = "something unexpected";
         let empty = "";

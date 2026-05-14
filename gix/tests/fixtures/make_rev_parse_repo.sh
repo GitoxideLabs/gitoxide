@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
+# This fixture embeds historical SHA-1 reflog entries verbatim.
+export GIT_DEFAULT_HASH=sha1
+
 git init -q
 touch new && git add new && git commit -m "init"
 

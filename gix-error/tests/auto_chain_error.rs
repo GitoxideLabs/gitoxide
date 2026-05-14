@@ -1,4 +1,4 @@
-use gix_error::{message, Error};
+use gix_error::{Error, message};
 #[cfg(not(feature = "tree-error"))]
 use gix_error::{ErrorExt, Exn, Message};
 use std::error::Error as _;
@@ -92,9 +92,5 @@ pub fn debug_string(input: impl std::fmt::Debug) -> String {
 }
 
 fn fixup_paths(input: String) -> String {
-    if cfg!(windows) {
-        input.replace('\\', "/")
-    } else {
-        input
-    }
+    if cfg!(windows) { input.replace('\\', "/") } else { input }
 }

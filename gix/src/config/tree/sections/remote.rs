@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{http, keys, Key, Remote, Section, SubSectionRequirement},
+    config::tree::{Key, Remote, Section, SubSectionRequirement, http, keys},
 };
 
 const NAME_PARAMETER: Option<SubSectionRequirement> = Some(SubSectionRequirement::Parameter("name"));

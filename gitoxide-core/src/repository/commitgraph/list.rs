@@ -1,7 +1,7 @@
 pub(crate) mod function {
-    use crate::repository::HexId;
     use crate::OutputFormat;
-    use anyhow::{bail, Context};
+    use crate::repository::HexId;
+    use anyhow::{Context, bail};
     use gix::odb::store::RefreshMode;
     use gix::revision::plumbing::Spec;
     use gix::{prelude::ObjectIdExt, revision::walk::Sorting};

@@ -5,11 +5,11 @@ use bstr::BString;
 use futures_lite::io::AsyncWriteExt;
 
 use crate::{
-    client::{
-        async_io::{request::RequestWriter, ExtendedBufRead, ReadlineBufRead},
-        Capabilities, Error, MessageKind, TransportWithoutIO, WriteMode,
-    },
     Protocol, Service,
+    client::{
+        Capabilities, Error, MessageKind, TransportWithoutIO, WriteMode,
+        async_io::{ExtendedBufRead, ReadlineBufRead, request::RequestWriter},
+    },
 };
 
 /// The response of the [`handshake()`][Transport::handshake()] method.

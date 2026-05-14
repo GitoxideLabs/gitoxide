@@ -6,21 +6,21 @@ use gix_path::RelativePath;
 use std::path::Path;
 use std::{
     borrow::Cow,
-    collections::{btree_map::Entry, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry},
     ffi::OsStr,
     path::PathBuf,
 };
 
 use super::{Error, Options};
 use crate::{
+    ThreadSafeRepository,
     bstr::BString,
     config,
     config::{
         cache::interpolate_context,
-        tree::{gitoxide, Core, Key, Safe},
+        tree::{Core, Key, Safe, gitoxide},
     },
     open::Permissions,
-    ThreadSafeRepository,
 };
 
 #[derive(Default, Clone)]
@@ -304,7 +304,10 @@ impl ThreadSafeRepository {
                 worktree_dir = gix_path::normalize(wt_path, current_dir).map(Cow::into_owned);
                 #[allow(unused_variables)]
                 if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
-                    gix_trace::warn!("The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading", worktree_path.display());
+                    gix_trace::warn!(
+                        "The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading",
+                        worktree_path.display()
+                    );
                 }
             } else if !config.lenient_config
                 && config

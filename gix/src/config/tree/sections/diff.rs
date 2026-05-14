@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Diff, Key, Section, SubSectionRequirement},
+    config::tree::{Diff, Key, Section, SubSectionRequirement, keys},
 };
 
 impl Diff {
@@ -159,7 +159,7 @@ mod renames {
         bstr::ByteSlice,
         config::{
             key::GenericError,
-            tree::{keys, sections::diff::Renames, Section},
+            tree::{Section, keys, sections::diff::Renames},
         },
         diff::rename::Tracking,
     };
@@ -193,7 +193,7 @@ mod renames {
 pub(super) mod validate {
     use crate::{
         bstr::BStr,
-        config::tree::{keys, Diff},
+        config::tree::{Diff, keys},
     };
 
     #[derive(Copy, Clone)]

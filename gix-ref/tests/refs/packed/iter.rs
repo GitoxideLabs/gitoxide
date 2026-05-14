@@ -17,7 +17,7 @@ fn empty() -> crate::Result {
 
 #[test]
 fn packed_refs_with_header() -> crate::Result {
-    let dir = gix_testtools::scripted_fixture_read_only_standalone("make_packed_ref_repository.sh")?;
+    let dir = crate::scripted_fixture_read_only("make_packed_ref_repository.sh")?;
     let buf = std::fs::read(dir.join(".git").join("packed-refs"))?;
     let iter = packed::Iter::new(&buf, crate::fixture_hash_kind())?;
     assert_eq!(iter.count(), 11, "it finds the right amount of items");

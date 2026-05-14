@@ -2,7 +2,7 @@ use std::{str::FromStr, time::SystemTime};
 
 use crate::{
     spec,
-    spec::parse::{delegate, delegate::SiblingBranch, Delegate, Error},
+    spec::parse::{Delegate, Error, delegate, delegate::SiblingBranch},
 };
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_error::{ErrorExt, Exn, ResultExt};
@@ -74,7 +74,7 @@ pub fn parse(mut input: &BStr, delegate: &mut impl Delegate) -> Result<(), Exn<E
 }
 
 mod intercept {
-    use crate::spec::parse::{delegate, Delegate};
+    use crate::spec::parse::{Delegate, delegate};
     use bstr::{BStr, BString};
     use gix_error::Exn;
 
@@ -251,7 +251,12 @@ fn long_describe_prefix(name: &BStr) -> Option<(&BStr, delegate::PrefixHint<'_>)
     let candidate = iter.clone().any(|token| !token.is_empty()).then_some(candidate);
     let hint = iter
         .next()
-        .and_then(|gen| gen.to_str().ok().and_then(|gen| usize::from_str(gen).ok()))
+        .and_then(|generation| {
+            generation
+                .to_str()
+                .ok()
+                .and_then(|generation| usize::from_str(generation).ok())
+        })
         .and_then(|generation| {
             iter.next().map(|token| {
                 let last_token_len = token.len();
@@ -371,7 +376,7 @@ where
         [b':'] => {
             return Err(
                 Error::new("':' must be followed by either slash and regex or path to lookup in HEAD tree").raise(),
-            )
+            );
         }
         [b':', b'/'] => return Err(Error::new("':/' must be followed by a regular expression").raise()),
         [b':', b'/', regex @ ..] => {
@@ -386,22 +391,22 @@ where
         [b':', b'0', b':', path @ ..] => {
             return consume_all(delegate.index_lookup(path.as_bstr(), 0), || {
                 format!("Couldn't find index '{path}' stage 0", path = path.as_bstr())
-            })
+            });
         }
         [b':', b'1', b':', path @ ..] => {
             return consume_all(delegate.index_lookup(path.as_bstr(), 1), || {
                 format!("Couldn't find index '{path}' stage 1", path = path.as_bstr())
-            })
+            });
         }
         [b':', b'2', b':', path @ ..] => {
             return consume_all(delegate.index_lookup(path.as_bstr(), 2), || {
                 format!("Couldn't find index '{path}' stage 2", path = path.as_bstr())
-            })
+            });
         }
         [b':', path @ ..] => {
             return consume_all(delegate.index_lookup(path.as_bstr(), 0), || {
                 format!("Couldn't find index '{path}' stage 0 (implicit)", path = path.as_bstr())
-            })
+            });
         }
         _ => {}
     }

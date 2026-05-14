@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::index::{self, Version, FAN_LEN, V2_SIGNATURE};
+use crate::index::{self, FAN_LEN, V2_SIGNATURE, Version};
 
 /// Returned by [`index::File::at()`].
 #[derive(thiserror::Error, Debug)]

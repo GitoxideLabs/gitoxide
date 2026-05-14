@@ -19,6 +19,7 @@ pub mod attributes;
 pub mod clean;
 pub mod diff;
 pub mod dirty;
+pub mod dirwalk;
 #[cfg(feature = "clean")]
 pub use clean::function::clean;
 #[cfg(feature = "blocking-client")]

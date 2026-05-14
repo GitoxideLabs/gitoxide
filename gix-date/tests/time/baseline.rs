@@ -1,8 +1,8 @@
 use std::{collections::HashMap, time::SystemTime};
 
 use gix_date::{
-    time::{format, Format},
     SecondsSinceUnixEpoch,
+    time::{Format, format},
 };
 use gix_testtools::Result;
 use std::sync::LazyLock;

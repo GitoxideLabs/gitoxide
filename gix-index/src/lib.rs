@@ -4,7 +4,7 @@
     doc = ::document_features::document_features!()
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
-#![deny(unsafe_code, missing_docs, rust_2018_idioms)]
+#![deny(unsafe_code, missing_docs)]
 
 use std::{ops::Range, path::PathBuf};
 
@@ -53,7 +53,7 @@ pub enum Version {
 }
 
 /// An entry in the index, identifying a non-tree item on disk.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Entry {
     /// The filesystem stat information for the file on disk.
     pub stat: entry::Stat,
@@ -165,7 +165,54 @@ pub struct State {
 mod impls {
     use std::fmt::{Debug, Formatter};
 
-    use crate::{entry::Stage, State};
+    use crate::{Entry, PathStorageRef, State, entry::Stage};
+
+    impl Entry {
+        pub(crate) fn fmt_debug(&self, f: &mut Formatter, path_backing: Option<&PathStorageRef>) -> std::fmt::Result {
+            if f.alternate() {
+                write!(
+                    f,
+                    "{} {}{:?} mtime: {:?} {} ",
+                    match self.flags.stage() {
+                        Stage::Unconflicted => "       ",
+                        Stage::Base => "BASE   ",
+                        Stage::Ours => "OURS   ",
+                        Stage::Theirs => "THEIRS ",
+                    },
+                    if self.flags.is_empty() {
+                        "".to_string()
+                    } else {
+                        format!("{:?} ", self.flags)
+                    },
+                    self.mode,
+                    self.stat.mtime,
+                    self.id,
+                )?;
+                return match path_backing {
+                    Some(path_backing) => write!(f, "{}", self.path_in(path_backing)),
+                    None => write!(f, "{:?}", self.path),
+                };
+            }
+
+            let mut entry = f.debug_struct("Entry");
+            entry
+                .field("stat", &self.stat)
+                .field("id", &self.id)
+                .field("flags", &self.flags)
+                .field("mode", &self.mode);
+            match path_backing {
+                Some(path_backing) => entry.field("path", &self.path_in(path_backing)),
+                None => entry.field("path", &self.path),
+            }
+            .finish()
+        }
+    }
+
+    impl Debug for Entry {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.fmt_debug(f, None)
+        }
+    }
 
     impl Debug for State {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

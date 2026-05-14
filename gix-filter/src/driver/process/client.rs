@@ -1,7 +1,7 @@
 use std::{collections::HashSet, io::Write, str::FromStr};
 
 use bstr::{BStr, BString, ByteVec};
-use gix_packetline::blocking_io::{encode, StreamingPeekableIter, Writer};
+use gix_packetline::blocking_io::{StreamingPeekableIter, Writer, encode};
 
 use crate::driver::{
     process,
@@ -92,23 +92,20 @@ impl Client {
             });
         }
 
-        let chosen_version;
         buf.clear();
         read.read_line_to_string(&mut buf)?;
-        match buf
+        let chosen_version = match buf
             .strip_prefix("version=")
             .and_then(|version| usize::from_str(version.trim_end()).ok())
         {
-            Some(version) => {
-                chosen_version = version;
-            }
+            Some(version) => version,
             None => {
                 return Err(handshake::Error::Protocol {
                     msg: "Needed 'version=<integer>', got ".into(),
                     actual: buf,
-                })
+                });
             }
-        }
+        };
 
         if !versions.contains(&chosen_version) {
             return Err(handshake::Error::Protocol {

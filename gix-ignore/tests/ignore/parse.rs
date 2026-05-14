@@ -1,5 +1,5 @@
 use bstr::BString;
-use gix_glob::{pattern::Mode, Pattern};
+use gix_glob::{Pattern, pattern::Mode};
 use gix_testtools::fixture_bytes;
 
 #[test]

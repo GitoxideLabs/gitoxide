@@ -210,13 +210,9 @@ pub fn zealously_contract_hunks(
             }
         }
 
-        let mut out = Vec::with_capacity(remove_leading_a_hunks_from.unwrap_or_else(|| {
-            if a_hunk_token_equal_till.is_some() {
-                1
-            } else {
-                0
-            }
-        }));
+        let mut out = Vec::with_capacity(
+            remove_leading_a_hunks_from.unwrap_or_else(|| if a_hunk_token_equal_till.is_some() { 1 } else { 0 }),
+        );
         truncate_hunks_from_from_front(
             a_hunks,
             remove_leading_a_hunks_from,

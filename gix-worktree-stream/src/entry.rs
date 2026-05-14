@@ -6,7 +6,7 @@ use std::{
 use gix_error::ErrorExt;
 use gix_object::bstr::BStr;
 
-use crate::{protocol, Entry, Stream};
+use crate::{Entry, Stream, protocol};
 
 /// The error returned by [`next_entry()`][Stream::next_entry()].
 pub type Error = gix_error::Exn<gix_error::Message>;

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use gix_negotiate::Algorithm;
-use gix_object::{bstr, bstr::ByteSlice, FindExt};
+use gix_object::{FindExt, bstr, bstr::ByteSlice};
 use gix_ref::{file::ReferenceExt, store::WriteReflog};
 
 #[test]
@@ -118,7 +118,9 @@ fn run() -> crate::Result {
                             actual,
                             have,
                             "{algo_name}:cache={use_cache}: order and commit matches exactly, wanted {expected}, got {actual}, commits left: {:?}",
-                            std::iter::from_fn(|| negotiator.next_have(&mut graph)).map(|id| message(id.unwrap())).collect::<Vec<_>>(),
+                            std::iter::from_fn(|| negotiator.next_have(&mut graph))
+                                .map(|id| message(id.unwrap()))
+                                .collect::<Vec<_>>(),
                             actual = message(actual),
                             expected = message(have)
                         );

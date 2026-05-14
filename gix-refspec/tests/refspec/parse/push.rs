@@ -1,8 +1,8 @@
 use crate::parse::{assert_parse, b, try_parse};
 use gix_refspec::{
+    Instruction,
     instruction::Push,
     parse::{Error, Operation},
-    Instruction,
 };
 
 #[test]

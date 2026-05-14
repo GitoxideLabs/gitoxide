@@ -1,8 +1,8 @@
 use std::{io::Read, path::PathBuf};
 
 use crate::{
-    store_impl::{file, file::log},
     FullNameRef,
+    store_impl::{file, file::log},
 };
 
 impl file::Store {
@@ -91,7 +91,7 @@ pub mod create_or_update {
         path::{Path, PathBuf},
     };
 
-    use gix_hash::{oid, ObjectId};
+    use gix_hash::{ObjectId, oid};
     use gix_object::bstr::BStr;
 
     use crate::store_impl::{file, file::WriteReflog};

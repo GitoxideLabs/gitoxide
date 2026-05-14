@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use bytesize::ByteSize;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 use sysinfo::{CpuRefreshKind, RefreshKind};
 
 use crate::corpus::{Engine, Run};
@@ -65,7 +65,9 @@ pub fn create(path: impl AsRef<std::path::Path>) -> anyhow::Result<rusqlite::Con
         }
         Some(version) if version != VERSION => match con.close() {
             Ok(()) => {
-                bail!("Cannot handle database with version {version}, cannot yet migrate to {VERSION} - maybe migrate by hand?");
+                bail!(
+                    "Cannot handle database with version {version}, cannot yet migrate to {VERSION} - maybe migrate by hand?"
+                );
             }
             Err((_, err)) => return Err(err.into()),
         },

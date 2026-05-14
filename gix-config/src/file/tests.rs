@@ -10,13 +10,12 @@ mod try_from {
 
     use super::{bodies, headers};
     use crate::{
+        File,
         file::{self, SectionBodyIdsLut, SectionId},
         parse::{
-            section,
+            Event, section,
             tests::util::{name_event, newline_event, section_header, value_event},
-            Event,
         },
-        File,
     };
 
     #[test]

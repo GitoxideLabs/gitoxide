@@ -5,13 +5,13 @@ use gix_hash::ObjectId;
 use gix_object::{Exists, Find, FindExt, Write};
 use gix_odb::{Header, HeaderExt};
 use gix_ref::{
-    transaction::{LogChange, PreviousValue, RefLog},
     FullName,
+    transaction::{LogChange, PreviousValue, RefLog},
 };
 use smallvec::SmallVec;
 
 use crate::repository::{new_commit, new_commit_as};
-use crate::{commit, ext::ObjectIdExt, object, tag, Blob, Commit, Id, Object, Reference, Tag, Tree};
+use crate::{Blob, Commit, Id, Object, Reference, Tag, Tree, commit, ext::ObjectIdExt, object, tag};
 
 /// Tree editing
 #[cfg(feature = "tree-editor")]
@@ -392,8 +392,8 @@ impl crate::Repository {
         parents: SmallVec<[ObjectId; 1]>,
     ) -> Result<Id<'_>, commit::Error> {
         use gix_ref::{
-            transaction::{Change, RefEdit},
             Target,
+            transaction::{Change, RefEdit},
         };
 
         // TODO: possibly use CommitRef to save a few allocations (but will have to allocate for object ids anyway.

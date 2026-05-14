@@ -71,7 +71,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
                 format!("{line_number}: Emails without a name or email to map to are invalid"),
                 line,
             )
-            .raise())
+            .raise());
         }
     })
 }

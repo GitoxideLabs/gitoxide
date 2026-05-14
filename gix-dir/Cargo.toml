@@ -7,8 +7,8 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with directory walks"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
@@ -17,13 +17,15 @@ test = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-discover/sha1", "gix-index/sha1", "gix-object/sha1", "gix-worktree/sha1"]
+sha1 = ["gix-index/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-index/sha256"]
 
 [dependencies]
 gix-trace = { version = "^0.1.19", path = "../gix-trace" }
 gix-index = { version = "^0.51.0", path = "../gix-index" }
 gix-discover = { version = "^0.51.0", path = "../gix-discover" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-path = { version = "^0.12.0", path = "../gix-path" }
 gix-pathspec = { version = "^0.18.0", path = "../gix-pathspec" }
 gix-worktree = { version = "^0.52.0", path = "../gix-worktree", default-features = false }

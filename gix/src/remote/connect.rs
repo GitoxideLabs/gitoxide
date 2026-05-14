@@ -3,11 +3,11 @@
 use std::borrow::Cow;
 
 #[cfg(feature = "async-network-client")]
-use gix_transport::client::async_io::{connect, Transport};
+use gix_transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-network-client")]
-use gix_transport::client::blocking_io::{connect, Transport};
+use gix_transport::client::blocking_io::{Transport, connect};
 
-use crate::{config::tree::Protocol, remote::Connection, Remote};
+use crate::{Remote, config::tree::Protocol, remote::Connection};
 
 mod error {
     use super::connect;

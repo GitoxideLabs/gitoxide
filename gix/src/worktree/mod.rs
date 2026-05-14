@@ -10,8 +10,8 @@ pub use gix_worktree_state as state;
 pub use gix_worktree_stream as stream;
 
 use crate::{
-    bstr::{BStr, BString},
     Repository,
+    bstr::{BStr, BString},
 };
 
 #[cfg(feature = "index")]
@@ -227,9 +227,9 @@ pub mod attributes {
 #[cfg(feature = "attributes")]
 pub mod pathspec {
     use crate::{
+        Worktree,
         bstr::BStr,
         config::{cache::util::ApplyLeniencyDefaultValue, tree::gitoxide},
-        Worktree,
     };
 
     /// The error returned by [`Worktree::pathspec()`].

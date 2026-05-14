@@ -6,7 +6,7 @@ use std::{
 
 use bstr::BStr;
 
-use crate::{client::Error, Protocol};
+use crate::{Protocol, client::Error};
 
 /// This trait represents all transport related functions that don't require any input/output to be done which helps
 /// implementation to share more code across blocking and async programs.

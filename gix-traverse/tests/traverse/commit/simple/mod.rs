@@ -1,7 +1,7 @@
 use crate::hex_to_id;
 use crate::util::{commit_graph, git_graph, git_graph_with_time, named_fixture, parse_commit_names};
 use gix_hash::ObjectId;
-use gix_traverse::commit::{simple::Sorting, Parents, Simple};
+use gix_traverse::commit::{Parents, Simple, simple::Sorting};
 
 mod adjusted_dates;
 mod different_date;

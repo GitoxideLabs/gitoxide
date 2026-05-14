@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::atomic::AtomicBool};
+use std::{path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_hash::ObjectId;
 use gix_object::WriteTo;
@@ -73,7 +73,7 @@ pub fn fixture(path: &str) -> PathBuf {
 }
 
 pub fn fixture_hash_kind() -> gix_hash::Kind {
-    gix_testtools::hash_kind_from_env().unwrap_or_default()
+    gix_testtools::object_hash()
 }
 
 fn fixture_bytes(path: &str) -> Vec<u8> {
@@ -200,39 +200,8 @@ pub fn generated_tree_root_id() -> Result<ObjectId> {
     )?)
 }
 
-/// Normalize rendered tree snapshots so one inline `insta` expectation can be reused for
-/// SHA-1 and SHA-256 fixtures.
-///
-/// Every object id whose hex length matches one of [`gix_hash::Kind::all()`] is rewritten to a
-/// stable `Oid(<n>)` placeholder in first-seen order while the tree rendering itself remains
-/// unchanged.
 pub fn normalize_tree_snapshot(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    let mut seen = HashMap::<&str, usize>::new();
-    let mut next_id = 1usize;
-    let mut cursor = input;
-
-    while !cursor.is_empty() {
-        let hex_len = cursor.bytes().take_while(u8::is_ascii_hexdigit).count();
-        if hex_len >= 40 && gix_hash::Kind::all().iter().any(|kind| kind.len_in_hex() == hex_len) {
-            let oid = &cursor[..hex_len];
-            let normalized = *seen.entry(oid).or_insert_with(|| {
-                let current = next_id;
-                next_id += 1;
-                current
-            });
-            out.push_str("Oid(");
-            out.push_str(&normalized.to_string());
-            out.push(')');
-            cursor = &cursor[hex_len..];
-            continue;
-        }
-
-        let ch = cursor.chars().next().expect("not empty");
-        out.push(ch);
-        cursor = &cursor[ch.len_utf8()..];
-    }
-    out
+    gix_testtools::normalize_hashes(input).0
 }
 
 #[test]

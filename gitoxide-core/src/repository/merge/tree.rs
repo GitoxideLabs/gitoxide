@@ -6,11 +6,15 @@ pub struct Options {
     pub tree_favor: Option<gix::merge::tree::TreeFavor>,
     pub in_memory: bool,
     pub debug: bool,
+    pub message: Option<String>,
+    pub update_head: bool,
 }
 
 pub(super) mod function {
 
-    use anyhow::{anyhow, bail, Context};
+    use std::collections::BTreeSet;
+
+    use anyhow::{Context, anyhow, bail};
     use gix::{
         bstr::{BString, ByteSlice},
         merge::tree::TreatAsUnresolved,
@@ -34,13 +38,21 @@ pub(super) mod function {
             tree_favor,
             in_memory,
             debug,
+            message,
+            update_head,
         }: Options,
     ) -> anyhow::Result<()> {
         if format != OutputFormat::Human {
             bail!("JSON output isn't implemented yet");
         }
+        if update_head && in_memory {
+            bail!("`--update-head` cannot be used with `--in-memory` - cannot set head to nothing");
+        }
+        if update_head && message.is_none() {
+            bail!("`--update-head` requires `--message`");
+        }
         repo.object_cache_size_if_unset(repo.compute_object_cache_size_for_tree_diffs(&**repo.index_or_empty()?));
-        if in_memory {
+        if in_memory || message.is_some() {
             repo.objects.enable_object_memory();
         }
         let (base_ref, base_id) = refname_and_tree(&repo, base)?;
@@ -69,9 +81,17 @@ pub(super) mod function {
                 .into(),
         };
         let res = repo.merge_trees(base_id, ours_id, theirs_id, labels, options)?;
-        let has_conflicts = res.conflicts.is_empty();
+        let has_conflicts = !res.conflicts.is_empty();
         let has_unresolved_conflicts = res.has_unresolved_conflicts(TreatAsUnresolved::default());
-        {
+        if message.is_some() && has_unresolved_conflicts {
+            write_unresolved_conflict_paths(err, &res.conflicts)?;
+            if debug {
+                writeln!(err, "{:#?}", &res.conflicts)?;
+            }
+            bail!("Tree conflicted, refusing to write commit");
+        }
+
+        let tree_id = {
             let _span = gix::trace::detail!("Writing merged tree");
             let mut written = 0;
             let tree_id = res
@@ -83,16 +103,70 @@ pub(super) mod function {
                 })
                 .map_err(|err| anyhow!("{err}"))?;
             writeln!(out, "{tree_id} (wrote {written} trees)")?;
+            tree_id
+        };
+
+        let conflicts = res.conflicts;
+        if message.is_some() && !in_memory {
+            persist_in_memory_objects(&mut repo)?;
+        }
+
+        if let Some(message) = message {
+            let head_id = repo.head_id()?;
+            let commit_id = if update_head {
+                let commit_id = repo.commit("HEAD", message, tree_id, Some(head_id))?;
+                let mut index = repo.index_from_tree(&tree_id)?;
+                index.write(Default::default())?;
+                commit_id
+            } else {
+                repo.new_commit(message, tree_id, Some(head_id))?.id()
+            };
+            writeln!(out, "{commit_id} (commit)")?;
+            return Ok(());
         }
 
         if debug {
-            writeln!(err, "{:#?}", &res.conflicts)?;
+            writeln!(err, "{conflicts:#?}")?;
         }
-        if !has_conflicts {
-            writeln!(err, "{} possibly resolved conflicts", res.conflicts.len())?;
+        if has_conflicts {
+            writeln!(err, "{} possibly resolved conflicts", conflicts.len())?;
         }
         if has_unresolved_conflicts {
             bail!("Tree conflicted")
+        }
+        Ok(())
+    }
+
+    fn persist_in_memory_objects(repo: &mut gix::Repository) -> anyhow::Result<()> {
+        let objects = repo.objects.take_object_memory().expect("always write in memory first");
+        for (_id, (kind, data)) in objects.iter() {
+            repo.write_buf(*kind, data).map_err(|err| anyhow!("{err}"))?;
+        }
+        Ok(())
+    }
+
+    fn write_unresolved_conflict_paths(
+        err: &mut dyn std::io::Write,
+        conflicts: &[gix::merge::tree::Conflict],
+    ) -> std::io::Result<()> {
+        let how = TreatAsUnresolved::default();
+        let mut paths = BTreeSet::new();
+        for conflict in conflicts.iter().filter(|conflict| conflict.is_unresolved(how)) {
+            let (ours, theirs) = conflict.changes_in_resolution();
+            for path in [
+                ours.source_location(),
+                ours.location(),
+                theirs.source_location(),
+                theirs.location(),
+            ] {
+                if !path.is_empty() {
+                    paths.insert(path);
+                }
+            }
+        }
+        for path in paths {
+            err.write_all(path.as_ref())?;
+            err.write_all(b"\n")?;
         }
         Ok(())
     }

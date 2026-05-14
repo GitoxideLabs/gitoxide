@@ -77,7 +77,7 @@ pub(super) mod function {
 
     use gix_features::progress::{Count, DynNestedProgress, Progress};
 
-    use crate::{multi_index, MMap};
+    use crate::{MMap, multi_index};
 
     use super::{Entry, Error, Options, Outcome, ProgressId};
 

@@ -108,15 +108,30 @@ fn create_dir(p: &Path) -> Result<(), Error> {
 }
 
 /// Options for use in [`into()`];
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Default, Clone)]
 pub struct Options {
-    /// If true, and the kind of repository to create has a worktree, then the destination directory must be empty.
+    /// Control whether the destination directory must be empty when creating a repository with a worktree.
     ///
-    /// By default repos with worktree can be initialized into a non-empty repository as long as there is no `.git` directory.
-    pub destination_must_be_empty: bool,
+    /// - `None` (default): initialize like Git and allow a non-empty destination directory, as long as no `.git`
+    ///   directory is present.
+    /// - `Some(true)`: require an empty destination directory.
+    /// - `Some(false)`: explicitly allow initialization into a non-empty destination directory (still requires that no
+    ///   `.git` directory is present).
+    ///
+    /// For clones, checkout failure cleanup is based on whether the destination was already present and non-empty before
+    /// initialization began, not on this option alone. In particular, if the destination was empty or had to be created,
+    /// cleanup may remove the entire destination, including the created `.git` directory. Preservation of the destination
+    /// for inspection or manual cleanup is only guaranteed when the destination was non-empty before the clone started.
+    ///
+    /// Bare repositories always require an empty destination, regardless of this option.
+    pub destination_must_be_empty: Option<bool>,
     /// If set, use these filesystem capabilities to populate the respective git-config fields.
     /// If `None`, the directory will be probed.
     pub fs_capabilities: Option<gix_fs::Capabilities>,
+    /// If set to `Some(Sha256)`, write `extensions.objectFormat=sha256`.
+    /// Otherwise, create a repository without an explicit object-format extension,
+    /// which is interpreted as legacy SHA-1.
+    pub object_hash: Option<gix_hash::Kind>,
 }
 
 /// Create a new `.git` repository of `kind` within the possibly non-existing `directory`
@@ -130,12 +145,13 @@ pub fn into(
     Options {
         fs_capabilities,
         destination_must_be_empty,
+        object_hash,
     }: Options,
 ) -> Result<gix_discover::repository::Path, Error> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
 
-    if bare || destination_must_be_empty {
+    if bare || destination_must_be_empty.unwrap_or(false) {
         let num_entries_in_dot_git = fs::read_dir(&dot_git)
             .or_else(|err| {
                 if err.kind() == std::io::ErrorKind::NotFound {
@@ -214,13 +230,29 @@ pub fn into(
             let caps = fs_capabilities.unwrap_or_else(|| gix_fs::Capabilities::probe(&dot_git));
             let mut core = config.new_section("core", None).expect("valid section name");
 
-            core.push(key("repositoryformatversion"), Some("0".into()));
             core.push(key("filemode"), Some(bool(caps.executable_bit).into()));
             core.push(key("bare"), Some(bool(bare).into()));
             core.push(key("logallrefupdates"), Some(bool(!bare).into()));
             core.push(key("symlinks"), Some(bool(caps.symlink).into()));
             core.push(key("ignorecase"), Some(bool(caps.ignore_case).into()));
             core.push(key("precomposeunicode"), Some(bool(caps.precompose_unicode).into()));
+
+            match object_hash {
+                #[cfg(feature = "sha256")]
+                Some(gix_hash::Kind::Sha256) => {
+                    core.push(key("repositoryformatversion"), Some("1".into()));
+
+                    let mut extensions = config.new_section("extensions", None).expect("valid section name");
+                    extensions.push(
+                        key("objectformat"),
+                        Some(gix_hash::Kind::Sha256.to_string().as_bytes().into()),
+                    );
+                }
+                _ => {
+                    core.push(key("repositoryformatversion"), Some("0".into()));
+                }
+            }
+
             caps
         };
         config_file

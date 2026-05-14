@@ -1,10 +1,10 @@
 mod invoke {
     use bstr::ByteSlice;
     use gix_credentials::{
+        Program,
         helper::{Action, Cascade},
         protocol,
         protocol::Context,
-        Program,
     };
     use gix_sec::identity::Account;
 

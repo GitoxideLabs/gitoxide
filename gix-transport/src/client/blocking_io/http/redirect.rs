@@ -1,6 +1,8 @@
 /// The error provided when redirection went beyond what we deem acceptable.
 #[derive(Debug, thiserror::Error)]
-#[error("Redirect url {redirect_url:?} could not be reconciled with original url {expected_url} as they don't share authority or the same suffix")]
+#[error(
+    "Redirect url {redirect_url:?} could not be reconciled with original url {expected_url} as they don't share authority or the same suffix"
+)]
 pub struct Error {
     redirect_url: String,
     expected_url: String,

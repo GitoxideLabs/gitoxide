@@ -9,7 +9,7 @@
     doc = ::document_features::document_features!()
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 /// The level at which the tracing item should be created.
 ///
@@ -35,7 +35,7 @@ pub const MAX_LEVEL: Level = Level::Coarse;
 mod enabled;
 
 #[cfg(feature = "tracing")]
-pub use enabled::{__tracing, field, Span};
+pub use enabled::{__tracing, Span, field};
 
 impl Span {
     /// Execute `f` in with this span active, consuming it.

@@ -7,10 +7,9 @@ use gix_lock::acquire::Fail;
 use crate::{
     config,
     config::{
-        boolean,
+        Cache, boolean,
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
         tree::{Core, Key},
-        Cache,
     },
     remote,
     repository::identity,

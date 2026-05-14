@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use super::Iter;
 use crate::{
-    bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool, worktree::IndexPersistedOrInMemory, PathspecDetached,
-    Repository,
+    PathspecDetached, Repository, bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool,
+    worktree::IndexPersistedOrInMemory,
 };
 
 /// An entry of the directory walk as returned by the [iterator](Iter).

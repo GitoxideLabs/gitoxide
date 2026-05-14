@@ -419,8 +419,8 @@ pub mod pack {
         use std::{ffi::OsStr, str::FromStr};
 
         use clap::{
-            builder::{NonEmptyStringValueParser, PossibleValue, TypedValueParser},
             Arg, Command, Error,
+            builder::{NonEmptyStringValueParser, PossibleValue, TypedValueParser},
         };
 
         #[derive(Clone)]

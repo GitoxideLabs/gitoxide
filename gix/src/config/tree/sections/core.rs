@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Core, Key, Section},
+    config::tree::{Core, Key, Section, keys},
 };
 
 impl Core {
@@ -175,7 +175,7 @@ mod filter {
         use crate::{
             bstr::{BStr, ByteSlice},
             config,
-            config::tree::{core::CheckRoundTripEncoding, Key},
+            config::tree::{Key, core::CheckRoundTripEncoding},
         };
 
         impl CheckRoundTripEncoding {

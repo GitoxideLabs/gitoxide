@@ -62,11 +62,11 @@ mod write;
 
 /// Lifecycle
 impl<'a> CommitRef<'a> {
-    /// Deserialize a commit from the given `data` bytes while avoiding most allocations, using `hash_kind` to know
+    /// Deserialize a commit from the given `data` bytes while avoiding most allocations, using `object_hash` to know
     /// what kind of hash to expect for validation.
-    pub fn from_bytes(mut data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<CommitRef<'a>, crate::decode::Error> {
+    pub fn from_bytes(mut data: &'a [u8], object_hash: gix_hash::Kind) -> Result<CommitRef<'a>, crate::decode::Error> {
         let input = &mut data;
-        match decode::commit(input, hash_kind) {
+        match decode::commit(input, object_hash) {
             Ok(tag) => Ok(tag),
             Err(err) => Err(err),
         }

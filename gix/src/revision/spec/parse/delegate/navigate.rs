@@ -1,4 +1,4 @@
-use gix_error::{bail, message, ErrorExt, Exn, OptionExt, ResultExt};
+use gix_error::{ErrorExt, Exn, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_index::entry::Stage;
 use gix_revision::spec::parse::{
@@ -8,11 +8,11 @@ use gix_revision::spec::parse::{
 
 use crate::revision::spec::parse::delegate::peel;
 use crate::{
+    Object,
     bstr::{BStr, ByteSlice},
     ext::ObjectIdExt,
     object,
-    revision::spec::parse::{delegate::Replacements, Delegate},
-    Object,
+    revision::spec::parse::{Delegate, delegate::Replacements},
 };
 
 impl delegate::Navigate for Delegate<'_> {

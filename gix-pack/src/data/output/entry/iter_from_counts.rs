@@ -5,12 +5,12 @@ pub(crate) mod function {
         parallel,
         parallel::SequenceId,
         progress::{
-            prodash::{Count, DynNestedProgress},
             Progress,
+            prodash::{Count, DynNestedProgress},
         },
     };
 
-    use super::{reduce, util, Error, Mode, Options, Outcome, ProgressId};
+    use super::{Error, Mode, Options, Outcome, ProgressId, reduce, util};
     use crate::data::output;
 
     /// Given a known list of object `counts`, calculate entries ready to be put into a data pack.
@@ -54,7 +54,7 @@ pub(crate) mod function {
             chunk_size,
         }: Options,
     ) -> impl Iterator<Item = Result<(SequenceId, Vec<output::Entry>), Error>>
-           + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
+    + parallel::reduce::Finalize<Reduce = reduce::Statistics<Error>>
     where
         Find: crate::Find + Send + Clone + 'static,
     {

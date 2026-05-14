@@ -1,7 +1,7 @@
 use std::{collections::HashSet, io::Write, str::FromStr};
 
 use bstr::{BString, ByteSlice};
-use gix_packetline::blocking_io::{encode, StreamingPeekableIter, Writer};
+use gix_packetline::blocking_io::{StreamingPeekableIter, Writer, encode};
 
 use crate::driver::process::Server;
 
@@ -99,7 +99,7 @@ impl Server {
                         return Err(handshake::Error::Protocol {
                             msg: "Expected 'version=<integer>', got".into(),
                             actual: buf,
-                        })
+                        });
                     }
                 },
             );
@@ -170,7 +170,7 @@ impl Server {
                 return Err(next_request::Error::Protocol {
                     msg: "Wanted 'command=<name>', got ".into(),
                     actual: buf.into(),
-                })
+                });
             }
         };
 
@@ -210,11 +210,11 @@ impl Server {
 mod request {
     use std::io::Write;
 
-    use gix_packetline::blocking_io::{encode, Writer};
+    use gix_packetline::blocking_io::{Writer, encode};
 
     use crate::driver::{
         process,
-        process::{server::Request, PacketlineReader},
+        process::{PacketlineReader, server::Request},
     };
 
     impl Request<'_> {

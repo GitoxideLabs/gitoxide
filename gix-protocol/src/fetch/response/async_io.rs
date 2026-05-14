@@ -1,12 +1,11 @@
 use std::io;
 
 use crate::transport::client::async_io::ExtendedBufRead;
-use gix_transport::{client, Protocol};
+use gix_transport::{Protocol, client};
 
 use crate::fetch::{
-    response,
-    response::{shallow_update_from_line, Acknowledgement, ShallowUpdate, WantedRef},
-    Response,
+    Response, response,
+    response::{Acknowledgement, ShallowUpdate, WantedRef, shallow_update_from_line},
 };
 
 async fn parse_v2_section<T>(

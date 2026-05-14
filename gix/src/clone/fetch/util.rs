@@ -1,14 +1,14 @@
 use std::{borrow::Cow, io::Write};
 
 use gix_ref::{
-    transaction::{LogChange, RefLog},
     FullNameRef, PartialName,
+    transaction::{LogChange, RefLog},
 };
 
 use super::Error;
 use crate::{
-    bstr::{BStr, BString, ByteSlice},
     Repository,
+    bstr::{BStr, BString, ByteSlice},
 };
 
 enum WriteMode {
@@ -69,8 +69,8 @@ pub fn update_head(
     ref_name: Option<&PartialName>,
 ) -> Result<(), Error> {
     use gix_ref::{
-        transaction::{PreviousValue, RefEdit},
         Target,
+        transaction::{PreviousValue, RefEdit},
     };
     let head_info = match ref_name {
         Some(ref_name) => Some(find_custom_refname(ref_map, ref_name)?),

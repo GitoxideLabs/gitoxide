@@ -140,12 +140,12 @@ pub mod pretty {
         #[cfg_attr(not(feature = "prodash-render-tui"), allow(unused_variables))] progress_keep_open: bool,
         range: impl Into<Option<ProgressRange>>,
         run: impl FnOnce(
-                progress::DoOrDiscard<prodash::tree::Item>,
-                &mut dyn std::io::Write,
-                &mut dyn std::io::Write,
-            ) -> Result<T>
-            + Send
-            + 'static,
+            progress::DoOrDiscard<prodash::tree::Item>,
+            &mut dyn std::io::Write,
+            &mut dyn std::io::Write,
+        ) -> Result<T>
+        + Send
+        + 'static,
     ) -> Result<T> {
         crate::shared::init_env_logger();
 
@@ -273,7 +273,7 @@ pub fn setup_line_renderer_range(
 mod clap {
     use std::{ffi::OsStr, str::FromStr};
 
-    use clap::{builder, builder::PossibleValue, error::ErrorKind, Arg, Command, Error};
+    use clap::{Arg, Command, Error, builder, builder::PossibleValue, error::ErrorKind};
     use gitoxide_core as core;
     use gix::bstr::BString;
 

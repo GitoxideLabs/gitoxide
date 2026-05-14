@@ -18,10 +18,10 @@ pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 0..=2;
 
 pub(crate) mod function {
     use crate::repository::HexId;
-    use crate::{repository::revision::list::Format, OutputFormat};
-    use anyhow::{bail, Context};
+    use crate::{OutputFormat, repository::revision::list::Format};
+    use anyhow::{Context, bail};
     use gix::odb::store::RefreshMode;
-    use gix::{hashtable::HashMap, revision::walk::Sorting, Progress};
+    use gix::{Progress, hashtable::HashMap, revision::walk::Sorting};
     use layout::{
         backends::svg::SVGWriter,
         core::{base::Orientation, geometry::Point, style::StyleAttr},

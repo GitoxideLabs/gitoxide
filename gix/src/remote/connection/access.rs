@@ -1,6 +1,6 @@
 use crate::{
-    remote::{connection::AuthenticateFn, Connection},
     Remote,
+    remote::{Connection, connection::AuthenticateFn},
 };
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;

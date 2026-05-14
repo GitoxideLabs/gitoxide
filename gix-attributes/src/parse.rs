@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use bstr::{BStr, ByteSlice};
 use kstring::KStringRef;
 
-use crate::{name, AssignmentRef, Name, NameRef, StateRef};
+use crate::{AssignmentRef, Name, NameRef, StateRef, name};
 
 /// The kind of attribute that was parsed.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]

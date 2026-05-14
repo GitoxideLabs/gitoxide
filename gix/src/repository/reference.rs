@@ -1,10 +1,10 @@
 use gix_hash::ObjectId;
 use gix_ref::{
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
     FullName, PartialNameRef, Target,
+    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
 };
 
-use crate::{bstr::BString, ext::ReferenceExt, reference, Reference};
+use crate::{Reference, bstr::BString, ext::ReferenceExt, reference};
 
 /// Obtain and alter references comfortably
 impl crate::Repository {

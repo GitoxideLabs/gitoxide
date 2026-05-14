@@ -9,9 +9,9 @@ use std::{
 };
 
 use crate::{
+    BStr, FullName, Namespace, Reference,
     file::loose::{self, iter::SortedLoosePaths},
     store_impl::{file, packed},
-    BStr, FullName, Namespace, Reference,
 };
 
 /// An iterator stepping through sorted input of loose references and packed references, preferring loose refs over otherwise
@@ -21,7 +21,7 @@ use crate::{
 pub struct LooseThenPacked<'p, 's> {
     git_dir: &'s Path,
     common_dir: Option<&'s Path>,
-    hash_kind: gix_hash::Kind,
+    object_hash: gix_hash::Kind,
     namespace: Option<&'s Namespace>,
     iter_packed: Option<Peekable<packed::Iter<'p>>>,
     iter_git_dir: Peekable<SortedLoosePaths>,
@@ -98,7 +98,7 @@ impl<'p> LooseThenPacked<'p, '_> {
                 source: err,
                 path: refpath.to_owned(),
             })?;
-        loose::Reference::try_from_path(name, buf, self.hash_kind)
+        loose::Reference::try_from_path(name, buf, self.object_hash)
             .map_err(|err| {
                 let relative_path = refpath
                     .strip_prefix(git_dir)
@@ -433,7 +433,7 @@ impl file::Store {
         Ok(LooseThenPacked {
             git_dir: self.git_dir(),
             common_dir: self.common_dir(),
-            hash_kind: self.object_hash,
+            object_hash: self.object_hash,
             iter_packed: match packed {
                 Some(packed) => Some(
                     match git_dir_info.prefix() {

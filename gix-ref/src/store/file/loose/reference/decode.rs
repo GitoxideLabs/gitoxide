@@ -1,7 +1,7 @@
 use gix_hash::ObjectId;
 use gix_object::bstr::BString;
 
-use crate::{parse::hex_hash, store_impl::file::loose::Reference, FullName, Target};
+use crate::{FullName, Target, parse::hex_hash, store_impl::file::loose::Reference};
 
 enum MaybeUnsafeState {
     Id(ObjectId),
@@ -34,7 +34,7 @@ impl TryFrom<MaybeUnsafeState> for Target {
                         return Err(Error::RefnameValidation {
                             source: err,
                             path: name,
-                        })
+                        });
                     }
                 })
             }
@@ -44,11 +44,11 @@ impl TryFrom<MaybeUnsafeState> for Target {
 
 impl Reference {
     /// Create a new reference named `name` from the loose reference file contents in `path_contents`,
-    /// parsing object ids as `hash_kind`.
-    pub fn try_from_path(name: FullName, path_contents: &[u8], hash_kind: gix_hash::Kind) -> Result<Self, Error> {
+    /// parsing object ids as `object_hash`.
+    pub fn try_from_path(name: FullName, path_contents: &[u8], object_hash: gix_hash::Kind) -> Result<Self, Error> {
         Ok(Reference {
             name,
-            target: parse(path_contents, hash_kind)
+            target: parse(path_contents, object_hash)
                 .map_err(|_| Error::Parse {
                     content: path_contents.into(),
                 })?
@@ -68,7 +68,7 @@ impl Reference {
 /// [`MaybeUnsafeState::Id`].
 ///
 /// If neither reference form can be parsed, an error is returned.
-fn parse(mut i: &[u8], hash_kind: gix_hash::Kind) -> Result<MaybeUnsafeState, ()> {
+fn parse(mut i: &[u8], object_hash: gix_hash::Kind) -> Result<MaybeUnsafeState, ()> {
     if let Some(rest) = i.strip_prefix(b"ref: ") {
         i = rest;
         while i.first() == Some(&b' ') {
@@ -78,7 +78,7 @@ fn parse(mut i: &[u8], hash_kind: gix_hash::Kind) -> Result<MaybeUnsafeState, ()
         let path = i[..path_end].into();
         Ok(MaybeUnsafeState::UnvalidatedPath(path))
     } else {
-        let hex = hex_hash(&mut i, hash_kind)?;
+        let hex = hex_hash(&mut i, object_hash)?;
         if i.first().is_some_and(u8::is_ascii_hexdigit) {
             return Err(());
         }

@@ -13,7 +13,9 @@ pub mod edit {
         FileTransactionCommit(#[from] gix_ref::file::transaction::commit::Error),
         #[error(transparent)]
         NameValidation(#[from] gix_validate::reference::name::Error),
-        #[error("Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in milliseconds to wait for locks or negative to wait forever")]
+        #[error(
+            "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in milliseconds to wait for locks or negative to wait forever"
+        )]
         LockTimeoutConfiguration(#[from] config::lock_timeout::Error),
         #[error(transparent)]
         ParseCommitterTime(#[from] crate::config::time::Error),

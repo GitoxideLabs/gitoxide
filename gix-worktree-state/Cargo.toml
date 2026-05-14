@@ -7,22 +7,25 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project implementing setting the worktree to a particular state"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [lib]
 doctest = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-filter/sha1", "gix-index/sha1", "gix-object/sha1", "gix-worktree/sha1"]
+sha1 = ["gix-index/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-index/sha256"]
+## Enable support for thread-safety.
+parallel = ["gix-features/parallel"]
 
 [dependencies]
 gix-worktree = { version = "^0.52.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
 gix-index = { version = "^0.51.0", path = "../gix-index" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-path = { version = "^0.12.0", path = "../gix-path" }
 gix-features = { version = "^0.48.0", path = "../gix-features" }
@@ -33,7 +36,17 @@ thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false }
 
 [dev-dependencies]
-gix-worktree-state = { path = ".", features = ["sha1"] }
+gix-worktree-state = { path = ".", features = ["sha1", "sha256"] }
+gix-object = { path = "../gix-object" }
+gix-discover = { path = "../gix-discover" }
+gix-filter = { path = "../gix-filter" }
+gix-index = { path = "../gix-index" }
+gix-hash = { path = "../gix-hash", features = ["sha256"] }
+gix-fs = { path = "../gix-fs" }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-odb = { path = "../gix-odb" }
+symlink = "0.1.0"
+walkdir = "2.3.2"
 
 [package.metadata.docs.rs]
 features = ["sha1"]

@@ -1,4 +1,4 @@
-use gix_config_value::{integer::Suffix, Integer};
+use gix_config_value::{Integer, integer::Suffix};
 
 use crate::b;
 

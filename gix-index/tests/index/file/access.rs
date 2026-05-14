@@ -1,5 +1,5 @@
 mod set_path {
-    use crate::index::file::read;
+    use crate::file::read;
 
     #[test]
     fn future_writes_respect_the_newly_set_path() -> crate::Result {

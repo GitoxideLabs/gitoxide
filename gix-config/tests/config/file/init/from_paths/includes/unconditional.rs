@@ -1,8 +1,8 @@
 use std::fs;
 
 use gix_config::{
-    file::{includes, init, init::from_paths},
     File,
+    file::{includes, init, init::from_paths},
 };
 use gix_testtools::tempfile::tempdir;
 

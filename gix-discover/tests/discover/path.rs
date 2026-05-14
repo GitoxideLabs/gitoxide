@@ -46,7 +46,7 @@ mod from_git_dir_file {
 
 #[test]
 fn repository_kind() {
-    use gix_discover::path::{repository_kind, RepositoryKind::*};
+    use gix_discover::path::{RepositoryKind::*, repository_kind};
     assert_eq!(repository_kind("hello".as_ref()), None);
     assert_eq!(repository_kind(".git".as_ref()), Some(Common));
     assert_eq!(repository_kind("foo/.git".as_ref()), Some(Common));

@@ -1,6 +1,6 @@
 use std::{
     path::Path,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 
 use crate::store::{handle, types};
@@ -68,7 +68,9 @@ impl super::Store {
                                         None
                                     }
                                     None => {
-                                        unreachable!("BUG: must set this handle to be stable to avoid slots to be cleared/changed")
+                                        unreachable!(
+                                            "BUG: must set this handle to be stable to avoid slots to be cleared/changed"
+                                        )
                                     }
                                 };
                                 slot.files.store(files);
@@ -108,7 +110,9 @@ impl super::Store {
                                                 load_pack(path, id, self.object_hash, self.alloc_limit_bytes)
                                             })?,
                                         None => {
-                                            unreachable!("BUG: must set this handle to be stable to avoid slots to be cleared/changed")
+                                            unreachable!(
+                                                "BUG: must set this handle to be stable to avoid slots to be cleared/changed"
+                                            )
                                         }
                                     };
                                     slot.files.store(files);

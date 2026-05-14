@@ -1,13 +1,13 @@
 use std::{str::FromStr, time::SystemTime};
 
-use jiff::{civil::Date, fmt::rfc2822, tz::TimeZone, Zoned};
+use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 
 use crate::parse::git::parse_git_date_format;
 use crate::parse::raw::parse_raw;
 use crate::{
+    Error, OffsetInSeconds, SecondsSinceUnixEpoch, Time,
     parse::relative,
     time::format::{DEFAULT, GITOXIDE, ISO8601, ISO8601_STRICT, SHORT},
-    Error, OffsetInSeconds, SecondsSinceUnixEpoch, Time,
 };
 use gix_error::{Exn, ResultExt};
 

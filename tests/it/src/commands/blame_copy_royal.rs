@@ -5,10 +5,10 @@ pub struct Options {
 pub(super) mod function {
     use anyhow::Context;
     use gix::{
+        ObjectId,
         blame::BlamePathEntry,
         bstr::{BString, ByteSlice},
         objs::FindExt,
-        ObjectId,
     };
     use std::{
         collections::BTreeSet,
@@ -314,7 +314,7 @@ git commit -m {commit_id}
 
             children.sort_by_key(|(_, x)| x.parent_index);
 
-            let parents = children
+            children
                 .iter()
                 .filter_map(|(index, child)| {
                     let parent_blob_id = child.previous_blob_id;
@@ -329,9 +329,7 @@ git commit -m {commit_id}
                         })
                         .cloned()
                 })
-                .collect();
-
-            parents
+                .collect()
         }
     }
 }

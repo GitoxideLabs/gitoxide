@@ -1,8 +1,8 @@
 use gix_hash::ObjectId;
 
 use crate::{
-    bstr::{BString, ByteSlice},
     Head,
+    bstr::{BString, ByteSlice},
 };
 
 impl<'repo> Head<'repo> {

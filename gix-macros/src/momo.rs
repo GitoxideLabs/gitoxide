@@ -125,7 +125,7 @@ fn parse_bounds(bounds: &Punctuated<TypeParamBound, Token![+]>) -> Option<Conver
     if bounds.len() != 1 {
         return None;
     }
-    if let TypeParamBound::Trait(ref tb) = bounds.first().unwrap() {
+    if let TypeParamBound::Trait(tb) = bounds.first().unwrap() {
         if let Some(seg) = tb.path.segments.iter().next_back() {
             if let PathArguments::AngleBracketed(ref gen_args) = seg.arguments {
                 if let GenericArgument::Type(_) = gen_args.args.first().unwrap() {
@@ -147,7 +147,7 @@ fn parse_bounds(bounds: &Punctuated<TypeParamBound, Token![+]>) -> Option<Conver
 fn parse_generics(decl: &Signature) -> HashMap<Ident, Conversion> {
     let mut ty_conversions = HashMap::new();
     for gp in decl.generics.params.iter() {
-        if let GenericParam::Type(ref tp) = gp {
+        if let GenericParam::Type(tp) = gp {
             if let Some(conversion) = parse_bounds(&tp.bounds) {
                 ty_conversions.insert(tp.ident.clone(), conversion);
             }
@@ -155,7 +155,7 @@ fn parse_generics(decl: &Signature) -> HashMap<Ident, Conversion> {
     }
     if let Some(ref wc) = decl.generics.where_clause {
         for wp in wc.predicates.iter() {
-            if let WherePredicate::Type(ref pt) = wp {
+            if let WherePredicate::Type(pt) = wp {
                 if let Some(ident) = parse_bounded_type(&pt.bounded_ty) {
                     if let Some(conversion) = parse_bounds(&pt.bounds) {
                         ty_conversions.insert(ident, conversion);

@@ -4,11 +4,11 @@ use std::{
     collections::BTreeMap,
 };
 
-use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
+use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 
 use crate::{
+    GENERATION_NUMBER_MAX, Graph, Position,
     file::{self},
-    Graph, Position, GENERATION_NUMBER_MAX,
 };
 
 /// Statistics gathered while verifying the integrity of the graph as returned by [`Graph::verify_integrity()`].

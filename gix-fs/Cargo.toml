@@ -2,13 +2,13 @@ lints.workspace = true
 
 [package]
 name = "gix-fs"
-version = "0.21.0"
+version = "0.21.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate providing file system specific utilities to `gitoxide`"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]

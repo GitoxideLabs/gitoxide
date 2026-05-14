@@ -3,7 +3,7 @@ use std::fmt;
 use bitflags::bitflags;
 use bstr::{BStr, ByteSlice};
 
-use crate::{pattern, wildmatch, Pattern};
+use crate::{Pattern, pattern, wildmatch};
 
 bitflags! {
     /// Information about a [`Pattern`].

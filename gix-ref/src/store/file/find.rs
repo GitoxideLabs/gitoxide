@@ -7,10 +7,9 @@ use std::{
 pub use error::Error;
 
 use crate::{
-    file,
+    BStr, BString, FullNameRef, PartialName, PartialNameRef, Reference, file,
     name::is_pseudo_ref,
     store_impl::{file::loose, packed},
-    BStr, BString, FullNameRef, PartialName, PartialNameRef, Reference,
 };
 
 /// ### Finding References - notes about precomposed unicode.
@@ -308,12 +307,12 @@ pub mod existing {
     pub use error::Error;
 
     use crate::{
+        PartialNameRef, Reference,
         file::{self},
         store_impl::{
             file::{find, loose},
             packed,
         },
-        PartialNameRef, Reference,
     };
 
     impl file::Store {

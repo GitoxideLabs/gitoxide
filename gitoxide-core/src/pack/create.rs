@@ -2,8 +2,8 @@ use std::{ffi::OsStr, io, path::Path, str::FromStr, time::Instant};
 
 use anyhow::anyhow;
 use gix::{
-    hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack, parallel::InOrderIter, prelude::Finalize,
-    progress, traverse, Count, NestedProgress, Progress,
+    Count, NestedProgress, Progress, hash, hash::ObjectId, interrupt, objs::bstr::ByteVec, odb::pack,
+    parallel::InOrderIter, prelude::Finalize, progress, traverse,
 };
 
 use crate::OutputFormat;

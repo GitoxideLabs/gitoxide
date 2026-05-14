@@ -72,12 +72,12 @@ pub fn header(input: &mut &[u8]) -> Result<Header, ()> {
 /// The reference line has the form `<hex-object-id> <ref-name>` followed by a
 /// line ending. If the following line starts with `^`, it is parsed as the
 /// peeled object id for the returned [`packed::Reference`].
-/// Object ids are parsed according to `hash_kind`.
+/// Object ids are parsed according to `object_hash`.
 ///
 /// On success, `input` is advanced past the reference line and, if present, the
 /// peeled object line.
-pub fn reference<'a>(input: &mut &'a [u8], hash_kind: gix_hash::Kind) -> Result<packed::Reference<'a>, ()> {
-    let target = parse::hex_hash(input, hash_kind)?;
+pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> Result<packed::Reference<'a>, ()> {
+    let target = parse::hex_hash(input, object_hash)?;
     let Some(rest) = input.strip_prefix(b" ") else {
         return Err(());
     };
@@ -86,7 +86,7 @@ pub fn reference<'a>(input: &mut &'a [u8], hash_kind: gix_hash::Kind) -> Result<
 
     let object = if let Some(rest) = input.strip_prefix(b"^") {
         *input = rest;
-        let object = parse::hex_hash(input, hash_kind)?;
+        let object = parse::hex_hash(input, object_hash)?;
         parse::newline(input)?;
         Some(object)
     } else {

@@ -1,5 +1,5 @@
 use bstr::ByteVec;
-use gix_config::file::{init, Metadata};
+use gix_config::file::{Metadata, init};
 
 #[test]
 fn empty_sections_roundtrip() {

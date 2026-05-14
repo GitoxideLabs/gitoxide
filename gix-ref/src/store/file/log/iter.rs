@@ -1,10 +1,9 @@
 use gix_object::bstr::ByteSlice;
 
 use crate::{
-    file,
+    FullNameRef, file,
     file::loose::reference::logiter::must_be_io_err,
     store_impl::file::{log, log::iter::decode::LineNumber},
-    FullNameRef,
 };
 
 ///

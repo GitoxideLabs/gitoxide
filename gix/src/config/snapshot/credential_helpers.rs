@@ -56,7 +56,7 @@ pub(super) mod function {
         config::{
             cache::util::ApplyLeniency,
             credential_helpers::Error,
-            tree::{credential, gitoxide::Credentials, Core, Credential},
+            tree::{Core, Credential, credential, gitoxide::Credentials},
         },
     };
 

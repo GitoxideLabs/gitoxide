@@ -4,7 +4,7 @@ mod locate {
     use gix_object::Kind;
     use gix_odb::pack;
 
-    use crate::{fixture_path, hex_to_id, pack::SMALL_PACK_INDEX};
+    use crate::{SMALL_PACK_INDEX, fixture_path, hex_to_id};
 
     fn locate<'a>(hex_id: &str, out: &'a mut Vec<u8>) -> gix_object::Data<'a> {
         let bundle = pack::Bundle::at(fixture_path(SMALL_PACK_INDEX), gix_hash::Kind::Sha1).expect("pack and idx");
@@ -24,7 +24,7 @@ mod locate {
         use gix_features::zlib;
         use gix_odb::pack;
 
-        use crate::{fixture_path, pack::PACKS_AND_INDICES};
+        use crate::{PACKS_AND_INDICES, fixture_path};
 
         #[test]
         fn all() -> Result<(), Box<dyn std::error::Error>> {
@@ -87,6 +87,7 @@ mod locate {
     }
 }
 
+#[cfg(all(not(feature = "wasm"), feature = "streaming-input"))]
 mod write_to_directory {
     use std::{fs, path::Path, sync::atomic::AtomicBool};
 
@@ -94,10 +95,7 @@ mod write_to_directory {
     use gix_odb::pack;
     use gix_testtools::tempfile::TempDir;
 
-    use crate::{
-        fixture_path,
-        pack::{SMALL_PACK, SMALL_PACK_INDEX},
-    };
+    use crate::{SMALL_PACK, SMALL_PACK_INDEX, fixture_path};
 
     fn expected_outcome() -> Result<pack::bundle::write::Outcome, Box<dyn std::error::Error>> {
         Ok(pack::bundle::write::Outcome {

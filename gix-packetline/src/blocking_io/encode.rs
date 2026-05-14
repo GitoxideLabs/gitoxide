@@ -1,9 +1,9 @@
 use std::io;
 
 use crate::{
-    encode::{u16_to_hex, Error},
-    BandRef, Channel, ErrorRef, PacketLineRef, TextRef, DELIMITER_LINE, ERR_PREFIX, FLUSH_LINE, MAX_DATA_LEN,
-    RESPONSE_END_LINE,
+    BandRef, Channel, DELIMITER_LINE, ERR_PREFIX, ErrorRef, FLUSH_LINE, MAX_DATA_LEN, PacketLineRef, RESPONSE_END_LINE,
+    TextRef,
+    encode::{Error, u16_to_hex},
 };
 
 /// Write a response-end message to `out`.

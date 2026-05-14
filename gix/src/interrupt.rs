@@ -149,7 +149,7 @@ use std::{
 };
 
 #[cfg(feature = "interrupt")]
-pub use init::{init_handler, Deregister};
+pub use init::{Deregister, init_handler};
 
 /// A wrapper for an inner iterator which will check for interruptions on each iteration.
 pub struct Iter<I, EFN> {

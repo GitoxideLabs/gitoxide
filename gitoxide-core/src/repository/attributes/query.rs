@@ -14,12 +14,11 @@ pub(crate) mod function {
     use gix::bstr::BStr;
 
     use crate::{
-        is_dir_to_mode,
+        OutputFormat, is_dir_to_mode,
         repository::{
-            attributes::query::{attributes_cache, Options},
             PathsOrPatterns,
+            attributes::query::{Options, attributes_cache},
         },
-        OutputFormat,
     };
 
     pub fn query(

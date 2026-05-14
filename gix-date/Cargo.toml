@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project parsing dates the way git does"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [lib]
 doctest = true
@@ -23,10 +23,7 @@ gix-error = { version = "^0.2.3", path = "../gix-error" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 itoa = "1.0.17"
-jiff = "0.2.21"
-# TODO: used for quick and easy `TimeBacking: std::io::Write` implementation, but could make that `Copy`
-#       and remove this dep with custom impl
-smallvec = { version = "1.15.1", features = ["write"] }
+jiff = "0.2.24"
 
 document-features = { version = "0.2.0", optional = true }
 

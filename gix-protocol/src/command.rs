@@ -21,7 +21,7 @@ mod with_io {
     use bstr::{BString, ByteSlice};
     use gix_transport::client::Capabilities;
 
-    use crate::{command::Feature, Command};
+    use crate::{Command, command::Feature};
 
     impl Command {
         /// Only V2
@@ -213,7 +213,7 @@ mod with_io {
                                 return Err(Error::UnsupportedCapability {
                                     command: self.as_str(),
                                     feature: feature.to_string(),
-                                })
+                                });
                             }
                         }
                     }

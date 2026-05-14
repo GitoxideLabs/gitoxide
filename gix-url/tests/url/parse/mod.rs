@@ -1,5 +1,5 @@
 use bstr::{BStr, ByteSlice};
-use gix_url::{testing::TestUrlExtension, Scheme};
+use gix_url::{Scheme, testing::TestUrlExtension};
 
 fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
     let actual = gix_url::parse(url.into())?;

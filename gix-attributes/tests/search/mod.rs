@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bstr::{BStr, ByteSlice};
 use gix_attributes::{
-    search::{AttributeId, Outcome},
     AssignmentRef, NameRef, StateRef,
+    search::{AttributeId, Outcome},
 };
 use gix_glob::pattern::Case;
 use gix_testtools::size_ok;
@@ -12,8 +12,8 @@ mod specials {
     use std::path::Path;
 
     use gix_attributes::{
-        search::{MetadataCollection, Outcome},
         Search,
+        search::{MetadataCollection, Outcome},
     };
     use gix_glob::pattern::Case;
 
@@ -296,7 +296,7 @@ mod baseline {
     use std::path::PathBuf;
 
     use bstr::{BStr, ByteSlice};
-    use gix_attributes::{search::MetadataCollection, AssignmentRef, StateRef};
+    use gix_attributes::{AssignmentRef, StateRef, search::MetadataCollection};
 
     /// Read user-attributes and baseline in one go.
     pub fn user_attributes_named_baseline(

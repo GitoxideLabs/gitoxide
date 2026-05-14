@@ -18,11 +18,11 @@ pub(crate) mod function {
     };
 
     use anyhow::{anyhow, bail};
-    use gix::{attrs::Assignment, bstr::BString, Count, Progress};
+    use gix::{Count, Progress, attrs::Assignment, bstr::BString};
 
     use crate::{
-        repository::attributes::{query::attributes_cache, validate_baseline::Options},
         OutputFormat,
+        repository::attributes::{query::attributes_cache, validate_baseline::Options},
     };
 
     pub fn validate_baseline(
@@ -176,10 +176,8 @@ pub(crate) mod function {
                 if feed_attrs.send(path.clone()).is_err() {
                     break;
                 }
-                if let Some(ch) = feed_excludes.as_ref() {
-                    if ch.send(path).is_err() {
-                        break;
-                    }
+                if feed_excludes.as_ref().is_some_and(|ch| ch.send(path).is_err()) {
+                    break;
                 }
             }
         });

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail};
-use gix::{worktree::archive, NestedProgress, Progress};
+use gix::{NestedProgress, Progress, worktree::archive};
 
 pub struct Options {
     pub format: Option<archive::Format>,
@@ -34,7 +34,7 @@ pub fn stream(
                 .ok_or_else(|| anyhow!("Adding files requires a worktree directory that contains them"))?,
         )?;
         for path in add_paths {
-            stream.add_entry_from_path(&root, &gix::path::realpath(&path)?)?;
+            stream.add_entry_from_path(&root, &gix::path::realpath(&path)?, repo.object_hash())?;
         }
     }
     for (path, content) in files {

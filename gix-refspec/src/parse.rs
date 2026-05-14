@@ -39,9 +39,9 @@ pub enum Operation {
 
 pub(crate) mod function {
     use crate::{
+        RefSpecRef,
         parse::{Error, Operation},
         types::Mode,
-        RefSpecRef,
     };
     use bstr::{BStr, ByteSlice};
     use gix_error::Exn;
@@ -71,7 +71,7 @@ pub(crate) mod function {
                 return match operation {
                     Operation::Push => Err(Error::Empty),
                     Operation::Fetch => Ok(fetch_head_only(Mode::Normal)),
-                }
+                };
             }
         };
 

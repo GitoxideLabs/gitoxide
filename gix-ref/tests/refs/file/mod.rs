@@ -18,17 +18,17 @@ pub fn store_at(name: &str) -> crate::Result<Store> {
 }
 
 pub fn named_store_at(script_name: &str, name: &str) -> crate::Result<Store> {
-    let path = gix_testtools::scripted_fixture_read_only_standalone(script_name)?;
+    let path = crate::scripted_fixture_read_only(script_name)?;
     Ok(Store::at(path.join(name).join(".git"), store_options()))
 }
 
 pub fn store_at_with_args(name: &str, args: impl IntoIterator<Item = impl Into<String>>) -> crate::Result<Store> {
-    let path = gix_testtools::scripted_fixture_read_only_with_args_standalone(name, args)?;
+    let path = crate::scripted_fixture_read_only_with_args(name, args)?;
     Ok(Store::at(path.join(".git"), store_options()))
 }
 
 fn store_writable(name: &str) -> crate::Result<(gix_testtools::tempfile::TempDir, Store)> {
-    let dir = gix_testtools::scripted_fixture_writable_standalone(name)?;
+    let dir = crate::scripted_fixture_writable(name)?;
     let git_dir = dir.path().join(".git");
     Ok((dir, Store::at(git_dir, store_options())))
 }
@@ -60,7 +60,7 @@ impl gix_object::Find for EmptyCommit {
     ) -> Result<Option<gix_object::Data<'a>>, gix_object::find::Error> {
         Ok(Some(gix_object::Data {
             kind: gix_object::Kind::Commit,
-            hash_kind: id.kind(),
+            object_hash: id.kind(),
             data: &[],
         }))
     }

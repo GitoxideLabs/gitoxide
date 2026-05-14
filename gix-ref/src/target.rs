@@ -1,6 +1,6 @@
 use std::fmt;
 
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 
 use crate::{FullName, FullNameRef, Kind, Target, TargetRef};
 

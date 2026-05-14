@@ -119,7 +119,7 @@ mod expand {
         sync::atomic::{AtomicBool, Ordering},
     };
 
-    use gix_hash::{oid, ObjectId};
+    use gix_hash::{ObjectId, oid};
     use gix_object::{CommitRefIter, Data, TagRefIter};
 
     use super::{
@@ -128,8 +128,8 @@ mod expand {
         util,
     };
     use crate::{
-        data::{output, output::count::PackLocation},
         FindExt,
+        data::{output, output::count::PackLocation},
     };
 
     #[allow(clippy::too_many_arguments)]
@@ -175,7 +175,7 @@ mod expand {
                         match obj.kind {
                             Tree | Blob => break,
                             Tag => {
-                                id = TagRefIter::from_bytes(obj.data, obj.hash_kind)
+                                id = TagRefIter::from_bytes(obj.data, obj.object_hash)
                                     .target_id()
                                     .expect("every tag has a target");
                                 let tmp = db.find(&id, buf1)?;
@@ -188,7 +188,7 @@ mod expand {
                             }
                             Commit => {
                                 let current_tree_iter = {
-                                    let mut commit_iter = CommitRefIter::from_bytes(obj.data, obj.hash_kind);
+                                    let mut commit_iter = CommitRefIter::from_bytes(obj.data, obj.object_hash);
                                     let tree_id = commit_iter.tree_id().expect("every commit has a tree");
                                     parent_commit_ids.clear();
                                     for token in commit_iter {
@@ -204,7 +204,7 @@ mod expand {
                                     push_obj_count_unique(
                                         &mut out, seen_objs, &tree_id, location, objects, stats, true,
                                     );
-                                    gix_object::TreeRefIter::from_bytes(obj.data, obj.hash_kind)
+                                    gix_object::TreeRefIter::from_bytes(obj.data, obj.object_hash)
                                 };
 
                                 let objects_ref = if parent_commit_ids.is_empty() {
@@ -229,7 +229,7 @@ mod expand {
                                             );
                                             CommitRefIter::from_bytes(
                                                 parent_commit_obj.data,
-                                                parent_commit_obj.hash_kind,
+                                                parent_commit_obj.object_hash,
                                             )
                                             .tree_id()
                                             .expect("every commit has a tree")
@@ -247,7 +247,7 @@ mod expand {
                                             );
                                             gix_object::TreeRefIter::from_bytes(
                                                 parent_tree_obj.data,
-                                                parent_tree_obj.hash_kind,
+                                                parent_tree_obj.object_hash,
                                             )
                                         };
 
@@ -285,7 +285,7 @@ mod expand {
                                 {
                                     let objects = ExpandedCountingObjects::new(db, out, objects);
                                     gix_traverse::tree::breadthfirst(
-                                        gix_object::TreeRefIter::from_bytes(obj.0.data, obj.0.hash_kind),
+                                        gix_object::TreeRefIter::from_bytes(obj.0.data, obj.0.object_hash),
                                         &mut tree_traversal_state,
                                         &objects,
                                         &mut traverse_delegate,
@@ -299,7 +299,7 @@ mod expand {
                                 break;
                             }
                             Commit => {
-                                id = CommitRefIter::from_bytes(obj.0.data, obj.0.hash_kind)
+                                id = CommitRefIter::from_bytes(obj.0.data, obj.0.object_hash)
                                     .tree_id()
                                     .expect("every commit has a tree");
                                 stats.expanded_objects += 1;
@@ -308,7 +308,7 @@ mod expand {
                             }
                             Blob => break,
                             Tag => {
-                                id = TagRefIter::from_bytes(obj.0.data, obj.0.hash_kind)
+                                id = TagRefIter::from_bytes(obj.0.data, obj.0.object_hash)
                                     .target_id()
                                     .expect("every tag has a target");
                                 stats.expanded_objects += 1;

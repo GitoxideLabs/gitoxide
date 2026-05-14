@@ -3,7 +3,7 @@ use std::{borrow::Cow, io};
 use anyhow::bail;
 use gix::bstr::BStr;
 
-use crate::{is_dir_to_mode, repository::PathsOrPatterns, OutputFormat};
+use crate::{OutputFormat, is_dir_to_mode, repository::PathsOrPatterns};
 
 pub mod query {
     use std::ffi::OsString;

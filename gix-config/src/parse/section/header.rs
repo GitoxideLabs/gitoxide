@@ -3,8 +3,8 @@ use std::{borrow::Cow, fmt::Display};
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 
 use crate::parse::{
-    section::{into_cow_bstr, Header, Name},
     Event,
+    section::{Header, Name, into_cow_bstr},
 };
 
 /// The error returned by [`Header::new(…)`][super::Header::new()].

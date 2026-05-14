@@ -46,7 +46,7 @@ fn store_and_reject() {
 }
 
 mod program {
-    use gix_credentials::{helper, program::Kind, Program};
+    use gix_credentials::{Program, helper, program::Kind};
 
     use crate::helper::script_helper;
 

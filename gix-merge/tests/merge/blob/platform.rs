@@ -6,11 +6,10 @@ mod merge {
 
     use bstr::{BStr, ByteSlice};
     use gix_merge::blob::{
-        builtin_driver,
+        BuiltinDriver, Resolution, ResourceKind, builtin_driver,
         builtin_driver::text::ConflictStyle,
         pipeline, platform,
-        platform::{builtin_merge::Pick, DriverChoice},
-        BuiltinDriver, Resolution, ResourceKind,
+        platform::{DriverChoice, builtin_merge::Pick},
     };
     use gix_object::tree::EntryKind;
 
@@ -592,9 +591,8 @@ cat "%B" >> "%A""#
 
 mod prepare_merge {
     use gix_merge::blob::{
-        builtin_driver, pipeline,
-        platform::{resource, DriverChoice},
-        BuiltinDriver, ResourceKind,
+        BuiltinDriver, ResourceKind, builtin_driver, pipeline,
+        platform::{DriverChoice, resource},
     };
     use gix_object::tree::EntryKind;
 
@@ -805,7 +803,7 @@ mod prepare_merge {
 }
 
 mod set_resource {
-    use gix_merge::blob::{pipeline, ResourceKind};
+    use gix_merge::blob::{ResourceKind, pipeline};
     use gix_object::tree::EntryKind;
 
     use crate::blob::platform::new_platform;

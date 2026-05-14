@@ -248,7 +248,7 @@ impl Pipeline {
                 return Err(convert_to_diffable::Error::InvalidEntryKind {
                     rela_path: rela_path.to_owned(),
                     actual: mode,
-                })
+                });
             }
         };
 

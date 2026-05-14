@@ -1,5 +1,5 @@
 //! A crate for handling a git-style directory walk.
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 use std::borrow::Cow;

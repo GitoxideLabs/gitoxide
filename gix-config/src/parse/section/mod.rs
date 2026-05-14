@@ -173,7 +173,7 @@ mod types {
         "Wrapper struct for value names, like `path` in `include.path`, since keys are case-insensitive."
     );
 }
-pub use types::{name, value_name, Name, ValueName};
+pub use types::{Name, ValueName, name, value_name};
 
 pub(crate) fn into_cow_bstr(c: Cow<'_, str>) -> Cow<'_, BStr> {
     match c {

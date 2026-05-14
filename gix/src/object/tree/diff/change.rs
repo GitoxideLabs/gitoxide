@@ -1,9 +1,9 @@
 use super::ChangeDetached;
 use crate::{
+    Repository,
     bstr::{BStr, ByteSlice},
     ext::ObjectIdExt,
     object::tree::diff::Change,
-    Repository,
 };
 
 impl Change<'_, '_, '_> {

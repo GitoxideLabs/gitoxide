@@ -2,9 +2,8 @@ pub(crate) mod prepare_and_commit {
     use gix_hash::ObjectId;
     use gix_object::bstr::BString;
     use gix_ref::{
-        file,
+        Target, file,
         transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
-        Target,
     };
 
     use crate::hex_to_id;

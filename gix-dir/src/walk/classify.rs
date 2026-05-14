@@ -6,10 +6,9 @@ use std::{
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
-    entry,
+    Entry, EntryRef, entry,
     entry::PathspecMatch,
     walk::{Context, Error, ForDeletionMode, Options},
-    Entry, EntryRef,
 };
 
 /// Classify the `worktree_relative_root` path and return the first `PathKind` that indicates that

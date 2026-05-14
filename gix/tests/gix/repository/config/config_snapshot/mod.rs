@@ -1,4 +1,4 @@
-use gix::config::tree::{gitoxide, Branch, Core, Key};
+use gix::config::tree::{Branch, Core, Key, gitoxide};
 
 use crate::{named_repo, repo_rw};
 
@@ -8,27 +8,29 @@ mod credential_helpers;
 #[test]
 fn commit_auto_rollback() -> crate::Result {
     let mut repo: gix::Repository = named_repo("make_basic_repo.sh")?;
-    assert_eq!(repo.head_id()?.shorten()?.to_string(), "3189cd3");
+    let default_abbrev = repo.head_id()?.to_string()[..7].to_owned();
+    let short_abbrev = repo.head_id()?.to_string()[..4].to_owned();
+    assert_eq!(repo.head_id()?.shorten()?.to_string(), default_abbrev);
 
     {
         let mut config = repo.config_snapshot_mut();
         config.set_raw_value(Core::ABBREV, "4")?;
         let repo = config.commit_auto_rollback()?;
-        assert_eq!(repo.head_id()?.shorten()?.to_string(), "3189");
+        assert_eq!(repo.head_id()?.shorten()?.to_string(), short_abbrev);
     }
 
-    assert_eq!(repo.head_id()?.shorten()?.to_string(), "3189cd3");
+    assert_eq!(repo.head_id()?.shorten()?.to_string(), default_abbrev);
 
     let repo = {
         let mut config = repo.config_snapshot_mut();
         config.set_raw_value(Core::ABBREV, "4")?;
         let mut repo = config.commit_auto_rollback()?;
-        assert_eq!(repo.head_id()?.shorten()?.to_string(), "3189");
+        assert_eq!(repo.head_id()?.shorten()?.to_string(), short_abbrev);
         // access to the mutable repo underneath
         repo.object_cache_size_if_unset(16 * 1024);
         repo.rollback()?
     };
-    assert_eq!(repo.head_id()?.shorten()?.to_string(), "3189cd3");
+    assert_eq!(repo.head_id()?.shorten()?.to_string(), default_abbrev);
 
     Ok(())
 }

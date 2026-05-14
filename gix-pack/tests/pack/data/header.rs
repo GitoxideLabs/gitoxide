@@ -1,4 +1,4 @@
-use crate::pack::fixture_path;
+use crate::fixture_path;
 
 #[test]
 fn encode_decode_roundtrip() -> crate::Result {

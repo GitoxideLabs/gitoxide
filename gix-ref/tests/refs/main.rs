@@ -1,4 +1,8 @@
 use gix_hash::ObjectId;
+pub use gix_testtools::{
+    scripted_fixture_read_only, scripted_fixture_read_only_with_args, scripted_fixture_writable,
+    scripted_fixture_writable_with_args,
+};
 
 pub fn hex_to_id(hex: &str) -> ObjectId {
     match fixture_hash_kind() {
@@ -15,7 +19,7 @@ pub fn sha1_hex_to_id(hex: &str) -> ObjectId {
 }
 
 pub fn fixture_hash_kind() -> gix_hash::Kind {
-    gix_testtools::hash_kind_from_env().unwrap_or_default()
+    gix_testtools::object_hash()
 }
 
 fn translate_sha1_to_fixture_sha256(hex: &str) -> String {

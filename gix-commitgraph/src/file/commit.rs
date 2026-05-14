@@ -1,9 +1,9 @@
 //! Low-level operations on individual commits.
 use crate::{
-    file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
     File, Position,
+    file::{self, EXTENDED_EDGES_MASK, LAST_EXTENDED_EDGE_MASK, NO_PARENT},
 };
-use gix_error::{message, Message};
+use gix_error::{Message, message};
 use std::{
     fmt::{Debug, Formatter},
     slice::Chunks,

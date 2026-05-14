@@ -5,7 +5,7 @@ use std::{
 
 use gix_url::{ArgumentSafety::*, Url};
 
-use crate::{client::blocking_io::file::SpawnProcessOnDemand, Protocol};
+use crate::{Protocol, client::blocking_io::file::SpawnProcessOnDemand};
 
 /// The error used in [`connect()`].
 #[derive(Debug, thiserror::Error)]

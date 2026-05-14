@@ -47,8 +47,8 @@ mod update {
         (repo, dir)
     }
     use gix_ref::{
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
         Target, TargetRef,
+        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
     };
 
     use crate::{
@@ -56,9 +56,9 @@ mod update {
         remote::{
             fetch,
             fetch::{
+                RefLogMessage,
                 refmap::{Mapping, Source, SpecIndex},
                 refs::{tests::restricted, update::TypeChange},
-                RefLogMessage,
             },
         },
     };

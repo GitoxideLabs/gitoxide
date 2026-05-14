@@ -2,7 +2,7 @@ mod error;
 mod exn;
 
 mod utils {
-    use gix_error::{message, ErrorExt, Exn, Message};
+    use gix_error::{ErrorExt, Exn, Message, message};
 
     pub fn new_tree_error() -> Exn<Message> {
         let e1 = message("E1").raise();
@@ -30,11 +30,7 @@ mod utils {
     }
 
     pub fn fixup_paths(input: String) -> String {
-        if cfg!(windows) {
-            input.replace('\\', "/")
-        } else {
-            input
-        }
+        if cfg!(windows) { input.replace('\\', "/") } else { input }
     }
 
     #[derive(Debug)]

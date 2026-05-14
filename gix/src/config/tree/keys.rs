@@ -225,7 +225,7 @@ mod duration {
 
     use crate::{
         config,
-        config::tree::{keys::DurationInMilliseconds, Section},
+        config::tree::{Section, keys::DurationInMilliseconds},
     };
 
     impl DurationInMilliseconds {
@@ -255,7 +255,7 @@ mod lock_timeout {
 
     use crate::{
         config,
-        config::tree::{keys::LockTimeout, Section},
+        config::tree::{Section, keys::LockTimeout},
     };
 
     impl LockTimeout {
@@ -283,8 +283,8 @@ mod lock_timeout {
 
 mod refspecs {
     use crate::config::tree::{
-        keys::{validate, FetchRefSpec, PushRefSpec},
         Section,
+        keys::{FetchRefSpec, PushRefSpec, validate},
     };
 
     impl PushRefSpec {
@@ -309,8 +309,8 @@ mod url {
         bstr::BStr,
         config,
         config::tree::{
-            keys::{validate, Url},
             Section,
+            keys::{Url, validate},
         },
     };
 
@@ -357,7 +357,7 @@ impl Path {
 }
 
 mod workers {
-    use crate::config::tree::{keys::UnsignedInteger, Section};
+    use crate::config::tree::{Section, keys::UnsignedInteger};
 
     impl UnsignedInteger {
         /// Create a new instance.
@@ -413,8 +413,8 @@ mod time {
     use crate::{
         bstr::{BStr, ByteSlice},
         config::tree::{
-            keys::{validate, Time},
             Section,
+            keys::{Time, validate},
         },
     };
     use gix_error::Exn;
@@ -446,8 +446,8 @@ mod boolean {
     use crate::{
         config,
         config::tree::{
-            keys::{validate, Boolean},
             Section,
+            keys::{Boolean, validate},
         },
     };
 
@@ -475,7 +475,7 @@ mod remote_name {
     use crate::{
         bstr::{BStr, BString},
         config,
-        config::tree::{keys::RemoteName, Section},
+        config::tree::{Section, keys::RemoteName},
     };
 
     impl RemoteName {

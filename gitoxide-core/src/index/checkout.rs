@@ -4,11 +4,11 @@ use std::{
 };
 
 use anyhow::bail;
-use gix::{objs::find::Error, worktree::state::checkout, NestedProgress, Progress};
+use gix::{NestedProgress, Progress, objs::find::Error, worktree::state::checkout};
 
 use crate::{
     index,
-    index::{parse_file, Options},
+    index::{Options, parse_file},
 };
 
 pub fn checkout_exclusive(
@@ -192,7 +192,7 @@ where
             // …but write nothing
             Ok(Some(gix::objs::Data {
                 kind,
-                hash_kind: id.kind(),
+                object_hash: id.kind(),
                 data: buf,
             }))
         } else {
@@ -209,7 +209,7 @@ impl gix::objs::Find for Empty {
         buffer.clear();
         Ok(Some(gix::objs::Data {
             kind: gix::object::Kind::Blob,
-            hash_kind: id.kind(),
+            object_hash: id.kind(),
             data: buffer,
         }))
     }

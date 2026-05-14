@@ -23,8 +23,8 @@ pub type StageRaw = u32;
 pub mod mode;
 
 mod flags;
-pub(crate) use flags::at_rest;
 pub use flags::Flags;
+pub(crate) use flags::at_rest;
 
 ///
 pub mod stat;
@@ -73,7 +73,7 @@ pub struct Stat {
 mod access {
     use bstr::{BStr, ByteSlice};
 
-    use crate::{entry, Entry, State};
+    use crate::{Entry, State, entry};
 
     impl Entry {
         /// Return an entry's path, relative to the repository, which is extracted from its owning `state`.
@@ -110,7 +110,7 @@ mod _impls {
     use bstr::BStr;
     use gix_object::tree::EntryKind;
 
-    use crate::{entry, Entry, State};
+    use crate::{Entry, State, entry};
 
     impl From<EntryKind> for entry::Mode {
         fn from(value: EntryKind) -> Self {

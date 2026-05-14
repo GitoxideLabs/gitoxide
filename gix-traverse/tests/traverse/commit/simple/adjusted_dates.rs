@@ -1,11 +1,11 @@
 //! Some dates adjusted to be a year apart, but still 'c1' and 'c2' with the same date.
 use super::*;
-use crate::util::fixture;
+use crate::util::{fixture, odb_at};
 use gix_traverse::commit::simple::CommitTimeOrder;
 
 fn adjusted_dates_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
     let dir = fixture("make_traversal_repo_for_commits_with_dates.sh")?;
-    let odb = gix_odb::at(dir.join(".git").join("objects"))?;
+    let odb = odb_at(dir.join(".git").join("objects"))?;
     Ok((dir, odb))
 }
 
@@ -16,12 +16,12 @@ fn head_breadth_first() -> crate::Result {
     // Timestamps show b1c1 (978393600) is a year newer than c2 (946771200),
     // explaining why date-order puts b1c1 before c2.
     insta::assert_snapshot!(git_graph_with_time(&repo_dir)?, @r"
-        *   288e509293165cb5630d08f4185bdf2445bf6170 1009929600 (HEAD -> main) m1b1
+        *   Oid(1) 1009929600 (HEAD -> main) m1b1
         |\  
-        | * bcb05040a6925f2ff5e10d3ae1f9264f2e8c43ac 978393600 (branch1) b1c1
-        * | 9902e3c3e8f0c569b4ab295ddf473e6de763e1e7 946771200 c2
+        | * Oid(2) 978393600 (branch1) b1c1
+        * | Oid(3) 946771200 c2
         |/  
-        * 134385f6d781b7e97062102c6a483440bfda2a03 946771200 c1
+        * Oid(4) 946771200 c1
         ");
 
     let tip = hex_to_id("288e509293165cb5630d08f4185bdf2445bf6170"); // m1b1

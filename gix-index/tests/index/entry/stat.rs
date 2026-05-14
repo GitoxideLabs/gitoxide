@@ -1,13 +1,13 @@
 use filetime::FileTime;
 use gix_index::entry::{
-    stat::{Options, Time},
     Stat,
+    stat::{Options, Time},
 };
 
 mod matches {
     use gix_index::entry::{
-        stat::{Options, Time},
         Stat,
+        stat::{Options, Time},
     };
 
     #[test]

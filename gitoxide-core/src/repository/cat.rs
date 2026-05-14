@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use gix::{diff::blob::ResourceKind, filter::plumbing::driver::apply::Delay, revision::Spec};
 
 use crate::repository::revision::resolve::{BlobFormat, TreeMode};

@@ -23,4 +23,4 @@ cargo run --package internal-tools -- \
     --destination-dir gix-diff/tests/fixtures/
 ```
 
-Finally, run `cargo test -p gix-diff-tests sliders -- --nocapture` to execute the actual tests to compare.
+Finally, run `cargo test -p gix-diff sliders -- --nocapture` to execute the actual tests to compare.

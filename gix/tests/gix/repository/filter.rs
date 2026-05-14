@@ -10,7 +10,8 @@ fn pipeline_in_nonbare_repo_without_index() -> crate::Result {
 use gix::bstr::ByteSlice;
 use gix_filter::driver::apply::Delay;
 
-use crate::util::{hex_to_id, named_repo, named_subrepo_opts};
+use super::blob_id;
+use crate::util::{named_repo, named_subrepo_opts};
 
 #[test]
 fn pipeline_in_repo_without_special_options() -> crate::Result {
@@ -41,7 +42,9 @@ fn pipeline_worktree_file_to_object() -> crate::Result {
         t.map(|t| (t.0, t.1))
     }
 
-    let submodule_id = hex_to_id("a047f8183ba2bb7eb00ef89e60050c5fde740483");
+    let submodule_id = gix::open_opts(work_dir.join("embedded-repository"), gix::open::Options::isolated())?
+        .head_id()?
+        .detach();
     assert_eq!(
         take_two(pipe.worktree_file_to_object("embedded-repository".into(), &index)?),
         Some((submodule_id, gix::object::tree::EntryKind::Commit))
@@ -63,22 +66,16 @@ fn pipeline_worktree_file_to_object() -> crate::Result {
     );
     assert_eq!(
         take_two(pipe.worktree_file_to_object("file".into(), &index)?),
-        Some((
-            hex_to_id("d95f3ad14dee633a758d2e331151e950dd13e4ed"),
-            gix::object::tree::EntryKind::Blob
-        ))
+        Some((blob_id(&repo, b"content\n"), gix::object::tree::EntryKind::Blob))
     );
     assert_eq!(
         take_two(pipe.worktree_file_to_object("link".into(), &index)?),
-        Some((
-            hex_to_id("1a010b1c0f081b2e8901d55307a15c29ff30af0e"),
-            gix::object::tree::EntryKind::Link
-        ))
+        Some((blob_id(&repo, b"file"), gix::object::tree::EntryKind::Link))
     );
     assert_eq!(
         take_two(pipe.worktree_file_to_object("exe".into(), &index)?),
         Some((
-            hex_to_id("a9128c283485202893f5af379dd9beccb6e79486"),
+            blob_id(&repo, b"binary\n"),
             gix::object::tree::EntryKind::BlobExecutable
         ))
     );

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{decode, extension, File, State};
+use crate::{File, State, decode, extension};
 
 mod error {
 

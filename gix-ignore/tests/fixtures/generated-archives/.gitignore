@@ -1,1 +1,5 @@
+# The fixture writes `git-check-ignore.baseline` files captured
+# from the host's `git check-ignore -vn --stdin` output. The baselines are then
+# diffed against `gix-ignore`, so they must match the comparing git binary on
+# the test host. Regenerating per-run avoids possible drift across git versions.
 make_global_and_external_and_dir_ignores.tar

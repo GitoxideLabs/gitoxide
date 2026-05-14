@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use crate::status::{index_worktree, tree_index, OwnedOrStaticAtomicBool, Platform, Submodule, UntrackedFiles};
+use crate::status::{OwnedOrStaticAtomicBool, Platform, Submodule, UntrackedFiles, index_worktree, tree_index};
 
 /// Builder
 impl<Progress> Platform<'_, Progress>

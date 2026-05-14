@@ -61,7 +61,7 @@ fn compare_baseline(config: &gix_config::File<'static>, key: impl AsRef<str>, ex
 }
 
 fn config_with_includes(name: &str) -> crate::Result<(gix_config::File<'static>, PathBuf)> {
-    let root = gix_testtools::scripted_fixture_read_only_standalone("hasconfig.sh")?.join(name);
+    let root = crate::scripted_fixture_read_only("hasconfig.sh")?.join(name);
     let options = init::Options {
         includes: includes::Options::follow(Default::default(), Default::default()),
         ..Default::default()

@@ -1,15 +1,14 @@
 use anyhow::bail;
 use gix::{
+    Exn,
     bstr::{BStr, BString},
     revision::plumbing::{
         spec,
         spec::parse::{
-            delegate,
+            Delegate, delegate,
             delegate::{PeelTo, ReflogLookup, SiblingBranch, Traversal},
-            Delegate,
         },
     },
-    Exn,
 };
 
 pub fn explain(spec: std::ffi::OsString, mut out: impl std::io::Write) -> anyhow::Result<()> {

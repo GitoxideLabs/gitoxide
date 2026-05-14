@@ -5,13 +5,13 @@ pub use gix_filter as plumbing;
 use gix_object::Find;
 
 use crate::{
+    Repository,
     bstr::BStr,
     config::{
         cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
         tree::Core,
     },
     prelude::ObjectIdExt,
-    Repository,
 };
 
 ///

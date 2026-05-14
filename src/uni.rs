@@ -4,7 +4,7 @@
 //!
 //! However, doing this could be interesting for distribution if the files are hard-linked
 //! instead of copied, which is why it is left here.
-#![deny(unsafe_code, rust_2018_idioms)]
+#![deny(unsafe_code)]
 
 use anyhow::{bail, Result};
 

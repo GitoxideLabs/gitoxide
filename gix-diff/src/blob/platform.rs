@@ -3,7 +3,7 @@ use std::{cmp::Ordering, io::Write, process::Stdio};
 use bstr::{BStr, BString, ByteSlice};
 
 use super::Algorithm;
-use crate::blob::{pipeline, Pipeline, Platform, ResourceKind};
+use crate::blob::{Pipeline, Platform, ResourceKind, pipeline};
 
 /// A key to uniquely identify either a location in the worktree, or in the object database.
 #[derive(Clone)]
@@ -54,7 +54,7 @@ impl Eq for CacheKey {}
 impl Default for CacheKey {
     fn default() -> Self {
         CacheKey {
-            id: gix_hash::Kind::Sha1.null(),
+            id: gix_hash::Kind::shortest().null(),
             use_id: false,
             is_link: false,
             location: BString::default(),
@@ -242,7 +242,7 @@ pub mod resource {
 pub mod set_resource {
     use bstr::BString;
 
-    use crate::blob::{pipeline, ResourceKind};
+    use crate::blob::{ResourceKind, pipeline};
 
     /// The error returned by [Platform::set_resource](super::Platform::set_resource).
     #[derive(Debug, thiserror::Error)]
@@ -359,9 +359,7 @@ pub mod prepare_diff_command {
         SourceOrDestinationUnset,
         #[error("Binary resources can't be diffed with an external command (as we don't have the data anymore)")]
         SourceOrDestinationBinary,
-        #[error(
-            "Tempfile to store content of '{rela_path}' for passing to external diff command could not be created"
-        )]
+        #[error("Tempfile to store content of '{rela_path}' for passing to external diff command could not be created")]
         CreateTempfile { rela_path: BString, source: std::io::Error },
         #[error("Could not write content of '{rela_path}' to tempfile for passing to external diff command")]
         WriteTempfile { rela_path: BString, source: std::io::Error },

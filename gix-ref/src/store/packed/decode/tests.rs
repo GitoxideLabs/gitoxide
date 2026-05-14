@@ -3,8 +3,8 @@ type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 mod reference {
     use super::Result;
     use crate::{
-        store_impl::{packed, packed::decode},
         FullNameRef,
+        store_impl::{packed, packed::decode},
     };
 
     const HASH_KIND: gix_hash::Kind = gix_hash::Kind::Sha1;

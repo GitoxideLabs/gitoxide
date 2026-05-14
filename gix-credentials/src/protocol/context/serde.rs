@@ -5,7 +5,7 @@ use crate::protocol::context::Error;
 mod write {
     use bstr::{BStr, BString};
 
-    use crate::protocol::{context::serde::validate, Context};
+    use crate::protocol::{Context, context::serde::validate};
 
     impl Context {
         /// Write ourselves to `out` such that [`from_bytes()`][Self::from_bytes()] can decode it losslessly.
@@ -70,7 +70,7 @@ mod write {
 pub mod decode {
     use bstr::{BString, ByteSlice};
 
-    use crate::protocol::{context, context::serde::validate, Context};
+    use crate::protocol::{Context, context, context::serde::validate};
 
     /// The error returned by [`from_bytes()`][Context::from_bytes()].
     #[derive(Debug, thiserror::Error)]

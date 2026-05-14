@@ -48,11 +48,11 @@ mod reflog {
 
 mod peel {
     use gix_object::FindExt;
-    use gix_ref::{file::ReferenceExt, Reference};
+    use gix_ref::{Reference, file::ReferenceExt};
 
     use crate::{
         file,
-        file::{store_with_packed_refs, EmptyCommit},
+        file::{EmptyCommit, store_with_packed_refs},
         hex_to_id,
     };
 

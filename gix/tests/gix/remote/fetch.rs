@@ -16,7 +16,7 @@ mod blocking_and_async_io {
 
     use gix::{
         config::tree::Protocol,
-        remote::{fetch, fetch::Status, Direction::Fetch},
+        remote::{Direction::Fetch, fetch, fetch::Status},
     };
     use gix_features::progress;
     use gix_protocol::maybe_async;
@@ -183,9 +183,10 @@ mod blocking_and_async_io {
                 {
                     Ok(out) => check_fetch_output(&local_repo, out, expected_object_count)?,
                     Err(err) => {
-                        assert!(err
-                            .to_string()
-                            .starts_with("The slotmap turned out to be too small with "));
+                        assert!(
+                            err.to_string()
+                                .starts_with("The slotmap turned out to be too small with ")
+                        );
                         // But opening a new repo will always be able to read all objects
                         // as it dynamically sizes the otherwise static slotmap.
                         let local_repo = gix::open_opts(
@@ -510,14 +511,22 @@ mod blocking_and_async_io {
                         .await?;
 
                     match res.status {
-                    fetch::Status::NoPackReceived { update_refs, negotiate: _, dry_run } => {
-                        assert_eq!(update_refs.edits.len(), expected_ref_count, "{shallow_args:?}|{fetch_tags:?}");
-                        assert!(!dry_run, "we actually perform the operation");
-                    },
-                    _ => unreachable!(
-                        "{shallow_args:?}|{fetch_tags:?}: default negotiation is able to realize nothing is required and doesn't get to receiving a pack"
-                    ),
-                }
+                        fetch::Status::NoPackReceived {
+                            update_refs,
+                            negotiate: _,
+                            dry_run,
+                        } => {
+                            assert_eq!(
+                                update_refs.edits.len(),
+                                expected_ref_count,
+                                "{shallow_args:?}|{fetch_tags:?}"
+                            );
+                            assert!(!dry_run, "we actually perform the operation");
+                        }
+                        _ => unreachable!(
+                            "{shallow_args:?}|{fetch_tags:?}: default negotiation is able to realize nothing is required and doesn't get to receiving a pack"
+                        ),
+                    }
                 }
             }
         }
@@ -568,16 +577,43 @@ mod blocking_and_async_io {
                 .await?;
 
             match res.status {
-                gix::remote::fetch::Status::Change { write_pack_bundle, update_refs, negotiate } => {
+                gix::remote::fetch::Status::Change {
+                    write_pack_bundle,
+                    update_refs,
+                    negotiate,
+                } => {
                     assert_eq!(negotiate.rounds.len(), 1);
-                    assert_eq!(write_pack_bundle.index.data_hash, hex_to_id(expected_data_hash), );
-                    assert_eq!(write_pack_bundle.index.num_objects, 3 + num_objects_offset, "{fetch_tags:?}");
-                    assert!(write_pack_bundle.data_path.as_deref().is_some_and(std::path::Path::is_file));
-                    assert!(write_pack_bundle.index_path.as_deref().is_some_and(std::path::Path::is_file));
+                    assert_eq!(write_pack_bundle.index.data_hash, hex_to_id(expected_data_hash),);
+                    assert_eq!(
+                        write_pack_bundle.index.num_objects,
+                        3 + num_objects_offset,
+                        "{fetch_tags:?}"
+                    );
+                    assert!(
+                        write_pack_bundle
+                            .data_path
+                            .as_deref()
+                            .is_some_and(std::path::Path::is_file)
+                    );
+                    assert!(
+                        write_pack_bundle
+                            .index_path
+                            .as_deref()
+                            .is_some_and(std::path::Path::is_file)
+                    );
                     assert_eq!(update_refs.edits.len(), expected_ref_edits, "{fetch_tags:?}");
-                    assert_eq!(write_pack_bundle.keep_path.as_deref().is_some_and(std::path::Path::is_file), update_refs.edits.is_empty(),".keep are kept if there was no edit to prevent `git gc` from clearing out the pack as it's not referred to necessarily");
-                },
-                _ => unreachable!("Naive negotiation sends the same have and wants, resulting in an empty pack (technically no change, but we don't detect it) - empty packs are fine")
+                    assert_eq!(
+                        write_pack_bundle
+                            .keep_path
+                            .as_deref()
+                            .is_some_and(std::path::Path::is_file),
+                        update_refs.edits.is_empty(),
+                        ".keep are kept if there was no edit to prevent `git gc` from clearing out the pack as it's not referred to necessarily"
+                    );
+                }
+                _ => unreachable!(
+                    "Naive negotiation sends the same have and wants, resulting in an empty pack (technically no change, but we don't detect it) - empty packs are fine"
+                ),
             }
         }
         Ok(())
@@ -687,7 +723,10 @@ mod blocking_and_async_io {
                         assert_eq!(negotiate.rounds.len(), 1);
                         assert_eq!(write_pack_bundle.pack_version, gix::odb::pack::data::Version::V2);
                         assert_eq!(write_pack_bundle.object_hash, repo.object_hash());
-                        assert_eq!(write_pack_bundle.index.num_objects, 4, "{dry_run}: this value is 4 when git does it with 'consecutive' negotiation style, but could be 33 if completely naive.");
+                        assert_eq!(
+                            write_pack_bundle.index.num_objects, 4,
+                            "{dry_run}: this value is 4 when git does it with 'consecutive' negotiation style, but could be 33 if completely naive."
+                        );
                         assert_eq!(
                             write_pack_bundle.index.index_version,
                             gix::odb::pack::index::Version::V2

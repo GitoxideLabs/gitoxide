@@ -1,6 +1,6 @@
 use gix_refspec::RefSpec;
 
-use crate::{config, remote, Remote, Repository};
+use crate::{Remote, Repository, config, remote};
 
 mod error {
     use crate::bstr::BString;

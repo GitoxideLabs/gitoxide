@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use gix::{
     bstr::{BString, ByteSlice},
     merge::tree::TreatAsUnresolved,
@@ -21,6 +21,8 @@ pub fn commit(
         tree_favor,
         in_memory,
         debug,
+        message: _,
+        update_head: _,
     }: Options,
 ) -> anyhow::Result<()> {
     if format != OutputFormat::Human {

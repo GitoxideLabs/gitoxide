@@ -43,10 +43,7 @@ fn on_root_with_decomposed_unicode() -> crate::Result {
         ));
     } else {
         assert!(
-            matches!(
-                gix::utils::str::precompose_path(repo.git_dir().into()),
-                Cow::Owned(_),
-            ),
+            matches!(gix::utils::str::precompose_path(repo.git_dir().into()), Cow::Owned(_),),
             "this has an effect as the path isn't precomposed, a necessity on filesystems that don't fold decomposition"
         );
         assert!(matches!(
@@ -272,9 +269,12 @@ fn non_bare_split_worktree_invalid_worktree_path_empty() -> crate::Result {
     )
     .unwrap_err();
     assert!(
-            matches!(err, gix::open::Error::Config(gix::config::Error::PathInterpolation{..})),
-            "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it"
-        );
+        matches!(
+            err,
+            gix::open::Error::Config(gix::config::Error::PathInterpolation { .. })
+        ),
+        "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it"
+    );
     Ok(())
 }
 
@@ -457,8 +457,8 @@ mod object_caches {
 }
 
 mod pack_alloc_limit_bytes {
-    use gix_odb::find::Header;
     use gix_odb::HeaderExt;
+    use gix_odb::find::Header;
     use gix_sec::Trust;
 
     use crate::util::repo_opts;

@@ -3,10 +3,10 @@ use std::borrow::Cow;
 use gix_ref::{Category, FullNameRef};
 
 use crate::{
+    Reference,
     bstr::ByteSlice,
     remote,
     repository::{branch_remote_ref_name, branch_remote_tracking_ref_name},
-    Reference,
 };
 
 /// Remotes

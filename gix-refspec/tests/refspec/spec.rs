@@ -1,5 +1,5 @@
 mod prefix {
-    use gix_refspec::{parse::Operation, RefSpec};
+    use gix_refspec::{RefSpec, parse::Operation};
 
     #[test]
     fn head_is_specifically_known() {

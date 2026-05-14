@@ -85,7 +85,7 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize), undo::Error> {
                                     format!("Invalid escaped value {next}"),
                                     original,
                                 )
-                                .raise())
+                                .raise());
                             }
                         }
                     }

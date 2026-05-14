@@ -75,7 +75,7 @@ mod message {
     }
     #[cfg(test)]
     mod tests {
-        use crate::{client::git, Protocol, Service};
+        use crate::{Protocol, Service, client::git};
 
         #[test]
         fn version_1_without_host_and_version() {

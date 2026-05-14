@@ -1,16 +1,14 @@
 use crate::{
-    packed,
+    FullName, FullNameRef, Reference, Target, packed,
     packed::transaction::buffer_into_transaction,
     store_impl::{
         file,
         file::{
-            loose,
+            Transaction, loose,
             transaction::{Edit, PackedRefs},
-            Transaction,
         },
     },
     transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
-    FullName, FullNameRef, Reference, Target,
 };
 
 impl Transaction<'_, '_> {
@@ -79,7 +77,7 @@ impl Transaction<'_, '_> {
                     (PreviousValue::MustExist | PreviousValue::MustExistAndMatch(_), None) => {
                         return Err(Error::DeleteReferenceMustExist {
                             full_name: change.name(),
-                        })
+                        });
                     }
                     (
                         PreviousValue::MustExistAndMatch(previous) | PreviousValue::ExistingMustMatch(previous),
@@ -443,8 +441,8 @@ mod error {
     use gix_object::bstr::BString;
 
     use crate::{
-        store_impl::{file, packed},
         Target,
+        store_impl::{file, packed},
     };
 
     /// The error returned by various [`Transaction`][super::Transaction] methods.
@@ -470,7 +468,9 @@ mod error {
         Io(#[from] std::io::Error),
         #[error("The reference {full_name:?} for deletion did not exist or could not be parsed")]
         DeleteReferenceMustExist { full_name: BString },
-        #[error("Reference {full_name:?} was not supposed to exist when writing it with value {new:?}, but actual content was {actual:?}")]
+        #[error(
+            "Reference {full_name:?} was not supposed to exist when writing it with value {new:?}, but actual content was {actual:?}"
+        )]
         MustNotExist {
             full_name: BString,
             actual: Target,

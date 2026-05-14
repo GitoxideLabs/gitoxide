@@ -27,8 +27,8 @@ pub(crate) mod function {
 
     use super::Options;
     use crate::{
-        repository::{cat::display_object, revision, revision::resolve::BlobFormat},
         OutputFormat,
+        repository::{cat::display_object, revision, revision::resolve::BlobFormat},
     };
 
     pub fn resolve(

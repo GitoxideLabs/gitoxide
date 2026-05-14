@@ -25,7 +25,7 @@
 //! assert!(gix_discover::is_git(&repository_dir).is_ok());
 //! # Ok(()) }
 //! ```
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 /// The name of the `.git` directory.
@@ -61,7 +61,9 @@ pub mod is_git {
         GitFile(#[from] crate::path::from_gitdir_file::Error),
         #[error("Could not retrieve metadata of \"{path}\"")]
         Metadata { source: std::io::Error, path: PathBuf },
-        #[error("The repository's config file doesn't exist or didn't have a 'bare' configuration or contained core.worktree without value")]
+        #[error(
+            "The repository's config file doesn't exist or didn't have a 'bare' configuration or contained core.worktree without value"
+        )]
         Inconclusive,
         #[error("Could not obtain current directory for resolving the '.' repository path")]
         CurrentDir(#[from] std::io::Error),

@@ -12,13 +12,16 @@ mod blocking_io {
         bstr::BString,
         config::tree::{Clone, Core, Init, Key},
         remote::{
-            fetch::{refmap::SpecIndex, Shallow},
             Direction,
+            fetch::{Shallow, refmap::SpecIndex},
         },
     };
     use gix_object::bstr::ByteSlice;
     use gix_ref::TargetRef;
     use gix_refspec::parse::Operation;
+
+    const EXISTING_CONTENT: &[u8] = b"Pre-existing user content.\n";
+    const EXISTING_HEAD_CONTENT: &[u8] = b"ref: refs/heads/pre-existing\n";
 
     fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
         let commits = repo.shallow_commits()?.expect(expected);
@@ -30,7 +33,7 @@ mod blocking_io {
     #[test]
     fn fetch_shallow_no_checkout_then_unshallow() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let called_configure_remote = std::sync::Arc::new(std::sync::atomic::AtomicBool::default());
+        let called_configure_remote = std::sync::Arc::new(AtomicBool::default());
         let remote_name = "special";
         let desired_fetch_tags = gix::remote::fetch::Tags::Included;
         let mut prepare = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
@@ -50,7 +53,7 @@ mod blocking_io {
                 }
             })
             .with_shallow(Shallow::DepthAtRemote(2.try_into().expect("non-zero")));
-        let (repo, _out) = prepare.fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (repo, _out) = prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?;
         drop(prepare);
 
         assert_eq!(
@@ -95,7 +98,7 @@ mod blocking_io {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _out) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_shallow(Shallow::DepthAtRemote(1.try_into()?))
-            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+            .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
 
         assert!(repo.is_shallow(), "repository should be shallow");
 
@@ -129,7 +132,7 @@ mod blocking_io {
             Default::default(),
             gix::open::Options::isolated().config_overrides([Clone::REJECT_SHALLOW.validated_assignment_fmt(&true)?]),
         )?
-        .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())
         .unwrap_err();
         assert!(
             matches!(
@@ -148,7 +151,7 @@ mod blocking_io {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base.shallow").path(), tmp.path())?
             .with_in_memory_config_overrides(Some("my.marker=1"))
-            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+            .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
         assert_eq!(
             shallow_ids(&repo, "present")?,
             vec![
@@ -181,7 +184,7 @@ mod blocking_io {
                 r.replace_refspecs(Some("refs/heads/main:refs/remotes/origin/main"), Direction::Fetch)?;
                 Ok(r)
             })
-            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+            .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
 
         assert!(repo.is_shallow());
         assert_eq!(
@@ -242,11 +245,9 @@ mod blocking_io {
 
         let (repo, _change) = gix::prepare_clone_bare(remote::repo("base").path(), tmp.path())?
             .with_fetch_options(gix::remote::ref_map::Options {
-                extra_refspecs: vec![gix::refspec::parse(
-                    "refs/heads/*:refs/remotes/origin/*".into(),
-                    Operation::Fetch,
-                )?
-                .into()],
+                extra_refspecs: vec![
+                    gix::refspec::parse("refs/heads/*:refs/remotes/origin/*".into(), Operation::Fetch)?.into(),
+                ],
                 ..Default::default()
             })
             .with_shallow(Shallow::Exclude {
@@ -256,7 +257,7 @@ mod blocking_io {
                     .collect(),
                 since_cutoff: None,
             })
-            .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+            .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
 
         assert!(repo.is_shallow());
         assert_eq!(
@@ -281,7 +282,7 @@ mod blocking_io {
     #[test]
     fn fetch_only_with_configuration() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let called_configure_remote = std::sync::Arc::new(std::sync::atomic::AtomicBool::default());
+        let called_configure_remote = std::sync::Arc::new(AtomicBool::default());
         let remote_name = "special";
         let desired_fetch_tags = gix::remote::fetch::Tags::Included;
         let mut prepare = gix::clone::PrepareFetch::new(
@@ -306,7 +307,7 @@ mod blocking_io {
                 Ok(r)
             }
         });
-        let (repo, out) = prepare.fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (repo, out) = prepare.fetch_only(gix::progress::Discard, &AtomicBool::default())?;
         drop(prepare);
 
         assert!(
@@ -401,12 +402,13 @@ mod blocking_io {
                         .find_reference(edit.name.as_ref())
                         .unwrap_or_else(|_| panic!("didn't find created reference: {edit:?}"));
                     if r.name().category().expect("known") != gix_ref::Category::Tag {
-                        assert!(r
-                            .name()
-                            .category_and_short_name()
-                            .expect("computable")
-                            .1
-                            .starts_with_str(remote_name));
+                        assert!(
+                            r.name()
+                                .category_and_short_name()
+                                .expect("computable")
+                                .1
+                                .starts_with_str(remote_name)
+                        );
                         match r.target() {
                             TargetRef::Object(_) => {
                                 let mut logs = r.log_iter();
@@ -540,9 +542,8 @@ mod blocking_io {
             Default::default(),
             restricted(),
         )?;
-        let (mut checkout, _out) =
-            prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
-        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
 
         let index = repo.index()?;
         assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
@@ -550,6 +551,181 @@ mod blocking_io {
         assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"));
         Ok(())
     }
+
+    #[test]
+    #[cfg(unix)]
+    fn fetch_and_checkout_does_not_follow_delayed_symlink_prefixes() -> crate::Result {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = gix_testtools::scripted_fixture_read_only("make_symlink_prefix_reuse_advisory.sh")?;
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let mut prepare = gix::clone::PrepareFetch::new(
+            fixture.join("malicious.git"),
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            restricted(),
+        )?;
+
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+
+        let git_dir = repo.git_dir();
+        let hook_path = git_dir.join("hooks").join("post-checkout");
+        assert!(
+            !hook_path.is_symlink(),
+            "checkout must not write attacker-controlled hooks through a symlink prefix"
+        );
+
+        let worktree = repo.workdir().expect("non-bare");
+        let payload = worktree.join("payload");
+        assert!(payload.is_file(), "payload itself is checked out");
+        assert_ne!(
+            payload.metadata()?.permissions().mode() & 0o111,
+            0,
+            "payload keeps its executable bits"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_and_checkout_into_non_empty_directory() -> crate::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
+        let destination = fixture.path().join("non-empty");
+        let existing_path = destination.join("existing.txt");
+
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            &destination,
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                destination_must_be_empty: Some(false),
+                ..Default::default()
+            },
+            restricted(),
+        )?;
+        let (mut checkout, _out) =
+            prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+
+        let index = repo.index()?;
+        assert_eq!(index.entries().len(), 1, "All entries are known as per HEAD tree");
+        assure_index_entries_on_disk(&index, repo.workdir().expect("non-bare"));
+
+        assert_eq!(std::fs::read(&existing_path)?, EXISTING_CONTENT);
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_and_checkout_into_non_empty_directory_does_not_overwrite_pre_existing_tracked_file() -> crate::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
+        let destination = fixture.path().join("non-empty-with-conflicting-file");
+        let existing_path = destination.join("file");
+        let remote_file_content = std::fs::read(remote::repo("base").workdir().expect("non-bare").join("file"))?;
+        assert_ne!(
+            EXISTING_CONTENT, remote_file_content,
+            "the fixture must differ from the file that checkout would write"
+        );
+
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            &destination,
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                destination_must_be_empty: Some(false),
+                ..Default::default()
+            },
+            restricted(),
+        )?;
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, outcome) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            std::fs::read(&existing_path)?,
+            EXISTING_CONTENT,
+            "checkout must not overwrite the pre-existing tracked path"
+        );
+        assert_eq!(repo.index()?.entries().len(), 1, "the index is still written");
+        assert_eq!(
+            outcome.collisions,
+            [gix_worktree_state::checkout::Collision {
+                path: BString::from("file"),
+                error_kind: std::io::ErrorKind::AlreadyExists
+            }],
+            "the pre-existing tracked path is reported as a normal checkout collision"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_and_checkout_into_non_empty_directory_with_existing_dot_git_is_rejected() -> crate::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
+        let destination = fixture.path().join("non-empty-with-dot-git");
+        let existing_path = destination.join("existing.txt");
+        let dot_git = destination.join(".git");
+        let head_path = dot_git.join("HEAD");
+
+        let err = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            &destination,
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                destination_must_be_empty: Some(false),
+                ..Default::default()
+            },
+            restricted(),
+        )
+        .map(drop)
+        .expect_err("an existing .git directory must not be reused for clone");
+
+        assert!(
+            matches!(
+                err,
+                gix::clone::Error::Init(gix::init::Error::Init(gix::create::Error::DirectoryExists { ref path }))
+                    if *path == dot_git
+            ),
+            "unexpected error: {err}"
+        );
+        assert_eq!(std::fs::read(&existing_path)?, EXISTING_CONTENT);
+        assert_eq!(std::fs::read(&head_path)?, EXISTING_HEAD_CONTENT);
+        Ok(())
+    }
+
+    #[test]
+    fn drop_after_failed_fetch_into_non_empty_directory_preserves_destination() -> crate::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
+        let destination = fixture.path().join("non-empty");
+        let existing_path = destination.join("existing.txt");
+
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote::repo("base").path(),
+            &destination,
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                destination_must_be_empty: Some(false),
+                ..Default::default()
+            },
+            restricted(),
+        )?
+        .with_ref_name(Some("does-not-exist"))?;
+
+        prepare
+            .fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())
+            .expect_err("non-existing ref must fail");
+        drop(prepare);
+
+        assert_eq!(
+            std::fs::read(&existing_path)?,
+            EXISTING_CONTENT,
+            "pre-existing user files must survive a failed clone+drop"
+        );
+        assert!(
+            destination.join(".git").is_dir(),
+            "the .git directory we created should remain for user cleanup"
+        );
+        Ok(())
+    }
+
     #[test]
     fn fetch_and_checkout_specific_ref() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
@@ -563,10 +739,9 @@ mod blocking_io {
             restricted(),
         )?
         .with_ref_name(Some(ref_to_checkout))?;
-        let (mut checkout, _out) =
-            prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
 
-        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
 
         assert_eq!(
             repo.references()?.all()?.count() - 2,
@@ -613,7 +788,7 @@ mod blocking_io {
         .with_ref_name(Some(ref_to_checkout))?;
 
         let err = prepare
-            .fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+            .fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())
             .unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -654,10 +829,9 @@ mod blocking_io {
             restricted(),
         )?
         .with_ref_name(Some(ref_to_checkout))?;
-        let (mut checkout, _out) =
-            prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
 
-        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
 
         assert_eq!(
             repo.references()?.all()?.count() - 1,
@@ -703,10 +877,8 @@ mod blocking_io {
                 Default::default(),
                 restricted().config_overrides(Some(format!("protocol.version={}", version as u8))),
             )?;
-            let (mut checkout, out) =
-                prepare.fetch_then_checkout(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
-            let (repo, _) =
-                checkout.main_worktree(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+            let (mut checkout, out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+            let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
 
             assert!(!repo.index_path().is_file(), "newly initialized repos have no index");
             let head = repo.head()?;
@@ -750,7 +922,7 @@ mod blocking_io {
             Default::default(),
             restricted(),
         )?
-        .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())?;
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
         assert!(repo.find_remote("origin").is_ok(), "default remote name is 'origin'");
         match out.status {
             gix::remote::fetch::Status::Change { write_pack_bundle, .. } => {
@@ -793,10 +965,31 @@ fn clone_and_destination_must_be_empty() -> crate::Result {
         restricted(),
     ) {
         Ok(_) => unreachable!("this should fail as the directory isn't empty"),
-        Err(err) => assert!(err
-            .to_string()
-            .starts_with("Refusing to initialize the non-empty directory as ")),
+        Err(err) => assert!(
+            err.to_string()
+                .starts_with("Refusing to initialize the non-empty directory as ")
+        ),
     }
+    Ok(())
+}
+
+#[test]
+fn clone_with_worktree_and_destination_must_be_empty() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_writable("make_clone_destinations.sh")?;
+    let destination = fixture.path().join("non-empty");
+    let err = gix::clone::PrepareFetch::new(
+        remote::repo("base").path(),
+        &destination,
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        restricted(),
+    )
+    .map(drop)
+    .expect_err("this should fail as the directory isn't empty");
+    assert!(
+        err.to_string()
+            .starts_with("Refusing to initialize the non-empty directory as ")
+    );
     Ok(())
 }
 

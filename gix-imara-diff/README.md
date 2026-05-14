@@ -110,9 +110,5 @@ Changes in the produced diffs are also considered breaking changes if the produc
 If the produced diff was invalid the change will be considered a bugfix.
 
 Additionally all changes to the minimum stable rust version (MSRV) are also considered breaking changes.
-The current **MSRV is 1.61**.
-`imara-diff` will roughly follow the MSRV of Firefox (stable) to remain
-compatible many platforms that try to include its latest version.
-To predict future changes to the MSRV the [Firefox documentation] can be consulted.
-
-[Firefox documentation]: https://firefox-source-docs.mozilla.org/writing-rust-code/update-policy.html
+The current **MSRV is 1.85**, matching the surrounding `gitoxide` workspace so hash-related dependencies
+can use Rust 2024 crates such as `sha2` 0.11 and `hashbrown` 0.17.

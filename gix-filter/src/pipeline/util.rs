@@ -5,10 +5,9 @@ use gix_attributes::StateRef;
 use smallvec::SmallVec;
 
 use crate::{
-    driver, eol,
+    Driver, driver, eol,
     eol::AttributesDigest,
-    pipeline::{convert::configuration, Context, CrlfRoundTripCheck},
-    Driver,
+    pipeline::{Context, CrlfRoundTripCheck, convert::configuration},
 };
 
 pub(crate) struct Configuration<'a> {

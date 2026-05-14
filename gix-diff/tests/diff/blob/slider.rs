@@ -3,9 +3,9 @@ use pretty_assertions::StrComparison;
 
 #[test]
 fn baseline() -> gix_testtools::Result {
-    use gix_diff::blob::{self, diff_with_slider_heuristics, Algorithm, InternedInput};
+    use gix_diff::blob::{self, Algorithm, InternedInput, diff_with_slider_heuristics};
 
-    let worktree_path = gix_testtools::scripted_fixture_read_only_standalone("make_diff_for_sliders_repo.sh")?;
+    let worktree_path = crate::scripted_fixture_read_only("make_diff_for_sliders_repo.sh")?;
     let asset_dir = worktree_path.join("assets");
 
     let dir = std::fs::read_dir(&worktree_path)?;

@@ -7,8 +7,8 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "archive generation from of a worktree stream"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
@@ -17,7 +17,9 @@ doctest = false
 [features]
 default = ["tar", "tar_gz", "zip"]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-worktree-stream/sha1", "gix-object/sha1"]
+sha1 = ["gix-worktree-stream/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-worktree-stream/sha256"]
 
 ## Enable the `tar` archive format. It has support for all information, except for object ids.
 tar = ["dep:tar", "dep:gix-path"]

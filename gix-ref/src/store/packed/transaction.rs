@@ -1,10 +1,9 @@
 use std::{borrow::Cow, fmt::Formatter, io::Write};
 
 use crate::{
-    file,
+    Namespace, Target, file,
     store_impl::{packed, packed::Edit},
     transaction::{Change, RefEdit},
-    Namespace, Target,
 };
 
 pub(crate) const HEADER_LINE: &[u8] = b"# pack-refs with: peeled fully-peeled sorted \n";
@@ -112,7 +111,7 @@ impl packed::Transaction {
                         Some(gix_object::Data {
                             kind: gix_object::Kind::Tag,
                             data,
-                            hash_kind,
+                            object_hash: hash_kind,
                         }) => {
                             next_id = gix_object::TagRefIter::from_bytes(data, hash_kind)
                                 .target_id()
@@ -128,7 +127,7 @@ impl packed::Transaction {
                         None => {
                             return Err(prepare::Error::Resolve(
                                 format!("Couldn't find object with id {next_id}").into(),
-                            ))
+                            ));
                         }
                     }
                 };

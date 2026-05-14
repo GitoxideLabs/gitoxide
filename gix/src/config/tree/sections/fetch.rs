@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Fetch, Key, Section},
+    config::tree::{Fetch, Key, Section, keys},
 };
 
 impl Fetch {
@@ -55,7 +55,7 @@ mod algorithm {
                     return Err(crate::config::key::GenericErrorWithValue::from_value(
                         self,
                         name.into_owned(),
-                    ))
+                    ));
                 }
             })
         }

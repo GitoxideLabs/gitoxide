@@ -24,7 +24,7 @@
 //! assert_eq!(bitmap.num_bits(), 64);
 //! assert_eq!(set_bits, vec![0, 2, 4]);
 //! ```
-#![deny(rust_2018_idioms, unsafe_code, missing_docs)]
+#![deny(unsafe_code, missing_docs)]
 
 /// Bitmap utilities for the advanced word-aligned hybrid bitmap
 pub mod ewah;

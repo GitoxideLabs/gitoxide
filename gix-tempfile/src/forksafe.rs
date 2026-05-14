@@ -2,7 +2,7 @@ use std::path::Path;
 
 use tempfile::{NamedTempFile, TempPath};
 
-use crate::{handle, AutoRemove};
+use crate::{AutoRemove, handle};
 
 enum TempfileOrTemppath {
     Tempfile(NamedTempFile),
@@ -82,7 +82,7 @@ impl ForksafeTempfile {
                             return Err((err.error, {
                                 self.inner = TempfileOrTemppath::Tempfile(err.file);
                                 self
-                            }))
+                            }));
                         }
                     }
                 }
@@ -101,7 +101,7 @@ impl ForksafeTempfile {
                             return Err((err.error, {
                                 self.inner = TempfileOrTemppath::Temppath(err.path);
                                 self
-                            }))
+                            }));
                         }
                     }
                 }

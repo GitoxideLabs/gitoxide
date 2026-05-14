@@ -4,8 +4,8 @@ use bstr::{BString, ByteSlice, ByteVec};
 use gix_url::ArgumentSafety::*;
 
 use crate::{
-    client::blocking_io::ssh::{self, ProgramKind},
     Protocol,
+    client::blocking_io::ssh::{self, ProgramKind},
 };
 
 impl ProgramKind {

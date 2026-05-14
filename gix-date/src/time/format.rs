@@ -1,6 +1,6 @@
 use crate::{
-    time::{CustomFormat, Format},
     Time,
+    time::{CustomFormat, Format},
 };
 
 /// E.g. `2018-12-24`

@@ -6,7 +6,7 @@ use std::{
 
 use bstr::BStr;
 use gix_filter::{driver::apply::MaybeDelayed, pipeline::convert::ToWorktreeOutcome};
-use gix_index::{entry::Stat, Entry};
+use gix_index::{Entry, entry::Stat};
 use gix_object::FindExt;
 use gix_worktree::Stack;
 use io_close::Close;
@@ -130,7 +130,7 @@ where
                         validated_file_path: dest.to_owned(),
                         entry,
                         entry_path,
-                    }))
+                    }));
                 }
             };
 

@@ -1,7 +1,7 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_odb::store::RefreshMode;
-use gix_protocol::fetch::{negotiate, Arguments};
+use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
@@ -16,7 +16,7 @@ use crate::{
     remote::{
         connection::fetch::config,
         fetch,
-        fetch::{negotiate::Algorithm, outcome, refs, Error, Outcome, Prepare, RefLogMessage, Status},
+        fetch::{Error, Outcome, Prepare, RefLogMessage, Status, negotiate::Algorithm, outcome, refs},
     },
 };
 

@@ -1,7 +1,7 @@
 mod streaming {
     use gix_packetline::{
-        decode::{self, streaming, Stream},
         ErrorRef, PacketLineRef,
+        decode::{self, Stream, streaming},
     };
 
     use crate::assert_err_display;
@@ -23,7 +23,7 @@ mod streaming {
 
     mod round_trip {
         use bstr::ByteSlice;
-        use gix_packetline::{decode, decode::streaming, Channel, PacketLineRef};
+        use gix_packetline::{Channel, PacketLineRef, decode, decode::streaming};
 
         use crate::decode::streaming::assert_complete;
         #[cfg(all(feature = "async-io", not(feature = "blocking-io")))]
@@ -138,7 +138,7 @@ mod streaming {
     }
 
     mod incomplete {
-        use gix_packetline::decode::{self, streaming, Stream};
+        use gix_packetline::decode::{self, Stream, streaming};
 
         fn assert_incomplete(res: Result<Stream, decode::Error>, expected_missing: usize) -> crate::Result {
             match res? {

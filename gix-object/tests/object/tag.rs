@@ -1,4 +1,4 @@
-use gix_object::{bstr::ByteSlice, Kind, TagRef, TagRefIter};
+use gix_object::{Kind, TagRef, TagRefIter, bstr::ByteSlice};
 
 use crate::fixture_name;
 
@@ -145,7 +145,7 @@ mod method {
 }
 
 mod iter {
-    use gix_object::{bstr::ByteSlice, tag::ref_iter::Token, Kind, TagRefIter};
+    use gix_object::{Kind, TagRefIter, bstr::ByteSlice, tag::ref_iter::Token};
 
     use crate::{fixture_name, hex_to_id, signature};
 
@@ -300,14 +300,16 @@ fn invalid_target_id_length() {
     let input = b"object 00000066666666666684666666666666666299297\ntype commit\ntag bad\n";
 
     assert!(TagRef::from_bytes(input, gix_hash::Kind::Sha1).is_err());
-    assert!(TagRefIter::from_bytes(input, gix_hash::Kind::Sha1)
-        .next()
-        .expect("a decoding error is returned for the first token")
-        .is_err());
+    assert!(
+        TagRefIter::from_bytes(input, gix_hash::Kind::Sha1)
+            .next()
+            .expect("a decoding error is returned for the first token")
+            .is_err()
+    );
 }
 
 mod from_bytes {
-    use gix_object::{bstr::ByteSlice, Kind, TagRef, WriteTo};
+    use gix_object::{Kind, TagRef, WriteTo, bstr::ByteSlice};
 
     use crate::{fixture_name, fixture_oid, object_fixture};
 

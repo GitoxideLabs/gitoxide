@@ -1,7 +1,7 @@
 use std::{borrow::Cow, ffi::OsStr, path::Path};
 
-use crate::path::RepositoryKind;
 use crate::DOT_GIT_DIR;
+use crate::path::RepositoryKind;
 
 /// Returns true if the given `git_dir` seems to be a bare repository.
 ///
@@ -93,7 +93,7 @@ pub(crate) fn git_with_metadata(
                 return Err(crate::is_git::Error::MissingCommonDir {
                     missing: common_dir,
                     source: err,
-                })
+                });
             }
             Some(Ok(common_dir)) => {
                 let common_dir = dot_git.join(common_dir);

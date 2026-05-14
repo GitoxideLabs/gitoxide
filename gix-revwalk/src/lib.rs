@@ -1,7 +1,7 @@
 //! Utility types for traversing the git commit-graph.
 //!
 //! This crate considers itself very much *plumbing* and is meant for consumption by other plumbing crates.
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 /// A graph of commits which additionally allows to associate data with commits.

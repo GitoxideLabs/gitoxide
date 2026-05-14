@@ -9,10 +9,10 @@ pub(crate) mod imp {
         io::{BufRead, Read, Write},
     };
 
-    use parking_lot::{const_mutex, lock_api::MutexGuard, Mutex, RawMutex};
+    use parking_lot::{Mutex, RawMutex, const_mutex, lock_api::MutexGuard};
     use rustix::termios::{self, Termios};
 
-    use crate::{unix::TTY_PATH, Error, Mode, Options};
+    use crate::{Error, Mode, Options, unix::TTY_PATH};
 
     static TERM_STATE: Mutex<Option<Termios>> = const_mutex(None);
 

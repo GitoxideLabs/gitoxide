@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Context};
-use gix::{bstr::ByteSlice, prelude::ObjectIdExt, Count, Progress};
-use rusqlite::{params, OptionalExtension};
+use anyhow::{Context, bail};
+use gix::{Count, Progress, bstr::ByteSlice, prelude::ObjectIdExt};
+use rusqlite::{OptionalExtension, params};
 
 use crate::{
     query,
-    query::{engine::update::FileMode, Command},
+    query::{Command, engine::update::FileMode},
 };
 
 impl query::Engine {
@@ -37,7 +37,9 @@ impl query::Engine {
                     .path()
                     .to_owned();
                 if relpath.is_empty() || is_excluded {
-                    bail!("Invalid pathspec {spec} - path must not be empty, not be excluded, and wildcards are taken literally")
+                    bail!(
+                        "Invalid pathspec {spec} - path must not be empty, not be excluded, and wildcards are taken literally"
+                    )
                 }
                 let file_id: usize = self
                     .con
@@ -89,11 +91,12 @@ impl query::Engine {
                             }),
                             source_file_id,
                         });
-                        if let Some(source_id) = source_file_id {
-                            if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(source_id) {
-                                stack.push(source_id);
-                                e.insert(path_by_id.query_row([source_id], |r| r.get(0))?);
-                            }
+                        let Some(source_id) = source_file_id else {
+                            continue;
+                        };
+                        if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(source_id) {
+                            stack.push(source_id);
+                            e.insert(path_by_id.query_row([source_id], |r| r.get(0))?);
                         }
                     }
                 }

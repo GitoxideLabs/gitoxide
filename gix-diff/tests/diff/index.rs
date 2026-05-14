@@ -1,14 +1,14 @@
 use gix_diff::{
+    Rewrites,
     index::Change,
     rewrites::{Copies, CopySource},
-    Rewrites,
 };
 use gix_object::bstr::BStr;
 
 #[test]
 fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
     let changes = collect_changes_no_renames(None, "c1 - initial").expect("really just an addition - nothing to track");
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Addition {
             location: "a",
@@ -68,7 +68,7 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
 #[test]
 fn changes_against_modified_tree_with_filename_tracking() -> crate::Result {
     let changes = collect_changes_no_renames("c2", "c3-modification")?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "a",
@@ -207,7 +207,7 @@ fn rename_by_similarity() -> crate::Result {
                 ..Default::default()
             }),
         ).expect("errors can only happen with IO or ODB access fails");
-            insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+            insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
             [
                 Modification {
                     location: "b",
@@ -258,7 +258,7 @@ fn rename_by_similarity() -> crate::Result {
     )
     .expect("it found all items at the cut-off point, similar to git");
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "b",
@@ -328,21 +328,24 @@ fn renames_by_similarity_with_limit() -> crate::Result {
     assert_eq!(actual_entry_modes, [Mode::FILE, Mode::FILE, Mode::FILE, Mode::FILE]);
 
     let actual_ids: Vec<_> = changes.iter().map(ChangeRef::id).collect();
-    let expected_ids = match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => [
-            crate::hex_to_id("f00c965d8307308469e537302baa73048488f162"),
-            crate::hex_to_id("683cfcc0f47566c332aa45d81c5cc98acb4aab49"),
-            crate::hex_to_id("3bb459b831ea471b9cd1cbb7c6d54a74251a711b"),
-            crate::hex_to_id("0a805f8e02d72bd354c1f00607906de2e49e00d6"),
-        ],
-        gix_hash::Kind::Sha256 => [
-            crate::hex_to_id("300fc9db3fb50e3794eb4013cfe2c9f6c0fa1d8db7f9e3a4f6f0158b3b62cc69"),
-            crate::hex_to_id("b863f94555dd058a680cca6d4afa1bad30b5f9c36122c7089f853081aa1c5a28"),
-            crate::hex_to_id("19ebb6b2c2f3a64e6578013f680ec39330ce158af5977a1b17be0d551185fbab"),
-            crate::hex_to_id("6271a9ad76b692e75a96d260cf02c4cd89e1d2071256447ff50e8a8f443299b4"),
-        ],
-        _ => unreachable!("tests only support sha1 and sha256 fixtures"),
-    };
+    let expected_ids = [
+        crate::hex_to_id(
+            "f00c965d8307308469e537302baa73048488f162",
+            "300fc9db3fb50e3794eb4013cfe2c9f6c0fa1d8db7f9e3a4f6f0158b3b62cc69",
+        ),
+        crate::hex_to_id(
+            "683cfcc0f47566c332aa45d81c5cc98acb4aab49",
+            "b863f94555dd058a680cca6d4afa1bad30b5f9c36122c7089f853081aa1c5a28",
+        ),
+        crate::hex_to_id(
+            "3bb459b831ea471b9cd1cbb7c6d54a74251a711b",
+            "19ebb6b2c2f3a64e6578013f680ec39330ce158af5977a1b17be0d551185fbab",
+        ),
+        crate::hex_to_id(
+            "0a805f8e02d72bd354c1f00607906de2e49e00d6",
+            "6271a9ad76b692e75a96d260cf02c4cd89e1d2071256447ff50e8a8f443299b4",
+        ),
+    ];
     assert_eq!(actual_ids, expected_ids);
 
     let out = out.expect("tracking enabled");
@@ -367,7 +370,7 @@ fn copies_by_identity() -> crate::Result {
             ..Default::default()
         }),
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Rewrite {
             source_location: "base",
@@ -434,7 +437,7 @@ fn copies_by_similarity() -> crate::Result {
             ..Default::default()
         }),
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Rewrite {
             source_location: "base",
@@ -540,7 +543,7 @@ fn copies_in_entire_tree_by_similarity() -> crate::Result {
     // Let's keep this as expectations, as in future there might be a candidate-based search that considers filenames
     // or similarity in names.
     match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+        gix_hash::Kind::Sha1 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
         [
             Rewrite {
                 source_location: "base",
@@ -602,7 +605,7 @@ fn copies_in_entire_tree_by_similarity() -> crate::Result {
             },
         ]
         "#),
-        gix_hash::Kind::Sha256 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+        gix_hash::Kind::Sha256 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
         [
             Rewrite {
                 source_location: "base",
@@ -694,7 +697,7 @@ fn copies_in_entire_tree_by_similarity_with_limit() -> crate::Result {
     )?;
 
     // Again, it finds a different first match for the rewrite compared to tree-traversal, expected for now.
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Rewrite {
             source_location: "base",
@@ -774,7 +777,7 @@ fn realistic_renames_by_identity() -> crate::Result {
         }),
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Rewrite {
             source_location: "git-index/src/file.rs",
@@ -826,7 +829,7 @@ fn realistic_renames_by_identity() -> crate::Result {
 #[test]
 fn realistic_renames_disabled() -> crate::Result {
     let changes = collect_changes_no_renames("r1-base", "r1-change")?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Deletion {
             location: "git-index/src/file.rs",
@@ -874,7 +877,7 @@ fn realistic_renames_disabled() -> crate::Result {
 fn realistic_renames_disabled_3() -> crate::Result {
     let changes = collect_changes_no_renames("r3-base", "r3-change")?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Addition {
             location: "src/ein.rs",
@@ -927,7 +930,7 @@ fn realistic_renames_by_identity_3() -> crate::Result {
         }),
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Rewrite {
             source_location: "src/plumbing-cli.rs",
@@ -988,7 +991,7 @@ fn realistic_renames_2() -> crate::Result {
     // We cannot capture renames if track-empty is disabled, as these are actually empty,
     // and we can't take directory-shortcuts here (i.e. tracking knows no directories here
     // as is the case with trees where we traverse breadth-first.
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Deletion {
             location: "git-sec/CHANGELOG.md",
@@ -1150,7 +1153,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
     // and SHA-1/SHA-256 produce a different id ordering for these same files.
     match crate::fixture_hash_kind() {
         gix_hash::Kind::Sha1 => {
-            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
             [
                 Rewrite {
                     source_location: "src/plumbing/options.rs",
@@ -1201,7 +1204,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
             "#);
         }
         gix_hash::Kind::Sha256 => {
-            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+            insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
             [
                 Rewrite {
                     source_location: "src/plumbing/mod.rs",
@@ -1275,7 +1278,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
     )?;
 
     // Pathspecs are applied in advance, which affects rename tracking.
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Deletion {
             location: "src/plumbing/main.rs",
@@ -1308,7 +1311,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
         Some("src/plumbing-renamed/m*"),
     )?;
     // One can also get the other side of the rename
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @r#"
     [
         Addition {
             location: "src/plumbing-renamed/main.rs",
@@ -1348,11 +1351,11 @@ fn unmerged_entries_and_intent_to_add() -> crate::Result {
     // Intent-to-add is transparent. And unmerged entries aren't emitted either, along with
     // their sibling paths.
     // All that with rename tracking…
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @"[]");
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @"[]");
 
     let changes = collect_changes_no_renames("r4-dir-rename-non-identity", ".git/index")?;
     // …or without
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())), @"[]");
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().collect::<Vec<_>>())).0, @"[]");
 
     let (index, _, _, _, _) = repo_with_indices(".git/index", ".git/index", None)?;
     assert_eq!(
@@ -1373,7 +1376,7 @@ mod util {
     use gix_diff::rewrites;
 
     fn repo_workdir() -> crate::Result<PathBuf> {
-        gix_testtools::scripted_fixture_read_only_standalone("make_diff_for_rewrites_repo.sh")
+        crate::scripted_fixture_read_only("make_diff_for_rewrites_repo.sh")
     }
 
     pub fn repo_with_indices(

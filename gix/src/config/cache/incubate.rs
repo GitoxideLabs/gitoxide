@@ -1,9 +1,9 @@
 #![allow(clippy::result_large_err)]
 
-use super::{util, Error};
+use super::{Error, util};
 use crate::config::{
     cache::util::{ApplyLeniency, ApplyLeniencyDefaultValue},
-    tree::{gitoxide, Core, Extensions},
+    tree::{Core, Extensions, gitoxide},
 };
 
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the

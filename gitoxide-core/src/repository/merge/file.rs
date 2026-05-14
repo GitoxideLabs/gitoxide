@@ -1,15 +1,15 @@
 use std::path::Path;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use gix::{
+    Id,
     bstr::{BString, ByteSlice},
     merge::blob::{
+        Resolution, ResourceKind,
         builtin_driver::{binary, text::Conflict},
         pipeline::WorktreeRoots,
-        Resolution, ResourceKind,
     },
     object::tree::EntryKind,
-    Id,
 };
 
 use crate::OutputFormat;

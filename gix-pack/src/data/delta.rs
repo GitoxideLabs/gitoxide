@@ -93,7 +93,7 @@ pub(crate) fn apply(base: &[u8], mut target: &mut [u8], data: &[u8]) -> Result<(
             0 => {
                 return Err(apply::Error::Corrupt {
                     message: "delta command 0 is reserved and invalid",
-                })
+                });
             }
             size => {
                 let end = i.checked_add(*size as usize).ok_or(apply::Error::Corrupt {

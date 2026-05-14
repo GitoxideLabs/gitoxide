@@ -2,7 +2,7 @@ use std::process::{Command, Stdio};
 
 use bstr::{BString, ByteSlice, ByteVec};
 
-use crate::{helper, Program};
+use crate::{Program, helper};
 
 /// The kind of helper program to use.
 #[derive(Debug, Clone, Eq, PartialEq)]

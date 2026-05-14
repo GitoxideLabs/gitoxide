@@ -1,4 +1,4 @@
-use gix_error::{bail, message, ErrorExt, Exn, ResultExt};
+use gix_error::{ErrorExt, Exn, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::parse::{
     delegate,
@@ -232,7 +232,7 @@ impl delegate::Revision for Delegate<'_> {
                     r
                 }
                 Ok(None) => {
-                    return Err(message("Unborn heads cannot have push or upstream tracking branches").raise_erased())
+                    return Err(message("Unborn heads cannot have push or upstream tracking branches").raise_erased());
                 }
                 Err(err) => {
                     return Err(err.raise_erased());

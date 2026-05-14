@@ -1,4 +1,4 @@
-use gix_index::entry::{mode::Change, Mode};
+use gix_index::entry::{Mode, mode::Change};
 
 #[test]
 fn apply() {

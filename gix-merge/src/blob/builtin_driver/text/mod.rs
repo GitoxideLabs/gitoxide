@@ -105,7 +105,6 @@ pub enum Conflict {
 
 impl Conflict {
     /// The amount of conflict marker characters to print by default.
-    // TODO: use NonZeroU8::new().unwrap() here once the MSRV supports it.
     pub const DEFAULT_MARKER_SIZE: u8 = 7;
 
     /// The amount of conflict markers to print if this instance contains them, or `None` otherwise

@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project to provide common errors and error-handling utilities"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [features]
 ## The [`Exn`](crate::Exn) type converts to [`anyhow::Error`] natively so `?` can be used directly.

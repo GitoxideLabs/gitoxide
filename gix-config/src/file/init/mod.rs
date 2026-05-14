@@ -1,8 +1,9 @@
 use gix_features::threading::OwnShared;
 
 use crate::{
-    file::{includes, section, Metadata},
-    parse, File,
+    File,
+    file::{Metadata, includes, section},
+    parse,
 };
 
 mod types;

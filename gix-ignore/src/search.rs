@@ -4,7 +4,7 @@ use std::{
 };
 
 use bstr::{BStr, ByteSlice};
-use gix_glob::search::{pattern, Pattern};
+use gix_glob::search::{Pattern, pattern};
 
 use crate::Search;
 

@@ -5,14 +5,14 @@ use gix_fs::Stack;
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct Record {
-    push_dir: usize,
+    push_dir_count: usize,
     dirs: Vec<PathBuf>,
     push: usize,
 }
 
 impl gix_fs::stack::Delegate for Record {
     fn push_directory(&mut self, stack: &Stack) -> std::io::Result<()> {
-        self.push_dir += 1;
+        self.push_dir_count += 1;
         self.dirs.push(stack.current().into());
         Ok(())
     }
@@ -24,6 +24,39 @@ impl gix_fs::stack::Delegate for Record {
 
     fn pop_directory(&mut self) {
         self.dirs.pop();
+    }
+}
+
+#[derive(Default)]
+struct FailOnce {
+    directory_to_fail_on: Option<PathBuf>,
+    path_to_fail_on: Option<PathBuf>,
+    failed: bool,
+    directories: Vec<PathBuf>,
+    popped_directories: Vec<PathBuf>,
+}
+
+impl gix_fs::stack::Delegate for FailOnce {
+    fn push_directory(&mut self, stack: &Stack) -> std::io::Result<()> {
+        if !self.failed && self.directory_to_fail_on.as_deref() == Some(stack.current_relative()) {
+            self.failed = true;
+            return Err(std::io::Error::other("failed to push directory"));
+        }
+        self.directories.push(stack.current_relative().to_owned());
+        Ok(())
+    }
+
+    fn push(&mut self, _is_last_component: bool, stack: &Stack) -> std::io::Result<()> {
+        if !self.failed && self.path_to_fail_on.as_deref() == Some(stack.current_relative()) {
+            self.failed = true;
+            return Err(std::io::Error::other("failed to push"));
+        }
+        Ok(())
+    }
+
+    fn pop_directory(&mut self) {
+        self.popped_directories
+            .push(self.directories.pop().expect("directory to pop"));
     }
 }
 
@@ -210,7 +243,7 @@ fn relative_components_are_invalid() {
     assert_eq!(
         r,
         Record {
-            push_dir: 2,
+            push_dir_count: 2,
             dirs: vec![".".into(), "./a".into()],
             push: 2,
         },
@@ -226,7 +259,7 @@ fn relative_components_are_invalid() {
     assert_eq!(
         r,
         Record {
-            push_dir: 2,
+            push_dir_count: 2,
             dirs: vec![".".into(), "./a".into()],
             push: 2,
         },
@@ -337,7 +370,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 2,
+            push_dir_count: 2,
             dirs: dirs.clone(),
             push: 2,
         },
@@ -348,7 +381,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 2,
+            push_dir_count: 2,
             dirs: dirs.clone(),
             push: 3,
         },
@@ -361,7 +394,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 4,
+            push_dir_count: 4,
             dirs: dirs.clone(),
             push: 6,
         },
@@ -373,7 +406,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 5,
+            push_dir_count: 5,
             dirs: dirs.clone(),
             push: 8,
         },
@@ -386,7 +419,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 5,
+            push_dir_count: 5,
             dirs: dirs.clone(),
             push: 9,
         },
@@ -398,7 +431,7 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 6,
+            push_dir_count: 6,
             dirs: dirs.clone(),
             push: 11,
         },
@@ -410,11 +443,11 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 7,
+            push_dir_count: 7,
             dirs: dirs.clone(),
-            push: 12,
+            push: 13,
         },
-        "and another sub-directory is added"
+        "and another sub-directory is added after revalidating the cached leaf as a directory"
     );
 
     dirs.push(root.join("x").join("z").join("a"));
@@ -423,11 +456,11 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 9,
+            push_dir_count: 9,
             dirs: dirs.clone(),
-            push: 14,
+            push: 16,
         },
-        "and more subdirectories, two at once this time."
+        "and more subdirectories, two at once this time, after revalidating the cached leaf as a directory."
     );
 
     dirs.drain(1 /*root*/ + 1 /*x*/ + 1 /*x/z*/ ..).count();
@@ -435,9 +468,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 9,
+            push_dir_count: 9,
             dirs: dirs.clone(),
-            push: 14,
+            push: 16,
         },
         "this only pops components, and as x/z/a/ was previously a directory, x/z is still a directory"
     );
@@ -460,9 +493,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 9,
+            push_dir_count: 9,
             dirs: dirs.clone(),
-            push: 15,
+            push: 17,
         },
         "reset as much as possible, with just a leaf-component and the root directory"
     );
@@ -472,9 +505,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
     assert_eq!(
         r,
         Record {
-            push_dir: 10,
+            push_dir_count: 10,
             dirs: dirs.clone(),
-            push: 17,
+            push: 19,
         },
         "double-slashes are automatically cleaned, even though they shouldn't happen, it's not forbidden"
     );
@@ -487,9 +520,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
         assert_eq!(
             r,
             Record {
-                push_dir: 11,
+                push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 19,
+                push: 21,
             },
             "a backslash is a normal character outside of Windows, so it's fine to have it as component"
         );
@@ -498,9 +531,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
         assert_eq!(
             r,
             Record {
-                push_dir: 11,
+                push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 19,
+                push: 21,
             },
         );
         assert_eq!(
@@ -514,9 +547,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
         assert_eq!(
             r,
             Record {
-                push_dir: 11,
+                push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 20,
+                push: 22,
             },
         );
         assert_eq!(
@@ -534,9 +567,9 @@ fn delegate_calls_are_consistent() -> crate::Result {
         assert_eq!(
             r,
             Record {
-                push_dir: 11,
+                push_dir_count: 11,
                 dirs: dirs.clone(),
-                push: 19,
+                push: 21,
             },
         );
         assert_eq!(
@@ -546,5 +579,67 @@ fn delegate_calls_are_consistent() -> crate::Result {
         );
     }
 
+    Ok(())
+}
+
+#[test]
+fn failed_leaf_to_directory_transition_restores_leaf_state() -> crate::Result {
+    let mut s = Stack::new(PathBuf::from("."));
+    let mut r = FailOnce {
+        directory_to_fail_on: Some(PathBuf::from("x/z")),
+        ..Default::default()
+    };
+
+    s.make_relative_path_current("x/z", &mut r)?;
+    let err = s.make_relative_path_current("x/z/a", &mut r).unwrap_err();
+    assert_eq!(err.to_string(), "failed to push directory");
+    assert_eq!(
+        s.current_relative(),
+        p("x/z"),
+        "the failed directory transition must restore the current path"
+    );
+    let popped_directories = r.popped_directories.len();
+
+    s.make_relative_path_current("x/q", &mut r)?;
+    assert_eq!(s.current_relative(), p("x/q"));
+    assert_eq!(
+        r.popped_directories.len(),
+        popped_directories,
+        "the failed directory transition must not leave directory state to pop"
+    );
+    Ok(())
+}
+
+#[test]
+fn failed_child_push_after_leaf_to_directory_transition_restores_directory_state() -> crate::Result {
+    for (path_to_fail_on, directory_to_fail_on, expected_error) in [
+        (Some("x/z/a"), None, "failed to push"),
+        (None, Some("x/z/a"), "failed to push directory"),
+    ] {
+        let mut s = Stack::new(PathBuf::from("."));
+        let mut r = FailOnce {
+            path_to_fail_on: path_to_fail_on.map(PathBuf::from),
+            directory_to_fail_on: directory_to_fail_on.map(PathBuf::from),
+            ..Default::default()
+        };
+
+        s.make_relative_path_current("x/z", &mut r)?;
+        let err = s.make_relative_path_current("x/z/a/b", &mut r).unwrap_err();
+        assert_eq!(err.to_string(), expected_error);
+        assert_eq!(
+            s.current_relative(),
+            p("x/z"),
+            "the failed child push must restore the current relative path"
+        );
+        let popped_directories = r.popped_directories.len();
+
+        s.make_relative_path_current("x/q", &mut r)?;
+        assert_eq!(s.current_relative(), p("x/q"));
+        assert_eq!(
+            r.popped_directories[popped_directories],
+            PathBuf::from("x/z"),
+            "the successful leaf-to-directory transition remains the next directory state to pop"
+        );
+    }
     Ok(())
 }

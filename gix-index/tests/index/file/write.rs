@@ -1,7 +1,7 @@
 use filetime::FileTime;
-use gix_index::{entry, extension, write, write::Options, State, Version};
+use gix_index::{State, Version, entry, extension, write, write::Options};
 
-use crate::index::Fixture::*;
+use crate::Fixture::*;
 
 /// Round-trips should eventually be possible for all files we have, as we write them back exactly as they were read.
 #[test]

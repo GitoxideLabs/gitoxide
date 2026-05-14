@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Http, Key, Section},
+    config::tree::{Http, Key, Section, keys},
 };
 
 impl Http {
@@ -94,8 +94,9 @@ pub type Version = keys::Any<validate::Version>;
 
 mod key_impls {
     use crate::config::tree::{
+        Section,
         http::{ProxyAuthMethod, SslVersion},
-        keys, Section,
+        keys,
     };
 
     impl SslVersion {
@@ -185,7 +186,7 @@ mod key_impls {
                     return Err(crate::config::key::GenericErrorWithValue::from_value(
                         self,
                         value.into_owned(),
-                    ))
+                    ));
                 }
             })
         }
@@ -216,7 +217,7 @@ mod key_impls {
                     return Err(crate::config::key::GenericErrorWithValue::from_value(
                         self,
                         value.into_owned(),
-                    ))
+                    ));
                 }
             })
         }

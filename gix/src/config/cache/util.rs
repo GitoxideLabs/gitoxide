@@ -2,7 +2,7 @@
 use super::Error;
 use crate::{
     config,
-    config::tree::{gitoxide, Core},
+    config::tree::{Core, gitoxide},
 };
 
 pub(crate) fn interpolate_context<'a>(

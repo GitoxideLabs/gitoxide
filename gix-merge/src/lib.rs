@@ -3,7 +3,6 @@
 //! * [blob-merges](blob) look at file content.
 //! * [tree-merges](mod@tree) look at trees and merge them structurally, triggering blob-merges as needed.
 //! * [commit-merges](mod@commit) are like tree merges, but compute or create the merge-base on the fly.
-#![deny(rust_2018_idioms)]
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 

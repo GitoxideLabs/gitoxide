@@ -1,8 +1,8 @@
 use std::{hint::black_box, time::Duration};
 
 use bstr::{BStr, ByteSlice};
-use criterion::{criterion_group, criterion_main, Criterion};
-use gix_glob::{pattern::Case, wildmatch::Mode, Pattern};
+use criterion::{Criterion, criterion_group, criterion_main};
+use gix_glob::{Pattern, pattern::Case, wildmatch::Mode};
 
 fn basename_start_pos(value: &BStr) -> Option<usize> {
     value.rfind_byte(b'/').map(|pos| pos + 1)

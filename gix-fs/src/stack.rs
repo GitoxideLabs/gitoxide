@@ -193,26 +193,39 @@ impl Stack {
         self.valid_components = matching_components;
 
         if !self.current_is_directory && components.peek().is_some() {
-            delegate.push_directory(self)?;
+            delegate.push(false, self)?;
+            // Make sure we don't consider this a directory if the `push` above fails.
+            self.current_is_directory = true;
+            if let Err(err) = delegate.push_directory(self) {
+                self.current_is_directory = false;
+                return Err(err);
+            }
         }
 
         while let Some(comp) = components.next() {
             let comp = comp.map_err(std::io::Error::other)?;
             let is_last_component = components.peek().is_none();
+            let parent_is_directory = self.current_is_directory;
             self.current_is_directory = !is_last_component;
             self.current.push(comp);
             self.current_relative.push(comp);
             self.valid_components += 1;
             let res = delegate.push(is_last_component, self);
-            if self.current_is_directory {
-                delegate.push_directory(self)?;
-            }
-
             if let Err(err) = res {
                 self.current.pop();
                 self.current_relative.pop();
                 self.valid_components -= 1;
+                self.current_is_directory = parent_is_directory;
                 return Err(err);
+            }
+            if self.current_is_directory {
+                if let Err(err) = delegate.push_directory(self) {
+                    self.current.pop();
+                    self.current_relative.pop();
+                    self.valid_components -= 1;
+                    self.current_is_directory = parent_is_directory;
+                    return Err(err);
+                }
             }
         }
         Ok(())

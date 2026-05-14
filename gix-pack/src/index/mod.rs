@@ -91,6 +91,9 @@ pub enum Version {
 impl Version {
     /// The kind of hash to produce to be compatible to this kind of index
     pub fn hash(&self) -> gix_hash::Kind {
+        #[cfg(not(feature = "sha1"))]
+        unreachable!("pack index versions V1 and V2 require SHA1 support");
+        #[cfg(feature = "sha1")]
         match self {
             Version::V1 | Version::V2 => gix_hash::Kind::Sha1,
         }

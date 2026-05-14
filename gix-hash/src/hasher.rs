@@ -10,9 +10,6 @@ pub(super) mod _impl {
     #[cfg(feature = "sha1")]
     use sha1_checked::{CollisionResult, Digest};
 
-    #[cfg(all(not(feature = "sha1"), feature = "sha256"))]
-    use sha2::Digest;
-
     use crate::hasher::Error;
 
     /// Hash implementations that can be used once.
@@ -42,7 +39,7 @@ pub(super) mod _impl {
         /// Let's not make this public to force people to go through [`hasher()`].
         #[cfg(feature = "sha256")]
         fn new_sha256() -> Self {
-            Self::Sha256(sha2::Sha256::new())
+            Self::Sha256(sha2::Sha256::default())
         }
     }
 
@@ -53,7 +50,7 @@ pub(super) mod _impl {
                 #[cfg(feature = "sha1")]
                 Hasher::Sha1(sha1) => sha1.update(bytes),
                 #[cfg(feature = "sha256")]
-                Hasher::Sha256(sha256) => sha256.update(bytes),
+                Hasher::Sha256(sha256) => sha2::Digest::update(sha256, bytes),
             }
         }
 
@@ -88,7 +85,7 @@ pub(super) mod _impl {
                     }),
                 },
                 #[cfg(feature = "sha256")]
-                Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha256.finalize().into())),
+                Hasher::Sha256(sha256) => Ok(crate::ObjectId::Sha256(sha2::Digest::finalize(sha256).into())),
             }
         }
     }

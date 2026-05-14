@@ -2,7 +2,7 @@ use std::{
     any::Any,
     io::{Read, Write},
     str::FromStr,
-    sync::{atomic, Arc},
+    sync::{Arc, atomic},
 };
 
 use gix_features::io::pipe;

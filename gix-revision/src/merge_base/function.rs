@@ -4,7 +4,7 @@ use gix_hash::ObjectId;
 use gix_revwalk::graph;
 
 use super::{Error, Simple};
-use crate::{merge_base::Flags, Graph, PriorityQueue};
+use crate::{Graph, PriorityQueue, merge_base::Flags};
 
 /// Given a commit at `first` id, traverse the commit `graph` and return all possible merge-base between it and `others`,
 /// sorted from best to worst. Returns `None` if there is no merge-base as `first` and `others` don't share history.

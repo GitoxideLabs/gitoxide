@@ -129,12 +129,11 @@ impl PrepareFetch {
                     .ref_map_by_ref(
                         &mut progress,
                         remote::ref_map::Options {
-                            extra_refspecs: vec![gix_refspec::parse(
-                                "HEAD".into(),
-                                gix_refspec::parse::Operation::Fetch,
-                            )
-                            .expect("valid")
-                            .to_owned()],
+                            extra_refspecs: vec![
+                                gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
+                                    .expect("valid")
+                                    .to_owned(),
+                            ],
                             ..Default::default()
                         },
                     )
@@ -319,6 +318,7 @@ impl PrepareFetch {
             crate::clone::PrepareCheckout {
                 repo: repo.into(),
                 ref_name: self.ref_name.clone(),
+                remove_worktree_on_drop: self.remove_worktree_on_drop,
             },
             fetch_outcome,
         ))

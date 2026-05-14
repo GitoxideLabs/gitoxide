@@ -1,4 +1,4 @@
-use crate::{store, PartialNameRef, Reference};
+use crate::{PartialNameRef, Reference, store};
 
 mod error {
     use std::convert::Infallible;
@@ -57,7 +57,7 @@ mod existing {
 
     pub use error::Error;
 
-    use crate::{store, PartialNameRef, Reference};
+    use crate::{PartialNameRef, Reference, store};
 
     impl store::Handle {
         /// Similar to [`crate::file::Store::find()`] but a non-existing ref is treated as error.

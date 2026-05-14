@@ -23,7 +23,7 @@
 //!
 //! assert_eq!(spec.to_bstring(), "refs/heads/*:refs/remotes/origin/*");
 //! ```
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 ///

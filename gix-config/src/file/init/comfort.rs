@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 
 use crate::{
-    file::{init, Metadata},
-    path, source, File, Source,
+    File, Source,
+    file::{Metadata, init},
+    path, source,
 };
 
 /// Easy-instantiation of typical non-repository git configuration files with all configuration defaulting to typical values.

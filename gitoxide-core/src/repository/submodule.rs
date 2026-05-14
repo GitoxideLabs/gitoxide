@@ -1,5 +1,5 @@
 use anyhow::bail;
-use gix::{commit::describe::SelectRef, prelude::ObjectIdExt, Repository, Submodule};
+use gix::{Repository, Submodule, commit::describe::SelectRef, prelude::ObjectIdExt};
 
 use crate::OutputFormat;
 

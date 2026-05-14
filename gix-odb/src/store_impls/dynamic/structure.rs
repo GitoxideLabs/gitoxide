@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{store::load_index, types::IndexAndPacks, Store};
+use crate::{Store, store::load_index, types::IndexAndPacks};
 
 /// A record of a structural element of an object database.
 #[derive(Debug, Clone, PartialEq, Eq)]

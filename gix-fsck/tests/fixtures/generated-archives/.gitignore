@@ -1,1 +1,5 @@
+# The fixture sets `GIT_CONFIG_GLOBAL` to a host-absolute path and
+# performs `git clone --no-local --no-hardlinks --filter=...` partial clones
+# whose alternates/promisor metadata embeds the host path of `./base`, so a
+# committed archive would not relocate to the test runner's checkout.
 make_test_repos.tar

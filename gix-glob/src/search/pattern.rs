@@ -64,11 +64,19 @@ fn read_in_full_ignore_missing(path: &Path, follow_symlinks: bool, buf: &mut Vec
 }
 
 fn io_err_is_dir(err: &std::io::Error) -> bool {
-    // TODO: use the enum variant NotADirectory for this once stabilized
-    let raw = err.raw_os_error();
-    raw == Some(if cfg!(windows) { 5 } else { 21 }) /* Not a directory */
-        /* Also that, but under different circumstances */
-        || raw == Some(20)
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::IsADirectory | std::io::ErrorKind::NotADirectory
+    ) || {
+        #[cfg(windows)]
+        {
+            err.kind() == std::io::ErrorKind::PermissionDenied
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
 }
 
 /// Instantiation

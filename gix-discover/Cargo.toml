@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Discover git repositories and check if a directory is a git repository"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [lib]
 doctest = true
@@ -17,12 +17,14 @@ doctest = true
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix-ref/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-ref/sha256"]
 
 [dependencies]
 gix-sec = { version = "^0.14.0", path = "../gix-sec" }
 gix-path = { version = "^0.12.0", path = "../gix-path" }
 gix-ref = { version = "^0.63.0", path = "../gix-ref" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std", "unicode"] }
 thiserror = "2.0.18"

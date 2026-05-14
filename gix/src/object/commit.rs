@@ -1,4 +1,4 @@
-use crate::{bstr, bstr::BStr, Commit, ObjectDetached, Tree};
+use crate::{Commit, ObjectDetached, Tree, bstr, bstr::BStr};
 
 mod error {
     use crate::object;
@@ -101,7 +101,7 @@ impl<'repo> Commit<'repo> {
 
     /// Decode the commit and obtain the time at which the commit was created.
     ///
-    /// For the time at which it was authored, refer to `.decode()?.author()?.time()`.
+    /// For the time at which it was authored, refer to `.author()?.time()`.
     pub fn time(&self) -> Result<gix_date::Time, Error> {
         Ok(self.committer()?.time()?)
     }

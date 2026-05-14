@@ -4,10 +4,10 @@ use bstr::BStr;
 use smallvec::ToSmallVec;
 
 use crate::{
-    file::{mutable::multi_value::EntryData, Index, Metadata, MultiValueMut, Size, ValueMut},
-    lookup,
-    parse::{section, Event},
     AsKey, File,
+    file::{Index, Metadata, MultiValueMut, Size, ValueMut, mutable::multi_value::EntryData},
+    lookup,
+    parse::{Event, section},
 };
 
 /// # Raw value API

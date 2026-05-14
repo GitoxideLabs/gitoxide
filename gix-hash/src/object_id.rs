@@ -4,7 +4,7 @@ use std::{
     ops::Deref,
 };
 
-use crate::{borrowed::oid, Kind};
+use crate::{Kind, borrowed::oid};
 
 #[cfg(feature = "sha1")]
 use crate::{EMPTY_BLOB_SHA1, EMPTY_TREE_SHA1, SIZE_OF_SHA1_DIGEST};

@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Clone, Key, Section},
+    config::tree::{Clone, Key, Section, keys},
 };
 
 impl Clone {

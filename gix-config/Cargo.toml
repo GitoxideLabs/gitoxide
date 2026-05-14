@@ -7,16 +7,17 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 description = "A git-config file parser and editor from the gitoxide project"
 license = "MIT OR Apache-2.0"
 authors = ["Edward Shen <code@eddie.sh>"]
-edition = "2021"
+edition = "2024"
 keywords = ["git-config", "git", "config", "gitoxide"]
 categories = ["config", "parser-implementations"]
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix-ref/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-ref/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-sec/serde", "gix-ref/serde", "gix-glob/serde", "gix-config-value/serde"]
 
@@ -39,6 +40,10 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 criterion = "0.8.2"
 gix-config = { path = ".", features = ["sha1"] }
+gix-testtools = { path = "../tests/tools", default-features = false }
+serial_test = { version = "3.4.0", default-features = false }
+bytesize = "2.3.1"
+cap = { version = "0.1.2", features = ["stats"] }
 
 [[bench]]
 name = "large_config_file"

@@ -1,14 +1,14 @@
 use std::{path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_features::progress;
-use gix_testtools::fixture_path_standalone;
+use gix_testtools::fixture_path;
 
 use crate::hex_to_id;
 
 #[test]
 fn from_paths() -> crate::Result {
     let dir = gix_testtools::tempfile::TempDir::new()?;
-    let input_indices = std::fs::read_dir(fixture_path_standalone("objects/pack"))?
+    let input_indices = std::fs::read_dir(fixture_path("objects/pack"))?
         .filter_map(|r| {
             r.ok()
                 .map(|e| e.path())

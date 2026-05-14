@@ -10,7 +10,7 @@ mod v1 {
         mod default_features {
             use gix_protocol::Command;
 
-            use super::super::{capabilities, GITHUB_CAPABILITIES};
+            use super::super::{GITHUB_CAPABILITIES, capabilities};
 
             #[test]
             fn it_chooses_the_best_multi_ack_and_sideband() {
@@ -127,14 +127,16 @@ mod v2 {
 
             #[test]
             fn ref_prefixes_can_always_be_used() {
-                assert!(Command::LsRefs
-                    .validate_argument_prefixes(
-                        gix_transport::Protocol::V2,
-                        &capabilities("something else", "do-not-matter"),
-                        &[b"ref-prefix hello/".as_bstr().into()],
-                        &[],
-                    )
-                    .is_ok());
+                assert!(
+                    Command::LsRefs
+                        .validate_argument_prefixes(
+                            gix_transport::Protocol::V2,
+                            &capabilities("something else", "do-not-matter"),
+                            &[b"ref-prefix hello/".as_bstr().into()],
+                            &[],
+                        )
+                        .is_ok()
+                );
             }
 
             #[test]

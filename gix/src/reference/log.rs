@@ -4,8 +4,8 @@ use gix_object::commit::MessageRef;
 use gix_ref::file::ReferenceExt;
 
 use crate::{
-    bstr::{BStr, BString, ByteVec},
     Reference,
+    bstr::{BStr, BString, ByteVec},
 };
 
 impl Reference<'_> {

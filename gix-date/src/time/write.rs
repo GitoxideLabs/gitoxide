@@ -3,7 +3,7 @@ use crate::{SecondsSinceUnixEpoch, Time};
 /// Serialize this instance as string, similar to what [`write_to()`](Self::write_to()) would do.
 impl std::fmt::Display for Time {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut buf = Vec::with_capacity(Time::MAX.size());
+        let mut buf = Vec::with_capacity(Time::MIN.size());
         self.write_to(&mut buf).expect("write to memory cannot fail");
         // Time serializes as ASCII, which is a subset of UTF-8.
         // Use `from_utf8()` (validated) instead of `from_utf8_unchecked()` for safety,
@@ -85,10 +85,15 @@ impl Time {
         digits
     }
 
-    /// The numerically largest possible time instance, whose [size()](Time::size) is the largest possible
-    /// number of bytes to write using [`Time::write_to()`].
+    /// The numerically largest possible time instance.
     pub const MAX: Time = Time {
         seconds: SecondsSinceUnixEpoch::MAX,
         offset: 99 * 60 * 60 + 59 * 60 + 59,
+    };
+
+    /// The numerically smallest possible time instance.
+    pub const MIN: Time = Time {
+        seconds: SecondsSinceUnixEpoch::MIN,
+        offset: -(99 * 60 * 60 + 59 * 60 + 59),
     };
 }

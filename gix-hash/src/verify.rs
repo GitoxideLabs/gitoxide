@@ -1,4 +1,4 @@
-use crate::{oid, ObjectId};
+use crate::{ObjectId, oid};
 
 /// The error returned by [`oid::verify()`].
 #[derive(Debug, thiserror::Error)]

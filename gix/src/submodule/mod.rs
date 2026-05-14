@@ -9,7 +9,7 @@ use std::{
 
 pub use gix_submodule::*;
 
-use crate::{bstr::BStr, is_dir_to_mode, worktree::IndexPersistedOrInMemory, Repository, Submodule};
+use crate::{Repository, Submodule, bstr::BStr, is_dir_to_mode, worktree::IndexPersistedOrInMemory};
 
 pub(crate) type ModulesFileStorage = gix_features::threading::OwnShared<gix_fs::SharedFileSnapshotMut<File>>;
 /// A lazily loaded and auto-updated worktree index.
@@ -160,14 +160,16 @@ impl Submodule<'_> {
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
     pub fn is_active(&self) -> Result<bool, is_active::Error> {
         let (mut platform, mut attributes) = self.state.active_state_mut()?;
-        let is_active = platform.is_active(&self.state.repo.config.resolved, self.name.as_ref(), {
+        let is_active = platform.is_active(
+            &self.state.repo.config.resolved,
+            self.name.as_ref(),
             &mut |relative_path, case, is_dir, out| {
                 attributes
                     .set_case(case)
                     .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
                     .is_ok_and(|platform| platform.matching_attributes(out))
-            }
-        })?;
+            },
+        )?;
         Ok(is_active)
     }
 
@@ -230,25 +232,56 @@ impl Submodule<'_> {
     /// the superproject's worktree where it actually *is* located if the submodule in the 'old-form', thus is a directory
     /// inside of the superproject's work-tree.
     ///
-    /// Note that 'old-form' paths returned aren't verified, i.e. the `.git` repository might be corrupt or otherwise
-    /// invalid - it's left to the caller to try to open it.
+    /// Note that paths returned aren't fully verified, i.e. the `.git` repository might be corrupt or otherwise
+    /// invalid - it's left to the caller to try to open it. `.git` files are parsed when present and their target
+    /// is required to be a directory though, as a malformed gitdir file means a broken submodule checkout.
     ///
-    /// Also note that the returned path may not actually exist.
+    /// Also note that the fallback path returned for uninitialized submodules may not actually exist.
     pub fn git_dir_try_old_form(&self) -> Result<PathBuf, git_dir_try_old_form::Error> {
-        let worktree_gitdir = self.worktree_gitdir()?;
-        let worktree_gitdir_or_modules_gitdir = if worktree_gitdir.is_dir() {
-            worktree_gitdir
-        } else {
-            self.git_dir()?
-        };
-        Ok(worktree_gitdir_or_modules_gitdir)
+        self.git_dir_try_old_form_inner(true)
     }
 
-    /// Query various parts of the submodule and assemble it into state information.
-    #[doc(alias = "status", alias = "git2")]
-    pub fn state(&self) -> Result<State, state::Error> {
-        let maybe_old_path = self.git_dir_try_old_form()?;
+    /// Return the best-known submodule repository path, optionally parsing a `.git` file target
+    /// and requiring it to be a directory if `validate_gitdir_file_target` is `true`.
+    ///
+    /// Validation may be skipped when callers only need coarse state, like `status_opts()` with
+    /// `Ignore::All`, which returns before opening or inspecting the submodule repository.
+    fn git_dir_try_old_form_inner(
+        &self,
+        validate_gitdir_file_target: bool,
+    ) -> Result<PathBuf, git_dir_try_old_form::Error> {
         let git_dir = self.git_dir()?;
+        let worktree_gitdir = self.worktree_gitdir()?;
+        let git_dir = if worktree_gitdir.is_dir() {
+            worktree_gitdir
+        } else if worktree_gitdir.is_file() {
+            if validate_gitdir_file_target {
+                let git_dir = gix_discover::path::from_gitdir_file(&worktree_gitdir).map_err(|source| {
+                    git_dir_try_old_form::Error::InvalidGitDirFileTarget {
+                        gitdir_file: worktree_gitdir.clone(),
+                        target: None,
+                        source: Some(source),
+                    }
+                })?;
+                if !git_dir.is_dir() {
+                    return Err(git_dir_try_old_form::Error::InvalidGitDirFileTarget {
+                        gitdir_file: worktree_gitdir,
+                        target: Some(git_dir),
+                        source: None,
+                    });
+                }
+                git_dir
+            } else {
+                gix_discover::path::from_gitdir_file(&worktree_gitdir).unwrap_or(git_dir)
+            }
+        } else {
+            git_dir
+        };
+        Ok(git_dir)
+    }
+
+    fn state_inner(&self, validate_gitdir_file_target: bool) -> Result<State, state::Error> {
+        let maybe_old_path = self.git_dir_try_old_form_inner(validate_gitdir_file_target)?;
         let worktree_git = self.worktree_gitdir()?;
         let superproject_configuration = self
             .state
@@ -261,10 +294,16 @@ impl Submodule<'_> {
             .any(|section| section.header().subsection_name() == Some(self.name.as_ref()));
         Ok(State {
             repository_exists: maybe_old_path.is_dir(),
-            is_old_form: maybe_old_path != git_dir,
+            is_old_form: worktree_git.is_dir(),
             worktree_checkout: worktree_git.exists(),
             superproject_configuration,
         })
+    }
+
+    /// Query various parts of the submodule and assemble it into state information.
+    #[doc(alias = "status", alias = "git2")]
+    pub fn state(&self) -> Result<State, state::Error> {
+        self.state_inner(true)
     }
 
     /// Open the submodule as repository, or `None` if the submodule wasn't initialized yet.
@@ -310,7 +349,7 @@ impl Submodule<'_> {
 pub mod status {
     use gix_submodule::config;
 
-    use super::{head_id, index_id, open, state, Status};
+    use super::{Status, head_id, index_id, open, state};
     use crate::Submodule;
 
     /// The error returned by [Submodule::status()].
@@ -373,7 +412,7 @@ pub mod status {
             )
                 -> crate::status::Platform<'a, gix_features::progress::Discard>,
         ) -> Result<Status, Error> {
-            let mut state = self.state()?;
+            let mut state = self.state_inner(ignore != config::Ignore::All)?;
             if ignore == config::Ignore::All {
                 return Ok(Status {
                     state,

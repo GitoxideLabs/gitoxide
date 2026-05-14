@@ -1,12 +1,60 @@
+# Archives below are intentionally not tracked. Each fixture creates state
+# whose contents depend on the host's working directory or installed `git`
+# binary (linked worktrees that bake absolute paths, alternates pointing at
+# `$PWD`, submodules with embedded host paths, host-only filesystem features,
+# or shallow/promisor metadata produced by the host `git`). Re-running the
+# script per host produces the values the test code expects.
+
+# `git worktree add` writes absolute paths into `.git/worktrees/<name>/gitdir`
+# and the worktree's `.git` pointer file; both shared with the `_bare` variant.
 /make_worktree_repo.tar
+/make_worktree_repo_sha256.tar
 /make_worktree_repo_bare.tar
+/make_worktree_repo_bare_sha256.tar
+# Same as above, plus per-worktree config created via `extensions.worktreeConfig`.
 /make_worktree_repo_with_configs.tar
+/make_worktree_repo_with_configs_sha256.tar
+# `git clone --shared file://$PWD/base` records the host-absolute alternates
+# path; numerous sub-clones inherit that reference.
 /make_remote_repos.tar
+/make_remote_repos_sha256.tar
+# Shallow clone created with `file://$remote`; `.git/shallow` and the alternates
+# record the host path of the source repo (this is the fixture called out in
+# issue #2316 / PR #2229 as a candidate for future commitment if those host
+# paths can be removed).
 /make_complex_shallow_repo.tar
+/make_complex_shallow_repo_sha256.tar
+# Clones from a host-supplied base repo path (`$1`); the resulting alternates
+# embed that absolute path.
 /make_fetch_repos.tar
+/make_fetch_repos_sha256.tar
+# Sets `core.worktree` to `$PWD/worktree` (an absolute path) on multiple
+# clones to test relative-vs-absolute worktree resolution.
 /make_core_worktree_repo.tar
+/make_core_worktree_repo_sha256.tar
+# Writes `global.config`/`system.config` files whose absolute paths the test
+# injects via `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM`; the path layout must
+# match the host running the test.
 /make_signatures_repo.tar
+/make_signatures_repo_sha256.tar
+# Reads tree blobs/messages from `$ROOT/assets/...` (a host-absolute path) via
+# `git update-index --index-info` to build commits.
 /make_diff_repos.tar
+/make_diff_repos_sha256.tar
+# `git submodule add` with relative path produces `.git/modules/<name>/config`
+# entries containing host-absolute worktree paths; also adds a worktree.
 /make_submodule_with_worktree.tar
+/make_submodule_with_worktree_sha256.tar
+# Uses `mkfifo`, `ln -s`, executable-bit changes, and adds a submodule —
+# none of which round-trip cleanly through a committed tar across platforms.
 /repo_with_untracked_files.tar
+/repo_with_untracked_files_sha256.tar
+# Adds a linked worktree (host-absolute paths in `.git/worktrees/<name>/gitdir`)
+# alongside `.git/info/exclude` content.
 /make_worktree_repo_with_info_exclude.tar
+/make_worktree_repo_with_info_exclude_sha256.tar
+# Embeds historical SHA-1 reflog entries verbatim.
+/make_rev_parse_repo_sha256.tar
+# Is based on Git's SHA-1 disambiguation tests and relies on exact SHA-1
+# prefixes in object names, refs, and expected messages.
+/make_rev_spec_parse_repos_sha256.tar

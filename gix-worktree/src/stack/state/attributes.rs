@@ -5,8 +5,8 @@ use gix_glob::pattern::Case;
 use gix_object::FindExt;
 
 use crate::{
-    stack::state::{AttributeMatchGroup, Attributes},
     PathIdMapping, Stack,
+    stack::state::{AttributeMatchGroup, Attributes},
 };
 
 /// Various aggregate numbers related [`Attributes`].
@@ -49,11 +49,7 @@ pub enum Source {
 impl Source {
     /// Returns non-worktree variants of `self` if `is_bare` is true.
     pub fn adjust_for_bare(self, is_bare: bool) -> Self {
-        if is_bare {
-            Source::IdMapping
-        } else {
-            self
-        }
+        if is_bare { Source::IdMapping } else { self }
     }
 }
 

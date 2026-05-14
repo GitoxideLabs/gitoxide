@@ -1,4 +1,4 @@
-use crate::{file, file::Commit, File, Graph, Position};
+use crate::{File, Graph, Position, file, file::Commit};
 
 /// Access
 impl Graph {
@@ -81,7 +81,7 @@ impl Graph {
                         file,
                         _file_index: file_index,
                         pos: file::Position(remaining),
-                    }
+                    };
                 }
             }
         }

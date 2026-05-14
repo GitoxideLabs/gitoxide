@@ -2,14 +2,15 @@ use std::{collections::VecDeque, io::Write};
 
 use gix_filter::{driver::apply::MaybeDelayed, pipeline::convert::ToWorktreeOutcome};
 use gix_object::{
+    FindExt,
     bstr::{BStr, BString, ByteSlice, ByteVec},
-    tree, FindExt,
+    tree,
 };
-use gix_traverse::tree::{visit::Action, Visit};
+use gix_traverse::tree::{Visit, visit::Action};
 
-use gix_error::{message, ResultExt};
+use gix_error::{ResultExt, message};
 
-use crate::{entry::Error, protocol, SharedErrorSlot};
+use crate::{SharedErrorSlot, entry::Error, protocol};
 
 pub struct Delegate<'a, AttributesFn, Find>
 where

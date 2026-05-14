@@ -1,7 +1,7 @@
 pub mod changes {
     use gix_diff::tree::{
-        visit::{Action, Change},
         Visit,
+        visit::{Action, Change},
     };
     use gix_hash::ObjectId;
     use gix_object::bstr::BStr;
@@ -66,7 +66,7 @@ pub mod changes {
 pub mod traverse {
     use gix_hash::ObjectId;
     use gix_object::{bstr::BStr, tree::EntryRef};
-    use gix_traverse::tree::{visit::Action, Visit};
+    use gix_traverse::tree::{Visit, visit::Action};
 
     use crate::data::output::count::objects_impl::util::InsertImmutable;
 

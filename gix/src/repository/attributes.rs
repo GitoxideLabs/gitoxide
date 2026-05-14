@@ -1,5 +1,5 @@
 //! exclude information
-use crate::{config, AttributeStack, Repository};
+use crate::{AttributeStack, Repository, config};
 
 /// The error returned by [`Repository::attributes()`].
 #[derive(Debug, thiserror::Error)]

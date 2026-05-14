@@ -2,9 +2,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
+    Repository, ThreadSafeRepository,
     bstr::{BStr, BString, ByteSlice},
     worktree::Proxy,
-    Repository, ThreadSafeRepository,
 };
 
 #[allow(missing_docs)]

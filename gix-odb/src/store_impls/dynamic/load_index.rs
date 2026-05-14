@@ -4,13 +4,13 @@ use std::{
     ops::Deref,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU16, Ordering},
         Arc,
+        atomic::{AtomicU16, Ordering},
     },
     time::SystemTime,
 };
 
-use crate::store::{handle, types, RefreshMode};
+use crate::store::{RefreshMode, handle, types};
 
 pub(crate) struct Snapshot {
     /// Indices ready for object lookup or contains checks, ordered usually by modification data, recent ones first.
@@ -46,7 +46,9 @@ mod error {
             super::Generation::MAX
         )]
         GenerationOverflow,
-        #[error("Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}")]
+        #[error(
+            "Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}"
+        )]
         TooManyPacksInMultiIndex {
             actual: PackIndex,
             limit: PackIndex,
@@ -628,7 +630,9 @@ impl super::Store {
                 bundle.index_is_loaded()
             }
             None => {
-                unreachable!("BUG: a slot can never be deleted if we have it recorded in the index WHILE changing said index. There shouldn't be a race")
+                unreachable!(
+                    "BUG: a slot can never be deleted if we have it recorded in the index WHILE changing said index. There shouldn't be a race"
+                )
             }
         }
     }

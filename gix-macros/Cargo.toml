@@ -3,7 +3,7 @@ lints.workspace = true
 [package]
 name = "gix-macros"
 version = "0.1.5"
-edition = "2021"
+edition = "2024"
 description = "Proc-macro utilities for gix"
 authors = [
     "Jiahao XU <Jiahao_XU@outlook.com>",
@@ -13,7 +13,7 @@ authors = [
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [lib]
 proc-macro = true

@@ -1,15 +1,15 @@
 use gix_diff::{
+    Rewrites,
     blob::DiffLineStats,
     rewrites,
     rewrites::{
-        tracker::{
-            visit::{Source, SourceKind},
-            ChangeKind,
-        },
         Copies, CopySource,
+        tracker::{
+            ChangeKind,
+            visit::{Source, SourceKind},
+        },
     },
     tree::visit::Relation,
-    Rewrites,
 };
 use gix_object::tree::EntryKind;
 use pretty_assertions::assert_eq;
@@ -50,7 +50,7 @@ fn rename_by_id() -> crate::Result {
                 src.unwrap(),
                 Source {
                     entry_mode: EntryKind::Blob.into(),
-                    id: NULL_ID,
+                    id: *NULL_ID,
                     kind: SourceKind::Rename,
                     location: "b".into(),
                     change: &Change::deletion(),
@@ -151,7 +151,10 @@ fn copy_by_id() -> crate::Result {
         let out = util::assert_emit_with_objects(
             &mut track,
             |dst, src| {
-                let id = hex_to_id("2e65efe2a145dda7ee51d1741299f848e5bf752e");
+                let id = hex_to_id(
+                    "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+                    "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7",
+                );
                 let source_a = Source {
                     entry_mode: EntryKind::Blob.into(),
                     id,
@@ -220,8 +223,12 @@ fn copy_by_id_search_in_all_sources() -> crate::Result {
             ],
         )?;
 
+        let content_id = hex_to_id(
+            "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+            "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7",
+        );
+
         let mut calls = 0;
-        let content_id = hex_to_id("2e65efe2a145dda7ee51d1741299f848e5bf752e");
         let out = util::assert_emit_with_objects_and_sources(
             &mut track,
             |dst, src| {
@@ -305,7 +312,10 @@ fn copy_by_50_percent_similarity() -> crate::Result {
     let out = util::assert_emit_with_objects(
         &mut track,
         |dst, src| {
-            let id = hex_to_id("78981922613b2afb6025042ff6bd878ac1994e85");
+            let id = hex_to_id(
+                "78981922613b2afb6025042ff6bd878ac1994e85",
+                "f8625e43f9e04f24291f77cdbe4c71b3c2a3b0003f60419b3ed06a058d766c8b",
+            );
             let source_a = Source {
                 entry_mode: EntryKind::Blob.into(),
                 id,
@@ -483,7 +493,10 @@ fn rename_by_50_percent_similarity() -> crate::Result {
         |dst, src| {
             match calls {
                 0 => {
-                    let id = hex_to_id("66a52ee7a1d803dc57859c3e95ac9dcdc87c0164");
+                    let id = hex_to_id(
+                        "66a52ee7a1d803dc57859c3e95ac9dcdc87c0164",
+                        "fdf2fd32de1d33ee5744979b40b07e0930a12c59dfbc5b3b6d34b807f944ba6e",
+                    );
                     assert_eq!(
                         src.unwrap(),
                         Source {
@@ -517,16 +530,27 @@ fn rename_by_50_percent_similarity() -> crate::Result {
         },
         odb,
     );
-    assert_eq!(
-        out,
-        rewrites::Outcome {
+
+    // The rename tracker currently sorts by hash, hence the outcome is hash-dependent.
+    let expected = match crate::fixture_hash_kind() {
+        gix_hash::Kind::Sha1 => rewrites::Outcome {
             options: rewrites,
             num_similarity_checks: 1,
             ..Default::default()
         },
+        gix_hash::Kind::Sha256 => rewrites::Outcome {
+            options: rewrites,
+            num_similarity_checks: 2,
+            ..Default::default()
+        },
+        _ => todo!(),
+    };
+    assert_eq!(
+        out, expected,
         "the first attempt already yields the one pair, so it doesn't participate anymore\
-         - we don't have best candidates yet, thus only one check"
+ - we don't have best candidates yet, thus only one check"
     );
+
     Ok(())
 }
 
@@ -535,7 +559,7 @@ fn directories_without_relation_are_ignored() -> crate::Result {
     let mut track = util::new_tracker(Default::default());
     for mode in [EntryKind::Tree, EntryKind::Commit] {
         let tree_without_relation = Change {
-            id: NULL_ID,
+            id: *NULL_ID,
             kind: ChangeKind::Deletion,
             mode: mode.into(),
             relation: None,
@@ -559,32 +583,42 @@ fn directory_renames_by_id_can_fail_gracefully() -> crate::Result {
     };
     let mut track = util::new_tracker(rename_by_similarity);
     let tree_dst_id = 1;
-    let tree_id = hex_to_id("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-    assert!(track
-        .try_push_change(
-            Change {
-                id: tree_id,
-                kind: ChangeKind::Addition,
-                mode: EntryKind::Tree.into(),
-                relation: Some(Relation::Parent(tree_dst_id)),
-            },
-            "d-renamed".into()
-        )
-        .is_none());
+    let tree_id = hex_to_id(
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    assert!(
+        track
+            .try_push_change(
+                Change {
+                    id: tree_id,
+                    kind: ChangeKind::Addition,
+                    mode: EntryKind::Tree.into(),
+                    relation: Some(Relation::Parent(tree_dst_id)),
+                },
+                "d-renamed".into()
+            )
+            .is_none()
+    );
 
     let tree_src_id = 3;
-    let tree_id = hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    assert!(track
-        .try_push_change(
-            Change {
-                id: tree_id,
-                kind: ChangeKind::Addition,
-                mode: EntryKind::Tree.into(),
-                relation: Some(Relation::Parent(tree_src_id)),
-            },
-            "d".into()
-        )
-        .is_none());
+    let tree_id = hex_to_id(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert!(
+        track
+            .try_push_change(
+                Change {
+                    id: tree_id,
+                    kind: ChangeKind::Addition,
+                    mode: EntryKind::Tree.into(),
+                    relation: Some(Relation::Parent(tree_src_id)),
+                },
+                "d".into()
+            )
+            .is_none()
+    );
     let odb = util::add_retained_blobs(
         &mut track,
         [
@@ -598,45 +632,92 @@ fn directory_renames_by_id_can_fail_gracefully() -> crate::Result {
         ],
     )?;
 
+    // The rename tracker currently sorts by hash, hence the outcome is hash-dependent.
     let mut calls = 0;
-    let out = util::assert_emit_with_objects(
-        &mut track,
-        |dst, src| {
-            match calls {
-                0..=2 => {
-                    let src = src.unwrap();
-                    let (expected_src, expected_dst) =
-                        &[("d/a", "d-renamed/a"), ("d/c", "d-renamed/subdir/c"), ("a", "b")][calls];
-                    assert_eq!(src.location, expected_src);
-                    assert_eq!(dst.location, expected_dst);
+    match crate::fixture_hash_kind() {
+        gix_hash::Kind::Sha1 => {
+            let out = util::assert_emit_with_objects(
+                &mut track,
+                |dst, src| {
+                    match calls {
+                        0..=2 => {
+                            let src = src.unwrap();
+                            let (expected_src, expected_dst) =
+                                &[("d/a", "d-renamed/a"), ("d/c", "d-renamed/subdir/c"), ("a", "b")][calls];
+                            assert_eq!(src.location, expected_src);
+                            assert_eq!(dst.location, expected_dst);
+                        }
+                        3 => {
+                            assert_eq!(src.unwrap().location, "d");
+                            assert_eq!(
+                                dst.location, "d-renamed",
+                                "it can now track modified and renamed directories"
+                            );
+                        }
+                        4 => {
+                            assert_eq!(src, None);
+                            assert_eq!(dst.change.kind, ChangeKind::Deletion);
+                            assert_eq!(dst.location, "d/subdir/d");
+                        }
+                        _ => unreachable!("Should have expected emission call {calls}"),
+                    }
+                    calls += 1;
+                    std::ops::ControlFlow::Continue(())
+                },
+                &odb,
+            );
+            assert_eq!(
+                out,
+                rewrites::Outcome {
+                    options: rename_by_similarity,
+                    num_similarity_checks: 1,
+                    ..Default::default()
                 }
-                3 => {
-                    assert_eq!(src.unwrap().location, "d");
-                    assert_eq!(
-                        dst.location, "d-renamed",
-                        "it can now track modified and renamed directories"
-                    );
-                }
-                4 => {
-                    assert_eq!(src, None);
-                    assert_eq!(dst.change.kind, ChangeKind::Deletion);
-                    assert_eq!(dst.location, "d/subdir/d");
-                }
-                _ => unreachable!("Should have expected emission call {calls}"),
-            }
-            calls += 1;
-            std::ops::ControlFlow::Continue(())
-        },
-        &odb,
-    );
-    assert_eq!(
-        out,
-        rewrites::Outcome {
-            options: rename_by_similarity,
-            num_similarity_checks: 1,
-            ..Default::default()
+            );
         }
-    );
+        gix_hash::Kind::Sha256 => {
+            let out = util::assert_emit_with_objects(
+                &mut track,
+                |dst, src| {
+                    match calls {
+                        0..=2 => {
+                            let src = src.unwrap();
+                            let (expected_src, expected_dst) =
+                                &[("d/c", "d-renamed/subdir/c"), ("d/a", "d-renamed/a"), ("a", "b")][calls];
+                            assert_eq!(src.location, expected_src);
+                            assert_eq!(dst.location, expected_dst);
+                        }
+                        3 => {
+                            assert_eq!(src.unwrap().location, "d");
+                            assert_eq!(
+                                dst.location, "d-renamed",
+                                "it can now track modified and renamed directories"
+                            );
+                        }
+                        4 => {
+                            assert_eq!(src, None);
+                            assert_eq!(dst.change.kind, ChangeKind::Deletion);
+                            assert_eq!(dst.location, "d/subdir/d");
+                        }
+                        _ => unreachable!("Should have expected emission call {calls}"),
+                    }
+                    calls += 1;
+                    std::ops::ControlFlow::Continue(())
+                },
+                &odb,
+            );
+            assert_eq!(
+                out,
+                rewrites::Outcome {
+                    options: rename_by_similarity,
+                    num_similarity_checks: 2,
+                    ..Default::default()
+                }
+            );
+            assert_eq!(calls, 5, "Should not have too few calls");
+        }
+        _ => todo!(),
+    }
     assert_eq!(calls, 5, "Should not have too few calls");
     Ok(())
 }
@@ -651,14 +732,21 @@ fn simple_directory_rename_by_id() -> crate::Result {
     };
     let mut track = util::new_tracker(renames_by_identity);
     let tree_dst_id = 1;
-    assert!(track
-        .try_push_change(Change::tree_addition(tree_dst_id), "d-renamed".into())
-        .is_none());
+    assert!(
+        track
+            .try_push_change(Change::tree_addition(tree_dst_id), "d-renamed".into())
+            .is_none()
+    );
     let tree_src_id = 3;
-    assert!(track
-        .try_push_change(Change::tree_deletion(tree_src_id), "d".into())
-        .is_none());
-    let tree_id = hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert!(
+        track
+            .try_push_change(Change::tree_deletion(tree_src_id), "d".into())
+            .is_none()
+    );
+    let tree_id = hex_to_id(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
     assert!(
         track
             .try_push_change(
@@ -674,17 +762,19 @@ fn simple_directory_rename_by_id() -> crate::Result {
         "trees that are children are kept and matched. That way, they can quickly be pruned which is done first.\
         Those who don't need them can prune them in a later step."
     );
-    assert!(track
-        .try_push_change(
-            Change {
-                id: tree_id,
-                kind: ChangeKind::Addition,
-                mode: EntryKind::Tree.into(),
-                relation: Some(Relation::ChildOfParent(tree_dst_id)),
-            },
-            "d-renamed/subdir".into(),
-        )
-        .is_none());
+    assert!(
+        track
+            .try_push_change(
+                Change {
+                    id: tree_id,
+                    kind: ChangeKind::Addition,
+                    mode: EntryKind::Tree.into(),
+                    relation: Some(Relation::ChildOfParent(tree_dst_id)),
+                },
+                "d-renamed/subdir".into(),
+            )
+            .is_none()
+    );
     let _odb = util::add_retained_blobs(
         &mut track,
         [
@@ -700,50 +790,101 @@ fn simple_directory_rename_by_id() -> crate::Result {
             (Change::addition(), "b", "firt\nsecond\n"),
         ],
     );
+
     let mut calls = 0;
-    let out = util::assert_emit(&mut track, |dst, src| {
-        match calls {
-            0 => {
-                let src = src.unwrap();
-                assert_eq!(src.location, "d");
-                assert_eq!(src.entry_mode.kind(), EntryKind::Tree);
-                assert_eq!(src.change.relation, Some(Relation::Parent(3)));
-                assert_eq!(dst.location, "d-renamed", "it found the renamed directory");
-                assert_eq!(dst.change.relation, Some(Relation::Parent(1)));
-                assert_eq!(dst.change.mode.kind(), EntryKind::Tree);
-            }
-            1..=5 => {
-                let src = src.unwrap();
-                let (expected_src, expected_dst) = &[
-                    ("d/a", "d-renamed/a"),
-                    ("d/c", "d-renamed/c"),
-                    ("d/b", "d-renamed/b"),
-                    ("d/subdir", "d-renamed/subdir"),
-                    ("d/subdir/d", "d-renamed/subdir/d"),
-                ][calls - 1];
-                assert_eq!(src.location, expected_src);
-                assert_eq!(dst.location, expected_dst);
-            }
-            6 => {
-                assert_eq!(src, None);
-                assert_eq!(dst.location, "a");
-            }
-            7 => {
-                assert_eq!(src, None);
-                assert_eq!(dst.location, "b");
-            }
-            _ => unreachable!("Should have expected emission call {calls}"),
+    match crate::fixture_hash_kind() {
+        gix_hash::Kind::Sha1 => {
+            let out = util::assert_emit(&mut track, |dst, src| {
+                match calls {
+                    0 => {
+                        let src = src.unwrap();
+                        assert_eq!(src.location, "d");
+                        assert_eq!(src.entry_mode.kind(), EntryKind::Tree);
+                        assert_eq!(src.change.relation, Some(Relation::Parent(3)));
+                        assert_eq!(dst.location, "d-renamed", "it found the renamed directory");
+                        assert_eq!(dst.change.relation, Some(Relation::Parent(1)));
+                        assert_eq!(dst.change.mode.kind(), EntryKind::Tree);
+                    }
+                    1..=5 => {
+                        let src = src.unwrap();
+                        let (expected_src, expected_dst) = &[
+                            ("d/a", "d-renamed/a"),
+                            ("d/c", "d-renamed/c"),
+                            ("d/b", "d-renamed/b"),
+                            ("d/subdir", "d-renamed/subdir"),
+                            ("d/subdir/d", "d-renamed/subdir/d"),
+                        ][calls - 1];
+                        assert_eq!(src.location, expected_src);
+                        assert_eq!(dst.location, expected_dst);
+                    }
+                    6 => {
+                        assert_eq!(src, None);
+                        assert_eq!(dst.location, "a");
+                    }
+                    7 => {
+                        assert_eq!(src, None);
+                        assert_eq!(dst.location, "b");
+                    }
+                    _ => unreachable!("Should have expected emission call {calls}"),
+                }
+                calls += 1;
+                std::ops::ControlFlow::Continue(())
+            });
+            assert_eq!(
+                out,
+                rewrites::Outcome {
+                    options: renames_by_identity,
+                    ..Default::default()
+                }
+            );
         }
-        calls += 1;
-        std::ops::ControlFlow::Continue(())
-    });
-    assert_eq!(
-        out,
-        rewrites::Outcome {
-            options: renames_by_identity,
-            ..Default::default()
+        gix_hash::Kind::Sha256 => {
+            let out = util::assert_emit(&mut track, |dst, src| {
+                match calls {
+                    0 => {
+                        let src = src.unwrap();
+                        assert_eq!(src.location, "d");
+                        assert_eq!(src.entry_mode.kind(), EntryKind::Tree);
+                        assert_eq!(src.change.relation, Some(Relation::Parent(3)));
+                        assert_eq!(dst.location, "d-renamed", "it found the renamed directory");
+                        assert_eq!(dst.change.relation, Some(Relation::Parent(1)));
+                        assert_eq!(dst.change.mode.kind(), EntryKind::Tree);
+                    }
+                    1..=5 => {
+                        let src = src.unwrap();
+                        let (expected_src, expected_dst) = &[
+                            ("d/subdir/d", "d-renamed/subdir/d"),
+                            ("d/b", "d-renamed/b"),
+                            ("d/subdir", "d-renamed/subdir"),
+                            ("d/c", "d-renamed/c"),
+                            ("d/a", "d-renamed/a"),
+                        ][calls - 1];
+                        assert_eq!(src.location, expected_src);
+                        assert_eq!(dst.location, expected_dst);
+                    }
+                    6 => {
+                        assert_eq!(src, None);
+                        assert_eq!(dst.location, "a");
+                    }
+                    7 => {
+                        assert_eq!(src, None);
+                        assert_eq!(dst.location, "b");
+                    }
+                    _ => unreachable!("Should have expected emission call {calls}"),
+                }
+                calls += 1;
+                std::ops::ControlFlow::Continue(())
+            });
+            assert_eq!(
+                out,
+                rewrites::Outcome {
+                    options: renames_by_identity,
+                    ..Default::default()
+                }
+            );
         }
-    );
+        _ => todo!(),
+    }
     assert_eq!(calls, 8, "Should not have too few calls");
     Ok(())
 }
@@ -791,10 +932,9 @@ fn add_only() -> crate::Result {
 
 mod util {
     use gix_diff::{
-        rewrites,
+        Rewrites, rewrites,
         rewrites::tracker::visit::{Destination, Source},
         tree::visit::Action,
-        Rewrites,
     };
 
     use crate::{rewrites::Change, util::ObjectDb};
@@ -861,7 +1001,7 @@ mod util {
     }
 
     fn new_platform_no_worktree() -> gix_diff::blob::Platform {
-        let root = gix_testtools::scripted_fixture_read_only_standalone("make_blob_repo.sh").expect("valid fixture");
+        let root = crate::scripted_fixture_read_only("make_blob_repo.sh").expect("valid fixture");
         let attributes = gix_worktree::Stack::new(
             root,
             gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(

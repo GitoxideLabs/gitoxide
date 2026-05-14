@@ -5,10 +5,10 @@ name = "gix-testtools"
 description = "Shared code for gitoxide crates to facilitate testing"
 version = "0.19.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [[bin]]
 name = "jtt"
@@ -18,18 +18,20 @@ path = "src/main.rs"
 doctest = true
 
 [features]
-default = []
+default = ["worktree-exclusions"]
+## Use the current repository's ignore rules to decide if generated fixture archives should be written.
+worktree-exclusions = ["dep:gix-discover", "dep:gix-worktree", "dep:gix-fs"]
 ## Use instead of plain `tar` files, compress these to produce `tar.xz` files instead.
 ## This is useful if archives are uploaded into `git-lfs`, which doesn't have built-in compression
 ## and metering counts towards uncompressed bytes transferred.
 xz = ["dep:xz2"]
 
 [dependencies]
-gix-hash = { version = "^0.25.0", path = "../../gix-hash", features = ["sha1"] }
+gix-hash = { version = "^0.25.0", path = "../../gix-hash", features = ["sha1", "sha256"] }
 gix-lock = { version = "^23.0.0", path = "../../gix-lock" }
-gix-discover = { version = "^0.51.0", path = "../../gix-discover" }
-gix-worktree = { version = "^0.52.0", path = "../../gix-worktree" }
-gix-fs = { version = "^0.21.0", path = "../../gix-fs" }
+gix-discover = { version = "^0.51.0", path = "../../gix-discover", optional = true }
+gix-worktree = { version = "^0.52.0", path = "../../gix-worktree", optional = true }
+gix-fs = { version = "^0.21.1", path = "../../gix-fs", optional = true }
 gix-tempfile = { version = "^23.0.0", path = "../../gix-tempfile", default-features = false, features = ["signals"] }
 
 fastrand = "2.0.0"

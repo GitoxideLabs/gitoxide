@@ -3,9 +3,9 @@ use std::io;
 use bstr::{BString, ByteSlice};
 
 use crate::{
+    Kind, Tree, TreeRef,
     encode::SPACE,
     tree::{Entry, EntryRef},
-    Kind, Tree, TreeRef,
 };
 
 /// The Error used in [`Tree::write_to()`][crate::WriteTo::write_to()].

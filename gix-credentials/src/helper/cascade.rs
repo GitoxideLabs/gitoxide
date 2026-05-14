@@ -1,4 +1,4 @@
-use crate::{helper, helper::Cascade, protocol, protocol::Context, Program};
+use crate::{Program, helper, helper::Cascade, protocol, protocol::Context};
 
 impl Default for Cascade {
     fn default() -> Self {

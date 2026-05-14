@@ -1,7 +1,7 @@
 use gix_object::{
+    TreeRefIter,
     bstr::ByteSlice,
     tree::{self, EntryRef},
-    TreeRefIter,
 };
 use pretty_assertions::assert_eq;
 
@@ -10,7 +10,7 @@ use crate::{fixture_hash_kind, fixture_oid, tree_fixture};
 #[test]
 fn empty() {
     assert_eq!(
-        TreeRefIter::from_bytes(&[], gix_testtools::hash_kind_from_env().unwrap_or_default()).count(),
+        TreeRefIter::from_bytes(&[], gix_testtools::object_hash()).count(),
         0,
         "empty trees are definitely ok"
     );
@@ -133,7 +133,7 @@ mod lookup_entry {
     }
 
     mod utils {
-        use gix_object::{tree, FindExt};
+        use gix_object::{FindExt, tree};
 
         use crate::generated_tree_root_id;
 

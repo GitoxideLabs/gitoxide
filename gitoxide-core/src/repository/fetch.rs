@@ -21,7 +21,7 @@ pub(crate) mod function {
     use gix::{
         prelude::ObjectIdExt,
         refspec::match_group::validate::Fix,
-        remote::fetch::{refs::update::TypeChange, Status},
+        remote::fetch::{Status, refs::update::TypeChange},
     };
     use layout::{
         backends::svg::SVGWriter,
@@ -218,13 +218,14 @@ pub(crate) mod function {
         updates.sort_by_key(|t| t.2);
         let mut skipped_due_to_implicit_tag = None;
         fn consume_skipped_tags(skipped: &mut Option<usize>, out: &mut impl std::io::Write) -> std::io::Result<()> {
-            if let Some(skipped) = skipped.take() {
-                if skipped != 0 {
+            match skipped.take() {
+                Some(skipped) if skipped != 0 => {
                     writeln!(
                         out,
                         "\tskipped {skipped} tags known to the remote without bearing on this commit-graph. Use `gix remote ref-map` to list them."
                     )?;
                 }
+                _ => {}
             }
             Ok(())
         }
@@ -249,11 +250,12 @@ pub(crate) mod function {
                 writeln!(out)?;
             }
 
-            if let Some(num_skipped) = skipped_due_to_implicit_tag.as_mut() {
-                if matches!(update.mode, gix::remote::fetch::refs::update::Mode::NoChangeNeeded) {
+            match skipped_due_to_implicit_tag.as_mut() {
+                Some(num_skipped) if matches!(update.mode, gix::remote::fetch::refs::update::Mode::NoChangeNeeded) => {
                     *num_skipped += 1;
                     continue;
                 }
+                _ => {}
             }
 
             write!(out, "\t")?;

@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::{oid, ObjectId, Prefix};
+use crate::{ObjectId, Prefix, oid};
 
 /// The error returned by [`Prefix::new()`].
 #[derive(Debug, thiserror::Error)]

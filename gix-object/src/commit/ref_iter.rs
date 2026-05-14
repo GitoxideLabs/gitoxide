@@ -1,12 +1,13 @@
 use std::{borrow::Cow, ops::Range};
 
 use bstr::BStr;
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 
 use crate::{
+    CommitRefIter,
     bstr::ByteSlice,
-    commit::{decode, SignedData, SIGNATURE_FIELD_NAME},
-    parse, CommitRefIter,
+    commit::{SIGNATURE_FIELD_NAME, SignedData, decode},
+    parse,
 };
 
 #[derive(Copy, Clone)]
@@ -30,7 +31,7 @@ pub(crate) enum State {
 
 /// Lifecycle
 impl<'a> CommitRefIter<'a> {
-    /// Create a commit iterator from the given `data`, using `hash_kind` to know
+    /// Create a commit iterator from the given `data`, using `object_hash` to know
     /// what kind of hash to expect for validation.
     pub fn from_bytes(data: &'a [u8], hash_kind: gix_hash::Kind) -> CommitRefIter<'a> {
         CommitRefIter {
@@ -44,7 +45,7 @@ impl<'a> CommitRefIter<'a> {
 /// Access
 impl<'a> CommitRefIter<'a> {
     /// Parse `data` as commit and return its PGP signature, along with *all non-signature* data as [`SignedData`], or `None`
-    /// if the commit isn't signed. All hashes in `data` are parsed as `hash_kind`.
+    /// if the commit isn't signed. All hashes in `data` are parsed as `object_hash`.
     ///
     /// This allows the caller to validate the signature by passing the signed data along with the signature back to the program
     /// that created it.
@@ -191,7 +192,7 @@ impl<'a> CommitRefIter<'a> {
                     Self::next_inner_(input, state, hash_kind)?
                 }
             }
-            Signature { ref mut of } => {
+            Signature { of } => {
                 let who = *of;
                 let field_name = match of {
                     SignatureKind::Author => {

@@ -2,12 +2,13 @@ use std::{collections::BTreeSet, io, path::Path, time::Instant};
 
 use anyhow::bail;
 use gix::{
+    Count, NestedProgress, Progress,
     actor::{Identity, IdentityRef},
     bstr::{BStr, ByteSlice},
     prelude::*,
-    progress, Count, NestedProgress, Progress,
+    progress,
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 
 /// Additional configuration for the hours estimation functionality.
 pub struct Context<W> {
@@ -83,9 +84,9 @@ fn parse_trailer_identity(trailer: gix::objs::commit::message::body::TrailerRef<
 /// Return `(commit_author, [commit_author, co_authors...])`. Use the `commit_author` for easy access to the commit author itself.
 fn commit_author_identities(
     commit_data: &[u8],
-    hash_kind: gix::hash::Kind,
+    object_hash: gix::hash::Kind,
 ) -> Result<(gix::actor::SignatureRef<'_>, SmallVec<[ParsedIdentity<'_>; 2]>), gix::objs::decode::Error> {
-    let commit = gix::objs::CommitRef::from_bytes(commit_data, hash_kind)?;
+    let commit = gix::objs::CommitRef::from_bytes(commit_data, object_hash)?;
     let author = commit.author()?.trim();
     let mut authors = smallvec![ParsedIdentity::Borrowed(gix::actor::IdentityRef::from(author))];
     authors.extend(commit.co_authored_by_trailers().filter_map(parse_trailer_identity));
@@ -421,7 +422,7 @@ where
 }
 
 mod core;
-use self::core::{deduplicate_identities, estimate_hours, HOURS_PER_WORKDAY};
+use self::core::{HOURS_PER_WORKDAY, deduplicate_identities, estimate_hours};
 
 mod util;
 use util::{CommitIdx, FileStats, LineStats, WorkByEmail, WorkByPerson};

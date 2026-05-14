@@ -9,7 +9,7 @@ use gix_odb::pack;
 use gix_packetline::async_io::StreamingPeekableIter;
 #[cfg(all(feature = "blocking-io", not(feature = "async-io")))]
 use gix_packetline::blocking_io::StreamingPeekableIter;
-use gix_packetline::{read::ProgressAction, PacketLineRef};
+use gix_packetline::{PacketLineRef, read::ProgressAction};
 
 use crate::read::streaming_peek_iter::fixture_bytes;
 
@@ -18,7 +18,7 @@ mod util {
     use std::{io::Result, pin::Pin};
 
     use futures_io::{AsyncBufRead, AsyncRead};
-    use futures_lite::{future, AsyncBufReadExt, AsyncReadExt};
+    use futures_lite::{AsyncBufReadExt, AsyncReadExt, future};
 
     pub struct BlockOn<T>(pub T);
 
@@ -112,7 +112,10 @@ async fn read_line_trait_method_reads_one_packet_line_at_a_time() -> crate::Resu
     let mut out = String::new();
     let mut r = rd.as_read();
     r.read_line_to_string(&mut out).await?;
-    assert_eq!(out, "808e50d724f604f69ab93c6da2919c014667bedb HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0\n");
+    assert_eq!(
+        out,
+        "808e50d724f604f69ab93c6da2919c014667bedb HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0\n"
+    );
     out.clear();
     r.read_line_to_string(&mut out).await?;
     assert_eq!(out, "808e50d724f604f69ab93c6da2919c014667bedb refs/heads/master\n");
@@ -157,7 +160,10 @@ async fn readline_reads_one_packet_line_at_a_time() -> crate::Result {
 
     let mut r = rd.as_read();
     let line = r.read_data_line().await.unwrap()??.as_bstr().unwrap();
-    assert_eq!(line, "808e50d724f604f69ab93c6da2919c014667bedb HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0\n");
+    assert_eq!(
+        line,
+        "808e50d724f604f69ab93c6da2919c014667bedb HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0\n"
+    );
     let line = r.read_data_line().await.unwrap()??.as_bstr().unwrap();
     assert_eq!(line, "808e50d724f604f69ab93c6da2919c014667bedb refs/heads/master\n");
     let line = r.read_data_line().await;

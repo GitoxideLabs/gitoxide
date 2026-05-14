@@ -33,7 +33,7 @@ pub(crate) mod function;
 
 mod octopus {
     use gix_hash::ObjectId;
-    use gix_revwalk::{graph, Graph};
+    use gix_revwalk::{Graph, graph};
 
     use crate::merge_base::{Error, Flags};
 

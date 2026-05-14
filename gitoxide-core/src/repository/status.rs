@@ -87,12 +87,12 @@ pub fn show(
                 track_empty: false,
             });
             if opts.rewrites.is_some() {
-                if let Some(opts) = opts.dirwalk_options.as_mut() {
+                opts.dirwalk_options.iter_mut().for_each(|opts| {
                     opts.set_emit_untracked(gix::dir::walk::EmissionMode::Matching);
                     if ignored.is_some() {
                         opts.set_emit_ignored(Some(gix::dir::walk::EmissionMode::Matching));
                     }
-                }
+                });
             }
             opts.thread_limit = thread_limit;
             opts.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);

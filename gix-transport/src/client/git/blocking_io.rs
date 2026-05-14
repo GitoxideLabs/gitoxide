@@ -3,6 +3,7 @@ use std::{any::Any, borrow::Cow, error::Error, io::Write};
 use bstr::{BStr, BString, ByteVec};
 
 use crate::{
+    Protocol, Service,
     client::{
         self,
         blocking_io::{RequestWriter, SetServiceResponse},
@@ -10,10 +11,9 @@ use crate::{
         git::{self, ConnectionState},
     },
     packetline::{
-        blocking_io::{StreamingPeekableIter, Writer},
         PacketLineRef,
+        blocking_io::{StreamingPeekableIter, Writer},
     },
-    Protocol, Service,
 };
 
 /// A TCP connection to either a `git` daemon or a spawned `git` process.

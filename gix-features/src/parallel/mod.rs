@@ -36,12 +36,12 @@
 mod in_parallel;
 #[cfg(feature = "parallel")]
 pub use in_parallel::{
-    build_thread, in_parallel, in_parallel_with_finalize, in_parallel_with_slice, join, threads, Scope,
+    Scope, build_thread, in_parallel, in_parallel_with_finalize, in_parallel_with_slice, join, threads,
 };
 
 mod serial;
 #[cfg(not(feature = "parallel"))]
-pub use serial::{build_thread, in_parallel, in_parallel_with_finalize, in_parallel_with_slice, join, threads, Scope};
+pub use serial::{Scope, build_thread, in_parallel, in_parallel_with_finalize, in_parallel_with_slice, join, threads};
 
 mod in_order;
 pub use in_order::{InOrderIter, SequenceId};

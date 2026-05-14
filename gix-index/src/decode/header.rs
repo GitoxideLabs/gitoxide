@@ -1,6 +1,6 @@
 pub(crate) const SIZE: usize = 4 /*signature*/ + 4 /*version*/ + 4 /* num entries */;
 
-use crate::{util::from_be_u32, Version};
+use crate::{Version, util::from_be_u32};
 
 pub(crate) const SIGNATURE: &[u8] = b"DIRC";
 

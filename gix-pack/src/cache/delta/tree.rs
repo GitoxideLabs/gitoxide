@@ -1,4 +1,4 @@
-use super::{traverse, Error};
+use super::{Error, traverse};
 use crate::exact_vec;
 /// An item stored within the [`Tree`] whose data is stored in a pack file, identified by
 /// the offset of its first (`offset`) and last (`next_offset`) bytes.

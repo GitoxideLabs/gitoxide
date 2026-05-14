@@ -6,7 +6,7 @@ fn main() {
 #[cfg(feature = "signals")]
 fn main() -> std::io::Result<()> {
     use std::{
-        io::{stdout, Write},
+        io::{Write, stdout},
         path::PathBuf,
     };
 
@@ -21,5 +21,7 @@ fn main() -> std::io::Result<()> {
     stdout().flush()?;
 
     signal_hook::low_level::raise(signal_hook::consts::SIGTERM)?;
-    unreachable!("the above line aborts the process, and prevents destructors from running. The tempfile will go away nonetheless");
+    unreachable!(
+        "the above line aborts the process, and prevents destructors from running. The tempfile will go away nonetheless"
+    );
 }

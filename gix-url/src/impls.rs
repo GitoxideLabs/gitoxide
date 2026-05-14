@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use bstr::BStr;
 
-use crate::{parse, Scheme, Url};
+use crate::{Scheme, Url, parse};
 
 impl Default for Url {
     fn default() -> Self {

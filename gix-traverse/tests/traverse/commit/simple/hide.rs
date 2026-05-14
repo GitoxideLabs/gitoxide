@@ -1,26 +1,28 @@
 use super::*;
-use crate::util::{commit_graph, fixture, git_rev_list};
+use crate::util::{commit_graph, fixture, git_rev_list, odb_at};
 use std::{cell::Cell, rc::Rc};
 
 fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> crate::Result {
     let graph = git_graph(repo_dir)?;
+
     insta::allow_duplicates! {
         insta::assert_snapshot!(graph, @r"
-            *-.   f49838d84281c3988eeadd988d97dd358c9f9dc4  (HEAD -> main) merge
-            |\ \  
-            | | * 48e8dac19508f4238f06c8de2b10301ce64a641c  (branch2) b2c2
-            | | * cb6a6befc0a852ac74d74e0354e0f004af29cb79  b2c1
-            | * | 66a309480201c4157b0eae86da69f2d606aadbe7  (branch1) b1c2
-            | * | 80947acb398362d8236fcb8bf0f8a9dac640583f  b1c1
-            | |/  
-            * / 0edb95c0c0d9933d88f532ec08fcd405d0eee882  c5
-            |/  
-            * 8cb5f13b66ce52a49399a2c49f537ee2b812369c  c4
-            * 33aa07785dd667c0196064e3be3c51dd9b4744ef  c3
-            * ad33ff2d0c4fc77d56b5fbff6f86f332fe792d83  c2
-            * 65d6af66f60b8e39fd1ba6a1423178831e764ec5  c1
-            ");
+        *-.   Oid(1)  (HEAD -> main) merge
+        |\ \  
+        | | * Oid(2)  (branch2) b2c2
+        | | * Oid(3)  b2c1
+        | * | Oid(4)  (branch1) b1c2
+        | * | Oid(5)  b1c1
+        | |/  
+        * / Oid(6)  c5
+        |/  
+        * Oid(7)  c4
+        * Oid(8)  c3
+        * Oid(9)  c2
+        * Oid(10)  c1
+        ")
     }
+
     Ok(())
 }
 
@@ -28,13 +30,13 @@ fn assert_simple_repo_graph(repo_dir: &std::path::Path) -> crate::Result {
 fn disjoint_hidden_and_interesting() -> crate::Result {
     let (repo_dir, odb) = named_fixture("make_repos.sh", "disjoint_branches")?;
 
-    insta::assert_snapshot!(git_graph(&repo_dir)?, @"
-        * e07cf1277ff7c43090f1acfc85a46039e7de1272  (HEAD -> disjoint) b3
-        * 94cf3f3a4c782b672173423e7a4157a02957dd48  b2
-        * 34e5ff5ce3d3ba9f0a00d11a7fad72551fff0861  b1
-        * b5665181bf4c338ab16b10da0524d81b96aff209  (main) a3
-        * f0230ce37b83d8e9f51ea6322ed7e8bd148d8e28  a2
-        * 674aca0765b935ac5e7f7e9ab83af7f79272b5b0  a1
+    insta::assert_snapshot!(git_graph(&repo_dir)?, @r"
+        * Oid(1)  (HEAD -> disjoint) b3
+        * Oid(2)  b2
+        * Oid(3)  b1
+        * Oid(4)  (main) a3
+        * Oid(5)  a2
+        * Oid(6)  a1
         ");
 
     let tip = hex_to_id("e07cf1277ff7c43090f1acfc85a46039e7de1272"); // b3
@@ -116,7 +118,7 @@ fn some_hidden_and_all_hidden() -> crate::Result {
 fn hidden_bug_repo(name: &str) -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
     let dir = fixture("make_repo_for_hidden_bug.sh")?;
     let repo_path = dir.join(name);
-    let odb = gix_odb::at(repo_path.join(".git").join("objects"))?;
+    let odb = odb_at(repo_path.join(".git").join("objects"))?;
     Ok((repo_path, odb))
 }
 
@@ -130,14 +132,15 @@ fn hidden_tip_with_longer_path_to_shared_ancestor() -> crate::Result {
     // Expected: only A is returned (shared is reachable from H)
     let (repo_path, odb) = hidden_bug_repo("long_hidden_path")?;
 
-    insta::assert_snapshot!(git_graph(&repo_path)?, @"
-            * b6cf469d740a02645b7b9f7cdb98977a6cd7e5ab  (HEAD -> main) A
-            | * 2955979fbddb1bddb9e1b1ca993789cacf612b18  (hidden_branch) H
-            | * ae431c4e51a81a1df4ac22a52c4e247734ee3c9d  X
-            | * ab31ef4cacc50169f2b1d753c1e4efd55d570bbc  Y
+    insta::assert_snapshot!(git_graph(&repo_path)?, @r"
+            * Oid(1)  (HEAD -> main) A
+            | * Oid(2)  (hidden_branch) H
+            | * Oid(3)  X
+            | * Oid(4)  Y
             |/  
-            * f1543941113388f8a194164420fd7da96f73c2ce  shared
-            ");
+            * Oid(5)  shared
+        "
+    );
 
     let commits = parse_commit_names(&repo_path)?;
     let tip_a = commits["A"];
@@ -172,14 +175,14 @@ fn interesting_tip_with_longer_path_to_shared_ancestor() -> crate::Result {
     // Expected: A, B, C are returned (D is reachable from H)
     let (repo_path, odb) = hidden_bug_repo("long_interesting_path")?;
 
-    insta::assert_snapshot!(git_graph(&repo_path)?, @"
-            * 8822f888affa916a2c945ef3b17447f29f8aabff  (HEAD -> main) A
-            * 90f80e3c031e9149cfa631493663ffe52d645aab  B
-            * 2f353d445c4c552eec8e84f0f6f73999d08a8073  C
-            | * 7e0cf8f62783a0eb1043fbe56d220308c3e0289e  (hidden_branch) H
+    insta::assert_snapshot!(git_graph(&repo_path)?, @r"
+            * Oid(1)  (HEAD -> main) A
+            * Oid(2)  B
+            * Oid(3)  C
+            | * Oid(4)  (hidden_branch) H
             |/  
-            * 359b53df58a6e26b95e276a9d1c9e2b33a3b50bf  D
-            ");
+            * Oid(5)  D
+        ");
 
     let commits = parse_commit_names(&repo_path)?;
     let tip_a = commits["A"];

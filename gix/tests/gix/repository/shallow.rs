@@ -96,14 +96,23 @@ mod traverse {
         for toggle in [false, true] {
             for name in ["shallow.git", "shallow"] {
                 let repo = gix::open_opts(shallow_base.join(name), crate::restricted())?;
-                assert_eq!(
-                    super::shallow_ids(&repo)?,
-                    [
+                // Shallow commits are sorted which is why there's different expectations depending
+                // on the hash the test is run with.
+                let expected_shallow_ids = match gix_testtools::object_hash() {
+                    gix_hash::Kind::Sha1 => [
                         hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
                         hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
                         hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85"),
-                    ]
-                );
+                    ],
+                    gix_hash::Kind::Sha256 => [
+                        hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
+                        hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85"),
+                        hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
+                    ],
+
+                    _ => unimplemented!(),
+                };
+                assert_eq!(super::shallow_ids(&repo)?, expected_shallow_ids);
                 let commits: Vec<_> = repo
                     .head_id()?
                     .ancestors()
@@ -127,13 +136,36 @@ mod traverse {
                     .collect::<Vec<_>>()
                 );
 
-                // should be
-                // *   f99771f - (HEAD -> main, origin/main, origin/HEAD) A (18 years ago) <A U Thor>
-                // | * 2d9d136 - C (18 years ago) <A U Thor>
-                // *-. | dfd0954 - (tag: b-tag) B (18 years ago) <A U Thor>
-                // | | * 27e7157 - (grafted) F (18 years ago) <A U Thor>
-                //     | * b515286 - (grafted) E (18 years ago) <A U Thor>
-                //     * 82024b2 - (grafted) D (18 years ago) <A U Thor>
+                if !toggle && name == "shallow" {
+                    let graph = gix_testtools::git(repo.git_dir(), "log --graph --oneline")?;
+                    match gix_testtools::object_hash() {
+                        gix_hash::Kind::Sha1 => insta::assert_snapshot!(graph, @r"
+*   f99771f A
+|\  
+| * 2d9d136 C
+| |   
+|  \  
+*-. | dfd0954 B
+|\ \| 
+| | * 27e7157 F
+| * b515286 E
+* 82024b2 D
+"),
+                        gix_hash::Kind::Sha256 => insta::assert_snapshot!(graph, @r"
+*   e36613f A
+|\  
+| * 1e485b4 C
+| |   
+|  \  
+*-. | 94c0c58 B
+|\ \| 
+| | * c2eec0d F
+| * a5d87b4 E
+* 125ce6c D
+"),
+                        _ => unimplemented!(),
+                    }
+                }
             }
         }
         Ok(())

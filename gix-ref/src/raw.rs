@@ -21,9 +21,9 @@ mod convert {
     use gix_hash::ObjectId;
 
     use crate::{
+        Target,
         raw::Reference,
         store_impl::{file::loose, packed},
-        Target,
     };
 
     impl From<Reference> for loose::Reference {
@@ -61,7 +61,7 @@ mod convert {
 mod access {
     use gix_object::bstr::ByteSlice;
 
-    use crate::{raw::Reference, FullNameRef, Namespace, Target};
+    use crate::{FullNameRef, Namespace, Target, raw::Reference};
 
     impl Reference {
         /// Returns the kind of reference based on its target

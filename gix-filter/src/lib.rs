@@ -8,7 +8,7 @@
 //!
 //! This crate implements the building blocks in terms of applying and undoing filters, along with logic to decide whether
 //! or not to apply such a filter.
-#![deny(rust_2018_idioms, missing_docs, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 use bstr::BString;
 /// A forwarding of the `encoding_rs` crate for its types and convenience.

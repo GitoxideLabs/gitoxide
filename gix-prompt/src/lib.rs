@@ -4,7 +4,7 @@
 //!
 //! This is a unix-only crate which will return with an error when trying to obtain any prompt on other platforms.
 //! On those platforms it is common to have helpers which perform this task so it shouldn't be a problem.
-#![deny(rust_2018_idioms, missing_docs)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod types;

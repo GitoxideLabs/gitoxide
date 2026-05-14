@@ -134,13 +134,13 @@ pub(crate) mod function {
     use std::{borrow::Cow, cmp::Ordering};
 
     use bstr::BStr;
-    use gix_error::{message, Exn, ResultExt};
+    use gix_error::{Exn, ResultExt, message};
     use gix_hash::oid;
 
     use super::{Error, Outcome};
     use crate::{
-        describe::{CommitTime, Flags, Options, MAX_CANDIDATES},
         Graph, PriorityQueue,
+        describe::{CommitTime, Flags, MAX_CANDIDATES, Options},
     };
 
     /// Given a `commit` id, traverse the commit `graph` and collect candidate names from the `name_by_oid` mapping to produce

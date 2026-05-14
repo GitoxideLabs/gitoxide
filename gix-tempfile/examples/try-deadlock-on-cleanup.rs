@@ -8,13 +8,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::{
         path::Path,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::Duration,
     };
 
-    use gix_tempfile::{handle::Writable, AutoRemove, ContainingDirectory, Handle};
+    use gix_tempfile::{AutoRemove, ContainingDirectory, Handle, handle::Writable};
 
     let secs_to_run: usize = std::env::args()
         .nth(1)

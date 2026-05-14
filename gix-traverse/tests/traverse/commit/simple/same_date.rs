@@ -1,12 +1,12 @@
 //! Same dates are somewhat special as they show how sorting-details on priority queues affects ordering
 use super::*;
-use crate::util::fixture;
+use crate::util::{fixture, odb_at};
 use gix_hash::oid;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
 fn same_date_repo() -> crate::Result<(std::path::PathBuf, gix_odb::Handle)> {
     let dir = fixture("make_traversal_repo_for_commits_same_date.sh")?;
-    let odb = gix_odb::at(dir.join(".git").join("objects"))?;
+    let odb = odb_at(dir.join(".git").join("objects"))?;
     Ok((dir, odb))
 }
 
@@ -15,16 +15,16 @@ fn c4_breadth_first() -> crate::Result {
     let (repo_dir, odb) = same_date_repo()?;
 
     insta::assert_snapshot!(git_graph(&repo_dir)?, @r"
-        *   01ec18a3ebf2855708ad3c9d244306bc1fae3e9b  (HEAD -> main) m1b1
+        *   Oid(1)  (HEAD -> main) m1b1
         |\  
-        | * ce2e8ffaa9608a26f7b21afc1db89cadb54fd353  (branch1) b1c2
-        | * 9152eeee2328073cf23dcf8e90c949170b711659  b1c1
-        * | efd9a841189668f1bab5b8ebade9cd0a1b139a37  c5
+        | * Oid(2)  (branch1) b1c2
+        | * Oid(3)  b1c1
+        * | Oid(4)  c5
         |/  
-        * 9556057aee5abb06912922e9f26c46386a816822  c4
-        * 17d78c64cef6c33a10a604573fd2c429e477fd63  c3
-        * 9902e3c3e8f0c569b4ab295ddf473e6de763e1e7  c2
-        * 134385f6d781b7e97062102c6a483440bfda2a03  c1
+        * Oid(5)  c4
+        * Oid(6)  c3
+        * Oid(7)  c2
+        * Oid(8)  c1
         ");
 
     let tip = hex_to_id("9556057aee5abb06912922e9f26c46386a816822"); // c4

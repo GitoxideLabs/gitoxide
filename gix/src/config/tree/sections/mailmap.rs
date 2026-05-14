@@ -1,6 +1,6 @@
 use crate::config::{
-    tree::{keys, Key, Mailmap, Section},
     Tree,
+    tree::{Key, Mailmap, Section, keys},
 };
 
 impl Mailmap {

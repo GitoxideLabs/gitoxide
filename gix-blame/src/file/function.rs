@@ -3,14 +3,14 @@ use std::num::NonZeroU32;
 use gix_diff::{blob::TokenSource, tree::Visit};
 use gix_hash::ObjectId;
 use gix_object::{
-    bstr::{BStr, BString},
     FindExt,
+    bstr::{BStr, BString},
 };
 use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
 
-use super::{process_changes, Change, UnblamedHunk};
-use crate::{types::BlamePathEntry, BlameEntry, Error, Options, Outcome, Statistics};
+use super::{Change, UnblamedHunk, process_changes};
+use crate::{BlameEntry, Error, Options, Outcome, Statistics, types::BlamePathEntry};
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
@@ -165,8 +165,8 @@ pub fn file(
                             source_file_path: current_file_path.clone(),
                             previous_source_file_path: None,
                             commit_id: suspect,
-                            blob_id: entry.unwrap_or(ObjectId::null(gix_hash::Kind::Sha1)),
-                            previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                            blob_id: entry.unwrap_or(gix_hash::Kind::shortest().null()),
+                            previous_blob_id: gix_hash::Kind::shortest().null(),
                             parent_index: 0,
                         };
                         blame_path.push(blame_path_entry);
@@ -299,7 +299,7 @@ pub fn file(
                                 previous_source_file_path: None,
                                 commit_id: suspect,
                                 blob_id: id,
-                                previous_blob_id: ObjectId::null(gix_hash::Kind::Sha1),
+                                previous_blob_id: gix_hash::Kind::shortest().null(),
                                 parent_index: index,
                             };
                             blame_path.push(blame_path_entry);

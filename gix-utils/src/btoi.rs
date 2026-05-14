@@ -126,7 +126,7 @@ pub fn to_unsigned_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Resu
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::InvalidDigit,
-                })
+                });
             }
         };
         result = match result.checked_mul(base) {
@@ -134,7 +134,7 @@ pub fn to_unsigned_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Resu
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::Overflow,
-                })
+                });
             }
         };
         result = match result.checked_add(x) {
@@ -142,7 +142,7 @@ pub fn to_unsigned_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Resu
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::Overflow,
-                })
+                });
             }
         };
     }
@@ -244,7 +244,7 @@ pub fn to_signed_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Result
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::InvalidDigit,
-                })
+                });
             }
         };
         result = match result.checked_mul(base) {
@@ -252,7 +252,7 @@ pub fn to_signed_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Result
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::Underflow,
-                })
+                });
             }
         };
         result = match result.checked_sub(x) {
@@ -260,7 +260,7 @@ pub fn to_signed_with_radix<I: MinNumTraits>(bytes: &[u8], radix: u32) -> Result
             None => {
                 return Err(ParseIntegerError {
                     kind: ErrorKind::Underflow,
-                })
+                });
             }
         };
     }

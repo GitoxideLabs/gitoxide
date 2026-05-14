@@ -7,19 +7,19 @@ use std::{
 
 use bstr::BStr;
 use filetime::FileTime;
-use gix_features::parallel::{in_parallel_if, Reduce};
+use gix_features::parallel::{Reduce, in_parallel_if};
 use gix_filter::pipeline::convert::ToGitOutcome;
 use gix_object::FindExt;
 
 use crate::index_as_worktree::types::ConflictIndexEntry;
 use crate::{
+    AtomicU64, SymlinkCheck,
     index_as_worktree::{
-        traits,
-        traits::{read_data::Stream, CompareBlobs, SubmoduleStatus},
+        Change, Conflict, Context, EntryStatus, Outcome, VisitEntry, traits,
+        traits::{CompareBlobs, SubmoduleStatus, read_data::Stream},
         types::{Error, Options},
-        Change, Conflict, Context, EntryStatus, Outcome, VisitEntry,
     },
-    is_dir_to_mode, AtomicU64, SymlinkCheck,
+    is_dir_to_mode,
 };
 
 /// Calculates the changes that need to be applied to an `index` to match the state of the `worktree` and makes them
@@ -370,7 +370,7 @@ impl<'index> State<'_, 'index> {
             Ok(path) => path,
             Err(err) if crate::stack::is_symlink_step_error(&err) => return Ok(Some(Change::Removed.into())),
             Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
-                return Ok(Some(Change::Removed.into()))
+                return Ok(Some(Change::Removed.into()));
             }
             Err(err) => return Err(Error::Io(err.into())),
         };
@@ -395,7 +395,7 @@ impl<'index> State<'_, 'index> {
             }
             Ok(metadata) => metadata,
             Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
-                return Ok(Some(Change::Removed.into()))
+                return Ok(Some(Change::Removed.into()));
             }
             Err(err) => {
                 return Err(Error::Io(err.into()));
@@ -416,7 +416,7 @@ impl<'index> State<'_, 'index> {
                             worktree_mode: new_mode,
                         }
                         .into(),
-                    ))
+                    ));
                 }
                 Some(gix_index::entry::mode::Change::ExecutableBit) => true,
                 None => false,

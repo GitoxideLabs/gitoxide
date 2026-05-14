@@ -1,16 +1,16 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use gix::bstr::BStr;
 
 use crate::hours::{
-    util::{add_lines, remove_lines},
     CommitIdx, FileStats, LineStats, WorkByEmail, WorkByPerson,
+    util::{add_lines, remove_lines},
 };
 
 const MINUTES_PER_HOUR: f32 = 60.0;

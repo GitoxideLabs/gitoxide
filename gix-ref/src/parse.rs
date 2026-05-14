@@ -6,9 +6,9 @@ fn is_hex_digit(b: u8) -> bool {
     b.is_ascii_hexdigit()
 }
 
-/// Copy from `gix-object`, validating the hash against `hash_kind`.
-pub fn hex_hash<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<&'a BStr> {
-    let len = hash_kind.len_in_hex();
+/// Copy from `gix-object`, validating the hash against `object_hash`.
+pub fn hex_hash<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> ParseResult<&'a BStr> {
+    let len = object_hash.len_in_hex();
     let Some(hex) = i.get(..len) else {
         return Err(());
     };

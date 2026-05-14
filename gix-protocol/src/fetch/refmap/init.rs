@@ -3,8 +3,8 @@ use gix_transport::client::Capabilities;
 
 use crate::{
     fetch::{
-        refmap::{Mapping, Source, SpecIndex},
         RefMap,
+        refmap::{Mapping, Source, SpecIndex},
     },
     handshake::Ref,
 };

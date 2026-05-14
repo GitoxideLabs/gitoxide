@@ -6,7 +6,7 @@ use std::{
 use gix_features::progress::DynNestedProgress;
 
 use crate::fetch::{
-    negotiate, Arguments, Context, Error, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags,
+    Arguments, Context, Error, Negotiate, NegotiateOutcome, Options, Outcome, ProgressId, Shallow, Tags, negotiate,
 };
 #[cfg(feature = "async-client")]
 use crate::transport::client::async_io::{ExtendedBufRead, HandleProgress, Transport};

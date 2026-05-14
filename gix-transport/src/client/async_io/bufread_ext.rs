@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use futures_io::{AsyncBufRead, AsyncRead};
 
 use crate::{
-    client::{Error, MessageKind},
-    packetline::{async_io::WithSidebands, read::ProgressAction, PacketLineRef},
     Protocol,
+    client::{Error, MessageKind},
+    packetline::{PacketLineRef, async_io::WithSidebands, read::ProgressAction},
 };
 
 /// A function `f(is_error, text)` receiving progress or error information.

@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::panic::Location;
 
-use crate::{write_location, ChainedError, Exn};
+use crate::{ChainedError, Exn, write_location};
 
 impl<E: Error + Send + Sync + 'static> From<E> for Exn<E> {
     #[track_caller]
@@ -375,11 +375,7 @@ impl Frame {
         }
 
         let res = walk(self, 0).2;
-        if std::ptr::addr_eq(res, self) {
-            None
-        } else {
-            Some(res)
-        }
+        if std::ptr::addr_eq(res, self) { None } else { Some(res) }
     }
 
     /// Iterate over all frames in breadth-first order. The first frame is this instance,

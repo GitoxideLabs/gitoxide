@@ -3,21 +3,21 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use gix_object::Exists;
 use gix_ref::{
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
     Target, TargetRef,
+    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
 };
 
 use crate::{
+    Repository,
     ext::ObjectIdExt,
     remote::{
         fetch,
         fetch::{
+            RefLogMessage,
             refmap::Source,
             refs::update::{Mode, TypeChange},
-            RefLogMessage,
         },
     },
-    Repository,
 };
 
 ///

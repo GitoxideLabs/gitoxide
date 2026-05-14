@@ -7,7 +7,7 @@
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
 // `unsafe_code` not forbidden because we need to interact with the libc
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 use std::fmt::{Display, Formatter};
 

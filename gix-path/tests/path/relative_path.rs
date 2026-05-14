@@ -1,5 +1,5 @@
 use bstr::{BStr, BString};
-use gix_path::{relative_path::Error, RelativePath};
+use gix_path::{RelativePath, relative_path::Error};
 
 #[cfg(not(windows))]
 #[test]

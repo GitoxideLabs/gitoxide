@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Extensions, Key, Section},
+    config::tree::{Extensions, Key, Section, keys},
 };
 
 impl Extensions {
@@ -26,11 +26,17 @@ mod object_format {
             &'static self,
             value: Cow<'_, BStr>,
         ) -> Result<gix_hash::Kind, config::key::GenericErrorWithValue> {
+            #[cfg(feature = "sha1")]
             if value.as_ref().eq_ignore_ascii_case(b"sha1") {
-                Ok(gix_hash::Kind::Sha1)
-            } else {
-                Err(config::key::GenericErrorWithValue::from_value(self, value.into_owned()))
+                return Ok(gix_hash::Kind::Sha1);
             }
+
+            #[cfg(feature = "sha256")]
+            if value.as_ref().eq_ignore_ascii_case(b"sha256") {
+                return Ok(gix_hash::Kind::Sha256);
+            }
+
+            Err(config::key::GenericErrorWithValue::from_value(self, value.into_owned()))
         }
     }
 }

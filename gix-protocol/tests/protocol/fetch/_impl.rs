@@ -13,9 +13,9 @@ pub enum RefsAction {
 mod fetch_fn {
     use gix_features::progress::NestedProgress;
     use gix_protocol::{
-        credentials,
+        Command, LsRefsCommand, credentials,
         fetch::{Arguments, Response},
-        indicate_end_of_interaction, Command, LsRefsCommand,
+        indicate_end_of_interaction,
     };
     #[cfg(feature = "async-client")]
     use gix_transport::client::async_io::{ExtendedBufRead, HandleProgress, Transport};
@@ -207,7 +207,7 @@ mod fetch_fn {
         }) as HandleProgress<'a>));
     }
 }
-pub use fetch_fn::{legacy_fetch as fetch, FetchConnection};
+pub use fetch_fn::{FetchConnection, legacy_fetch as fetch};
 
 mod delegate {
     use std::{

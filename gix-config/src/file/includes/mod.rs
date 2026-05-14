@@ -8,9 +8,9 @@ use gix_features::threading::OwnShared;
 use gix_ref::Category;
 
 use crate::{
-    file,
-    file::{includes, init, Metadata, SectionId},
-    path, File,
+    File, file,
+    file::{Metadata, SectionId, includes, init},
+    path,
 };
 
 impl File<'static> {
@@ -355,4 +355,4 @@ fn resolve_path(
 }
 
 mod types;
-pub use types::{conditional, Error, Options};
+pub use types::{Error, Options, conditional};

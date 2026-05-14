@@ -7,8 +7,8 @@ use std::{
     ops::{AddAssign, Range, SubAssign},
 };
 
-use crate::file::function::tokens_for_diffing;
 use crate::Error;
+use crate::file::function::tokens_for_diffing;
 
 /// A type to represent one or more line ranges to blame in a file.
 ///
@@ -106,7 +106,7 @@ impl BlameRanges {
     /// Adds a new ranges, merging it with any existing overlapping ranges.
     fn merge_zero_based_exclusive_range(&mut self, new_range: Range<u32>) {
         match self {
-            Self::PartialFile(ref mut ranges) => {
+            Self::PartialFile(ranges) => {
                 // Partition ranges into those that don't overlap and those that do.
                 let (mut non_overlapping, overlapping): (Vec<_>, Vec<_>) = ranges
                     .drain(..)

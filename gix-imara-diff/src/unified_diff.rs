@@ -4,8 +4,8 @@
 use std::fmt::{self, Display};
 use std::hash::Hash;
 
-use crate::intern::{InternedInput, Interner, Token};
 use crate::Diff;
+use crate::intern::{InternedInput, Interner, Token};
 
 impl Diff {
     /// Creates a unified diff output that can be formatted as a string.

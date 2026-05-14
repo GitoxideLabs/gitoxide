@@ -1,2 +1,11 @@
-repo_with_loose_objects.tar
+# The fixtures rely on object-database state that cannot be reliably committed:
+# loose-object layout may depend on installation-wide Git auto-gc/repack
+# behavior, and alternates point at host-absolute paths.
+
+# `make_alternates_odb.sh` writes `$PWD/object_source/.git/objects` into
+# `.git/objects/info/alternates`; the absolute path is host-specific.
 make_alternates_odb.tar
+# Fixture deliberately uses loose objects; whether commits remain loose vs. get
+# packed depends on installation-wide Git auto-gc/repack behavior, so the
+# layout is regenerated per run.
+repo_with_loose_objects.tar

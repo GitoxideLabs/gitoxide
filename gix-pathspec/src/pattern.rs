@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 
-use crate::{normalize, MagicSignature, Pattern, SearchMode};
+use crate::{MagicSignature, Pattern, SearchMode, normalize};
 
 /// Access
 impl Pattern {
@@ -54,11 +54,7 @@ impl Pattern {
                     _ => 0,
                 })
                 .sum::<isize>();
-            if count > 0 {
-                count as usize
-            } else {
-                Default::default()
-            }
+            if count > 0 { count as usize } else { Default::default() }
         }
 
         let mut path = gix_path::from_bstr(self.path.as_bstr());
@@ -72,7 +68,7 @@ impl Pattern {
                     return Err(normalize::Error::AbsolutePathOutsideOfWorktree {
                         path: path.into_owned(),
                         worktree_path: root.into(),
-                    })
+                    });
                 }
             };
             path = rela_path.to_owned().into();
@@ -109,7 +105,7 @@ impl Pattern {
             None => {
                 return Err(normalize::Error::OutsideOfWorktree {
                     path: path.into_owned(),
-                })
+                });
             }
         };
 

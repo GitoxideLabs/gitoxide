@@ -1,13 +1,13 @@
 use gix_features::{progress, progress::Progress};
-use gix_transport::{client, Service};
+use gix_transport::{Service, client};
 use maybe_async::maybe_async;
 
 use super::Error;
+use crate::Handshake;
 #[cfg(feature = "async-client")]
 use crate::transport::client::async_io::{SetServiceResponse, Transport};
 #[cfg(feature = "blocking-client")]
 use crate::transport::client::blocking_io::{SetServiceResponse, Transport};
-use crate::Handshake;
 use crate::{credentials, handshake::refs};
 
 /// Perform a handshake with the server on the other side of `transport`, with `authenticate` being used if authentication

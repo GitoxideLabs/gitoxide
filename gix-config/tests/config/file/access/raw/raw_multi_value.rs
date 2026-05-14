@@ -1,4 +1,4 @@
-use gix_config::{lookup, File};
+use gix_config::{File, lookup};
 
 use crate::file::cow_str;
 

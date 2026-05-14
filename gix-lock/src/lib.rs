@@ -36,7 +36,7 @@
 //! assert_eq!(std::fs::read_to_string(&resource)?, "new = value\n");
 //! # Ok(()) }
 //! ```
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 use std::path::PathBuf;
 

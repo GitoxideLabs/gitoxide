@@ -1,8 +1,8 @@
 ///
 pub mod set_target_id {
-    use gix_ref::{transaction::PreviousValue, Target};
+    use gix_ref::{Target, transaction::PreviousValue};
 
-    use crate::{bstr::BString, Reference};
+    use crate::{Reference, bstr::BString};
 
     mod error {
         use gix_ref::FullName;

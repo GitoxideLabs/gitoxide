@@ -1,5 +1,5 @@
 use anyhow::Context;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 /// A version to be incremented whenever the database layout is changed, to refresh it automatically.
 const VERSION: usize = 1;

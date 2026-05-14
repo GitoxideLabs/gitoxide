@@ -6,8 +6,8 @@ use gix_object::{self as object};
 use gix_odb::pack;
 
 use crate::{
-    fixture_path, hex_to_id,
-    pack::{leaked_fixture_bytes, pack_from_memory_at, INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX},
+    INDEX_V1, PACK_FOR_INDEX_V1, SMALL_PACK, SMALL_PACK_INDEX, fixture_path, hex_to_id, leaked_fixture_bytes,
+    pack_from_memory_at,
 };
 
 fn memory_backed_index(at: &str) -> gix_pack::index::File<&'static [u8]> {
@@ -21,7 +21,7 @@ mod version {
     mod v1 {
         use gix_pack::index;
 
-        use crate::{fixture_path, pack::INDEX_V1};
+        use crate::{INDEX_V1, fixture_path};
 
         #[test]
         fn lookup() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,7 +65,7 @@ mod version {
     mod v2 {
         use gix_pack::index;
 
-        use crate::{fixture_path, pack::INDEX_V2};
+        use crate::{INDEX_V2, fixture_path};
 
         #[test]
         fn lookup() -> Result<(), Box<dyn std::error::Error>> {
@@ -115,7 +115,7 @@ mod version {
         }
     }
 
-    #[cfg(feature = "gix-features-parallel")]
+    #[cfg(feature = "parallel")]
     mod any {
         use std::{fs, io, sync::atomic::AtomicBool};
 
@@ -123,10 +123,7 @@ mod version {
         use gix_odb::pack;
         use gix_pack::{data::input, index};
 
-        use crate::{
-            fixture_path,
-            pack::{INDEX_V2, V2_PACKS_AND_INDICES},
-        };
+        use crate::{INDEX_V2, V2_PACKS_AND_INDICES, fixture_path};
 
         fn slice_map(entry: gix_pack::data::EntryRange, map: &memmap2::Mmap) -> Option<&[u8]> {
             map.get(entry.start as usize..entry.end as usize)
@@ -233,7 +230,7 @@ mod version {
 
         #[test]
         fn lookup_missing() {
-            let file = index::File::at(&fixture_path(INDEX_V2), gix_hash::Kind::Sha1).unwrap();
+            let file = index::File::at(fixture_path(INDEX_V2), gix_hash::Kind::Sha1).unwrap();
             let prefix = gix_hash::Prefix::new(&gix_hash::Kind::Sha1.null(), 7).unwrap();
             assert!(file.lookup_prefix(prefix, None).is_none());
 
@@ -306,7 +303,7 @@ use gix_features::progress;
 use gix_pack::{cache, data::decode::entry::Outcome, index};
 use maplit::btreemap;
 
-use crate::pack::{INDEX_V2, PACK_FOR_INDEX_V2};
+use crate::{INDEX_V2, PACK_FOR_INDEX_V2};
 
 static ALGORITHMS: &[index::traverse::Algorithm] = &[
     index::traverse::Algorithm::Lookup,

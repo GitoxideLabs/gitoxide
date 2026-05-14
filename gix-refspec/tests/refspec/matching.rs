@@ -8,9 +8,9 @@ pub mod baseline {
     use bstr::{BString, ByteSlice, ByteVec};
     use gix_hash::ObjectId;
     use gix_refspec::{
-        match_group::{validate::Fix, SourceRef},
-        parse::Operation,
         MatchGroup,
+        match_group::{SourceRef, validate::Fix},
+        parse::Operation,
     };
     use std::sync::LazyLock;
 

@@ -20,6 +20,6 @@ cargo +nightly fuzz run index_file -- -max_total_time=60
 
 The `artifacts/index_file` directory contains minimized reproducer inputs produced by libFuzzer or Google OSS-Fuzz.
 
-The integration test module `fuzzed` reads every regular file in that directory and runs it through the parser under test. This lets `cargo test -p gix-index-tests fuzzed` reproduce known fuzz failures without starting a fuzzing session.
+The integration test module `fuzzed` reads every regular file in that directory and runs it through the parser under test. This lets `cargo test -p gix-index fuzzed` reproduce known fuzz failures without starting a fuzzing session.
 
-When OSS-Fuzz reports a new failure, place the minimized testcase in `artifacts/index_file`, then run `cargo test -p gix-index-tests fuzzed`. To confirm it against the original harness, run `cargo fuzz run index_file artifacts/index_file/<reproducer>` from this directory.
+When OSS-Fuzz reports a new failure, place the minimized testcase in `artifacts/index_file`, then run `cargo test -p gix-index fuzzed`. To confirm it against the original harness, run `cargo fuzz run index_file artifacts/index_file/<reproducer>` from this directory.

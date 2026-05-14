@@ -144,7 +144,7 @@ mod remote_at {
 mod find_remote {
     use std::io::BufRead;
 
-    use gix::{remote::Direction, Repository};
+    use gix::{Repository, remote::Direction};
     use gix_object::bstr::BString;
 
     use crate::remote;

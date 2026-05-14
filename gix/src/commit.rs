@@ -38,7 +38,7 @@ pub mod describe {
     use gix_hashtable::HashMap;
     use std::borrow::Cow;
 
-    use crate::{bstr::BStr, ext::ObjectIdExt, Repository};
+    use crate::{Repository, bstr::BStr, ext::ObjectIdExt};
 
     /// The result of [`try_resolve()`][Platform::try_resolve()].
     pub struct Resolution<'repo> {

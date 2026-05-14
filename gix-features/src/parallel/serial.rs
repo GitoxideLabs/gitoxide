@@ -113,7 +113,7 @@ mod not_parallel {
 }
 
 #[cfg(not(feature = "parallel"))]
-pub use not_parallel::{build_thread, in_parallel_with_slice, join, threads, Scope};
+pub use not_parallel::{Scope, build_thread, in_parallel_with_slice, join, threads};
 
 /// Read items from `input` and `consume` them in a single thread, producing an output to be collected by a `reducer`,
 /// whose task it is to aggregate these outputs into the final result returned by this function.

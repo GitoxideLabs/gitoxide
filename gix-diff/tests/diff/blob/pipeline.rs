@@ -1,9 +1,8 @@
 pub(crate) mod convert_to_diffable {
 
     use gix_diff::blob::{
-        pipeline,
+        ResourceKind, pipeline,
         pipeline::{Options, WorktreeRoots},
-        ResourceKind,
     };
     use gix_filter::{eol, eol::AutoCrlf};
     use gix_object::{bstr::ByteSlice, tree::EntryKind};
@@ -438,7 +437,7 @@ pub(crate) mod convert_to_diffable {
     #[test]
     fn binary_by_buffer_inspection() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let root = gix_testtools::scripted_fixture_read_only_standalone("make_blob_repo.sh")?;
+        let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
         let mut attributes = gix_worktree::Stack::new(
             root,
             gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
@@ -536,7 +535,7 @@ pub(crate) mod convert_to_diffable {
 
     #[test]
     fn with_driver() -> crate::Result {
-        let root = gix_testtools::scripted_fixture_read_only_standalone("make_blob_repo.sh")?;
+        let root = crate::scripted_fixture_read_only("make_blob_repo.sh")?;
         let command = "echo to-text; cat <";
         let mut attributes = gix_worktree::Stack::new(
             &root,

@@ -1,6 +1,6 @@
 use bstr::ByteSlice;
 
-use crate::{parse, parse::ParseResult, BStr, Kind, TagRef};
+use crate::{BStr, Kind, TagRef, parse, parse::ParseResult};
 
 /// Parse a complete annotated tag object body.
 ///
@@ -38,7 +38,7 @@ pub fn git_tag<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<T
 /// Parse the `object <hex>\n` header and return the object id as bytes.
 ///
 /// Typical input is `object 0123456789012345678901234567890123456789\n`.
-/// The hash must match `hash_kind`. Uppercase ASCII hex is also valid.
+/// The hash must match `object_hash`. Uppercase ASCII hex is also valid.
 /// On success, `i` is advanced past the entire header line.
 pub(crate) fn target<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<&'a BStr> {
     parse::header_field(i, b"object", |value| parse::hex_hash(value, hash_kind))

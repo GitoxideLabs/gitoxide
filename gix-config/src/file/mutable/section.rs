@@ -9,12 +9,11 @@ use smallvec::SmallVec;
 
 use crate::{
     file::{
-        self,
-        mutable::{escape_value, Whitespace},
-        Index, Section, Size,
+        self, Index, Section, Size,
+        mutable::{Whitespace, escape_value},
     },
     lookup, parse,
-    parse::{section::ValueName, Event},
+    parse::{Event, section::ValueName},
     value::{normalize, normalize_bstr, normalize_bstring},
 };
 

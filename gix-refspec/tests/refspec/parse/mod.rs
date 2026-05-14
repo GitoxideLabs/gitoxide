@@ -94,7 +94,7 @@ mod invalid;
 mod push;
 
 mod util {
-    use gix_refspec::{parse::Operation, Instruction, RefSpecRef};
+    use gix_refspec::{Instruction, RefSpecRef, parse::Operation};
 
     pub fn b(input: &str) -> &bstr::BStr {
         input.into()

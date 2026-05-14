@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eu -o pipefail
 
+# This fixture is based on Git's SHA-1 disambiguation tests and relies on
+# exact SHA-1 prefixes in object names, refs, and expected messages.
+export GIT_DEFAULT_HASH=sha1
 
 function baseline() {
   local spec=${1:?first argument is the spec to test}

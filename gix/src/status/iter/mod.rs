@@ -5,7 +5,7 @@ use gix_status::index_as_worktree::{Change, EntryStatus};
 use crate::{
     bstr::BString,
     config::cache::util::ApplyLeniencyDefault,
-    status::{index_worktree, index_worktree::BuiltinSubmoduleStatus, tree_index, Platform},
+    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus, tree_index},
     worktree::IndexPersistedOrInMemory,
 };
 

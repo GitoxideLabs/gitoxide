@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gix_config::parse::{section, Event};
+use gix_config::parse::{Event, section};
 
 pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static str>>) -> Event<'static> {
     Event::SectionHeader(section::Header::new(name, subsection.into().map(|s| Cow::Borrowed(s.into()))).unwrap())

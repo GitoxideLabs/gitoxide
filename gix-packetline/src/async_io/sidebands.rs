@@ -1,13 +1,13 @@
 use std::{
     future::Future,
     pin::Pin,
-    task::{ready, Context, Poll},
+    task::{Context, Poll, ready},
 };
 
 use futures_io::{AsyncBufRead, AsyncRead};
 
 use super::read::StreamingPeekableIter;
-use crate::{decode, read::ProgressAction, BandRef, PacketLineRef, TextRef, U16_HEX_BYTES};
+use crate::{BandRef, PacketLineRef, TextRef, U16_HEX_BYTES, decode, read::ProgressAction};
 
 type ReadLineResult<'a> = Option<std::io::Result<Result<PacketLineRef<'a>, decode::Error>>>;
 /// An implementor of [`AsyncBufRead`] yielding packet lines on each call to `read_line()`.
@@ -308,9 +308,9 @@ where
                                         None => {
                                             return Poll::Ready(Err(io::Error::other(
                                                 "encountered non-data line in a data-line only context",
-                                            )))
+                                            )));
                                         }
-                                    }
+                                    };
                                 }
                             }
                         }

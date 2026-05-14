@@ -8,7 +8,7 @@ use gix_features::{
 };
 
 use crate::{
-    cache::delta::{traverse::util::ItemSliceSync, Item, Tree},
+    cache::delta::{Item, Tree, traverse::util::ItemSliceSync},
     data::EntryRange,
 };
 
@@ -33,7 +33,7 @@ pub enum Error {
     #[error("Interrupted")]
     Interrupted,
     #[error(
-    "The base at {base_pack_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
+        "The base at {base_pack_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
     )]
     OutOfPackRefDelta {
         /// The base's offset which was from a resolved ref-delta that didn't actually get added to the tree

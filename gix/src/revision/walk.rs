@@ -2,7 +2,7 @@ use gix_hash::ObjectId;
 use gix_object::FindExt;
 use gix_traverse::commit::simple::CommitTimeOrder;
 
-use crate::{ext::ObjectIdExt, revision, Repository};
+use crate::{Repository, ext::ObjectIdExt, revision};
 
 /// The error returned by [`Platform::all()`] and [`Platform::selected()`].
 #[derive(Debug, thiserror::Error)]

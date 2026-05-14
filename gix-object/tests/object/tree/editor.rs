@@ -1,6 +1,6 @@
 use gix_object::{
-    tree::{Entry, EntryKind},
     Tree,
+    tree::{Entry, EntryKind},
 };
 
 fn hash_kind() -> gix_hash::Kind {
@@ -874,7 +874,7 @@ mod utils {
                     tree.write_to(buffer).expect("valid trees can always be serialized");
                     Ok(Some(gix_object::Data {
                         kind: gix_object::Kind::Tree,
-                        hash_kind: id.kind(),
+                        object_hash: id.kind(),
                         data: &*buffer,
                     }))
                 }
@@ -960,5 +960,5 @@ mod utils {
     }
 }
 use utils::{
-    any_blob, display_tree, display_tree_with_odb, empty_tree, find_tree, new_inmemory_writes, tree_odb, StorageOdb,
+    StorageOdb, any_blob, display_tree, display_tree_with_odb, empty_tree, find_tree, new_inmemory_writes, tree_odb,
 };

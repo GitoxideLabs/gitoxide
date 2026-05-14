@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 
-use gix_refspec::{parse::Operation, RefSpec};
+use gix_refspec::{RefSpec, parse::Operation};
 
 fn pair() -> Vec<RefSpec> {
     let lhs = gix_refspec::parse("refs/heads/foo".into(), Operation::Push).unwrap();

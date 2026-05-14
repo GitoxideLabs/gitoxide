@@ -3,7 +3,7 @@ use std::{
     io::Write,
     marker::PhantomData,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use gix_features::{interrupt, progress, progress::Progress};
@@ -109,7 +109,7 @@ impl crate::Bundle {
                         writer: data_file.clone(),
                     },
                     pack_version,
-                    gix_hash::Kind::Sha1, // Thin packs imply a pack being transported, and there we only ever know SHA1 at the moment.
+                    object_hash,
                 );
                 (Box::new(pack_entries_iter), pack_version)
             }

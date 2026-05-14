@@ -60,7 +60,7 @@
 //! Callers may `.expect()` on the result to indicate they don't wish to handle this special and rare case. Note that servers should not
 //! ever get into a code-path which does panic though.
 //! </details>
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![cfg_attr(not(test), deny(unsafe_code))]
 
 /// A dummy type to represent path specs and help finding all spots that take path specs once it is implemented.

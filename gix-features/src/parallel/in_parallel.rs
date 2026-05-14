@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
 
-use crate::parallel::{num_threads, Reduce};
+use crate::parallel::{Reduce, num_threads};
 
 /// A scope to start threads within.
 pub type Scope<'scope, 'env> = std::thread::Scope<'scope, 'env>;

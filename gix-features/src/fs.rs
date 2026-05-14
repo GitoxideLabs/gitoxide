@@ -253,7 +253,7 @@ pub mod walkdir {
 }
 
 #[cfg(feature = "walkdir")]
-pub use self::walkdir::{walkdir_new, walkdir_sorted_new, WalkDir};
+pub use self::walkdir::{WalkDir, walkdir_new, walkdir_sorted_new};
 
 /// Prepare open options which won't follow symlinks when the file is opened.
 ///

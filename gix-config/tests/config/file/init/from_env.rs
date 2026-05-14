@@ -1,10 +1,10 @@
 use std::{borrow::Cow, fs};
 
 use gix_config::{
-    file::{includes, init, init::from_env},
     File,
+    file::{includes, init, init::from_env},
 };
-use gix_testtools::{tempfile::tempdir, Env};
+use gix_testtools::{Env, tempfile::tempdir};
 use serial_test::serial;
 
 use crate::file::init::from_paths::escape_backslashes;

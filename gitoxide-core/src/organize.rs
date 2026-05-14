@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix::{objs::bstr::ByteSlice, progress, NestedProgress, Progress};
+use gix::{NestedProgress, Progress, objs::bstr::ByteSlice, progress};
 
 #[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub enum Mode {
@@ -213,10 +213,8 @@ fn handle(
                     };
                     if !gix::discover::is_bare(&git_dir) {
                         // Non-bare repository - strip .git extension if present
-                        if let Some(ext) = path.extension() {
-                            if ext == "git" {
-                                path.set_extension("");
-                            }
+                        if path.extension().is_some_and(|ext| ext == "git") {
+                            path.set_extension("");
                         }
                     }
                     path
@@ -224,10 +222,9 @@ fn handle(
             }
         }));
 
-    if let Ok(destination) = destination.canonicalize() {
-        if git_workdir.canonicalize()? == destination {
-            return Ok(());
-        }
+    match destination.canonicalize() {
+        Ok(destination) if git_workdir.canonicalize()? == destination => return Ok(()),
+        _ => {}
     }
     match mode {
         Mode::Simulate => progress.info(format!(

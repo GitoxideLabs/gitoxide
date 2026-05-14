@@ -1,4 +1,4 @@
-use crate::{object, Blob, Commit, Object, ObjectDetached, Tag, Tree};
+use crate::{Blob, Commit, Object, ObjectDetached, Tag, Tree, object};
 
 impl<'repo> From<Object<'repo>> for ObjectDetached {
     fn from(mut v: Object<'repo>) -> Self {

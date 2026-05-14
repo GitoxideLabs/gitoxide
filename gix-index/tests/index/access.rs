@@ -1,7 +1,7 @@
 use bstr::{BString, ByteSlice};
 use gix_index::entry::Stage;
 
-use crate::index::Fixture;
+use crate::Fixture;
 
 fn icase_fixture() -> gix_index::File {
     Fixture::Generated("v2_icase_name_clashes").open()
@@ -59,7 +59,10 @@ fn dirwalk_api_and_icase_support() {
             let other_entry = file
                 .entry_closest_to_directory_or_directory_icase(dir_upper.as_bstr(), true, &icase)
                 .unwrap_or_else(|| panic!("didn't find upper-cased {dir_upper}"));
-            assert_eq!(other_entry, entry, "the first entry is always the same, no matter what kind of search is conducted (as there are no clashes/ambiguities here)");
+            assert_eq!(
+                other_entry, entry,
+                "the first entry is always the same, no matter what kind of search is conducted (as there are no clashes/ambiguities here)"
+            );
         }
     }
 }
@@ -97,27 +100,30 @@ fn entry_closest_to_directory_or_directory_icase_with_submodule() {
             .is_some(),
         "this is a directory"
     );
-    assert!(file
-        .entry_closest_to_directory_or_directory_icase("D".into(), false, &icase)
-        .is_none());
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("D".into(), false, &icase)
+            .is_none()
+    );
 
     assert!(
         file.entry_closest_to_directory_or_directory_icase("SuB".into(), true, &icase)
             .is_some(),
         "this is a checked in repository, a directory itself"
     );
-    assert!(file
-        .entry_closest_to_directory_or_directory_icase("SuB".into(), false, &icase)
-        .is_none());
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("SuB".into(), false, &icase)
+            .is_none()
+    );
 
     assert!(
         file.entry_closest_to_directory_or_directory_icase("SUB-worktree".into(), true, &icase)
             .is_some(),
         "a submodule that is officially registered, absolutely the same as 'sub' in the index."
     );
-    assert!(file
-        .entry_closest_to_directory_or_directory_icase("SUB-worktree".into(), false, &icase)
-        .is_none());
+    assert!(
+        file.entry_closest_to_directory_or_directory_icase("SUB-worktree".into(), false, &icase)
+            .is_none()
+    );
 
     assert!(
         file.entry_closest_to_directory_or_directory_icase("A".into(), true, &icase)

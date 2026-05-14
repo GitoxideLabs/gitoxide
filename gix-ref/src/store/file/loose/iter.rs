@@ -4,7 +4,7 @@ use gix_features::fs::walkdir::DirEntryIter;
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
 
-use crate::{file::iter::LooseThenPacked, store_impl::file, BString, FullName};
+use crate::{BString, FullName, file::iter::LooseThenPacked, store_impl::file};
 
 /// An iterator over all valid loose reference paths as seen from a particular base directory.
 pub(in crate::store_impl::file) struct SortedLoosePaths {

@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Key, Protocol, Section},
+    config::tree::{Key, Protocol, Section, keys},
 };
 
 impl Protocol {
@@ -96,12 +96,12 @@ mod key_impls {
                     return Err(crate::config::key::GenericErrorWithValue::from_value(
                         self,
                         other.to_string().into(),
-                    ))
+                    ));
                 }
                 Err(err) => {
                     return Err(
                         crate::config::key::GenericErrorWithValue::from_value(self, "unknown".into()).with_source(err),
-                    )
+                    );
                 }
             })
         }

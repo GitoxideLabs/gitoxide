@@ -1,6 +1,6 @@
 use gix_revision::spec::parse::delegate::Traversal;
 
-use crate::spec::parse::{parse, try_parse, PeelToOwned as PeelTo};
+use crate::spec::parse::{PeelToOwned as PeelTo, parse, try_parse};
 
 #[test]
 fn single_is_first_parent() {

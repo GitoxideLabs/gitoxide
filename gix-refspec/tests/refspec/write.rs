@@ -1,5 +1,5 @@
 mod push {
-    use gix_refspec::{instruction, Instruction};
+    use gix_refspec::{Instruction, instruction};
 
     #[test]
     fn all_matching_branches() {
@@ -54,7 +54,7 @@ mod push {
 }
 
 mod fetch {
-    use gix_refspec::{instruction, Instruction};
+    use gix_refspec::{Instruction, instruction};
     #[test]
     fn only() {
         assert_eq!(

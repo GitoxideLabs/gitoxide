@@ -2,9 +2,9 @@
 #![allow(clippy::empty_docs)]
 use std::ops::Deref;
 
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 
-use crate::{object::find, Id, Object};
+use crate::{Id, Object, object::find};
 
 /// An [object id][ObjectId] infused with a [`Repository`][crate::Repository].
 impl<'repo> Id<'repo> {
@@ -112,7 +112,7 @@ impl<'repo> Id<'repo> {
 mod impls {
     use std::{cmp::Ordering, hash::Hasher};
 
-    use gix_hash::{oid, ObjectId};
+    use gix_hash::{ObjectId, oid};
 
     use crate::{Id, Object, ObjectDetached};
 

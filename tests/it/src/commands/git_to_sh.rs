@@ -7,7 +7,7 @@ pub struct Options {
 pub(super) mod function {
     use std::{borrow::Cow, path::Path};
 
-    use anyhow::{bail, Context};
+    use anyhow::{Context, bail};
     use gix::{object::tree::EntryKind, objs::FindExt};
 
     use super::Options;
@@ -93,7 +93,9 @@ pub(super) mod function {
 
         for (rela_path, entry) in specs.index_entries_with_paths(index).into_iter().flatten() {
             if rela_path.contains(&b'\n') {
-                bail!("Entry at '{rela_path}' contained a newline, which currently can't be encoded. Preferred newlines over NULL separation.")
+                bail!(
+                    "Entry at '{rela_path}' contained a newline, which currently can't be encoded. Preferred newlines over NULL separation."
+                )
             }
 
             let (blob_id, blob_data) = match entry.mode.to_tree_entry_mode() {

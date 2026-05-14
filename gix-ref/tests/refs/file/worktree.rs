@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, path::PathBuf};
 
-use gix_ref::{file::ReferenceExt, Reference};
+use gix_ref::{Reference, file::ReferenceExt};
 use gix_testtools::Creation;
 
 fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testtools::tempfile::TempDir>)> {
@@ -10,10 +10,10 @@ fn dir(packed: bool, writable: bool) -> crate::Result<(PathBuf, Option<gix_testt
         args.push("packed");
     }
     if writable {
-        gix_testtools::scripted_fixture_writable_with_args_standalone(name, args, Creation::Execute)
+        crate::scripted_fixture_writable_with_args(name, args, Creation::Execute)
             .map(|tmp| (tmp.path().to_owned(), tmp.into()))
     } else {
-        gix_testtools::scripted_fixture_read_only_with_args_standalone(name, args).map(|p| (p, None))
+        crate::scripted_fixture_read_only_with_args(name, args).map(|p| (p, None))
     }
 }
 
@@ -82,7 +82,7 @@ impl From<Mode> for bool {
 }
 
 mod read_only {
-    use crate::file::worktree::{assert_reflog, into_peel, main_store, worktree_store, Mode};
+    use crate::file::worktree::{Mode, assert_reflog, into_peel, main_store, worktree_store};
 
     #[test]
     fn linked() -> crate::Result {
@@ -198,16 +198,16 @@ mod writable {
     use gix_date::parse::TimeBuf;
     use gix_lock::acquire::Fail;
     use gix_ref::{
-        file::{transaction::PackedRefs, Store},
-        transaction::{Change, LogChange, PreviousValue, RefEdit},
         FullName, FullNameRef, Target,
+        file::{Store, transaction::PackedRefs},
+        transaction::{Change, LogChange, PreviousValue, RefEdit},
     };
 
     use crate::{
         file::{
-            transaction::prepare_and_commit::committer,
-            worktree::{main_store, oid, worktree_store, Mode},
             EmptyCommit,
+            transaction::prepare_and_commit::committer,
+            worktree::{Mode, main_store, oid, worktree_store},
         },
         hex_to_id,
     };
@@ -430,25 +430,28 @@ mod writable {
                 );
             }
 
-            assert!(matches!(
-                store.transaction().prepare(
-                    vec![
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "main-worktree/refs/heads/foo".try_into()?,
-                            deref: false,
-                        },
-                        RefEdit {
-                            change: change_with_id(new_id_main),
-                            name: "refs/heads/foo".try_into()?,
-                            deref: false,
-                        },
-                    ],
-                    Fail::Immediately,
-                    Fail::Immediately,
+            assert!(
+                matches!(
+                    store.transaction().prepare(
+                        vec![
+                            RefEdit {
+                                change: change_with_id(new_id_main),
+                                name: "main-worktree/refs/heads/foo".try_into()?,
+                                deref: false,
+                            },
+                            RefEdit {
+                                change: change_with_id(new_id_main),
+                                name: "refs/heads/foo".try_into()?,
+                                deref: false,
+                            },
+                        ],
+                        Fail::Immediately,
+                        Fail::Immediately,
+                    ),
+                    Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
                 ),
-                Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
-            ), "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)");
+                "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
+            );
 
             assert!(matches!(
                 store.transaction().prepare(
@@ -494,25 +497,28 @@ mod writable {
             let (store, _odb, _tmp) = worktree_store(packed, "w1", Mode::Write)?;
 
             for conflicting_name in ["main-worktree/refs/heads/shared", "worktrees/w1/refs/heads/shared"] {
-                assert!(matches!(
-                    store.transaction().prepare(
-                        vec![
-                            RefEdit {
-                                change: change_with_id(new_id),
-                                name: conflicting_name.try_into()?,
-                                deref: false,
-                            },
-                            RefEdit {
-                                change: change_with_id(new_id),
-                                name: "refs/heads/shared".try_into()?,
-                                deref: false,
-                            },
-                        ],
-                        Fail::Immediately,
-                        Fail::Immediately,
+                assert!(
+                    matches!(
+                        store.transaction().prepare(
+                            vec![
+                                RefEdit {
+                                    change: change_with_id(new_id),
+                                    name: conflicting_name.try_into()?,
+                                    deref: false,
+                                },
+                                RefEdit {
+                                    change: change_with_id(new_id),
+                                    name: "refs/heads/shared".try_into()?,
+                                    deref: false,
+                                },
+                            ],
+                            Fail::Immediately,
+                            Fail::Immediately,
+                        ),
+                        Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
                     ),
-                    Err(gix_ref::file::transaction::prepare::Error::LockAcquire { .. })
-                ), "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)");
+                    "prefixed refs resolve to the same name and will fail to be locked (so we don't check for this when doing dupe checking)"
+                );
             }
 
             let mut t = store.transaction();

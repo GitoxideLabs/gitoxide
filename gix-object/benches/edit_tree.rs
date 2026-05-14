@@ -1,9 +1,9 @@
 use std::{cell::RefCell, hint::black_box, rc::Rc};
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use gix_hash::ObjectId;
 use gix_hashtable::hash_map::Entry;
-use gix_object::{tree, tree::EntryKind, Tree, WriteTo};
+use gix_object::{Tree, WriteTo, tree, tree::EntryKind};
 
 fn create_new_tree_add_and_remove(c: &mut Criterion) {
     let (storage, mut write) = new_inmemory_writes();
@@ -173,7 +173,7 @@ impl gix_object::Find for StorageOdb {
                 tree.write_to(buffer).expect("valid trees can always be serialized");
                 Ok(Some(gix_object::Data {
                     kind: gix_object::Kind::Tree,
-                    hash_kind: id.kind(),
+                    object_hash: id.kind(),
                     data: &*buffer,
                 }))
             }

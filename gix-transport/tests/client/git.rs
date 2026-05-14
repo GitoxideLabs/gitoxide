@@ -19,9 +19,8 @@ use gix_transport::client::{
     git::blocking_io::Connection,
 };
 use gix_transport::{
-    client,
-    client::{git, TransportWithoutIO},
-    Protocol, Service,
+    Protocol, Service, client,
+    client::{TransportWithoutIO, git},
 };
 
 use crate::fixture_bytes;
@@ -203,11 +202,12 @@ async fn push_v1_simulated() -> crate::Result {
             &["000eunpack ok", "0017ok refs/heads/main", "0000"],
             "this seems to be a packetline encoding within a packetline encoding! Including a flush package. Strange, but it's the real deal."
         );
-        let expected_progress = &["Resolving deltas:   0% (0/2)\r", 
+        let expected_progress = &[
+            "Resolving deltas:   0% (0/2)\r",
             "Resolving deltas:  50% (1/2)\r",
-            "Resolving deltas: 100% (2/2)\r", 
-            "Resolving deltas: 100% (2/2), completed with 2 local objects.", 
-            "\nGitHub found 1 vulnerability on the-lean-crate/criner's default branch (1 high). To find out more, visit:\n     https://github.com/the-lean-crate/criner/security/dependabot/1\n"
+            "Resolving deltas: 100% (2/2)\r",
+            "Resolving deltas: 100% (2/2), completed with 2 local objects.",
+            "\nGitHub found 1 vulnerability on the-lean-crate/criner's default branch (1 high). To find out more, visit:\n     https://github.com/the-lean-crate/criner/security/dependabot/1\n",
         ];
         assert_eq!(
             messages.lock().expect("no poison").as_slice(),

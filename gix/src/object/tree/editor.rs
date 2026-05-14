@@ -2,9 +2,9 @@ use gix_hash::ObjectId;
 use gix_object::tree::EntryKind;
 
 use crate::{
+    Id, Repository,
     bstr::{BStr, BString},
     prelude::ObjectIdExt,
-    Id, Repository,
 };
 
 ///

@@ -147,7 +147,7 @@ impl<'a> convert::TryFrom<&'a OsStr> for &'a PartialNameRef {
 mod impls {
     use std::borrow::Borrow;
 
-    use crate::{bstr::ByteSlice, PartialName, PartialNameRef};
+    use crate::{PartialName, PartialNameRef, bstr::ByteSlice};
 
     impl Borrow<PartialNameRef> for PartialName {
         #[inline]

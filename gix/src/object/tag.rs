@@ -1,4 +1,4 @@
-use crate::{ext::ObjectIdExt, ObjectDetached, Tag};
+use crate::{ObjectDetached, Tag, ext::ObjectIdExt};
 
 impl<'repo> Tag<'repo> {
     /// Decode the entire tag object and return it for accessing all tag information.

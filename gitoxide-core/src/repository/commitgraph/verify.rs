@@ -12,7 +12,7 @@ pub struct Context<W1: std::io::Write, W2: std::io::Write> {
 pub(crate) mod function {
     use std::io;
 
-    use crate::{repository::commitgraph::verify::Context, OutputFormat};
+    use crate::{OutputFormat, repository::commitgraph::verify::Context};
     use anyhow::Result;
 
     pub fn verify<W1, W2>(

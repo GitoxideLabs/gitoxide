@@ -4,13 +4,14 @@ use gix_transport::client::async_io::Transport;
 use gix_transport::client::blocking_io::Transport;
 
 use crate::{
+    Progress,
     bstr::BString,
     remote,
     remote::{
+        Connection,
         fetch::{DryRun, RefMap},
-        ref_map, Connection,
+        ref_map,
     },
-    Progress,
 };
 
 mod error;

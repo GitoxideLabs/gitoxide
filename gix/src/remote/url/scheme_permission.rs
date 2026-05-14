@@ -3,7 +3,7 @@ use std::{borrow::Cow, collections::BTreeMap};
 use crate::{
     bstr::{BStr, BString, ByteSlice},
     config,
-    config::tree::{gitoxide, Protocol},
+    config::tree::{Protocol, gitoxide},
 };
 
 /// All allowed values of the `protocol.allow` key.

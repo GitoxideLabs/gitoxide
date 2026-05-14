@@ -1,6 +1,6 @@
 use crate::revision;
 #[cfg(feature = "revision")]
-use crate::{bstr::BStr, Id};
+use crate::{Id, bstr::BStr};
 
 /// Methods for resolving revisions by spec or working with the commit graph.
 impl crate::Repository {

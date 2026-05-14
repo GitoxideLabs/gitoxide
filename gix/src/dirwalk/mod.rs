@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gix_dir::walk::{CollapsedEntriesEmissionMode, EmissionMode, ForDeletionMode};
 
-use crate::{config, AttributeStack, Pathspec};
+use crate::{AttributeStack, Pathspec, config};
 
 mod options;
 

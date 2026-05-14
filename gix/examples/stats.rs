@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use gix::{prelude::ObjectIdExt, Reference};
+use gix::{Reference, prelude::ObjectIdExt};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut repo = gix::discover(".")?;

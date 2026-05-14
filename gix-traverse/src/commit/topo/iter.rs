@@ -1,11 +1,10 @@
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 use gix_revwalk::PriorityQueue;
 use smallvec::SmallVec;
 
 use crate::commit::{
-    find,
+    Either, Info, Parents, Topo, find,
     topo::{Error, Sorting, WalkFlags},
-    Either, Info, Parents, Topo,
 };
 
 pub(in crate::commit) type GenAndCommitTime = (u32, i64);
@@ -43,7 +42,7 @@ impl Queue {
     }
 
     pub(super) fn initial_sort(&mut self) {
-        if let Self::Topo(ref mut inner_vec) = self {
+        if let Self::Topo(inner_vec) = self {
             inner_vec.sort_by_key(|a| a.0);
         }
     }
@@ -54,8 +53,8 @@ where
     Find: gix_object::Find,
 {
     pub(super) fn compute_indegrees_to_depth(&mut self, gen_cutoff: u32) -> Result<(), Error> {
-        while let Some(((gen, _), _)) = self.indegree_queue.peek() {
-            if *gen >= gen_cutoff {
+        while let Some(((generation, _), _)) = self.indegree_queue.peek() {
+            if *generation >= gen_cutoff {
                 self.indegree_walk_step()?;
             } else {
                 break;
@@ -66,8 +65,8 @@ where
     }
 
     fn indegree_walk_step(&mut self) -> Result<(), Error> {
-        if let Some(((gen, _), id)) = self.indegree_queue.pop() {
-            self.explore_to_depth(gen)?;
+        if let Some(((generation, _), id)) = self.indegree_queue.pop() {
+            self.explore_to_depth(generation)?;
 
             let parents = self.collect_parents(&id)?;
             for (id, gen_time) in parents {
@@ -84,8 +83,8 @@ where
     }
 
     fn explore_to_depth(&mut self, gen_cutoff: u32) -> Result<(), Error> {
-        while let Some(((gen, _), _)) = self.explore_queue.peek() {
-            if *gen >= gen_cutoff {
+        while let Some(((generation, _), _)) = self.explore_queue.peek() {
+            if *generation >= gen_cutoff {
                 self.explore_walk_step()?;
             } else {
                 break;

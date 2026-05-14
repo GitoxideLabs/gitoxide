@@ -2,7 +2,7 @@ use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
     revision::spec::from_bytes::{parse_spec, parse_spec_no_baseline, repo},
-    util::hex_to_id,
+    util::hex_to_id_sha1_only,
 };
 
 #[test]
@@ -62,7 +62,7 @@ fn parent() {
     let repo = repo("complex_graph").unwrap();
     assert_eq!(
         parse_spec("a^1", &repo).unwrap(),
-        Spec::from_id(hex_to_id("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(&repo))
+        Spec::from_id(hex_to_id_sha1_only("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(&repo))
     );
     assert_eq!(parse_spec("a", &repo).unwrap(), parse_spec("a^0", &repo).unwrap());
     assert_eq!(
@@ -76,12 +76,12 @@ fn ancestors() {
     let repo = repo("complex_graph").unwrap();
     assert_eq!(
         parse_spec("a~1", &repo).unwrap(),
-        Spec::from_id(hex_to_id("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(&repo))
+        Spec::from_id(hex_to_id_sha1_only("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(&repo))
     );
     assert_eq!(parse_spec("a", &repo).unwrap(), parse_spec("a~0", &repo).unwrap());
     assert_eq!(
         parse_spec("a~3", &repo).unwrap(),
-        Spec::from_id(hex_to_id("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
+        Spec::from_id(hex_to_id_sha1_only("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
     );
     assert_eq!(
         parse_spec("a~42", &repo).unwrap_err().probable_cause().to_string(),

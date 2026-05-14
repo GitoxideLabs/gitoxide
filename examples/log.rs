@@ -1,5 +1,5 @@
 use std::{
-    io::{stdout, Write},
+    io::{Write, stdout},
     path::{Path, PathBuf},
 };
 
@@ -62,16 +62,12 @@ struct Args {
 
 fn run(args: Args) -> anyhow::Result<()> {
     let repo = gix::discover(args.git_dir.as_deref().unwrap_or(Path::new(".")))?;
+    let committish = args.committish.map(|mut c| {
+        c.push_str("^{commit}");
+        c
+    });
     let commit = repo
-        .rev_parse_single({
-            args.committish
-                .map(|mut c| {
-                    c.push_str("^{commit}");
-                    c
-                })
-                .as_deref()
-                .unwrap_or("HEAD")
-        })?
+        .rev_parse_single(committish.as_deref().unwrap_or("HEAD"))?
         .object()?
         .try_into_commit()?;
 

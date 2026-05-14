@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Index, Key, Section},
+    config::tree::{Index, Key, Section, keys},
 };
 
 impl Index {

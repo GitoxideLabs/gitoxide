@@ -2,7 +2,7 @@ use bstr::{BStr, BString};
 
 use crate::{
     driver,
-    driver::{apply::handle_io_err, Operation, State},
+    driver::{Operation, State, apply::handle_io_err},
 };
 
 ///

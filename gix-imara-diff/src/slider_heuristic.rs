@@ -172,19 +172,11 @@ impl IndentLevel {
     }
 
     fn map_or<T>(self, default: T, f: impl FnOnce(u8) -> T) -> T {
-        if self == Self::BLANK {
-            default
-        } else {
-            f(self.0)
-        }
+        if self == Self::BLANK { default } else { f(self.0) }
     }
 
     fn or(self, default: Self) -> Self {
-        if self == Self::BLANK {
-            default
-        } else {
-            self
-        }
+        if self == Self::BLANK { default } else { self }
     }
 }
 
@@ -388,11 +380,11 @@ mod tests {
     #[test]
     fn ascii_indent_clamps_before_overflow() {
         assert_eq!(
-            IndentLevel::for_ascii_line(std::iter::repeat(b' ').take(255), 1),
+            IndentLevel::for_ascii_line(std::iter::repeat_n(b' ', 255), 1),
             IndentLevel::MAX
         );
         assert_eq!(
-            IndentLevel::for_ascii_line(std::iter::repeat(b'\t').take(8), u8::MAX),
+            IndentLevel::for_ascii_line(std::iter::repeat_n(b'\t', 8), u8::MAX),
             IndentLevel::MAX
         );
     }

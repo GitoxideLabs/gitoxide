@@ -1,6 +1,6 @@
 use gix_actor::SignatureRef;
 use gix_object::{
-    bstr::ByteSlice, commit::message::body::TrailerRef, commit::ref_iter::Token, CommitRef, CommitRefIter, WriteTo,
+    CommitRef, CommitRefIter, WriteTo, bstr::ByteSlice, commit::message::body::TrailerRef, commit::ref_iter::Token,
 };
 use smallvec::SmallVec;
 

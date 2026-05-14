@@ -1,5 +1,5 @@
 use crate::{File, Graph, MAX_COMMITS};
-use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
+use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 use std::{
     io::{BufRead, BufReader},
     path::Path,

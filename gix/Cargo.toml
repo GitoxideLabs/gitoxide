@@ -7,11 +7,11 @@ description = "Interact with git repositories just like git would"
 license = "MIT OR Apache-2.0"
 version = "0.83.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-# This MSRV is dictated by `firefox` to support the `helix` editor, but is now probably
-# effectively controlled by `jiff`, which also aligns with `regex`.
-rust-version = "1.82"
+# Rust 1.85 is required so hash-related dependencies can use Rust 2024 crates,
+# notably `sha2` 0.11 and `hashbrown` 0.17.
+rust-version = "1.85"
 
 [lib]
 doctest = true
@@ -91,38 +91,15 @@ comfort = [
 ## Enable support for the SHA-1 hash throughout the `gix` stack.
 sha1 = [
     "gix-hash/sha1",
-    "gix-archive?/sha1",
-    "gix-blame?/sha1",
-    "gix-commitgraph/sha1",
-    "gix-config/sha1",
-    "gix-diff/sha1",
-    "gix-dir?/sha1",
-    "gix-discover/sha1",
-    "gix-filter?/sha1",
-    "gix-hashtable/sha1",
-    "gix-index?/sha1",
-    "gix-merge?/sha1",
-    "gix-negotiate?/sha1",
-    "gix-object/sha1",
-    "gix-odb/sha1",
     "gix-pack/sha1",
-    "gix-protocol/sha1",
-    "gix-ref/sha1",
-    "gix-refspec/sha1",
-    "gix-revision/sha1",
-    "gix-revwalk/sha1",
-    "gix-shallow/sha1",
-    "gix-status?/sha1",
-    "gix-submodule?/sha1",
-    "gix-traverse/sha1",
-    "gix-worktree?/sha1",
-    "gix-worktree-state?/sha1",
     "gix-worktree-stream?/sha1",
 ]
 
 ## Enable support for the SHA-256 hash throughout the `gix` stack.
 sha256 = [
     "gix-hash/sha256",
+    "gix-pack/sha256",
+    "gix-worktree-stream?/sha256",
 ]
 
 #! #### Components
@@ -360,7 +337,7 @@ cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 [dependencies]
 gix-error = { version = "^0.2.3", path = "../gix-error" }
 gix-utils = { version = "^0.3.2", path = "../gix-utils" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-ref = { version = "^0.63.0", path = "../gix-ref" }
 gix-discover = { version = "^0.51.0", path = "../gix-discover" }
 gix-tempfile = { version = "^23.0.0", path = "../gix-tempfile", default-features = false }
@@ -449,9 +426,9 @@ document-features = { version = "0.2.0", optional = true }
 [dev-dependencies]
 # For additional features that aren't enabled by default due to MSRV
 gix = { path = ".", default-features = false, features = [
-    "need-more-recent-msrv", "tree-error"
+    "need-more-recent-msrv", "tree-error", "sha1", "sha256"
 ] }
-gix-hash = { version = "^0.25.0", path = "../gix-hash", features = ["sha256"] }
+gix-hash = { version = "^0.25.0", path = "../gix-hash" }
 pretty_assertions = "1.4.0"
 gix-testtools = { path = "../tests/tools" }
 is_ci = "1.1.1"

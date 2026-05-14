@@ -109,12 +109,17 @@ mod find {
         );
         let target_commit_id = hex_to_id("134385f6d781b7e97062102c6a483440bfda2a03");
         assert_eq!(
-            tag_ref.inner.peeled, Some(target_commit_id),
+            tag_ref.inner.peeled,
+            Some(target_commit_id),
             "It only counts as peeled as this ref is packed, and peeling in place is a way to 'make it the target' officially."
         );
 
         let err = tag_ref.peel_to_kind(gix::object::Kind::Blob).unwrap_err();
-        let expected_err = "Last encountered object 4b825dc was tree while trying to peel to blob";
+        let empty_tree_id = hex_to_id("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+        let expected_err = format!(
+            "Last encountered object {} was tree while trying to peel to blob",
+            &empty_tree_id.to_string()[..7]
+        );
         assert_eq!(
             err.to_string(),
             expected_err,
@@ -131,7 +136,7 @@ mod find {
 
         let obj = tag_ref.peel_to_kind(gix::object::Kind::Tree)?;
         assert!(obj.kind.is_tree());
-        assert_eq!(obj.id, hex_to_id("4b825dc642cb6eb9a060e54bf8d69288fbee4904"));
+        assert_eq!(obj.id, empty_tree_id);
         assert_eq!(tag_ref.peel_to_tree()?.id, obj.id);
 
         assert_eq!(
@@ -207,11 +212,13 @@ fn set_target_id() {
     assert_eq!(head_ref.id(), target_id, "the id was set and is observable right away");
 
     head_ref.delete().unwrap();
-    assert!(head_ref
-        .set_target_id(prev_id, "fails")
-        .unwrap_err()
-        .to_string()
-        .starts_with("Reference \"refs/heads/main\" was supposed to exist"));
+    assert!(
+        head_ref
+            .set_target_id(prev_id, "fails")
+            .unwrap_err()
+            .to_string()
+            .starts_with("Reference \"refs/heads/main\" was supposed to exist")
+    );
 }
 
 mod remote;

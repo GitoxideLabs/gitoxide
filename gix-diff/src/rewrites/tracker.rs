@@ -11,10 +11,10 @@ use bstr::{BStr, ByteSlice};
 use gix_object::tree::{EntryKind, EntryMode};
 
 use crate::{
-    blob::{platform::prepare_diff::Operation, DiffLineStats, ResourceKind},
-    rewrites::{tracker::visit::SourceKind, CopySource, Outcome, Tracker},
-    tree::visit::{Action, ChangeId, Relation},
     Rewrites,
+    blob::{DiffLineStats, ResourceKind, platform::prepare_diff::Operation},
+    rewrites::{CopySource, Outcome, Tracker, tracker::visit::SourceKind},
+    tree::visit::{Action, ChangeId, Relation},
 };
 
 /// The kind of a change.
@@ -422,11 +422,7 @@ impl<T: Change> Tracker<T> {
             // There can be trees with a lot of entries and pathological search behaviour, as they can be repeated
             // and then have a lot of similar hashes. This also means we have to search a lot of candidates which
             // can be too slow despite best attempts. So play it save and detect such cases 'roughly' by amount of items.
-            if self.items.len() < 100_000 {
-                0
-            } else {
-                limit
-            }
+            if self.items.len() < 100_000 { 0 } else { limit }
         };
 
         while let Some((mut dest_idx, dest)) = self.items[dest_ofs..].iter().enumerate().find_map(|(idx, item)| {
@@ -575,7 +571,9 @@ impl<T: Change> Tracker<T> {
                     return Ok(res);
                 }
             } else {
-                gix_trace::warn!("Children of parents with change-id {src_parent_id} and {dst_parent_id} were not equal, even though their parents claimed to be");
+                gix_trace::warn!(
+                    "Children of parents with change-id {src_parent_id} and {dst_parent_id} were not equal, even though their parents claimed to be"
+                );
                 break;
             }
         }
@@ -803,7 +801,7 @@ mod diff {
 #[cfg(test)]
 mod estimate_involved_items {
     use super::estimate_involved_items;
-    use crate::rewrites::tracker::{visit::SourceKind, ChangeKind};
+    use crate::rewrites::tracker::{ChangeKind, visit::SourceKind};
 
     #[test]
     fn renames_count_unemitted_as_sources_and_destinations() {

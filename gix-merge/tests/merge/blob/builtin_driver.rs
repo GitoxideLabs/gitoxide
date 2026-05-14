@@ -1,7 +1,6 @@
 use gix_merge::blob::{
-    builtin_driver,
+    Resolution, builtin_driver,
     builtin_driver::binary::{Pick, ResolveWith},
-    Resolution,
 };
 
 #[test]
@@ -30,9 +29,8 @@ mod text {
     use arbitrary::Arbitrary;
     use bstr::ByteSlice;
     use gix_merge::blob::{
-        builtin_driver,
+        Resolution, builtin_driver,
         builtin_driver::text::{self, Conflict, ConflictStyle},
-        Resolution,
     };
     use pretty_assertions::assert_str_eq;
     use std::num::NonZero;
@@ -360,7 +358,7 @@ mod text {
     }
 
     mod false_conflict {
-        use gix_merge::blob::{builtin_driver, builtin_driver::text::Conflict, Resolution};
+        use gix_merge::blob::{Resolution, builtin_driver, builtin_driver::text::Conflict};
         use imara_diff::InternedInput;
 
         /// Minimal reproduction: Myers produces a false conflict where git merge-file resolves cleanly.

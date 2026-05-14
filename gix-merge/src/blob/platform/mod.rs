@@ -1,7 +1,7 @@
 use bstr::{BStr, BString};
 use gix_filter::attributes;
 
-use crate::blob::{pipeline, BuiltinDriver, Pipeline, Platform};
+use crate::blob::{BuiltinDriver, Pipeline, Platform, pipeline};
 
 /// A stored value representing a resource that participates in a merge.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Debug)]

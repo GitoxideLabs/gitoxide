@@ -1,1 +1,5 @@
+# The fixture captures `git-baseline.unix` and `git-baseline.windows`
+# files by piping a large set of URLs through `git fetch-pack --diag-url`. That
+# textual output may be sensitive to the git version, so the baseline must be
+# produced by the host's `git` to keep the comparison meaningful.
 make_baseline.tar

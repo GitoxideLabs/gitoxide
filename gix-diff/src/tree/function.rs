@@ -1,10 +1,10 @@
 use std::{borrow::BorrowMut, collections::VecDeque};
 
-use gix_object::{tree::EntryRef, FindExt, TreeRefIter};
+use gix_object::{FindExt, TreeRefIter, tree::EntryRef};
 
 use crate::tree::{
-    visit::{Change, ChangeId, Relation},
     Error, State, TreeInfoTuple, Visit,
+    visit::{Change, ChangeId, Relation},
 };
 
 /// Calculate the changes that would need to be applied to `lhs` to get `rhs` using `objects` to obtain objects as needed for traversal.
@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn compare_select_samples() {
-        let null = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+        let null = gix_testtools::object_hash().null();
         let actual = compare(
             &EntryRef {
                 mode: EntryKind::Blob.into(),

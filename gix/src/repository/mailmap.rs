@@ -1,4 +1,4 @@
-use crate::{config::tree::Mailmap, Id};
+use crate::{Id, config::tree::Mailmap};
 
 impl crate::Repository {
     // TODO: tests

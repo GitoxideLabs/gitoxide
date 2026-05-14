@@ -1,4 +1,4 @@
-use gix_object::{bstr::ByteSlice, commit::ref_iter::Token, CommitRefIter};
+use gix_object::{CommitRefIter, bstr::ByteSlice, commit::ref_iter::Token};
 
 use crate::{
     commit::{LONG_MESSAGE, MERGE_TAG, SIGNATURE},

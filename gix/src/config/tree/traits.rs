@@ -135,7 +135,7 @@ pub trait Key: std::fmt::Debug {
                     return Err(format!(
                         "The key named '{}' cannot be used without subsections.",
                         self.logical_name()
-                    ))
+                    ));
                 }
                 _ => subsection,
             },

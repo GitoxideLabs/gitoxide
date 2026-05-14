@@ -10,7 +10,9 @@
 [advisories]
 ignore = [
     { id = "RUSTSEC-2025-0052", reason = "`async-std` - unmaintained without replacement - needs some time to replace, but async version isn't too important right now" },
-    { id = "RUSTSEC-2024-0436", reason = "unmaintained, comes in with `curl`" }
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, comes in with `curl`" },
+    { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` comes through reqwest's optional hickory DNS feature; no safe 0.25.x upgrade is available yet" },
+    { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` comes through reqwest's optional hickory DNS feature; reqwest has not upgraded to hickory 0.26.1 yet" }
 ]
 
 

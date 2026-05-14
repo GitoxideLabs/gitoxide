@@ -1,15 +1,15 @@
 use gix_diff::{
+    Rewrites,
     rewrites::{Copies, CopySource},
     tree::{recorder::Location, visit::Relation},
     tree_with_rewrites::{Change, Options},
-    Rewrites,
 };
-use gix_object::{bstr::BStr, TreeRefIter};
+use gix_object::{TreeRefIter, bstr::BStr};
 
 #[test]
 fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
     let (changes, _out) = collect_changes(None, "c1 - initial").expect("full path tracking is the default");
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Addition {
             location: "a",
@@ -61,7 +61,7 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
         },
     )
     .expect("the path-options are respected - we only see the filename here");
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Addition {
             location: "a",
@@ -107,8 +107,8 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
     {
         let (lhs, rhs, mut cache, odb) = repo_with_trees(None, "c1 - initial")?;
         let err = gix_diff::tree_with_rewrites(
-            TreeRefIter::from_bytes(&lhs, gix_testtools::hash_kind_from_env().unwrap_or_default()),
-            TreeRefIter::from_bytes(&rhs, gix_testtools::hash_kind_from_env().unwrap_or_default()),
+            TreeRefIter::from_bytes(&lhs, gix_testtools::object_hash()),
+            TreeRefIter::from_bytes(&rhs, gix_testtools::object_hash()),
             &mut cache,
             &mut Default::default(),
             &odb,
@@ -129,7 +129,7 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
 fn changes_against_modified_tree_with_filename_tracking() -> crate::Result {
     let (changes, _out) = collect_changes("c2", "c3-modification")?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "a",
@@ -162,7 +162,7 @@ fn changes_against_modified_tree_with_filename_tracking() -> crate::Result {
             ..Default::default()
         },
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "a",
@@ -304,7 +304,7 @@ fn rename_by_similarity() -> crate::Result {
             },
         ).expect("errors can only happen with IO or ODB access fails");
         insta::assert_snapshot!(crate::normalize_debug_snapshot(&(
-            changes)),
+            changes)).0,
             @r#"
         [
             Modification {
@@ -357,7 +357,7 @@ fn rename_by_similarity() -> crate::Result {
     )
     .expect("it found all items at the cut-off point, similar to git");
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "b",
@@ -449,7 +449,7 @@ fn copies_by_identity() -> crate::Result {
             }),
         },
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "dir",
@@ -517,7 +517,7 @@ fn copies_by_similarity() -> crate::Result {
             }),
         },
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "dir",
@@ -640,7 +640,7 @@ fn copies_in_entire_tree_by_similarity() -> crate::Result {
     )?;
     // The chosen source for `newly-added` differs by fixture hash kind because candidate order is id-dependent.
     match crate::fixture_hash_kind() {
-        gix_hash::Kind::Sha1 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+        gix_hash::Kind::Sha1 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
         [
             Rewrite {
                 source_location: "base",
@@ -695,7 +695,7 @@ fn copies_in_entire_tree_by_similarity() -> crate::Result {
             },
         ]
         "#),
-        gix_hash::Kind::Sha256 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+        gix_hash::Kind::Sha256 => insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
         [
             Rewrite {
                 source_location: "base",
@@ -781,7 +781,7 @@ fn copies_in_entire_tree_by_similarity_with_limit() -> crate::Result {
             }),
         },
     )?;
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Rewrite {
             source_location: "base",
@@ -849,7 +849,7 @@ fn copies_by_similarity_with_limit() -> crate::Result {
         },
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&changes).0, @r#"
     [
         Modification {
             location: "dir",
@@ -912,7 +912,7 @@ fn realistic_renames_by_identity() -> crate::Result {
         },
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())).0, @r#"
     [
         Rewrite {
             source_location: "git-index/src/file.rs",
@@ -987,7 +987,7 @@ fn realistic_renames_disabled() -> crate::Result {
         },
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())).0, @r#"
     [
         Deletion {
             location: "git-index/src/file.rs",
@@ -1064,7 +1064,7 @@ fn realistic_renames_disabled_2() -> crate::Result {
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter()
                                      .filter(|c| !c.entry_mode().is_tree() ||
                                                   c.relation().is_some_and(|r| matches!(r, Relation::Parent(_)))
-                                     ).collect::<Vec<_>>())), @r#"
+                                     ).collect::<Vec<_>>())).0, @r#"
     [
         Deletion {
             location: "git-sec",
@@ -1327,7 +1327,7 @@ fn realistic_renames_disabled_3() -> crate::Result {
         },
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())).0, @r#"
     [
         Addition {
             location: "src/ein.rs",
@@ -1404,7 +1404,7 @@ fn realistic_renames_by_identity_3() -> crate::Result {
         },
     )?;
 
-    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())), @r#"
+    insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter().filter(|c| !c.entry_mode().is_tree()).collect::<Vec<_>>())).0, @r#"
     [
         Rewrite {
             source_location: "src/plumbing-cli.rs",
@@ -1487,7 +1487,7 @@ fn realistic_renames_2() -> crate::Result {
     insta::assert_snapshot!(crate::normalize_debug_snapshot(&(changes.into_iter()
                                      .filter(|c| !c.entry_mode().is_tree() ||
                                                   c.relation().is_some_and(|r| matches!(r, Relation::Parent(_)))
-                                     ).collect::<Vec<_>>())), @r#"
+                                     ).collect::<Vec<_>>())).0, @r#"
     [
         Rewrite {
             source_location: "git-sec",
@@ -1753,7 +1753,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
                 changes
                     .into_iter()
                     .filter(|c| !c.entry_mode().is_tree() || c.relation().is_some_and(|r| matches!(r, Relation::Parent(_))))
-                    .collect::<Vec<_>>())),
+                    .collect::<Vec<_>>())).0,
                 @r#"
             [
                 Rewrite {
@@ -1845,7 +1845,7 @@ fn realistic_renames_3_without_identity() -> crate::Result {
                 changes
                     .into_iter()
                     .filter(|c| !c.entry_mode().is_tree() || c.relation().is_some_and(|r| matches!(r, Relation::Parent(_))))
-                    .collect::<Vec<_>>())),
+                    .collect::<Vec<_>>())).0,
                 @r#"
             [
                 Rewrite {
@@ -1956,11 +1956,11 @@ mod util {
     use gix_object::{FindExt, TreeRefIter};
 
     pub fn repo_workdir() -> crate::Result<PathBuf> {
-        gix_testtools::scripted_fixture_read_only_standalone("make_diff_for_rewrites_repo.sh")
+        crate::scripted_fixture_read_only("make_diff_for_rewrites_repo.sh")
     }
 
     pub fn fixture_hash_kind() -> gix_hash::Kind {
-        gix_testtools::hash_kind_from_env().unwrap_or_default()
+        gix_testtools::object_hash()
     }
 
     pub fn repo_with_trees(

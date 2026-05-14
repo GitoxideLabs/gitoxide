@@ -1,9 +1,8 @@
 //!
 #![allow(clippy::empty_docs)]
 use crate::{
-    object,
-    object::{peel, Kind},
-    Commit, Object, Tree,
+    Commit, Object, Tree, object,
+    object::{Kind, peel},
 };
 
 ///
@@ -62,7 +61,7 @@ impl<'repo> Object<'repo> {
                         oid: self.id().shorten().unwrap_or_else(|_| self.id.into()),
                         actual: self.kind,
                         expected: kind,
-                    })
+                    });
                 }
             }
         }

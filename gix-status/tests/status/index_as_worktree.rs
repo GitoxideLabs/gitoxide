@@ -1,23 +1,23 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use bstr::BStr;
-use filetime::{set_file_mtime, FileTime};
+use filetime::{FileTime, set_file_mtime};
 use gix_filter::eol::AutoCrlf;
 use gix_index as index;
-use gix_index::{entry, Entry};
+use gix_index::{Entry, entry};
 use gix_status::{
     index_as_worktree,
     index_as_worktree::{
-        traits::{CompareBlobs, FastEq, ReadData, SubmoduleStatus},
         Change as WorktreeChange, Conflict, Context, EntryStatus as WorktreeEntryStatus, Options, Outcome, Record,
         Recorder,
+        traits::{CompareBlobs, FastEq, ReadData, SubmoduleStatus},
     },
 };
 
-use crate::{fixture_path, hex_to_id};
+use crate::{fixture_path, hex_to_id, odb_at};
 use gix_index::entry::{Flags, Mode};
 use gix_status::index_as_worktree::ConflictIndexEntry;
 use pretty_assertions::assert_eq;
@@ -160,8 +160,8 @@ fn fixture_filtered_detailed(
 
     let worktree = fixture_path(name).join(subdir);
     let git_dir = worktree.join(".git");
-    let mut index =
-        gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default()).unwrap();
+    let object_hash = gix_testtools::object_hash();
+    let mut index = gix_index::File::at(git_dir.join("index"), object_hash, false, Default::default()).unwrap();
     prepare_index(&mut index);
     let mut recorder = Recorder::default();
     let search = gix_pathspec::Search::from_specs(to_pathspecs(pathspecs), None, std::path::Path::new(""))
@@ -194,7 +194,7 @@ fn fixture_filtered_detailed(
         ..Options::default()
     };
     let outcome = if use_odb {
-        let odb = gix_odb::at(git_dir.join("objects")).unwrap().into_arc().unwrap();
+        let odb = odb_at(&git_dir, object_hash);
         index_as_worktree(
             &index,
             &worktree,
@@ -1002,12 +1002,12 @@ fn racy_git() {
     // we need a writable fixture because we have to mess with `mtimes` manually, because touch -d
     // respects the locale so the test wouldn't work depending on the timezone you
     // run your test in.
-    let dir = gix_testtools::scripted_fixture_writable_standalone("racy_git.sh").expect("script works");
+    let dir = crate::scripted_fixture_writable("racy_git.sh").expect("script works");
     let worktree = dir.path();
     let git_dir = worktree.join(".git");
     let fs = gix_fs::Capabilities::probe(&git_dir);
-    let mut index =
-        gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default()).unwrap();
+    let object_hash = gix_testtools::object_hash();
+    let mut index = gix_index::File::at(git_dir.join("index"), object_hash, false, Default::default()).unwrap();
 
     #[derive(Clone)]
     struct CountCalls(Arc<AtomicUsize>, FastEq);

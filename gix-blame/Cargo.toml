@@ -7,21 +7,15 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dedicated to implementing a 'blame' algorithm"
 authors = ["Christoph Rüßler <christoph.ruessler@mailbox.org>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = [
-    "gix-commitgraph/sha1",
-    "gix-diff/sha1",
-    "gix-hash/sha1",
-    "gix-object/sha1",
-    "gix-revwalk/sha1",
-    "gix-traverse/sha1",
-    "gix-worktree/sha1",
-]
+sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-hash/sha256"]
 
 [dependencies]
 gix-error = { version = "^0.2.3", path = "../gix-error" }
@@ -39,11 +33,12 @@ smallvec = "1.15.1"
 thiserror = "2.0.18"
 
 [dev-dependencies]
-gix-ref = { path = "../gix-ref" }
+gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+gix-ref = { path = "../gix-ref", features = ["sha1", "sha256"] }
 gix-filter = { path = "../gix-filter" }
 gix-fs = { path = "../gix-fs" }
-gix-index = { path = "../gix-index" }
-gix-odb = { path = "../gix-odb" }
+gix-index = { path = "../gix-index", features = ["sha1"] }
+gix-odb = { path = "../gix-odb", features = ["sha1"] }
 gix-testtools = { path = "../tests/tools" }
 pretty_assertions = "1.4.0"
 

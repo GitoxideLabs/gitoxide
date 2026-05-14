@@ -1,8 +1,8 @@
 use crate::{
     config,
     config::{
-        tree::{keys, Key, Merge, Section, SubSectionRequirement},
         Tree,
+        tree::{Key, Merge, Section, SubSectionRequirement, keys},
     },
 };
 
@@ -94,7 +94,7 @@ mod conflict_style {
 mod validate {
     use crate::{
         bstr::BStr,
-        config::tree::{keys, Merge},
+        config::tree::{Merge, keys},
     };
 
     #[derive(Clone, Copy)]

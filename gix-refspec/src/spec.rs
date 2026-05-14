@@ -1,10 +1,10 @@
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
+    Instruction, RefSpec, RefSpecRef,
     instruction::{Fetch, Push},
     parse::Operation,
     types::Mode,
-    Instruction, RefSpec, RefSpecRef,
 };
 
 /// Conversion. Use the [`RefSpecRef`][RefSpec::to_ref()] type for more usage options.

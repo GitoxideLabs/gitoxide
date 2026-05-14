@@ -39,3 +39,5 @@ git reset --hard HEAD~1
 if [ "$omit_multi_index" == "no" ]; then
   git multi-pack-index write
 fi
+
+git count-objects -v > expected-count-objects

@@ -7,16 +7,18 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate providing utilities for walking the revision graph"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [lib]
 doctest = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-commitgraph/sha1", "gix-hash/sha1", "gix-hashtable/sha1", "gix-object/sha1"]
+sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-hash/sha256"]
 
 [dependencies]
 gix-hash = { version = "^0.25.0", path = "../gix-hash" }

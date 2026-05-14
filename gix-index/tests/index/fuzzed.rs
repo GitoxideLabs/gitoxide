@@ -14,7 +14,11 @@ fn decode_fuzzed(data: &[u8]) -> Result<(gix_index::State, Option<gix_hash::Obje
 fn index_file_artifacts_run_fuzzer() {
     for path in artifact_paths("index_file") {
         let data = std::fs::read(path).expect("artifact is readable");
-        let _ = decode_fuzzed(&data);
+        if let Ok((state, _)) = decode_fuzzed(&data) {
+            let file = gix_index::File::from_state(state, PathBuf::from("fuzz-input.index"));
+            let mut out = Vec::new();
+            let _ = file.write_to(&mut out, Default::default());
+        }
     }
 }
 

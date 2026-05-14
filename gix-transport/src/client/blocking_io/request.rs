@@ -1,8 +1,8 @@
 use std::{io, io::Write};
 
 use crate::{
-    client::{blocking_io::ExtendedBufRead, MessageKind, WriteMode},
-    packetline::blocking_io::{encode, Writer},
+    client::{MessageKind, WriteMode, blocking_io::ExtendedBufRead},
+    packetline::blocking_io::{Writer, encode},
 };
 
 /// A [`Write`][io::Write] implementation optimized for writing packet lines.

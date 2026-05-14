@@ -4,8 +4,8 @@ use gix_protocol::handshake;
 use gix_transport::Protocol;
 
 use crate::fetch::{
-    _impl::FetchConnection, helper_unused, oid, transport, CloneDelegate, CloneRefInWantDelegate, Error,
-    LsRemoteDelegate,
+    _impl::FetchConnection, CloneDelegate, CloneRefInWantDelegate, Error, LsRemoteDelegate, helper_unused, oid,
+    transport,
 };
 
 #[maybe_async::test(feature = "blocking-client", async(feature = "async-client", async_std::test))]

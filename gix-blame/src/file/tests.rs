@@ -49,7 +49,7 @@ fn one_sha() -> ObjectId {
 
 mod process_change {
     use super::*;
-    use crate::file::{process_change, Change, Offset};
+    use crate::file::{Change, Offset, process_change};
 
     #[test]
     fn nothing() {
@@ -733,9 +733,8 @@ mod process_changes {
     use pretty_assertions::assert_eq;
 
     use crate::file::{
-        process_changes,
+        Change, process_changes,
         tests::{one_sha, zero_sha},
-        Change,
     };
 
     #[test]

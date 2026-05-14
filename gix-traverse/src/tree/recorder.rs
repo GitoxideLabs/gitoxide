@@ -4,7 +4,7 @@ use gix_object::{
     tree,
 };
 
-use crate::tree::{visit::Action, Recorder, Visit};
+use crate::tree::{Recorder, Visit, visit::Action};
 
 /// Describe how to track the location of an entry.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

@@ -1,4 +1,4 @@
-use crate::{config, Repository};
+use crate::{Repository, config};
 
 impl Repository {
     /// Return options that can be used to drive a low-level checkout operation.

@@ -1,7 +1,7 @@
 use std::{
     io,
     io::{Read, Write},
-    sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
+    sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
     thread,
     time::Duration,
 };
@@ -11,8 +11,8 @@ use gix_features::io::pipe;
 
 use crate::client::blocking_io::http::{
     self,
-    curl::curl_is_spurious,
     curl::Error,
+    curl::curl_is_spurious,
     options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
     redirect,
     traits::PostBodyDataKind,

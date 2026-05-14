@@ -58,11 +58,11 @@ impl From<ProgressId> for gix_features::progress::Id {
 pub(super) mod function {
     use std::{io, sync::atomic::AtomicBool};
 
-    use gix_features::progress::{self, prodash::DynNestedProgress, Count, Progress};
+    use gix_features::progress::{self, Count, Progress, prodash::DynNestedProgress};
 
-    use crate::cache::delta::{traverse, Tree};
+    use crate::cache::delta::{Tree, traverse};
 
-    use super::{modify_base, Error, Outcome, ProgressId, TreeEntry};
+    use super::{Error, Outcome, ProgressId, TreeEntry, modify_base};
 
     /// Write information about `entries` as obtained from a pack data file into a pack index file via the `out` stream.
     /// The resolver produced by `make_resolver` must resolve pack entries from the same pack data file that produced the
@@ -194,7 +194,7 @@ pub(super) mod function {
                      entry,
                      decompressed: bytes,
                      ..
-                 }| { modify_base(data, entry, bytes, version.hash()) },
+                 }| { modify_base(data, entry, bytes, object_hash) },
                 traverse::Options {
                     object_progress: Box::new(
                         root_progress.add_child_with_id("Resolving".into(), ProgressId::ResolveObjects.into()),
@@ -235,6 +235,7 @@ pub(super) mod function {
             sorted_pack_offsets_by_oid,
             &pack_hash,
             version,
+            object_hash,
             &mut root_progress.add_child_with_id("writing index file".into(), ProgressId::IndexBytesWritten.into()),
         )?;
         root_progress.show_throughput_with(

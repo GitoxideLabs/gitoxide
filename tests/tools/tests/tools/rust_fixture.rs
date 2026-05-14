@@ -107,27 +107,3 @@ fn rust_fixture_closure_error_propagates() {
         "Error message should contain the original error, got: {err_msg}"
     );
 }
-
-#[test]
-fn rust_fixture_standalone_uses_fixtures_directory() -> Result {
-    let (dir, _) = gix_testtools::rust_fixture_read_only_standalone("test_fixture_standalone", 1, |fixture| {
-        if let FixtureState::Uninitialized(dir) = fixture {
-            std::fs::write(dir.join("standalone.txt"), "standalone")?;
-        }
-        Ok(())
-    })?;
-
-    // Standalone fixtures are stored in fixtures/generated-do-not-edit, not tests/fixtures/...
-    let dir_str = dir.to_string_lossy();
-    assert!(
-        dir_str.contains("fixtures") && dir_str.contains("generated-do-not-edit"),
-        "Standalone fixture should be in fixtures/generated-do-not-edit directory, got: {dir_str}"
-    );
-    assert!(
-        !dir_str.contains("tests/fixtures"),
-        "Standalone fixture should NOT be in tests/fixtures directory, got: {dir_str}"
-    );
-
-    assert!(dir.join("standalone.txt").exists());
-    Ok(())
-}

@@ -1,4 +1,4 @@
-use crate::{bstr::BStr, ext::ReferenceExt, revision::Spec, Id, Reference};
+use crate::{Id, Reference, bstr::BStr, ext::ReferenceExt, revision::Spec};
 
 ///
 pub mod parse;

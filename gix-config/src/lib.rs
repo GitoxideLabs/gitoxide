@@ -63,7 +63,7 @@ pub mod lookup;
 pub mod parse;
 ///
 pub mod value;
-pub use gix_config_value::{color, integer, path, Boolean, Color, Integer, Path};
+pub use gix_config_value::{Boolean, Color, Integer, Path, color, integer, path};
 
 mod key;
 pub use key::{AsKey, KeyRef};

@@ -115,11 +115,7 @@ mod baseline {
 
     impl Kind {
         pub const fn new() -> Self {
-            if cfg!(windows) {
-                Kind::Windows
-            } else {
-                Kind::Unix
-            }
+            if cfg!(windows) { Kind::Windows } else { Kind::Unix }
         }
 
         pub fn extension(&self) -> &'static str {

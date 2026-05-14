@@ -10,13 +10,17 @@ impl packed::Buffer {
     ///
     /// There is no namespace support in packed iterators. It can be emulated using `iter_prefixed(…)`.
     pub fn iter(&self) -> Result<packed::Iter<'_>, packed::iter::Error> {
-        packed::Iter::new(self.as_ref(), self.hash_kind)
+        packed::Iter::new(self.as_ref(), self.object_hash)
     }
 
     /// Return an iterator yielding only references matching the given prefix, ordered by reference name.
     pub fn iter_prefixed(&self, prefix: BString) -> Result<packed::Iter<'_>, packed::iter::Error> {
         let first_record_with_prefix = self.binary_search_by(prefix.as_bstr()).unwrap_or_else(|(_, pos)| pos);
-        packed::Iter::new_with_prefix(&self.as_ref()[first_record_with_prefix..], self.hash_kind, Some(prefix))
+        packed::Iter::new_with_prefix(
+            &self.as_ref()[first_record_with_prefix..],
+            self.object_hash,
+            Some(prefix),
+        )
     }
 }
 
@@ -29,7 +33,7 @@ impl<'a> Iterator for packed::Iter<'a> {
         }
 
         let start = self.cursor;
-        match decode::reference(&mut self.cursor, self.hash_kind) {
+        match decode::reference(&mut self.cursor, self.object_hash) {
             Ok(reference) => {
                 self.current_line += 1;
                 if let Some(ref prefix) = self.prefix {
@@ -64,23 +68,23 @@ impl<'a> Iterator for packed::Iter<'a> {
 
 impl<'a> packed::Iter<'a> {
     /// Return a new iterator after successfully parsing the possibly existing first line of the given `packed` refs buffer,
-    /// parsing object ids as `hash_kind`.
-    pub fn new(packed: &'a [u8], hash_kind: gix_hash::Kind) -> Result<Self, Error> {
-        Self::new_with_prefix(packed, hash_kind, None)
+    /// parsing object ids as `object_hash`.
+    pub fn new(packed: &'a [u8], object_hash: gix_hash::Kind) -> Result<Self, Error> {
+        Self::new_with_prefix(packed, object_hash, None)
     }
 
     /// Returns an iterator whose references will only match `prefix`.
     ///
-    /// It assumes that the underlying `packed` buffer is indeed sorted and parses object ids as `hash_kind`.
+    /// It assumes that the underlying `packed` buffer is indeed sorted and parses object ids as `object_hash`.
     pub(in crate::store_impl::packed) fn new_with_prefix(
         packed: &'a [u8],
-        hash_kind: gix_hash::Kind,
+        object_hash: gix_hash::Kind,
         prefix: Option<BString>,
     ) -> Result<Self, Error> {
         if packed.is_empty() {
             Ok(packed::Iter {
                 cursor: packed,
-                hash_kind,
+                object_hash,
                 prefix,
                 current_line: 1,
             })
@@ -92,14 +96,14 @@ impl<'a> packed::Iter<'a> {
             let refs = input;
             Ok(packed::Iter {
                 cursor: refs,
-                hash_kind,
+                object_hash,
                 prefix,
                 current_line: 2,
             })
         } else {
             Ok(packed::Iter {
                 cursor: packed,
-                hash_kind,
+                object_hash,
                 prefix,
                 current_line: 1,
             })

@@ -1,5 +1,16 @@
+# The fixtures use `git worktree add` and then rewrite the
+# linked-worktree `.git` files (`gitdir:` pointer) and `.git/worktrees/*/gitdir`
+# entries. Those paths are absolute or relative to the host's working
+# directory, so the layout cannot relocate cleanly when extracted from a
+# committed archive — it must be rebuilt per host.
+
 make_worktree_repo.tar
 make_worktree_repo_sha256.tar
+# `_packed` variants additionally run `git pack-refs --all --prune`, whose
+# pack-refs file format can vary slightly across git versions.
 make_worktree_repo_packed.tar
 make_worktree_repo_packed_sha256.tar
+# `make_multi_hop_ref.sh` writes raw symbolic-ref text files under `.git/refs`
+# whose target paths are validated by the host git; regenerating per run keeps
+# the format aligned with the git binary doing the comparison.
 make_multi_hop_ref*.tar

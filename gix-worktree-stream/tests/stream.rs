@@ -1,6 +1,10 @@
 /// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
-fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
-    gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
+fn hex_to_id(hex_sha1: &str, hex_sha256: &str) -> gix_hash::ObjectId {
+    match gix_testtools::object_hash() {
+        gix_hash::Kind::Sha1 => gix_hash::ObjectId::from_hex(hex_sha1.as_bytes()).expect("40 bytes hex"),
+        gix_hash::Kind::Sha256 => gix_hash::ObjectId::from_hex(hex_sha256.as_bytes()).expect("64 bytes hex"),
+        _ => unimplemented!(),
+    }
 }
 
 mod from_tree {
@@ -13,7 +17,7 @@ mod from_tree {
 
     use gix_attributes::glob::pattern::Case;
     use gix_hash::oid;
-    use gix_object::{bstr::ByteSlice, tree::EntryKind, Data};
+    use gix_object::{Data, bstr::ByteSlice, tree::EntryKind};
     use gix_worktree::stack::state::attributes::Source;
     use std::sync::LazyLock;
 
@@ -35,7 +39,7 @@ mod from_tree {
     #[test]
     fn can_receive_err_if_root_is_not_found() {
         let mut stream = gix_worktree_stream::from_tree(
-            gix_hash::Kind::Sha1.null(),
+            gix_testtools::object_hash().null(),
             FailObjectRetrieval,
             mutating_pipeline(false),
             |_, _, _| -> Result<_, Infallible> { unreachable!("must not be called") },
@@ -58,11 +62,6 @@ mod from_tree {
         Ok(())
     }
 
-    #[cfg(target_pointer_width = "64")]
-    const EXPECTED_BUFFER_LENGTH: usize = 320302;
-    #[cfg(target_pointer_width = "32")]
-    const EXPECTED_BUFFER_LENGTH: usize = 320198;
-
     #[test]
     fn will_provide_all_information_and_respect_export_ignore() -> gix_testtools::Result {
         let (dir, head_tree, odb, mut cache) = basic()?;
@@ -77,12 +76,13 @@ mod from_tree {
                     .map(|_| ())
             },
         );
+        let object_hash = gix_testtools::object_hash();
         stream
-            .add_entry_from_path(&dir, &dir.join("extra-file"))?
-            .add_entry_from_path(&dir, &dir.join("extra-bigfile"))?
-            .add_entry_from_path(&dir, &dir.join("extra-exe"))?
-            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"))?
-            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"))?;
+            .add_entry_from_path(&dir, &dir.join("extra-file"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-bigfile"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-exe"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"), object_hash)?;
 
         let tee_read = TeeToMemory {
             read: stream.into_read(),
@@ -121,53 +121,69 @@ mod from_tree {
                 (
                     ".gitattributes".into(),
                     EntryKind::Blob,
-                    hex_to_id("45c160c35c17ad264b96431cceb9793160396e99")
+                    hex_to_id(
+                        "45c160c35c17ad264b96431cceb9793160396e99",
+                        "e34ae8e2c517230c6c613202a955b5f2095567830de5c3bb7081d72f1af393dd"
+                    )
                 ),
                 (
                     "a".into(),
                     EntryKind::Blob,
-                    hex_to_id("45b983be36b73c0788dc9cbcb76cbb80fc7bb057")
+                    hex_to_id(
+                        "45b983be36b73c0788dc9cbcb76cbb80fc7bb057",
+                        "96c18f0297e38d01f4b2dacddea4259aea6b2961eb0822bd2c0c3f6029030045"
+                    )
                 ),
                 (
                     "bigfile".into(),
                     EntryKind::Blob,
-                    hex_to_id("4995fde49ed64e043977e22539f66a0d372dd129")
+                    hex_to_id(
+                        "4995fde49ed64e043977e22539f66a0d372dd129",
+                        "527a170c0c29520af58bf61a383c4e99a7a7c63c0475cbb630cf98d38d6c0dce"
+                    )
                 ),
                 (
                     "symlink-to-a".into(),
                     EntryKind::Link,
-                    hex_to_id("2e65efe2a145dda7ee51d1741299f848e5bf752e")
+                    hex_to_id(
+                        "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+                        "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7"
+                    )
                 ),
                 (
                     "dir/.gitattributes".into(),
                     EntryKind::Blob,
-                    hex_to_id("81b9a375276405703e05be6cecf0fc1c8b8eed64")
+                    hex_to_id(
+                        "81b9a375276405703e05be6cecf0fc1c8b8eed64",
+                        "4b74474eca46ad7e1807afe8855e7a511d132b314d3d0f481bb55a331b249fb7"
+                    )
                 ),
                 (
                     "dir/b".into(),
                     EntryKind::Blob,
-                    hex_to_id("ab4a98190cf776b43cb0fe57cef231fb93fd07e6")
+                    hex_to_id(
+                        "ab4a98190cf776b43cb0fe57cef231fb93fd07e6",
+                        "cf84f9ae227fa5c481dacd97f6d6506de727dabd30377c6907f623ef1192637a"
+                    )
                 ),
                 (
                     "dir/subdir/exe".into(),
                     EntryKind::BlobExecutable,
-                    hex_to_id("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391")
+                    hex_to_id(
+                        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+                        "473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813"
+                    )
                 ),
                 (
                     "dir/subdir/streamed".into(),
                     EntryKind::Blob,
-                    hex_to_id("08991f58f4de5d85b61c0f87f3ac053c79d0e739")
+                    hex_to_id(
+                        "08991f58f4de5d85b61c0f87f3ac053c79d0e739",
+                        "8c13ad7df9686daf00357f34700922485802cb0be33e684ec5171f7d0d8a84fd"
+                    )
                 ),
-                (
-                    "extra-file".into(),
-                    EntryKind::Blob,
-                    hex_to_id("0000000000000000000000000000000000000000")
-                ),
-                (
-                    "extra-bigfile".into(),
-                    EntryKind::Blob,
-                    hex_to_id("0000000000000000000000000000000000000000")
-                ),
+                ("extra-file".into(), EntryKind::Blob, object_hash.null()),
+                ("extra-bigfile".into(), EntryKind::Blob, object_hash.null()),
                 (
                     "extra-exe".into(),
                     if cfg!(windows) {
@@ -175,23 +191,29 @@ mod from_tree {
                     } else {
                         EntryKind::BlobExecutable
                     },
-                    hex_to_id("0000000000000000000000000000000000000000")
+                    object_hash.null()
                 ),
-                (
-                    "extra-dir-empty".into(),
-                    EntryKind::Tree,
-                    hex_to_id("0000000000000000000000000000000000000000")
-                ),
-                (
-                    "extra-dir/symlink-to-extra".into(),
-                    EntryKind::Link,
-                    hex_to_id("0000000000000000000000000000000000000000")
-                )
+                ("extra-dir-empty".into(), EntryKind::Tree, object_hash.null()),
+                ("extra-dir/symlink-to-extra".into(), EntryKind::Link, object_hash.null())
             ]
         );
+
+        #[cfg(target_pointer_width = "64")]
+        let expected_buffer_length: usize = match gix_testtools::object_hash() {
+            gix_hash::Kind::Sha1 => 320302,
+            gix_hash::Kind::Sha256 => 320458,
+            _ => unimplemented!(),
+        };
+        #[cfg(target_pointer_width = "32")]
+        let expected_buffer_length: usize = match gix_testtools::object_hash() {
+            gix_hash::Kind::Sha1 => 320198,
+            gix_hash::Kind::Sha256 => todo!("let the test fail on CI and add the value here"),
+            _ => unimplemented!(),
+        };
+
         assert_eq!(
             copy.lock().len(),
-            EXPECTED_BUFFER_LENGTH,
+            expected_buffer_length,
             "keep track of file size changes of the streaming format"
         );
 
@@ -237,7 +259,14 @@ mod from_tree {
             let hex = std::fs::read(dir.join("head.hex"))?;
             gix_hash::ObjectId::from_hex(hex.trim())?
         };
-        let odb = gix_odb::at(dir.join(".git").join("objects"))?;
+        let odb = gix_odb::at_opts(
+            dir.join(".git").join("objects"),
+            Vec::new(),
+            gix_odb::store::init::Options {
+                object_hash: gix_testtools::object_hash(),
+                ..Default::default()
+            },
+        )?;
 
         let mut collection = Default::default();
         let mut buf = Default::default();
@@ -280,24 +309,8 @@ mod from_tree {
         }
     }
 
-    static DRIVER: LazyLock<PathBuf> = LazyLock::new(|| {
-        let mut cargo = std::process::Command::new(env!("CARGO"));
-        let res = cargo
-            .args(["build", "-p=gix-filter", "--example", "arrow"])
-            .status()
-            .expect("cargo should run fine");
-        assert!(res.success(), "cargo invocation should be successful");
-
-        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-            .ancestors()
-            .nth(1)
-            .expect("first parent in target dir")
-            .join("debug")
-            .join("examples")
-            .join(if cfg!(windows) { "arrow.exe" } else { "arrow" });
-        assert!(path.is_file(), "Expecting driver to be located at {}", path.display());
-        path
-    });
+    static DRIVER: LazyLock<PathBuf> =
+        LazyLock::new(|| gix_testtools::build_example_for_test("gix-filter", "arrow", env!("CARGO_TARGET_TMPDIR")));
 
     struct TeeToMemory<R> {
         read: R,

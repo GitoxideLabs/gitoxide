@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 description = "Implements various git object databases"
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 autotests = false
 
 [lib]
@@ -17,9 +17,13 @@ doctest = true
 
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
-sha1 = ["gix-hash/sha1"]
+sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
+## Enable support for multi-threaded usage of the object database.
+parallel = ["gix-features/parallel"]
 
 [dependencies]
 gix-features = { version = "^0.48.0", path = "../gix-features", features = ["walkdir", "zlib", "crc32"] }
@@ -29,7 +33,7 @@ gix-path = { version = "^0.12.0", path = "../gix-path" }
 gix-quote = { version = "^0.7.1", path = "../gix-quote" }
 gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-pack = { version = "^0.70.0", path = "../gix-pack", default-features = false }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 
 tempfile = "3.26.0"
@@ -41,7 +45,20 @@ memmap2 = "0.9.10"
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-odb = { path = ".", features = ["sha1", "sha256"] }
+gix-hash = { path = "../gix-hash" }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-date = { path = "../gix-date" }
+gix-pack = { path = "../gix-pack", features = ["sha1"] }
+gix-actor = { path = "../gix-actor" }
+pretty_assertions = "1.0.0"
+filetime = "0.2.27"
+maplit = "1.0.2"
+crossbeam-channel = "0.5.15"
+
+[[test]]
+name = "odb"
+path = "tests/odb/main.rs"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]

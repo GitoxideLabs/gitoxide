@@ -1,1 +1,5 @@
+# The fixture bakes a `baseline` file from `git check-attr -a`
+# output produced by the host's `git` binary. The exact format/lookup-order may
+# be sensitive to the git version, so the fixture is re-run on the test host to
+# stay aligned with the comparing git.
 make_attributes_baseline.tar

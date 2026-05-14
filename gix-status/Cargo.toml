@@ -7,10 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing with 'git status'-like functionality"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>", "Pascal Kuthe <pascal.kuthe@semimod.de>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [lib]
 doctest = false
@@ -18,12 +17,16 @@ doctest = false
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## Add support for tracking rewrites along with checking for worktree modifications.
 worktree-rewrites = ["dep:gix-dir", "dep:gix-diff"]
+## Enable parallel algorithms.
+parallel = ["gix-features/parallel"]
 
 [dependencies]
 gix-index = { version = "^0.51.0", path = "../gix-index" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-hash = { version = "^0.25.0", path = "../gix-hash" }
 gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-path = { version = "^0.12.0", path = "../gix-path" }
@@ -45,7 +48,19 @@ document-features = { version = "0.2.0", optional = true }
 portable-atomic = "1"
 
 [dev-dependencies]
+gix-status = { path = ".", features = ["worktree-rewrites", "parallel"] }
 gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-index = { path = "../gix-index" }
+gix-fs = { path = "../gix-fs" }
+gix-diff = { path = "../gix-diff" }
+gix-filter = { path = "../gix-filter" }
+gix-dir = { path = "../gix-dir" }
+gix-odb = { path = "../gix-odb" }
+gix-object = { path = "../gix-object" }
+gix-pathspec = { path = "../gix-pathspec" }
+gix-worktree = { path = "../gix-worktree" }
+pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "worktree-rewrites"]

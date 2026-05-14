@@ -1,11 +1,11 @@
 //! A library for performing object database integrity and connectivity checks
-#![deny(rust_2018_idioms, unsafe_code, missing_docs)]
+#![deny(unsafe_code, missing_docs)]
 
 use std::collections::VecDeque;
 
 use gix_hash::ObjectId;
 use gix_hashtable::HashSet;
-use gix_object::{tree::EntryKind, Exists, FindExt, Kind};
+use gix_object::{Exists, FindExt, Kind, tree::EntryKind};
 
 /// Perform a connectivity check.
 pub struct Connectivity<T, F>

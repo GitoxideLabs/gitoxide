@@ -5,14 +5,13 @@ use gix_features::threading::OwnShared;
 use smallvec::SmallVec;
 
 use crate::{
+    AsKey, File,
     file::{
-        self,
+        self, Metadata, SectionId,
         write::{extract_newline, platform_newline},
-        Metadata, SectionId,
     },
     lookup,
     parse::Event,
-    AsKey, File,
 };
 
 /// Read-only low-level access methods, as it requires generics for converting into

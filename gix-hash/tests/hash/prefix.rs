@@ -157,7 +157,7 @@ mod new {
 mod try_from {
     use std::cmp::Ordering;
 
-    use gix_hash::{prefix::from_hex::Error, Prefix};
+    use gix_hash::{Prefix, prefix::from_hex::Error};
 
     use crate::hex_to_id;
 
@@ -217,7 +217,7 @@ mod try_from {
 mod from_hex_nonempty {
     use std::cmp::Ordering;
 
-    use gix_hash::{prefix::from_hex::Error, Prefix};
+    use gix_hash::{Prefix, prefix::from_hex::Error};
 
     use crate::hex_to_id;
 

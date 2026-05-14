@@ -75,7 +75,7 @@ pub(crate) mod hero {
         use crate::transport::client::async_io;
         #[cfg(feature = "blocking-client")]
         use crate::transport::client::blocking_io;
-        use crate::{fetch::RefMap, ls_refs::RefPrefixes, Handshake};
+        use crate::{Handshake, fetch::RefMap, ls_refs::RefPrefixes};
         use gix_features::progress::Progress;
         use std::borrow::Cow;
 
@@ -178,7 +178,9 @@ mod error {
         InvalidCredentials { url: BString, source: std::io::Error },
         #[error(transparent)]
         Transport(#[from] client::Error),
-        #[error("The transport didn't accept the advertised server version {actual_version:?} and closed the connection client side")]
+        #[error(
+            "The transport didn't accept the advertised server version {actual_version:?} and closed the connection client side"
+        )]
         TransportProtocolPolicyViolation { actual_version: gix_transport::Protocol },
         #[error(transparent)]
         ParseRefs(#[from] refs::parse::Error),

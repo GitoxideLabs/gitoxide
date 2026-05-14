@@ -14,11 +14,7 @@ pub(super) fn find_lcs(before: &[Token], after: &[Token], histogram: &mut Histog
         found_cs: false,
     };
     search.run(before, after, histogram);
-    if search.success() {
-        Some(search.lcs)
-    } else {
-        None
-    }
+    if search.success() { Some(search.lcs) } else { None }
 }
 
 /// Represents a longest common subsequence found by the histogram algorithm.

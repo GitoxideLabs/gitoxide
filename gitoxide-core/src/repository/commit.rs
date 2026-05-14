@@ -4,7 +4,7 @@ use std::{
     process::Stdio,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use gix::{
     bstr::{BStr, BString},
     objs::commit::SIGNATURE_FIELD_NAME,

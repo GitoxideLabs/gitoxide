@@ -1,4 +1,4 @@
-#![deny(unsafe_code, rust_2018_idioms)]
+#![deny(unsafe_code)]
 
 #[cfg(feature = "pretty-cli")]
 fn main() -> anyhow::Result<()> {

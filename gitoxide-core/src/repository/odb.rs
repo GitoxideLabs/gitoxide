@@ -73,7 +73,7 @@ pub fn statistics(
     }: statistics::Options,
 ) -> anyhow::Result<()> {
     use bytesize::ByteSize;
-    use gix::odb::{find, HeaderExt};
+    use gix::odb::{HeaderExt, find};
 
     if format == OutputFormat::Human {
         writeln!(err, "Only JSON is implemented - using that instead")?;

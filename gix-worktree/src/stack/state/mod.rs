@@ -1,7 +1,7 @@
 use bstr::{BString, ByteSlice};
 use gix_glob::pattern::Case;
 
-use crate::{stack::State, PathIdMapping};
+use crate::{PathIdMapping, stack::State};
 
 #[cfg(feature = "attributes")]
 type AttributeMatchGroup = gix_attributes::Search;

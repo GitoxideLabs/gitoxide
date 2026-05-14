@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use bstr::BStr;
 use gix_config::{
-    color,
-    file::{init, Metadata},
-    integer, path, Boolean, Color, File, Integer,
+    Boolean, Color, File, Integer, color,
+    file::{Metadata, init},
+    integer, path,
 };
 
 use crate::file::cow_str;

@@ -4,7 +4,7 @@ use std::{
 };
 
 use bstr::BStr;
-use gix_fs::{stack::ToNormalPathComponents, Stack};
+use gix_fs::{Stack, stack::ToNormalPathComponents};
 
 use crate::SymlinkCheck;
 

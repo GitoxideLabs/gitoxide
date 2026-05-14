@@ -1,11 +1,11 @@
 use std::sync::atomic::AtomicBool;
 
 use crate::{
+    Repository,
     bstr::{BStr, BString},
     config, dirwalk, is_dir_to_mode,
     util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
-    Repository,
 };
 
 impl Repository {

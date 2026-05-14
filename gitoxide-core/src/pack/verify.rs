@@ -1,11 +1,10 @@
 use std::{ffi::OsStr, io, path::Path, str::FromStr, sync::atomic::AtomicBool};
 
-use anyhow::{anyhow, Context as AnyhowContext, Result};
+use anyhow::{Context as AnyhowContext, Result, anyhow};
 use bytesize::ByteSize;
 use gix::{
-    object, odb,
+    NestedProgress, object, odb,
     odb::{pack, pack::index},
-    NestedProgress,
 };
 pub use index::verify::Mode;
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=2;
@@ -148,8 +147,8 @@ where
                         verify_mode: mode,
                         traversal: algorithm.into(),
                         make_pack_lookup_cache: cache,
-                        thread_limit
-                    }
+                        thread_limit,
+                    },
                 }),
                 &mut progress,
                 should_interrupt,
@@ -157,35 +156,46 @@ where
             .map(|o| (o.actual_index_checksum, o.pack_traverse_statistics))
             .with_context(|| "Verification failure")?
         }
-        "" => {
-            match path.file_name() {
-                Some(file_name) if file_name == "multi-pack-index" => {
-                    let multi_index = gix::odb::pack::multi_index::File::at(path, None)?;
-                    let res = multi_index.verify_integrity(&mut progress, should_interrupt, gix::odb::pack::index::verify::integrity::Options{
+        "" => match path.file_name() {
+            Some(file_name) if file_name == "multi-pack-index" => {
+                let multi_index = gix::odb::pack::multi_index::File::at(path, None)?;
+                let res = multi_index.verify_integrity(
+                    &mut progress,
+                    should_interrupt,
+                    gix::odb::pack::index::verify::integrity::Options {
                         verify_mode: mode,
                         traversal: algorithm.into(),
                         thread_limit,
-                        make_pack_lookup_cache: cache
-                    })?;
-                    match output_statistics {
-                        Some(OutputFormat::Human) => {
-                            for (index_name, stats) in multi_index.index_names().iter().zip(res.pack_traverse_statistics) {
-                                writeln!(out, "{}", index_name.display()).ok();
-                                drop(print_statistics(&mut out, &stats));
-                            }
-                        },
-                        #[cfg(feature = "serde")]
-                        Some(OutputFormat::Json) => serde_json::to_writer_pretty(out, &multi_index.index_names().iter().zip(res.pack_traverse_statistics).collect::<Vec<_>>())?,
-                        _ => {}
+                        make_pack_lookup_cache: cache,
+                    },
+                )?;
+                match output_statistics {
+                    Some(OutputFormat::Human) => {
+                        for (index_name, stats) in multi_index.index_names().iter().zip(res.pack_traverse_statistics) {
+                            writeln!(out, "{}", index_name.display()).ok();
+                            drop(print_statistics(&mut out, &stats));
+                        }
                     }
-                    return Ok(())
-                },
-                _ => return Err(anyhow!(
-                        "Cannot determine data type on path without extension '{}', expecting default extensions 'idx' and 'pack'",
-                        path.display()
-                    ))
+                    #[cfg(feature = "serde")]
+                    Some(OutputFormat::Json) => serde_json::to_writer_pretty(
+                        out,
+                        &multi_index
+                            .index_names()
+                            .iter()
+                            .zip(res.pack_traverse_statistics)
+                            .collect::<Vec<_>>(),
+                    )?,
+                    _ => {}
+                }
+                return Ok(());
             }
-        }
+            _ => {
+                return Err(anyhow!(
+                    "Cannot determine data type on path without extension '{}', expecting default extensions 'idx' and 'pack'",
+                    path.display()
+                ));
+            }
+        },
         ext => return Err(anyhow!("Unknown extension {ext:?}, expecting 'idx' or 'pack'")),
     };
     if let Some(stats) = res.1.as_ref() {

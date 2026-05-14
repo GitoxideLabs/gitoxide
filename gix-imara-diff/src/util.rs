@@ -1,8 +1,8 @@
 // Modified for gitoxide from the upstream imara-diff crate.
 // Upstream source: git cat-file -p 32d1e45d3df061e6ccba6db7fdce92db29e345d8:src/util.rs
 
-use crate::intern::Token;
 use crate::Hunk;
+use crate::intern::Token;
 
 /// Computes the number of common tokens at the start of two sequences.
 pub fn common_prefix(file1: &[Token], file2: &[Token]) -> u32 {

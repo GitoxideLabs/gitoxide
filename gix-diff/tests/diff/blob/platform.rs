@@ -1,7 +1,6 @@
 use gix_diff::blob::{
-    pipeline, platform,
+    Algorithm, Platform, ResourceKind, pipeline, platform,
     platform::{prepare_diff, prepare_diff::Operation},
-    Algorithm, Platform, ResourceKind,
 };
 use gix_object::{
     bstr::{BString, ByteSlice},
@@ -48,7 +47,11 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
     assert_eq!(new.data.as_slice().expect("present").as_bstr(), a_content);
     assert_eq!(new.driver_index, Some(0));
     assert_eq!(new.mode, EntryKind::BlobExecutable);
-    assert_eq!(new.id, hex_to_id("4c469b6c8c4486fdc9ded9d597d8f6816a455707"));
+    let new_id = hex_to_id(
+        "4c469b6c8c4486fdc9ded9d597d8f6816a455707",
+        "061557fb6e67e1be5d41f8e83962699fce2a7d168ccfb2b5743d27ab06038da8",
+    );
+    assert_eq!(new.id, new_id);
     assert_eq!(new.rela_path, "a", "location is kept directly as provided");
 
     let out = platform.prepare_diff()?;
@@ -70,7 +73,14 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
             2,
             3
         )),
-        format!("{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> 4c469b6c8c4486fdc9ded9d597d8f6816a455707 100755", if !cfg!(windows) { "GIT_DIFF_PATH_COUNTER=3 GIT_DIFF_PATH_TOTAL=3 GIT_DIR=. " } else { Default::default() }),
+        format!(
+            "{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 100755",
+            if !cfg!(windows) {
+                "GIT_DIFF_PATH_COUNTER=3 GIT_DIFF_PATH_TOTAL=3 GIT_DIR=. "
+            } else {
+                ""
+            }
+        ),
         "in this case, there is no rename-to field as last argument, it's based on the resource paths being different"
     );
 
@@ -95,7 +105,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
         a_content,
         "despite the same content"
     );
-    assert_eq!(new.id, hex_to_id("4c469b6c8c4486fdc9ded9d597d8f6816a455707"));
+    assert_eq!(new.id, new_id);
     assert_eq!(new.rela_path, "a");
 
     let out = platform.prepare_diff()?;
@@ -117,7 +127,14 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
             0,
             1
         )),
-        format!("{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> 4c469b6c8c4486fdc9ded9d597d8f6816a455707 120000", if !cfg!(windows) { r#"GIT_DIFF_PATH_COUNTER=1 GIT_DIFF_PATH_TOTAL=1 GIT_DIR=. "# } else { Default::default() }),
+        format!(
+            "{}test a <tmp-path> 0000000000000000000000000000000000000000 100644 <tmp-path> {new_id} 120000",
+            if !cfg!(windows) {
+                r#"GIT_DIFF_PATH_COUNTER=1 GIT_DIFF_PATH_TOTAL=1 GIT_DIR=. "#
+            } else {
+                ""
+            }
+        ),
         "Also obvious that symlinks are definitely special, but it's what git does as well"
     );
 
@@ -374,7 +391,7 @@ fn new_platform(
     drivers: impl IntoIterator<Item = gix_diff::blob::Driver>,
     mode: gix_diff::blob::pipeline::Mode,
 ) -> Platform {
-    let root = gix_testtools::scripted_fixture_read_only_standalone("make_blob_repo.sh").expect("valid fixture");
+    let root = crate::scripted_fixture_read_only("make_blob_repo.sh").expect("valid fixture");
     let attributes = gix_worktree::Stack::new(
         &root,
         gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(

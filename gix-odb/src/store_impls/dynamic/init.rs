@@ -3,8 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use arc_swap::ArcSwap;
 
 use crate::{
-    store::types::{MutableIndexAndPack, SlotMapIndex},
     Store,
+    store::types::{MutableIndexAndPack, SlotMapIndex},
 };
 
 /// Options for use in [`Store::at_opts()`].

@@ -1,4 +1,4 @@
-use crate::{bstr::BStr, revision::Spec, Repository};
+use crate::{Repository, bstr::BStr, revision::Spec};
 use gix_error::Exn;
 use gix_hash::ObjectId;
 

@@ -7,7 +7,7 @@ pub mod decode {
 /// Decode `data` as EWAH bitmap.
 pub fn decode(data: &[u8]) -> Result<(Vec, &[u8]), decode::Error> {
     use crate::decode;
-    use gix_error::{message, OptionExt};
+    use gix_error::{OptionExt, message};
 
     let (num_bits, data) = decode::u32(data).ok_or_raise(|| message("eof reading amount of bits").into())?;
     let (len, data) = decode::u32(data).ok_or_raise(|| message("eof reading chunk length").into())?;
@@ -54,11 +54,7 @@ mod access {
                     chunk.iter().enumerate().fold(
                         0u64,
                         |word, (idx, bit)| {
-                            if *bit {
-                                word | (1u64 << idx)
-                            } else {
-                                word
-                            }
+                            if *bit { word | (1u64 << idx) } else { word }
                         },
                     )
                 })

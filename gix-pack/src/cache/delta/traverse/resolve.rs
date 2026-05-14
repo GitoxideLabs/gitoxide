@@ -7,15 +7,15 @@ use gix_features::{progress::Progress, threading, zlib};
 
 use crate::{
     cache::delta::{
-        traverse::{util::ItemSliceSync, Context, Error},
         Item,
+        traverse::{Context, Error, util::ItemSliceSync},
     },
     data,
     data::EntryRange,
 };
 
 mod root {
-    use crate::cache::delta::{traverse::util::ItemSliceSync, Item};
+    use crate::cache::delta::{Item, traverse::util::ItemSliceSync};
 
     /// An item returned by `iter_root_chunks`, allowing access to the `data` stored alongside nodes in a [`Tree`].
     pub(crate) struct Node<'a, T: Send> {

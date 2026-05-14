@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{gitoxide, keys, Key, Section, User},
+    config::tree::{Key, Section, User, gitoxide, keys},
 };
 
 impl User {

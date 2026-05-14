@@ -1,4 +1,4 @@
-use gix_config::{lookup, File};
+use gix_config::{File, lookup};
 
 #[test]
 fn single_section() -> crate::Result {

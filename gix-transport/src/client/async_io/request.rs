@@ -8,8 +8,8 @@ use futures_io::AsyncWrite;
 use pin_project_lite::pin_project;
 
 use crate::{
-    client::{async_io::ExtendedBufRead, MessageKind, WriteMode},
-    packetline::async_io::{encode, Writer},
+    client::{MessageKind, WriteMode, async_io::ExtendedBufRead},
+    packetline::async_io::{Writer, encode},
 };
 
 pin_project! {

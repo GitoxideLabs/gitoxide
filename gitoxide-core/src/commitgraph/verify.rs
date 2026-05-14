@@ -24,7 +24,7 @@ pub(crate) mod function {
 
     use crate::OutputFormat;
     use anyhow::Result;
-    use gix::commitgraph::{verify::Outcome, Graph};
+    use gix::commitgraph::{Graph, verify::Outcome};
 
     pub fn verify<W1, W2>(
         path: impl AsRef<Path>,

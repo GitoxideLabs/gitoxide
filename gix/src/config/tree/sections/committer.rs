@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{gitoxide, keys, Committer, Key, Section},
+    config::tree::{Committer, Key, Section, gitoxide, keys},
 };
 
 impl Committer {

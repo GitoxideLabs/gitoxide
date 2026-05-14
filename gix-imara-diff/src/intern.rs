@@ -4,8 +4,8 @@
 use std::hash::{BuildHasher as _, Hash};
 use std::ops::Index;
 
-use hashbrown::hash_table::{Entry, HashTable};
 use hashbrown::DefaultHashBuilder as RandomState;
+use hashbrown::hash_table::{Entry, HashTable};
 
 /// A token represented as an interned integer.
 ///

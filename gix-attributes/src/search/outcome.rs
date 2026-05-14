@@ -3,11 +3,11 @@ use gix_glob::Pattern;
 use kstring::{KString, KStringRef};
 
 use crate::{
-    search::{
-        refmap::RefMapKey, Assignments, AttributeId, Attributes, MatchKind, Metadata, MetadataCollection, Outcome,
-        TrackedAssignment, Value,
-    },
     AssignmentRef, NameRef, StateRef,
+    search::{
+        Assignments, AttributeId, Attributes, MatchKind, Metadata, MetadataCollection, Outcome, TrackedAssignment,
+        Value, refmap::RefMapKey,
+    },
 };
 
 /// Initialization

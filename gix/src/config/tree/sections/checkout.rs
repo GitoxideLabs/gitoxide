@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Checkout, Key, Section},
+    config::tree::{Checkout, Key, Section, keys},
 };
 
 impl Checkout {

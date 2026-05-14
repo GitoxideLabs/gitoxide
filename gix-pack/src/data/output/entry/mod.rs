@@ -45,7 +45,7 @@ impl output::Entry {
     /// An object which can be identified as invalid easily which happens if objects didn't exist even if they were referred to.
     pub fn invalid() -> output::Entry {
         output::Entry {
-            id: gix_hash::Kind::Sha1.null(), // NOTE: the actual object hash used in the repo doesn't matter here, this is a sentinel value.
+            id: gix_hash::Kind::shortest().null(), // NOTE: the actual object hash used in the repo doesn't matter here, this is a sentinel value.
             kind: Kind::Base(gix_object::Kind::Blob),
             decompressed_size: 0,
             compressed_data: vec![],

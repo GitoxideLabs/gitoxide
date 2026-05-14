@@ -5,10 +5,12 @@ name = "gitoxide"
 description = "A command-line application for interacting with git repositories"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 version = "0.53.0"
-rust-version = "1.82"
+# Rust 1.85 is required so hash-related dependencies can use Rust 2024 crates,
+# notably `sha2` 0.11 and `hashbrown` 0.17.
+rust-version = "1.85"
 default-run = "gix"
 include = ["/src/**/*", "/build.rs", "/LICENSE-*", "/README.md"]
 resolver = "2"
@@ -90,9 +92,11 @@ lean-async = ["hashes", "fast", "tracing", "pretty-cli", "gitoxide-core-tools", 
 #! Typical combinations of features of our dependencies, some of which are referred to in the `gitoxide` crate's code for conditional compilation.
 
 ## Provide support for all known hashes. If this isn't enabled, select an individual hash algorithms.
-hashes = ["sha1"]
+hashes = ["sha1", "sha256"]
 ## Enable support for the SHA-1 hash throughout the `gix` crate.
 sha1 = ["gix/sha1"]
+## Enable support for the SHA-256 hash throughout the `gix` crate.
+sha256 = ["gix/sha256"]
 
 ## Makes the crate execute as fast as possible by supporting parallel computation of otherwise long-running functions.
 ## If disabled, the binary will be visibly smaller.
@@ -296,16 +300,6 @@ members = [
     "gix-fsck",
     "tests/tools",
     "tests/it",
-    "gix-diff/tests",
-    "gix-pack/tests",
-    "gix-odb/tests",
-    "gix-worktree-state/tests",
-    "gix-status/tests",
-    "gix-worktree/tests",
-    "gix-index/tests",
-    "gix-ref/tests",
-    "gix-config/tests",
-    "gix-traverse/tests",
     "gix-shallow"
 ]
 
@@ -333,6 +327,18 @@ bin-dir = "gitoxide-max-pure-v{ version }-{ target }/{ bin }{ binary-ext }"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
+
+## Maybe one day we can enable these, unwrap and expect shouldn't be needed.
+# unwrap_used      = "warn"
+# expect_used      = "warn"
+# panic            = "warn"
+## This is a tough one - parsers are relying on it, but they check bounds before.
+## Those can probably be rewritten to do the bounds-check via `get` and avoid len comparisons.
+# indexing_slicing = "warn"
+## This is about overflow/underflow and securing against this particularly with untrusted input.
+## Very noisy and needs special care, probably better to focus on fuzzers instead to not pre-empt complexity.
+# arithmetic_side_effects = "warn"
+
 #
 # Reviewed and allowed lints
 needless_continue = "allow"

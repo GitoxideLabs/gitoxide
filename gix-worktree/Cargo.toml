@@ -7,10 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project for shared worktree related types and utilities."
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [lib]
 doctest = false
@@ -19,14 +18,18 @@ doctest = false
 default = ["attributes"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## Instantiate stacks that can access `.gitattributes` information.
 attributes = ["dep:gix-attributes", "dep:gix-validate"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "bstr/serde", "gix-index/serde", "gix-hash/serde", "gix-object/serde", "gix-attributes?/serde", "gix-ignore/serde"]
+## Enable thread-safety.
+parallel = ["gix-features/parallel"]
 
 [dependencies]
 gix-index = { version = "^0.51.0", path = "../gix-index" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-hash = { version = "^0.25.0", path = "../gix-hash" }
 gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-glob = { version = "^0.26.0", path = "../gix-glob" }
@@ -34,6 +37,7 @@ gix-path = { version = "^0.12.0", path = "../gix-path" }
 gix-attributes = { version = "^0.33.0", path = "../gix-attributes", optional = true }
 gix-validate = { version = "^0.11.1", path = "../gix-validate", optional = true }
 gix-ignore = { version = "^0.21.0", path = "../gix-ignore" }
+gix-features = { version = "^0.48.0", path = "../gix-features", optional = true }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 bstr = { version = "1.12.0", default-features = false }
@@ -42,6 +46,16 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-odb = { path = "../gix-odb" }
+gix-discover = { path = "../gix-discover" }
+symlink = "0.1.0"
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Forwarding-only dependency for test feature parity after dissolving gix-worktree-tests.
+    "gix-features",
+]

@@ -147,9 +147,10 @@ mod branch_remote {
             "refs/heads/not_a_valid_merge_ref",
             "short names are simply turned into branch names - this doesn't always work, but sometimes."
         );
-        assert!(repo
-            .branch_remote_ref_name("refs/heads/missing".try_into()?, remote::Direction::Fetch)
-            .is_none());
+        assert!(
+            repo.branch_remote_ref_name("refs/heads/missing".try_into()?, remote::Direction::Fetch)
+                .is_none()
+        );
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
                 repo.branch_remote_name("broken", direction).expect("is set").as_bstr(),
@@ -226,7 +227,8 @@ mod branch_remote {
         }
 
         assert!(
-            repo.branch_remote_tracking_ref_name("refs/heads/broken".try_into()?, remote::Direction::Push).is_none(),
+            repo.branch_remote_tracking_ref_name("refs/heads/broken".try_into()?, remote::Direction::Push)
+                .is_none(),
             "push.default = simple, hence we need to verify the merge-branch is the same as us, and retrieving it succeeds due to auto-fullnamification but then it doesn't match",
         );
 
@@ -362,7 +364,8 @@ mod branch_remote {
 
         repo.config_snapshot_mut().set_value(&Push::DEFAULT, "simple")?;
         assert_eq!(
-            repo.branch_remote_ref_name("refs/heads/main".try_into()?, remote::Direction::Push).transpose()?,
+            repo.branch_remote_ref_name("refs/heads/main".try_into()?, remote::Direction::Push)
+                .transpose()?,
             None,
             "simple requires that the upstream matches the current branch, which isn't the case as `branch.main.merge` points to 'other'"
         );

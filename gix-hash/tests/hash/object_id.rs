@@ -17,7 +17,7 @@ mod from_hex {
     }
 
     mod invalid {
-        use gix_hash::{decode, ObjectId};
+        use gix_hash::{ObjectId, decode};
 
         #[test]
         fn non_hex_characters() {
@@ -62,7 +62,7 @@ fn from_bytes_or_panic_sha256() {
 mod sha1 {
     use std::str::FromStr as _;
 
-    use gix_hash::{hasher, Kind, ObjectId};
+    use gix_hash::{Kind, ObjectId, hasher};
 
     fn hash_contents(s: &[u8]) -> Result<ObjectId, hasher::Error> {
         let mut hasher = hasher(Kind::Sha1);
@@ -139,7 +139,7 @@ mod sha1 {
 
 #[cfg(feature = "sha256")]
 mod sha256 {
-    use gix_hash::{hasher, Kind, ObjectId};
+    use gix_hash::{Kind, ObjectId, hasher};
 
     fn hash_contents(s: &[u8]) -> Result<ObjectId, hasher::Error> {
         let mut hasher = hasher(Kind::Sha256);

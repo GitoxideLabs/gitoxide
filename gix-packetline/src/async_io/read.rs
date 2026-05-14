@@ -9,9 +9,8 @@ use futures_lite::AsyncReadExt;
 
 pub use super::sidebands::WithSidebands;
 use crate::{
-    decode,
+    MAX_LINE_LEN, PacketLineRef, U16_HEX_BYTES, decode,
     read::{ExhaustiveOutcome, ProgressAction, StreamingPeekableIterState},
-    PacketLineRef, MAX_LINE_LEN, U16_HEX_BYTES,
 };
 
 /// Read pack lines one after another, without consuming more than needed from the underlying

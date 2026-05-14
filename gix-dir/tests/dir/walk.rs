@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, sync::atomic::AtomicBool};
 
 use gix_dir::{
-    entry,
+    EntryRef, entry,
     entry::{Kind::*, PathspecMatch::*, Property::*, Status::*},
     walk,
     walk::{
@@ -9,15 +9,14 @@ use gix_dir::{
         EmissionMode::*,
         ForDeletionMode,
     },
-    EntryRef,
 };
 use gix_ignore::Kind::*;
 use pretty_assertions::assert_eq;
 
 use crate::walk_utils::{
-    collect, collect_filtered, collect_filtered_with_cwd, entry, entry_dirstat, entry_nokind, entry_nomatch, entryps,
-    entryps_dirstat, fixture, fixture_in, options, options_emit_all, try_collect, try_collect_filtered_opts,
-    try_collect_filtered_opts_collect, try_collect_filtered_opts_collect_with_root, EntryExt, Options,
+    EntryExt, Options, collect, collect_filtered, collect_filtered_with_cwd, entry, entry_dirstat, entry_nokind,
+    entry_nomatch, entryps, entryps_dirstat, fixture, fixture_in, options, options_emit_all, try_collect,
+    try_collect_filtered_opts, try_collect_filtered_opts_collect, try_collect_filtered_opts_collect_with_root,
 };
 
 #[test]
@@ -590,9 +589,7 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
     );
     assert_eq!(
         entries,
-        [
-            entryps("ignored/b", Ignored(Expendable), File, Prefix),
-        ],
+        [entryps("ignored/b", Ignored(Expendable), File, Prefix),],
         "the traversal starts from the top, but we automatically prevent the 'd' directory from being deleted by stopping its collapse."
     );
 
@@ -1142,7 +1139,8 @@ fn only_untracked_explicit_pathspec_selection() -> crate::Result {
         [
             entryps("d/a", Untracked, File, Verbatim),
             entry_nokind("d/b", Pruned),
-            entryps("d/d/a", Untracked, File, Verbatim)],
+            entryps("d/d/a", Untracked, File, Verbatim)
+        ],
         "we actually want to mention the entries that matched the pathspec precisely, so two of them would be needed here \
         while preventing the directory collapse from happening"
     );
@@ -2440,7 +2438,13 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             entryps("d/d", Untracked, Directory, WildcardMatch),
             entryps_dirstat("d/d/a.o", Ignored(Expendable), File, WildcardMatch, Untracked),
             entryps_dirstat("d/d/b.o", Ignored(Expendable), File, WildcardMatch, Untracked),
-            entryps_dirstat("d/d/generated", Ignored(Expendable), Directory, WildcardMatch, Untracked),
+            entryps_dirstat(
+                "d/d/generated",
+                Ignored(Expendable),
+                Directory,
+                WildcardMatch,
+                Untracked
+            ),
         ],
         "everything is filtered down to the pathspec, otherwise it's like before. Not how all-matching  'generated' collapses, \
         but also how 'd/d' collapses as our current working directory the worktree"

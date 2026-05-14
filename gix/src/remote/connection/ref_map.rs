@@ -6,7 +6,7 @@ use gix_transport::client::blocking_io::Transport;
 
 use crate::{
     bstr::BString,
-    remote::{fetch, Connection, Direction},
+    remote::{Connection, Direction, fetch},
 };
 
 /// The error returned by [`Connection::ref_map()`].

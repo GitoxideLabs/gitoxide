@@ -52,7 +52,7 @@ pub(crate) mod function {
                 return Err(Error::Unmappable {
                     worktree_encoding: worktree_encoding.name(),
                     character: c,
-                })
+                });
             }
         }
         Ok(())

@@ -3,7 +3,7 @@ use std::path::Path;
 use gix_diff::Rewrites;
 use gix_merge::{
     commit::Options,
-    tree::{apply_index_entries::RemovalMode, treat_as_unresolved, TreatAsUnresolved},
+    tree::{TreatAsUnresolved, apply_index_entries::RemovalMode, treat_as_unresolved},
 };
 use gix_object::Write;
 use gix_worktree::stack::state::attributes;

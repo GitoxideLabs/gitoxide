@@ -1,8 +1,8 @@
 use bstr::ByteSlice;
 use gix_filter::{eol, eol::AutoCrlf};
 use gix_merge::blob::{
-    pipeline::{self, Mode, WorktreeRoots},
     Pipeline, ResourceKind,
+    pipeline::{self, Mode, WorktreeRoots},
 };
 use gix_object::tree::EntryKind;
 

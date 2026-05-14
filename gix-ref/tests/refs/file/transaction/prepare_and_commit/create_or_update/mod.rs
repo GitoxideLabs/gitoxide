@@ -5,22 +5,21 @@ use gix_hash::ObjectId;
 use gix_lock::acquire::Fail;
 use gix_object::bstr::{BString, ByteSlice};
 use gix_ref::{
+    Target,
     file::{
-        transaction::{self, PackedRefs},
         ReferenceExt,
+        transaction::{self, PackedRefs},
     },
     store::WriteReflog,
     transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
-    Target,
 };
 
 use crate::{
     file::{
-        store_with_packed_refs, store_writable,
+        EmptyCommit, store_with_packed_refs, store_writable,
         transaction::prepare_and_commit::{
             committer, create_at, create_symbolic_at, delete_at, empty_store, log_line, reflog_lines,
         },
-        EmptyCommit,
     },
     hex_to_id,
 };
@@ -51,7 +50,10 @@ fn intermediate_directories_are_removed_on_rollback() -> crate::Result {
         }
 
         assert!(!dir.path().join("refs/heads").exists());
-        assert!(!dir.path().join("refs").exists(), "we go all in right now and also remove the refs directory. 'git' might not do that, but it's not a problem either");
+        assert!(
+            !dir.path().join("refs").exists(),
+            "we go all in right now and also remove the refs directory. 'git' might not do that, but it's not a problem either"
+        );
     }
     Ok(())
 }
@@ -203,8 +205,8 @@ fn the_existing_must_match_constraint_allow_non_existing_references_to_be_create
 }
 
 #[test]
-fn the_existing_must_match_constraint_requires_existing_references_to_have_the_given_value_to_cause_failure_on_mismatch(
-) -> crate::Result {
+fn the_existing_must_match_constraint_requires_existing_references_to_have_the_given_value_to_cause_failure_on_mismatch()
+-> crate::Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -317,8 +319,8 @@ fn reference_with_must_exist_constraint_must_exist_already_with_any_value() -> c
 }
 
 #[test]
-fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one(
-) -> crate::Result {
+fn reference_with_must_not_exist_constraint_may_exist_already_if_the_new_value_matches_the_existing_one()
+-> crate::Result {
     let (_keep, store) = store_writable("make_repo_for_reflog.sh")?;
     let head = store.try_find_loose("HEAD")?.expect("head exists already");
     let target = head.target;
@@ -746,10 +748,10 @@ fn packed_refs_are_looked_up_when_checking_existing_values() -> crate::Result {
 
     let packed = store.open_packed_buffer().unwrap().expect("packed refs is available");
     assert_eq!(
-            packed.find("main")?.target(),
-            old_id,
-            "packed refs aren't rewritten, the change goes into the loose ref instead which shadows packed refs of same name"
-        );
+        packed.find("main")?.target(),
+        old_id,
+        "packed refs aren't rewritten, the change goes into the loose ref instead which shadows packed refs of same name"
+    );
     assert_eq!(
         store.find_loose("main")?.target.try_id(),
         Some(new_id.as_ref()),
@@ -852,10 +854,10 @@ fn packed_refs_creation_with_packed_refs_mode_leave_keeps_original_loose_refs() 
         .prepare(edits, Fail::Immediately, Fail::Immediately)?
         .commit(committer().to_ref(&mut TimeBuf::default()))?;
     assert_eq!(
-            edits.len(),
-            2,
-            "it claims to have performed all desired operations, even though some don't make it into the pack as 'side-car'"
-        );
+        edits.len(),
+        2,
+        "it claims to have performed all desired operations, even though some don't make it into the pack as 'side-car'"
+    );
 
     assert_eq!(
         store.loose_iter()?.filter_map(Result::ok).count(),

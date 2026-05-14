@@ -3,10 +3,10 @@ use std::{cmp::Ordering, collections::HashMap};
 use bstr::BStr;
 
 use crate::{
+    File,
     file::{self, SectionBodyIdsLut, SectionId},
     lookup,
     parse::section,
-    File,
 };
 
 /// Private helper functions

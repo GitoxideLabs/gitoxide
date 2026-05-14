@@ -88,10 +88,6 @@ mod init {
     }
 
     fn packed_refs_mmap_threshold() -> u64 {
-        if cfg!(windows) {
-            u64::MAX
-        } else {
-            32 * 1024
-        }
+        if cfg!(windows) { u64::MAX } else { 32 * 1024 }
     }
 }

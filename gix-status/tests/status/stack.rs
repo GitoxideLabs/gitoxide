@@ -4,7 +4,7 @@ fn stack() -> gix_status::SymlinkCheck {
 
 fn stack_in(dir: &str) -> gix_status::SymlinkCheck {
     gix_status::SymlinkCheck::new(
-        gix_testtools::scripted_fixture_read_only_standalone("symlink_stack.sh")
+        crate::scripted_fixture_read_only("symlink_stack.sh")
             .expect("valid script")
             .join(dir),
     )

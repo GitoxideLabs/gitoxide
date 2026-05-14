@@ -46,8 +46,8 @@ pub(crate) mod function {
     #[cfg(feature = "blocking-client")]
     use crate::transport::client::blocking_io::{self, TransportV2Ext as _};
     use crate::{
-        handshake::{refs::from_v2_refs, Ref},
         Command,
+        handshake::{Ref, refs::from_v2_refs},
     };
 
     /// [`RefPrefixes`] are the set of prefixes that are sent to the server for

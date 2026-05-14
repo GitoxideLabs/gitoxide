@@ -1,8 +1,8 @@
 use crate::hex_to_id;
 use crate::util::{commit_graph, fixture, fixture_odb};
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 use gix_object::bstr::ByteSlice;
-use gix_traverse::commit::{topo, Parents};
+use gix_traverse::commit::{Parents, topo};
 use std::path::PathBuf;
 
 fn odb() -> crate::Result<gix_odb::Handle> {

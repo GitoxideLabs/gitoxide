@@ -1,8 +1,8 @@
 #[test]
-#[cfg(feature = "gix-features-parallel")]
+#[cfg(feature = "parallel")]
 fn is_send_and_sync() {
     pub fn store_at(name: &str) -> crate::Result<gix_ref::file::Store> {
-        let path = gix_testtools::scripted_fixture_read_only_standalone(name)?;
+        let path = crate::scripted_fixture_read_only(name)?;
         Ok(gix_ref::file::Store::at(
             path.join(".git"),
             gix_ref::store::init::Options {

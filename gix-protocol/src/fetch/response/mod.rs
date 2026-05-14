@@ -1,5 +1,5 @@
 use bstr::BString;
-use gix_transport::{client, Protocol};
+use gix_transport::{Protocol, client};
 
 use crate::{command::Feature, fetch::Response};
 

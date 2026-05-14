@@ -1,10 +1,10 @@
-use gix_object::{bstr::ByteSlice, tree, tree::EntryRef, Tree, TreeRef, TreeRefIter, WriteTo};
+use gix_object::{Tree, TreeRef, TreeRefIter, WriteTo, bstr::ByteSlice, tree, tree::EntryRef};
 
 use crate::{fixture_oid, tree_fixture};
 
 #[test]
 fn empty() -> crate::Result {
-    let tree_ref = TreeRef::from_bytes(&[], gix_testtools::hash_kind_from_env().unwrap_or_default())?;
+    let tree_ref = TreeRef::from_bytes(&[], gix_testtools::object_hash())?;
     assert_eq!(
         tree_ref,
         TreeRef { entries: vec![] },
@@ -79,7 +79,7 @@ fn invalid() {
 #[test]
 fn fuzzed() {
     assert!(
-        gix_object::TreeRef::from_bytes(b"2", gix_testtools::hash_kind_from_env().unwrap_or_default()).is_err(),
+        gix_object::TreeRef::from_bytes(b"2", gix_testtools::object_hash()).is_err(),
         "fail, but don't crash"
     );
 }

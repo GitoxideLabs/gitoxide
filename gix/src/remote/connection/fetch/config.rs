@@ -1,7 +1,7 @@
 use super::Error;
 use crate::{
-    config::{cache::util::ApplyLeniency, tree::Pack},
     Repository,
+    config::{cache::util::ApplyLeniency, tree::Pack},
 };
 
 pub fn index_threads(repo: &Repository) -> Result<Option<usize>, Error> {

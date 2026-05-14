@@ -1,6 +1,6 @@
 use gix_refspec::RefSpec;
 
-use crate::{bstr::BStr, remote, Remote};
+use crate::{Remote, bstr::BStr, remote};
 
 /// Access
 impl<'repo> Remote<'repo> {

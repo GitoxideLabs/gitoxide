@@ -1,7 +1,7 @@
 //! The implementation of creating an archive from a git tree, similar to `git archive`, but using an internal format.
 //!
 //! This crate can effectively be used to manipulate worktrees as streams of bytes, which can be decoded using the [`Stream`] type.
-#![deny(rust_2018_idioms, missing_docs, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 use std::{path::Path, sync::Arc};
 
@@ -123,13 +123,18 @@ impl Stream {
 
     /// Add the item at `path` as entry to this stream, which is expected to be under `root`.
     ///
-    /// Note that the created entries will always have a null SHA1, and that we access this path
+    /// Note that the created entries will always have a null hash, and that we access this path
     /// to determine its type, and will access it again when it is requested.
-    pub fn add_entry_from_path(&mut self, root: &Path, path: &Path) -> std::io::Result<&mut Self> {
+    pub fn add_entry_from_path(
+        &mut self,
+        root: &Path,
+        path: &Path,
+        object_hash: gix_hash::Kind,
+    ) -> std::io::Result<&mut Self> {
         let rela_path = path.strip_prefix(root).map_err(std::io::Error::other)?;
         let meta = path.symlink_metadata()?;
         let relative_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(rela_path)).into_owned();
-        let id = gix_hash::ObjectId::null(gix_hash::Kind::Sha1);
+        let id = object_hash.null();
 
         let entry = if meta.is_symlink() {
             let content = std::fs::read_link(path)?;

@@ -4,13 +4,13 @@ use std::io;
 #[cfg(feature = "progress-unit-bytes")]
 pub use bytesize;
 pub use prodash::{
-    self,
+    self, BoxedDynNestedProgress, Count, DynNestedProgress, DynNestedProgressToNestedProgress, NestedProgress,
+    Progress, Unit,
     messages::MessageLevel,
     progress::{
-        AtomicStep, Discard, DoOrDiscard, Either, Id, Step, StepShared, Task, ThroughputOnDrop, Value, UNKNOWN,
+        AtomicStep, Discard, DoOrDiscard, Either, Id, Step, StepShared, Task, ThroughputOnDrop, UNKNOWN, Value,
     },
-    unit, BoxedDynNestedProgress, Count, DynNestedProgress, DynNestedProgressToNestedProgress, NestedProgress,
-    Progress, Unit,
+    unit,
 };
 /// A stub for the portions of the `bytesize` crate that we use internally in `gitoxide`.
 #[cfg(not(feature = "progress-unit-bytes"))]

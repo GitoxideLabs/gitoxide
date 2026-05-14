@@ -1,6 +1,6 @@
 use std::{fmt::Write, hint::black_box};
 
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 
 struct BenchmarkTokenSource {
     number_of_lines: u32,

@@ -1,8 +1,8 @@
 use std::{ffi::OsStr, path::PathBuf};
 
 use clap::{
-    builder::{OsStringValueParser, TypedValueParser},
     Arg, Command, Error,
+    builder::{OsStringValueParser, TypedValueParser},
 };
 use gix::bstr::BString;
 

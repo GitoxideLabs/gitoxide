@@ -36,6 +36,14 @@ git init untracked-unborn
   touch untracked
 )
 
+git init added-unborn
+(cd added-unborn
+  echo content >added
+  mkdir dir
+  echo content >dir/nested
+  git add added dir/nested
+)
+
 git init untracked-added
 (cd untracked-added
   echo content >added

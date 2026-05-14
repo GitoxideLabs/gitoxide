@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    file::{init, init::Options, Metadata},
     File,
+    file::{Metadata, init, init::Options},
 };
 
 /// The error returned by [`File::from_paths_metadata()`] and [`File::from_path_no_includes()`].

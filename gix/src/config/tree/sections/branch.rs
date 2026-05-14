@@ -1,4 +1,4 @@
-use crate::config::tree::{keys, traits::SubSectionRequirement, Branch, Key, Section};
+use crate::config::tree::{Branch, Key, Section, keys, traits::SubSectionRequirement};
 
 const NAME_PARAMETER: Option<SubSectionRequirement> = Some(SubSectionRequirement::Parameter("name"));
 

@@ -1,5 +1,5 @@
 mod at_or_new {
-    use crate::index::Fixture::Generated;
+    use crate::Fixture::Generated;
 
     #[test]
     fn opens_existing() {
@@ -30,7 +30,7 @@ mod at_or_new {
 mod from_state {
     use gix_index::Version::{V2, V3};
 
-    use crate::index::Fixture::*;
+    use crate::Fixture::*;
 
     #[test]
     fn writes_data_to_disk_and_is_a_valid_index() -> gix_testtools::Result {

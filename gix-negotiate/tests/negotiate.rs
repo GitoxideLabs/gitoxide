@@ -1,4 +1,4 @@
-use gix_testtools::{size_ok, Result};
+use gix_testtools::{Result, size_ok};
 
 mod window_size {
     use gix_negotiate::window_size;

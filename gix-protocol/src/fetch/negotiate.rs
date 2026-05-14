@@ -11,7 +11,7 @@ use gix_date::SecondsSinceUnixEpoch;
 use gix_negotiate::Flags;
 use gix_ref::file::ReferenceExt;
 
-use crate::fetch::{refmap, RefMap, Shallow, Tags};
+use crate::fetch::{RefMap, Shallow, Tags, refmap};
 
 type Queue = gix_revwalk::PriorityQueue<SecondsSinceUnixEpoch, gix_hash::ObjectId>;
 
@@ -383,7 +383,7 @@ fn mark_all_refs_in_repo(
             .filter(|_| !is_complete)
         {
             queue.insert(commit.commit_time, id);
-        };
+        }
     }
     Ok(())
 }

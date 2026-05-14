@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
 
-use crate::parse::{error::ParseNode, section, Comment, Error, Event};
+use crate::parse::{Comment, Error, Event, error::ParseNode, section};
 
 type ParseResult<T> = Result<T, ()>;
 

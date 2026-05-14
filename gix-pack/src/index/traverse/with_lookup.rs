@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use gix_features::{
     parallel::{self, in_parallel_if},
     progress::{self, Count, DynNestedProgress, Progress},
-    threading::{lock, Mutable, OwnShared},
+    threading::{Mutable, OwnShared, lock},
     zlib,
 };
 

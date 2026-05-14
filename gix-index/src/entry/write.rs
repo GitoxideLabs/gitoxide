@@ -1,4 +1,4 @@
-use crate::{entry, Entry, State};
+use crate::{Entry, State, entry};
 
 impl Entry {
     /// Serialize ourselves to `out` with path access via `state`, without padding.

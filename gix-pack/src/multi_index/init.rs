@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::multi_index::{chunk, File, Version};
+use crate::multi_index::{File, Version, chunk};
 
 mod error {
     use crate::multi_index::chunk;
@@ -147,8 +147,7 @@ where
         let trailer = &data[checksum_offset..];
         if trailer.len() != object_hash.len_in_bytes() {
             return Err(Error::Corrupt {
-                message:
-                    "Trailing checksum didn't have the expected size or there were unknown bytes after the checksum.",
+                message: "Trailing checksum didn't have the expected size or there were unknown bytes after the checksum.",
             });
         }
 

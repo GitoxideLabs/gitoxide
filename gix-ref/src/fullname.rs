@@ -1,4 +1,4 @@
-use crate::{bstr::ByteVec, name::is_pseudo_ref, Category, FullName, FullNameRef, Namespace, PartialNameRef};
+use crate::{Category, FullName, FullNameRef, Namespace, PartialNameRef, bstr::ByteVec, name::is_pseudo_ref};
 use gix_object::bstr::{BStr, BString, ByteSlice};
 use std::{borrow::Borrow, path::Path};
 

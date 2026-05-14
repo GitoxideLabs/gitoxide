@@ -1,6 +1,6 @@
 use std::io;
 
-use crate::{blocking_io::encode, MAX_DATA_LEN, U16_HEX_BYTES};
+use crate::{MAX_DATA_LEN, U16_HEX_BYTES, blocking_io::encode};
 
 /// An implementor of [`Write`][io::Write] which passes all input to an inner `Write` in packet line data encoding,
 /// one line per `write(…)` call or as many lines as it takes if the data doesn't fit into the maximum allowed line length.

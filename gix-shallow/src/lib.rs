@@ -22,7 +22,7 @@
 //! assert_eq!(ids, vec![first, second]);
 //! # Ok(()) }
 //! ```
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 /// An instruction on how to

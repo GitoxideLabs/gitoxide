@@ -5,14 +5,15 @@
 mod locate {
     use gix_object::Find;
 
-    use crate::{hex_to_id, odb::db};
+    use crate::{db, hex_to_id};
 
     fn can_locate(db: &gix_odb::Handle, hex_id: &str) {
         let mut buf = vec![];
-        assert!(db
-            .try_find(&hex_to_id(hex_id), &mut buf)
-            .expect("no read error")
-            .is_some());
+        assert!(
+            db.try_find(&hex_to_id(hex_id), &mut buf)
+                .expect("no read error")
+                .is_some()
+        );
     }
 
     #[test]

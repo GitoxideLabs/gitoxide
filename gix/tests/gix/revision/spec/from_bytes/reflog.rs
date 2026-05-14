@@ -2,7 +2,7 @@ use gix::{prelude::ObjectIdExt, revision::Spec};
 
 use crate::{
     revision::spec::from_bytes::{parse_spec, parse_spec_no_baseline, repo},
-    util::hex_to_id,
+    util::hex_to_id_sha1_only,
 };
 
 #[test]
@@ -44,7 +44,7 @@ fn by_index() {
         let spec = parse_spec("@{0}", repo).unwrap();
         assert_eq!(
             spec,
-            Spec::from_id(hex_to_id("55e825ebe8fd2ff78cad3826afb696b96b576a7e").attach(repo))
+            Spec::from_id(hex_to_id_sha1_only("55e825ebe8fd2ff78cad3826afb696b96b576a7e").attach(repo))
         );
         assert_eq!(
             spec.first_reference().expect("set").name.as_bstr(),
@@ -58,7 +58,7 @@ fn by_index() {
         let spec = parse_spec("HEAD@{5}", repo).unwrap();
         assert_eq!(
             spec,
-            Spec::from_id(hex_to_id("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(repo))
+            Spec::from_id(hex_to_id_sha1_only("5b3f9e24965d0b28780b7ce5daf2b5b7f7e0459f").attach(repo))
         );
         assert_eq!(
             spec.first_reference().map(|r| r.name.to_string()),
@@ -85,6 +85,6 @@ fn by_date() {
 
     assert_eq!(
         spec,
-        Spec::from_id(hex_to_id("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
+        Spec::from_id(hex_to_id_sha1_only("9f9eac6bd1cd4b4cc6a494f044b28c985a22972b").attach(&repo))
     );
 }

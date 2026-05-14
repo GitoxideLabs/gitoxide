@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Key, Push, Section},
+    config::tree::{Key, Push, Section, keys},
 };
 
 impl Push {

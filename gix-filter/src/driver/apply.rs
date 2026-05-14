@@ -3,9 +3,8 @@ use std::collections::HashMap;
 use bstr::{BStr, BString};
 
 use crate::{
-    driver,
-    driver::{process, process::client::invoke, Operation, Process, State},
-    Driver,
+    Driver, driver,
+    driver::{Operation, Process, State, process, process::client::invoke},
 };
 
 /// What to do if delay is supported by a process filter.

@@ -174,8 +174,8 @@ impl Object {
 }
 
 use crate::{
-    decode::{loose_header, Error as DecodeError, LooseHeaderDecodeError},
     BlobRef, CommitRef, Kind, ObjectRef, TagRef, TreeRef,
+    decode::{Error as DecodeError, LooseHeaderDecodeError, loose_header},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -190,7 +190,7 @@ pub enum LooseDecodeError {
 }
 
 impl<'a> ObjectRef<'a> {
-    /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `hash_kind`.
+    /// Deserialize an object from a loose serialisation given `data`, parsing with the provided `object_hash`.
     pub fn from_loose(data: &'a [u8], hash_kind: gix_hash::Kind) -> Result<ObjectRef<'a>, LooseDecodeError> {
         let (kind, size, offset) = loose_header(data)?;
 
@@ -203,7 +203,7 @@ impl<'a> ObjectRef<'a> {
         Ok(Self::from_bytes(body, kind, hash_kind)?)
     }
 
-    /// Deserialize an object of `kind` from the given `data`, using `hash_kind`.
+    /// Deserialize an object of `kind` from the given `data`, using `object_hash`.
     pub fn from_bytes(
         data: &'a [u8],
         kind: Kind,

@@ -180,7 +180,7 @@ fn should_prune_common_line(token_status: &[Occurrences], pos: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_prune_common_line, Occurrences};
+    use super::{Occurrences, should_prune_common_line};
 
     #[test]
     fn common_line_pruning_ignores_distant_context() {

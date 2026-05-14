@@ -1,16 +1,17 @@
 use std::{
     io,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
-use crate::{net, pack::receive::protocol::fetch::negotiate, OutputFormat};
+use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
 #[cfg(feature = "async-client")]
 use gix::protocol::transport::client::async_io::connect;
 #[cfg(feature = "blocking-client")]
 use gix::protocol::transport::client::blocking_io::connect;
-use gix::{config::tree::Key, protocol::maybe_async, remote::fetch::Error, DynNestedProgress};
+use gix::{DynNestedProgress, config::tree::Key, protocol::maybe_async, remote::fetch::Error};
 pub use gix::{
+    NestedProgress, Progress,
     hash::ObjectId,
     objs::bstr::{BString, ByteSlice},
     odb::pack,
@@ -21,7 +22,6 @@ pub use gix::{
         transport,
         transport::client::Capabilities,
     },
-    NestedProgress, Progress,
 };
 
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;

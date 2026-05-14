@@ -6,9 +6,8 @@ use std::{
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
-    entry,
-    walk::{classify, readdir, Action, Context, Delegate, Error, ForDeletionMode, Options, Outcome},
-    EntryRef,
+    EntryRef, entry,
+    walk::{Action, Context, Delegate, Error, ForDeletionMode, Options, Outcome, classify, readdir},
 };
 
 /// A function to perform a git-style, unsorted, directory walk.

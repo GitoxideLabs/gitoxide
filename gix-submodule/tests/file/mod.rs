@@ -37,12 +37,12 @@ mod is_active_platform {
         config: &'a gix_config::File<'static>,
         defaults: gix_pathspec::Defaults,
         mut attributes: impl FnMut(
-                &BStr,
-                gix_pathspec::attributes::glob::pattern::Case,
-                bool,
-                &mut gix_pathspec::attributes::search::Outcome,
-            ) -> bool
-            + 'a,
+            &BStr,
+            gix_pathspec::attributes::glob::pattern::Case,
+            bool,
+            &mut gix_pathspec::attributes::search::Outcome,
+        ) -> bool
+        + 'a,
     ) -> crate::Result<Vec<(&'a str, bool)>> {
         let mut platform = module.is_active_platform(config, defaults)?;
         Ok(module
@@ -241,7 +241,7 @@ mod url {
 mod update {
     use std::str::FromStr;
 
-    use gix_submodule::config::{update::Error, Update};
+    use gix_submodule::config::{Update, update::Error};
 
     use crate::file::submodule;
 
@@ -466,8 +466,9 @@ mod append_submodule_overrides {
     #[test]
     fn last_of_multiple_values_wins() -> crate::Result {
         let mut module = submodule("[submodule.a] url = from-module");
-        let repo_config =
-            gix_config::File::from_str("[submodule.a]\n url = a\n url = b\n ignore = x\n [submodule.a]\n url = c\n[submodule.b] url = not-relevant")?;
+        let repo_config = gix_config::File::from_str(
+            "[submodule.a]\n url = a\n url = b\n ignore = x\n [submodule.a]\n url = c\n[submodule.b] url = not-relevant",
+        )?;
         module.append_submodule_overrides(&repo_config);
         Ok(())
     }

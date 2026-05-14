@@ -240,11 +240,12 @@ mod from_tree {
                     .map(|_| ())
             },
         );
+        let object_hash = gix_testtools::object_hash();
         stream
-            .add_entry_from_path(&dir, &dir.join("extra-file"))?
-            .add_entry_from_path(&dir, &dir.join("extra-exe"))?
-            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"))?
-            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"))?;
+            .add_entry_from_path(&dir, &dir.join("extra-file"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-exe"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-dir-empty"), object_hash)?
+            .add_entry_from_path(&dir, &dir.join("extra-dir").join("symlink-to-extra"), object_hash)?;
 
         let mut buf = Vec::new();
         if format == Format::InternalTransientNonPersistable {

@@ -2,12 +2,12 @@ mod single {
     use crate::matching::baseline;
 
     fn test_hashes() -> (String, String) {
-        let annotated_tag = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        let annotated_tag = match gix_testtools::object_hash() {
             gix_hash::Kind::Sha1 => "78b1c1be9421b33a49a7a8176d93eeeafa112da1",
             gix_hash::Kind::Sha256 => "b071221ea854da2958fba3a37527ca5cf32c4ebcd71ab0b68b6b8f10f04e93ad",
             _ => unimplemented!(),
         };
-        let initial_commit = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+        let initial_commit = match gix_testtools::object_hash() {
             gix_hash::Kind::Sha1 => "9d2fab1a0ba3585d0bc50922bfdd04ebb59361df",
             gix_hash::Kind::Sha256 => "ac050883b75422e0d03bfee760c591b292cbc10cee8ad934480ea5fb2ebc44fe",
             _ => unimplemented!(),
@@ -203,7 +203,7 @@ mod multiple {
 mod complex_globs {
     use bstr::BString;
     use gix_hash::ObjectId;
-    use gix_refspec::{parse::Operation, MatchGroup};
+    use gix_refspec::{MatchGroup, parse::Operation};
 
     #[test]
     fn one_sided_complex_glob_patterns_can_be_parsed() {

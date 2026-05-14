@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 fn parse_commit(c: &mut Criterion) {
@@ -30,7 +30,7 @@ fn parse_tag(c: &mut Criterion) {
 }
 
 fn parse_tree(c: &mut Criterion) {
-    let hash_kind = gix_testtools::hash_kind_from_env().unwrap_or_default();
+    let hash_kind = gix_testtools::object_hash();
     c.bench_function("TreeRef()", |b| {
         b.iter(|| black_box(gix_object::TreeRef::from_bytes(TREE, hash_kind)).unwrap());
     });

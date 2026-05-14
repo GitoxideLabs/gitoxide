@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Credential, Key, Section},
+    config::tree::{Credential, Key, Section, keys},
 };
 
 impl Credential {

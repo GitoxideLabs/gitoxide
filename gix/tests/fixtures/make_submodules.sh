@@ -120,6 +120,34 @@ git init with-submodules
   git submodule add ../module1 dir/m1
 )
 
+git init submodule-with-divergent-gitlink
+(cd submodule-with-divergent-gitlink
+  git submodule add ../module1 outer/inner
+  git commit -m "add nested submodule"
+
+  mv .git/modules/outer/inner .git/modules/inner
+  rmdir .git/modules/outer
+  git config --file .git/modules/inner/config core.worktree ../../../outer/inner
+  printf 'gitdir: ../../.git/modules/inner\n' >outer/inner/.git
+
+  git clone --bare ../module1 .git/modules/outer/inner
+  git -C .git/modules/outer/inner update-ref HEAD "$(git -C ../module1 rev-parse @~1)"
+)
+
+git init submodule-with-missing-gitlink-target
+(cd submodule-with-missing-gitlink-target
+  git submodule add ../module1 m1
+  git commit -m "add submodule"
+  printf 'gitdir: ../missing\n' >m1/.git
+)
+
+git init submodule-with-malformed-gitlink
+(cd submodule-with-malformed-gitlink
+  git submodule add ../module1 m1
+  git commit -m "add submodule"
+  printf 'bogus\n' >m1/.git
+)
+
 cp -R with-submodules with-submodules-in-index
 (cd with-submodules-in-index
   git add .

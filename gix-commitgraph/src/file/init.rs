@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
+use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 
 use crate::{
+    File,
     file::{
         BASE_GRAPHS_LIST_CHUNK_ID, COMMIT_DATA_CHUNK_ID, COMMIT_DATA_ENTRY_SIZE_SANS_HASH,
         EXTENDED_EDGES_LIST_CHUNK_ID, FAN_LEN, HEADER_LEN, OID_FAN_CHUNK_ID, OID_LOOKUP_CHUNK_ID, SIGNATURE,
     },
-    File,
 };
 
 const MIN_FILE_SIZE: usize = HEADER_LEN

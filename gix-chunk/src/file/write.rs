@@ -1,4 +1,4 @@
-use crate::file::{index::Entry, Index};
+use crate::file::{Index, index::Entry};
 
 mod write_chunk {
     use std::collections::VecDeque;

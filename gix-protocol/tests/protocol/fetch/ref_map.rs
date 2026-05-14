@@ -1,8 +1,8 @@
 mod is_missing_required_mapping {
     use gix_protocol::{
         fetch::{
-            refmap::{Mapping, Source, SpecIndex},
             RefMap,
+            refmap::{Mapping, Source, SpecIndex},
         },
         handshake::Ref,
     };

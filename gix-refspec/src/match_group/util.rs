@@ -3,7 +3,7 @@ use std::{borrow::Cow, ops::Range};
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_hash::ObjectId;
 
-use crate::{match_group::Item, RefSpecRef};
+use crate::{RefSpecRef, match_group::Item};
 
 /// A type keeping enough information about a ref-spec to be able to efficiently match it against multiple matcher items.
 #[derive(Debug)]

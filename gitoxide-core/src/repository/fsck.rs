@@ -1,5 +1,5 @@
 use anyhow::Context;
-use gix::{objs::Kind, ObjectId};
+use gix::{ObjectId, objs::Kind};
 
 pub fn function(mut repo: gix::Repository, spec: Option<String>, mut out: impl std::io::Write) -> anyhow::Result<()> {
     let spec = spec.unwrap_or("HEAD".into());

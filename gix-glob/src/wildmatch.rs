@@ -16,12 +16,27 @@ pub(crate) mod function {
 
     use crate::wildmatch::Mode;
 
+    /// Internal control-flow result for recursive wildmatch evaluation.
     #[derive(Eq, PartialEq)]
     enum Result {
+        /// The pattern matches the text.
         Match,
+        /// Only the current pattern/text alignment failed.
+        ///
+        /// An enclosing `*` may still advance the text and try again.
         NoMatch,
+        /// The current recursive attempt cannot match.
+        ///
+        /// This mirrors Git's `WM_ABORT_ALL`: advancing an enclosing wildcard cannot make this suffix match, so callers
+        /// should stop retrying it.
         AbortAll,
+        /// A path-component-local `*` failed because it cannot cross `/`.
+        ///
+        /// This mirrors Git's `WM_ABORT_TO_STARSTAR`: an enclosing `**` may keep searching across components, but
+        /// ordinary `*` frames should stop retrying this component. Keeping this distinct from `NoMatch` avoids
+        /// exponential retries for suffixes that have already been proven impossible.
         AbortToStarStar,
+        /// The recursion guard was hit before a definitive answer was found.
         RecursionLimitReached,
     }
 
@@ -116,7 +131,13 @@ pub(crate) mod function {
                             match next {
                                 None => {
                                     return if !match_slash && text[t_idx..].contains(&SLASH) {
-                                        NoMatch
+                                        // A trailing single `*` cannot cross `/` in path mode.
+                                        // Seeing a slash in the remaining text proves that this
+                                        // `*` can never consume enough to make this branch match.
+                                        // Signal the enclosing `**` machinery to stop retrying
+                                        // this component instead of treating it as an ordinary
+                                        // non-match at only the current text position.
+                                        AbortToStarStar
                                     } else {
                                         Match
                                     };
@@ -130,7 +151,13 @@ pub(crate) mod function {
                                                 for _ in t.by_ref().take(distance_to_slash) {}
                                                 continue;
                                             }
-                                            None => return NoMatch,
+                                            None => {
+                                                // A non-slash-matching `*/` needs a slash to finish
+                                                // the directory component. If there is none left,
+                                                // advancing outer stars cannot make this suffix
+                                                // match, so abort this entire recursive attempt.
+                                                return AbortAll;
+                                            }
                                         }
                                     }
                                 }
@@ -138,10 +165,14 @@ pub(crate) mod function {
                         }
                         None => {
                             return if !match_slash && text[t_idx..].contains(&SLASH) {
-                                NoMatch
+                                // Same as the `next == None` case above, but for a `*` that was
+                                // itself the last pattern byte. With pathname matching, it is a
+                                // component-local wildcard, so a later slash is a definitive
+                                // failure for this branch and should prune enclosing retries.
+                                AbortToStarStar
                             } else {
                                 Match
-                            }
+                            };
                         }
                     }
 
@@ -160,7 +191,15 @@ pub(crate) mod function {
                                 }
                             }
                             if t_ch != p_ch {
-                                return NoMatch;
+                                // `match_slash` says whether this `*` frame may consume `/`.
+                                // When `*` is followed by a literal byte, all bytes before the
+                                // next occurrence of that literal must belong to `*`. If the
+                                // literal cannot be found, the suffix has been proven impossible:
+                                // with `match_slash` the whole remaining text was searched, while
+                                // without it only the current path component was searched. Return
+                                // the corresponding Git abort signal so enclosing wildcard frames
+                                // do not retry later text positions that cannot change the result.
+                                return if match_slash { AbortAll } else { AbortToStarStar };
                             }
                         }
                         let res = match_recursive(pattern[p_idx..].as_bstr(), text[t_idx..].as_bstr(), mode, depth + 1);

@@ -1,5 +1,5 @@
 use crate::bstr::BStr;
-use crate::{worktree, Worktree};
+use crate::{Worktree, worktree};
 #[cfg(feature = "worktree-archive")]
 use gix_error::ResultExt;
 

@@ -24,7 +24,7 @@ mod stepped {
             for handle in std::mem::take(&mut self.threads) {
                 if let Err(err) = handle.join() {
                     last_err = Some(err);
-                };
+                }
             }
             if let Some(thread_err) = last_err {
                 std::panic::resume_unwind(thread_err);

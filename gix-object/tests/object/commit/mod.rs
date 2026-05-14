@@ -193,10 +193,12 @@ fn invalid_object_id_length() {
     let input = b"tree 00000066666666666684666666666666666299297\npare6";
 
     assert!(CommitRef::from_bytes(input, gix_hash::Kind::Sha1).is_err());
-    assert!(CommitRefIter::from_bytes(input, gix_hash::Kind::Sha1)
-        .next()
-        .expect("a decoding error is returned for the first token")
-        .is_err());
+    assert!(
+        CommitRefIter::from_bytes(input, gix_hash::Kind::Sha1)
+            .next()
+            .expect("a decoding error is returned for the first token")
+            .is_err()
+    );
 }
 
 #[test]

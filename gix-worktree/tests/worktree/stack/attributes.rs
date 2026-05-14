@@ -2,14 +2,14 @@ use bstr::ByteSlice;
 use gix_attributes::search::Outcome;
 use gix_worktree::stack::state;
 
-use crate::worktree::stack::probe_case;
+use crate::stack::probe_case;
 
 #[test]
 fn baseline() -> crate::Result {
     // Due to the way our setup differs from gits dynamic stack (which involves trying to read files from disk
     // by path) we can only test one case baseline, so we require multiple platforms (or filesystems) to run this.
     let case = probe_case()?;
-    let dir = gix_testtools::scripted_fixture_read_only_standalone("make_attributes_baseline.sh")?;
+    let dir = crate::scripted_fixture_read_only("make_attributes_baseline.sh")?;
     let base = dir.join("basics");
     let git_dir = base.join(".git");
 

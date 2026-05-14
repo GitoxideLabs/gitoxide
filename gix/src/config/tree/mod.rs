@@ -106,14 +106,14 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    branch, checkout, core, credential, extensions, fetch, gitoxide, http, index, protocol, push, remote, ssh, Author,
-    Branch, Checkout, Clone, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Http, Index, Init, Mailmap,
-    Merge, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User,
+    Author, Branch, Checkout, Clone, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Http, Index, Init,
+    Mailmap, Merge, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, branch, checkout, core, credential, extensions,
+    fetch, gitoxide, http, index, protocol, push, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
-pub use sections::{diff, Diff};
+pub use sections::{Diff, diff};
 #[cfg(feature = "status")]
-pub use sections::{status, Status};
+pub use sections::{Status, status};
 
 /// Generic value implementations for static instantiation.
 pub mod keys;

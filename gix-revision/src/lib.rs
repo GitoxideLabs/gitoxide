@@ -6,7 +6,7 @@
     doc = ::document_features::document_features!()
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 ///
 #[cfg(feature = "describe")]
@@ -22,5 +22,5 @@ pub use merge_base::function::merge_base;
 
 ///
 pub mod spec;
-pub use gix_revwalk::{graph, Graph, PriorityQueue};
+pub use gix_revwalk::{Graph, PriorityQueue, graph};
 pub use spec::types::Spec;

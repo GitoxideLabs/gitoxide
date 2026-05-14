@@ -3,7 +3,7 @@
 //! We chose to use hashing/identity over pointers as it's possible that different objects end up in the same memory location,
 //! which would create obscure bugs. The same could happen with hash collisions, but they these are designed to be less likely.
 use std::{
-    collections::{btree_map::Entry, hash_map::DefaultHasher, BTreeMap},
+    collections::{BTreeMap, btree_map::Entry, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 

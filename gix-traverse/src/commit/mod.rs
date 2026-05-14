@@ -3,7 +3,7 @@
 //! Use [`Simple`] for fast walks that maintain minimal state, or [`Topo`] for a more elaborate traversal.
 use gix_hash::ObjectId;
 use gix_object::FindExt;
-use gix_revwalk::{graph::IdMap, PriorityQueue};
+use gix_revwalk::{PriorityQueue, graph::IdMap};
 use smallvec::SmallVec;
 
 /// A fast iterator over the ancestors of one or more starting commits.

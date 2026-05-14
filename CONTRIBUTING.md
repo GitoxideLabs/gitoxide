@@ -14,6 +14,13 @@ comments may lead to the PR or issue being closed.
 AI-assisted proofreading or wording polish does not need disclosure, but it is still courteous to
 mention it when the AI materially influenced the final text.
 
+#### Issues or PRs
+
+As a first step, prefer opening issues that include references and research results. Do not submit
+PRs first if they are fully generated, but feel free to suggest the fix and/or tests in the issue.
+Never submit an issue and a PR at the same time. This gives maintainers a chance to evaluate the
+problem, supporting material, and proposed direction before reviewing generated code.
+
 For everything else, please have a look at the respective section in the [README] file.
 
 [README]: https://github.com/GitoxideLabs/gitoxide#contributions

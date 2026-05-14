@@ -12,7 +12,7 @@
 //! assert!(gix_validate::path::component(b"src".as_bstr(), None, Default::default()).is_ok());
 //! assert!(gix_validate::path::component(b".git".as_bstr(), None, Default::default()).is_err());
 //! ```
-#![deny(missing_docs, rust_2018_idioms)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 ///

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::{store::WriteReflog, Namespace};
+use crate::{Namespace, store::WriteReflog};
 
 /// A store for reference which uses plain files.
 ///
@@ -53,7 +53,7 @@ mod access {
         }
     }
 
-    use crate::{file, Target};
+    use crate::{Target, file};
 
     /// Access
     impl file::Store {

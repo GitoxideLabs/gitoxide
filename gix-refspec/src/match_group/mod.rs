@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use crate::{parse::Operation, types::Mode, MatchGroup, RefSpecRef};
+use crate::{MatchGroup, RefSpecRef, parse::Operation, types::Mode};
 
 pub(crate) mod types;
-pub use types::{match_lhs, match_rhs, Item, Mapping, Source, SourceRef};
+pub use types::{Item, Mapping, Source, SourceRef, match_lhs, match_rhs};
 
 ///
 pub mod validate;

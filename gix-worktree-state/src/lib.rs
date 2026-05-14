@@ -1,5 +1,5 @@
 //! A crate to help setting the worktree to a particular state.
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 ///
 pub mod checkout;

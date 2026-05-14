@@ -1,6 +1,6 @@
 use std::{fs, io, path::PathBuf, str::FromStr, sync::atomic::AtomicBool};
 
-use gix::{odb::pack, NestedProgress};
+use gix::{NestedProgress, odb::pack};
 
 use crate::OutputFormat;
 

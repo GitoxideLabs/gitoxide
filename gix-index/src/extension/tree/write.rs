@@ -1,10 +1,13 @@
-use crate::extension::{tree, Tree};
+use crate::extension::{Tree, tree};
 
 impl Tree {
     /// Serialize this instance to `out`.
     pub fn write_to(&self, mut out: impl std::io::Write) -> Result<(), std::io::Error> {
-        fn tree_entry(out: &mut impl std::io::Write, tree: &Tree) -> Result<(), std::io::Error> {
-            let mut buf = itoa::Buffer::new();
+        fn tree_entry(
+            out: &mut impl std::io::Write,
+            tree: &Tree,
+            buf: &mut itoa::Buffer,
+        ) -> Result<(), std::io::Error> {
             let num_entries = match tree.num_entries {
                 Some(num_entries) => buf.format(num_entries),
                 None => buf.format(-1),
@@ -22,7 +25,7 @@ impl Tree {
             }
 
             for child in &tree.children {
-                tree_entry(out, child)?;
+                tree_entry(out, child, buf)?;
             }
 
             Ok(())
@@ -30,12 +33,16 @@ impl Tree {
 
         let signature = tree::SIGNATURE;
 
-        let estimated_size = self.num_entries.unwrap_or(0) * (300 + 3 + 1 + 3 + 1 + 20);
-        let mut entries: Vec<u8> = Vec::with_capacity(estimated_size as usize);
-        tree_entry(&mut entries, self)?;
+        let mut entries = Vec::<u8>::new();
+        let mut num_buf = itoa::Buffer::new();
+        tree_entry(&mut entries, self, &mut num_buf)?;
 
         out.write_all(&signature)?;
-        out.write_all(&(u32::try_from(entries.len()).expect("less than 4GB tree extension")).to_be_bytes())?;
+        out.write_all(
+            &u32::try_from(entries.len())
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "tree extension exceeds 4GB"))?
+                .to_be_bytes(),
+        )?;
         out.write_all(&entries)?;
 
         Ok(())

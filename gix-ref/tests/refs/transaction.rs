@@ -3,8 +3,8 @@ mod refedit_ext {
 
     use gix_object::bstr::{BString, ByteSlice};
     use gix_ref::{
-        transaction::{Change, PreviousValue, RefEdit, RefEditsExt, RefLog},
         PartialNameRef, Target,
+        transaction::{Change, PreviousValue, RefEdit, RefEditsExt, RefLog},
     };
 
     #[derive(Default)]
@@ -99,8 +99,8 @@ mod refedit_ext {
         use std::cell::Cell;
 
         use gix_ref::{
-            transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
             FullNameRef, PartialNameRef, Target,
+            transaction::{Change, LogChange, PreviousValue, RefEdit, RefEditsExt, RefLog},
         };
 
         use crate::{hex_to_id, transaction::refedit_ext::MockStore};

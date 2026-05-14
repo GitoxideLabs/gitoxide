@@ -3,14 +3,14 @@ use std::{borrow::Cow, ffi::OsString};
 
 use gix_sec::Permission;
 
-use super::{interpolate_context, util, Error, StageOne};
+use super::{Error, StageOne, interpolate_context, util};
 use crate::{
     bstr::BString,
     config,
     config::{
-        cache::util::ApplyLeniency,
-        tree::{gitoxide, Core, Gitoxide, Http},
         Cache,
+        cache::util::ApplyLeniency,
+        tree::{Core, Gitoxide, Http, gitoxide},
     },
     open,
     repository::init::setup_objects,
@@ -273,7 +273,7 @@ impl Cache {
                         gix_path::env::home_dir().map(Into::into)
                     } else {
                         None
-                    }
+                    };
                 }
                 _ => None,
             }

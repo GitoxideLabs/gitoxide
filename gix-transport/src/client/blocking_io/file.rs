@@ -7,16 +7,15 @@ use std::{
     process::{self, Stdio},
 };
 
-use bstr::{io::BufReadExt, BStr, BString, ByteSlice};
+use bstr::{BStr, BString, ByteSlice, io::BufReadExt};
 
 use crate::{
-    client::{
-        self,
-        blocking_io::{ssh, RequestWriter, SetServiceResponse},
-        git::blocking_io::Connection,
-        MessageKind, WriteMode,
-    },
     Protocol, Service,
+    client::{
+        self, MessageKind, WriteMode,
+        blocking_io::{RequestWriter, SetServiceResponse, ssh},
+        git::blocking_io::Connection,
+    },
 };
 
 // from https://github.com/git/git/blob/20de7e7e4f4e9ae52e6cc7cfaa6469f186ddb0fa/environment.c#L115:L115
@@ -299,7 +298,7 @@ pub fn connect(
 mod tests {
     mod ssh {
         mod connect {
-            use crate::{client::blocking_io::ssh, Protocol};
+            use crate::{Protocol, client::blocking_io::ssh};
 
             #[test]
             fn path() {

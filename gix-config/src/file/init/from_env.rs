@@ -2,7 +2,7 @@ use std::convert::TryFrom;
 
 use bstr::ByteSlice;
 
-use crate::{file, file::init, parse::section, path::interpolate, File, KeyRef};
+use crate::{File, KeyRef, file, file::init, parse::section, path::interpolate};
 
 /// Represents the errors that may occur when calling [`File::from_env()`].
 #[derive(Debug, thiserror::Error)]

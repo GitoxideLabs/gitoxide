@@ -3,8 +3,9 @@ use std::sync::atomic::AtomicBool;
 use gix_status::index_as_worktree::traits::{CompareBlobs, SubmoduleStatus};
 
 use crate::{
+    Repository,
     bstr::{BStr, BString},
-    config, Repository,
+    config,
 };
 
 /// The error returned by [Repository::index_worktree_status()].
@@ -211,7 +212,7 @@ mod submodule_status {
         bstr,
         bstr::BStr,
         config,
-        status::{index_worktree::BuiltinSubmoduleStatus, Submodule},
+        status::{Submodule, index_worktree::BuiltinSubmoduleStatus},
     };
 
     impl BuiltinSubmoduleStatus {
@@ -435,7 +436,7 @@ pub mod iter {
     use super::{Item, RewriteSource};
     use crate::{
         bstr::{BStr, BString},
-        status::{index_worktree, Platform},
+        status::{Platform, index_worktree},
     };
 
     /// Access

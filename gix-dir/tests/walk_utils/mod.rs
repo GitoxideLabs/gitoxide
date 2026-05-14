@@ -4,7 +4,7 @@ use std::{
 };
 
 use bstr::BStr;
-use gix_dir::{entry, walk, Entry};
+use gix_dir::{Entry, entry, walk};
 use gix_testtools::scripted_fixture_read_only;
 
 pub fn fixture_in(filename: &str, name: &str) -> PathBuf {

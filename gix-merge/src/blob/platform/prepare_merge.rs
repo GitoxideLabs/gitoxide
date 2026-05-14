@@ -4,9 +4,9 @@ use bstr::{BStr, BString, ByteSlice};
 use gix_filter::attributes;
 
 use crate::blob::{
-    builtin_driver::text::Conflict,
-    platform::{merge, DriverChoice, ResourceRef},
     BuiltinDriver, Platform, PlatformRef, ResourceKind,
+    builtin_driver::text::Conflict,
+    platform::{DriverChoice, ResourceRef, merge},
 };
 
 /// The error returned by [Platform::prepare_merge_state()](Platform::prepare_merge()).

@@ -1,8 +1,9 @@
 use std::{cell::RefCell, cmp::Ordering};
 
 use crate::{
+    Tree, TreeRef,
     bstr::{BStr, BString},
-    tree, Tree, TreeRef,
+    tree,
 };
 
 ///

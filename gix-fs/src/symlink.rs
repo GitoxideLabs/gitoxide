@@ -80,9 +80,9 @@ pub fn create(original: &Path, link: &Path) -> io::Result<()> {
 /// already exists as filesystem object.
 #[cfg(any(unix, target_os = "wasi"))]
 pub fn is_collision_error(err: &std::io::Error) -> bool {
-    // TODO: use ::IsDirectory as well when stabilized instead of raw_os_error(), and ::FileSystemLoop respectively
+    // TODO: use `ErrorKind::FilesystemLoop` once stabilized.
     err.kind() == AlreadyExists
-            || err.raw_os_error() == Some(21)
+            || err.kind() == std::io::ErrorKind::IsADirectory
             || err.raw_os_error() == Some(62) // no-follow on symlnk on mac-os
             || err.raw_os_error() == Some(40) // no-follow on symlnk on ubuntu
 }

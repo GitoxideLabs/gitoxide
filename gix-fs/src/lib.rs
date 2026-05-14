@@ -54,7 +54,7 @@
 //! assert_eq!(gix_fs::current_dir(capabilities.precompose_unicode)?, std::env::current_dir()?);
 //! # Ok(()) }
 //! ```
-#![deny(rust_2018_idioms, missing_docs)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
@@ -142,11 +142,9 @@ pub fn is_executable(metadata: &std::fs::Metadata) -> bool {
 pub mod io_err {
     use std::io::ErrorKind;
 
-    /// Return `true` if `err` indicates that the entry doesn't exist on disk. `raw` is used as well
-    /// for additional checks while the variants are outside the MSRV.
-    pub fn is_not_found(err: ErrorKind, raw_err: Option<i32>) -> bool {
-        // TODO: use variant once MSRV is 1.83
-        err == ErrorKind::NotFound || raw_err == Some(20)
+    /// Return `true` if `err` indicates that the entry doesn't exist on disk.
+    pub fn is_not_found(err: ErrorKind, _raw_err: Option<i32>) -> bool {
+        err == ErrorKind::NotFound || err == ErrorKind::NotADirectory
     }
 }
 

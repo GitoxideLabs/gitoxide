@@ -1,4 +1,4 @@
-use gix_glob::{pattern::Mode, Pattern};
+use gix_glob::{Pattern, pattern::Mode};
 
 #[test]
 fn display() {

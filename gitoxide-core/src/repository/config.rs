@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use gix::{bstr::BString, config::AsKey};
 
 use crate::OutputFormat;

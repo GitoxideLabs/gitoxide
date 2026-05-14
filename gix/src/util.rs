@@ -1,6 +1,6 @@
 use std::{
     ops::Deref,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 #[derive(Clone)]

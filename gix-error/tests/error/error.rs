@@ -1,5 +1,5 @@
-use crate::{debug_string, new_tree_error, ErrorWithSource};
-use gix_error::{message, Error, ErrorExt, ValidationError};
+use crate::{ErrorWithSource, debug_string, new_tree_error};
+use gix_error::{Error, ErrorExt, ValidationError, message};
 use std::error::Error as _;
 
 #[test]

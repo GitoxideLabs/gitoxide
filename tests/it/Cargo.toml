@@ -5,10 +5,10 @@ name = "internal-tools"
 description = "internal CLI tooling to help generated test-cases"
 version = "0.0.0"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
-rust-version = "1.82"
+rust-version = "1.85"
 
 [[bin]]
 name = "it"

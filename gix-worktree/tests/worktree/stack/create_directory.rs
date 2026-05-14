@@ -1,10 +1,11 @@
 use std::path::Path;
 
-use gix_testtools::tempfile::{tempdir, TempDir};
-use gix_worktree::{stack, Stack};
+use gix_testtools::tempfile::{TempDir, tempdir};
+use gix_worktree::{Stack, stack};
 
 const IS_FILE: Option<gix_index::entry::Mode> = Some(gix_index::entry::Mode::FILE);
 const IS_DIR: Option<gix_index::entry::Mode> = Some(gix_index::entry::Mode::DIR);
+const IS_SYMLINK: Option<gix_index::entry::Mode> = Some(gix_index::entry::Mode::SYMLINK);
 
 #[test]
 fn root_is_assumed_to_exist_and_files_in_root_do_not_create_directory() -> crate::Result {
@@ -122,6 +123,56 @@ fn symlinks_or_files_in_path_are_forbidden_or_unlinked_when_forced() -> crate::R
         cache.statistics().delegate.num_mkdir_calls,
         4,
         "like before, but it unlinks what's there and tries again"
+    );
+    Ok(())
+}
+
+#[test]
+fn symlink_cached_as_file_is_revalidated_before_use_as_directory() -> crate::Result {
+    let (mut cache, tmp) = new_cache();
+    let forbidden = tmp.path().join("forbidden");
+    std::fs::create_dir(&forbidden)?;
+
+    let link_path = cache
+        .at_path("link", IS_SYMLINK, &gix_object::find::Never)?
+        .path()
+        .to_owned();
+    symlink::symlink_dir(&forbidden, &link_path)?;
+
+    let err = cache
+        .at_path("link/file", IS_SYMLINK, &gix_object::find::Never)
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(
+        link_path.symlink_metadata()?.file_type().is_symlink(),
+        "the existing symlink must remain in place when collisions are forbidden"
+    );
+    Ok(())
+}
+
+#[test]
+fn symlink_cached_as_file_is_unlinked_before_use_as_directory_when_forced() -> crate::Result {
+    let (mut cache, tmp) = new_cache();
+    let forbidden = tmp.path().join("forbidden");
+    std::fs::create_dir(&forbidden)?;
+
+    let link_path = cache
+        .at_path("link", IS_SYMLINK, &gix_object::find::Never)?
+        .path()
+        .to_owned();
+    symlink::symlink_dir(&forbidden, &link_path)?;
+    if let stack::State::CreateDirectoryAndAttributesStack {
+        unlink_on_collision, ..
+    } = cache.state_mut()
+    {
+        *unlink_on_collision = true;
+    }
+
+    let path = cache.at_path("link/file", IS_SYMLINK, &gix_object::find::Never)?.path();
+    assert_eq!(path, tmp.path().join("link").join("file"));
+    assert!(
+        link_path.symlink_metadata()?.is_dir(),
+        "the existing symlink must be replaced with a directory when collisions may be unlinked"
     );
     Ok(())
 }

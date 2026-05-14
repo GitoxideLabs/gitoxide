@@ -1,7 +1,7 @@
 use gix_refspec::{
+    Instruction,
     instruction::Fetch,
     parse::{Error, Operation},
-    Instruction,
 };
 
 use crate::parse::{assert_parse, b, try_parse};

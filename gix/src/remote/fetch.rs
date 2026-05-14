@@ -8,7 +8,7 @@ pub mod negotiate {
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use super::connection::fetch::{
-    outcome, prepare, refs, Error, Outcome, Prepare, ProgressId, RefLogMessage, Status,
+    Error, Outcome, Prepare, ProgressId, RefLogMessage, Status, outcome, prepare, refs,
 };
 
 /// If `Yes`, don't really make changes but do as much as possible to get an idea of what would be done.
@@ -32,5 +32,5 @@ pub(crate) enum WritePackedRefs {
 }
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-pub use gix_protocol::fetch::{refmap, RefMap};
+pub use gix_protocol::fetch::{RefMap, refmap};
 pub use gix_protocol::fetch::{Shallow, Tags};

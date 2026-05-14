@@ -3,7 +3,7 @@ mod section {
 
     use bstr::BStr;
 
-    use crate::parse::{section, section::Header, Comment, Event, Events, Section};
+    use crate::parse::{Comment, Event, Events, Section, section, section::Header};
 
     #[test]
     #[cfg(target_pointer_width = "64")]
@@ -172,7 +172,7 @@ pub(crate) mod util {
 
     use std::borrow::Cow;
 
-    use crate::parse::{section, Comment, Event};
+    use crate::parse::{Comment, Event, section};
 
     pub fn section_header(
         name: &str,

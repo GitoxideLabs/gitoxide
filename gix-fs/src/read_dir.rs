@@ -8,7 +8,7 @@ pub(crate) mod function {
     pub fn read_dir(
         path: &Path,
         precompose_unicode: bool,
-    ) -> std::io::Result<impl Iterator<Item = std::io::Result<super::DirEntry>>> {
+    ) -> std::io::Result<impl Iterator<Item = std::io::Result<super::DirEntry>> + use<>> {
         std::fs::read_dir(path)
             .map(move |it| it.map(move |res| res.map(|entry| super::DirEntry::new(entry, precompose_unicode))))
     }

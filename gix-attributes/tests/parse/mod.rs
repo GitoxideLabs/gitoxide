@@ -1,5 +1,5 @@
 use bstr::BString;
-use gix_attributes::{parse, state::ValueRef, StateRef};
+use gix_attributes::{StateRef, parse, state::ValueRef};
 use gix_glob::pattern::Mode;
 use gix_testtools::fixture_bytes;
 

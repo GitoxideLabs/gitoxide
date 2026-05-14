@@ -6,7 +6,7 @@ use std::{
 
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
-use crate::{backoff, File, Marker, DOT_LOCK_SUFFIX};
+use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
 
 /// Describe what to do if a lock cannot be obtained as it's already held elsewhere.
 #[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -46,7 +46,10 @@ impl From<Duration> for Fail {
 pub enum Error {
     #[error("Another IO error occurred while obtaining the lock")]
     Io(#[from] std::io::Error),
-    #[error("The lock for resource '{resource_path}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource_path}{}' might need manual deletion.", super::DOT_LOCK_SUFFIX)]
+    #[error(
+        "The lock for resource '{resource_path}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource_path}{}' might need manual deletion.",
+        super::DOT_LOCK_SUFFIX
+    )]
     PermanentlyLocked {
         resource_path: PathBuf,
         mode: Fail,

@@ -1,10 +1,10 @@
 use std::ops::Range;
 
 use crate::{
+    Entry, Version,
     decode::{self, header},
     entry,
     util::{read_u32, split_at_byte_exclusive, var_int},
-    Entry, Version,
 };
 
 /// a guess directly from git sources

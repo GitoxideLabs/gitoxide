@@ -1,4 +1,4 @@
-use crate::spec::parse::{try_parse, try_parse_opts, Options};
+use crate::spec::parse::{Options, try_parse, try_parse_opts};
 
 #[test]
 fn cannot_declare_ranges_multiple_times() {
@@ -26,7 +26,7 @@ fn delegate_can_refuse_spec_kinds() {
 mod include_parents {
     use gix_revision::spec;
 
-    use crate::spec::parse::{kind::prefix, parse, try_parse, Call};
+    use crate::spec::parse::{Call, kind::prefix, parse, try_parse};
 
     #[test]
     fn trailing_caret_at_symbol() {
@@ -61,7 +61,7 @@ mod include_parents {
 mod exclude_parents {
     use gix_revision::spec;
 
-    use crate::spec::parse::{kind::prefix, parse, try_parse, Call};
+    use crate::spec::parse::{Call, kind::prefix, parse, try_parse};
 
     #[test]
     fn freestanding() {
@@ -149,7 +149,7 @@ mod exclusive {
 mod range {
     use gix_revision::{spec, spec::parse::delegate::Traversal};
 
-    use crate::spec::parse::{kind::prefix, parse, try_parse, Call};
+    use crate::spec::parse::{Call, kind::prefix, parse, try_parse};
 
     #[test]
     fn minus_with_n_omitted() {

@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io::Write, path::Path};
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 
 use crate::OutputFormat;
 

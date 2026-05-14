@@ -38,7 +38,7 @@ mod function {
 
     use gix_features::progress::{self, DynNestedProgress};
 
-    use super::{fanout, HIGH_BIT, LARGE_OFFSET_THRESHOLD};
+    use super::{HIGH_BIT, LARGE_OFFSET_THRESHOLD, fanout};
     use crate::index::V2_SIGNATURE;
 
     struct Count<W> {
@@ -72,6 +72,7 @@ mod function {
         entries_sorted_by_oid: Vec<crate::cache::delta::Item<crate::index::write::TreeEntry>>,
         pack_hash: &gix_hash::ObjectId,
         kind: crate::index::Version,
+        object_hash: gix_hash::Kind,
         progress: &mut dyn DynNestedProgress,
     ) -> Result<gix_hash::ObjectId, gix_hash::io::Error> {
         use io::Write;
@@ -84,7 +85,7 @@ mod function {
         // Write header
         let mut out = Count::new(std::io::BufWriter::with_capacity(
             8 * 4096,
-            gix_hash::io::Write::new(out, kind.hash()),
+            gix_hash::io::Write::new(out, object_hash),
         ));
         out.write_all(V2_SIGNATURE)?;
         out.write_all(&(kind as u32).to_be_bytes())?;
@@ -143,7 +144,7 @@ mod function {
         progress.inc();
         progress.show_throughput_with(
             start,
-            (bytes_written_without_trailer + 20) as usize,
+            (bytes_written_without_trailer + object_hash.len_in_bytes() as u64) as usize,
             progress::bytes().expect("unit always set"),
             progress::MessageLevel::Success,
         );

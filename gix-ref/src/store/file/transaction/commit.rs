@@ -1,7 +1,7 @@
 use crate::{
-    store_impl::file::{transaction::PackedRefs, Transaction},
-    transaction::{Change, LogChange, RefEdit, RefLog},
     Target,
+    store_impl::file::{Transaction, transaction::PackedRefs},
+    transaction::{Change, LogChange, RefEdit, RefLog},
 };
 
 impl Transaction<'_, '_> {

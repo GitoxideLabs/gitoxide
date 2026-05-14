@@ -2,11 +2,7 @@ use crate::eol::{AttributesDigest, AutoCrlf, Configuration, Mode, Stats};
 
 impl Default for Mode {
     fn default() -> Self {
-        if cfg!(windows) {
-            Mode::CrLf
-        } else {
-            Mode::Lf
-        }
+        if cfg!(windows) { Mode::CrLf } else { Mode::Lf }
     }
 }
 

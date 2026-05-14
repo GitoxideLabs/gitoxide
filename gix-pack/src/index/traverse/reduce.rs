@@ -6,7 +6,7 @@ use std::{
 use gix_features::{
     parallel,
     progress::Progress,
-    threading::{lock, Mutable, OwnShared},
+    threading::{Mutable, OwnShared, lock},
 };
 
 use crate::{data, index::traverse};

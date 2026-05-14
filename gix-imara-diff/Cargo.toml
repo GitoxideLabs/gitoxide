@@ -4,9 +4,9 @@
 [package]
 name = "gix-imara-diff"
 version = "0.2.1"
-edition = "2021"
+edition = "2024"
 authors = ["pascalkuthe <pascalkuthe@pm.me>", "Sebastian Thiel <sebastian.thiel@icloud.com>"]
-rust-version = "1.71"
+rust-version = "1.85"
 license = "Apache-2.0"
 
 description = "A high performance library for computing diffs, maintained as a modified copy of upstream imara-diff for gitoxide."
@@ -17,7 +17,7 @@ include = ["/src/**/*", "/LICENSE", "/README.md", "!/src/tests.rs"]
 
 [dependencies]
 bstr = { version = "1.12.0", default-features = false }
-hashbrown = { version = ">=0.15,<=0.16", default-features = false, features = ["default-hasher", "inline-more"] }
+hashbrown = { version = ">=0.15, <=0.17", default-features = false, features = ["default-hasher", "inline-more"] }
 
 [features]
 default = []
@@ -30,9 +30,6 @@ gix-hash = { version = "^0.25.0", path = "../gix-hash", features = ["sha1"] }
 gix-object = { version = "^0.60.0", path = "../gix-object", features = ["sha1"] }
 cov-mark = "2.1.0"
 expect-test = "1.4.0"
-
-[profile.release]
-debug = true
 
 # [[bench]]
 # name = "git_repo"

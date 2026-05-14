@@ -1,7 +1,7 @@
 mod _ref {
     use bstr::ByteSlice;
 
-    use crate::{signature::decode, IdentityRef, Signature, SignatureRef};
+    use crate::{IdentityRef, Signature, SignatureRef, signature::decode};
 
     /// Lifecycle
     impl<'a> SignatureRef<'a> {

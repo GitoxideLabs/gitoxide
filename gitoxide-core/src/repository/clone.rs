@@ -14,11 +14,11 @@ pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
 pub(crate) mod function {
     use std::{borrow::Cow, ffi::OsStr};
 
-    use anyhow::{bail, Context};
-    use gix::{bstr::BString, remote::fetch::Status, NestedProgress};
+    use anyhow::{Context, bail};
+    use gix::{NestedProgress, bstr::BString, remote::fetch::Status};
 
     use super::Options;
-    use crate::{repository::fetch::function::print_updates, OutputFormat};
+    use crate::{OutputFormat, repository::fetch::function::print_updates};
 
     pub fn clone<P>(
         url: impl AsRef<OsStr>,
@@ -116,8 +116,10 @@ pub(crate) mod function {
             }
         }
 
-        if let Some(gix::worktree::state::checkout::Outcome { collisions, errors, .. }) = outcome {
-            if !(collisions.is_empty() && errors.is_empty()) {
+        match outcome {
+            Some(gix::worktree::state::checkout::Outcome { collisions, errors, .. })
+                if !(collisions.is_empty() && errors.is_empty()) =>
+            {
                 let mut messages = Vec::new();
                 if !errors.is_empty() {
                     messages.push(format!("kept going through {} errors(s)", errors.len()));
@@ -136,6 +138,7 @@ pub(crate) mod function {
                     messages.join(", ")
                 );
             }
+            _ => {}
         }
         Ok(())
     }

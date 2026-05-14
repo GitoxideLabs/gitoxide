@@ -1,2 +1,7 @@
+# `baseline.sh` runs the host's `git` through a clean/smudge
+# filter driver supplied as its `$1` argument (a host-absolute path to the test
+# helper binary). Both the driver path and any filter output baked into the
+# resulting working tree are host-specific, so the fixture must be regenerated
+# per run. Both SHA-1 and SHA-256 variants share this constraint.
 /baseline.tar
 /baseline_sha256.tar

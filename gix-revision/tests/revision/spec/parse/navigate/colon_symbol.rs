@@ -1,6 +1,6 @@
 use gix_revision::spec::parse::delegate::Traversal;
 
-use crate::spec::parse::{parse, PeelToOwned as PeelTo};
+use crate::spec::parse::{PeelToOwned as PeelTo, parse};
 
 #[test]
 fn paths_consume_all_remaining_input_as_they_refer_to_blobs() {

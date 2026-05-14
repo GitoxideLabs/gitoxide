@@ -16,7 +16,7 @@ use gix_object::{
 };
 
 use crate::{
-    blob::{builtin_driver::binary::Pick, ResourceKind},
+    blob::{ResourceKind, builtin_driver::binary::Pick},
     tree::{
         Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping, Error, Options, Resolution,
         ResolutionFailure,

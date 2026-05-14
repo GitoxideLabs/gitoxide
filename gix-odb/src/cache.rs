@@ -135,11 +135,11 @@ impl<S> DerefMut for Cache<S> {
 mod impls {
     use std::{cell::RefCell, io::Read, ops::DerefMut};
 
-    use gix_hash::{oid, ObjectId};
+    use gix_hash::{ObjectId, oid};
     use gix_object::{Data, Kind};
     use gix_pack::cache::Object;
 
-    use crate::{find::Header, pack::data::entry::Location, Cache};
+    use crate::{Cache, find::Header, pack::data::entry::Location};
 
     impl<S> gix_object::Write for Cache<S>
     where

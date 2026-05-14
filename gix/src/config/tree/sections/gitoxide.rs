@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Gitoxide, Key, Section},
+    config::tree::{Gitoxide, Key, Section, keys},
 };
 
 impl Gitoxide {
@@ -70,8 +70,8 @@ impl Section for Gitoxide {
 
 mod subsections {
     use crate::config::{
-        tree::{http, keys, Gitoxide, Key, Section},
         Tree,
+        tree::{Gitoxide, Key, Section, http, keys},
     };
 
     /// The `Core` sub-section.

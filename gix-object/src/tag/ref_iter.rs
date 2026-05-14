@@ -1,7 +1,7 @@
 use bstr::BStr;
-use gix_hash::{oid, ObjectId};
+use gix_hash::{ObjectId, oid};
 
-use crate::{bstr::ByteSlice, tag::decode, Kind, TagRefIter};
+use crate::{Kind, TagRefIter, bstr::ByteSlice, tag::decode};
 
 #[derive(Default, Copy, Clone)]
 pub(crate) enum State {
@@ -14,7 +14,7 @@ pub(crate) enum State {
 }
 
 impl<'a> TagRefIter<'a> {
-    /// Create a tag iterator from `data`, parsing hashes as `hash_kind`.
+    /// Create a tag iterator from `data`, parsing hashes as `object_hash`.
     pub fn from_bytes(data: &'a [u8], hash_kind: gix_hash::Kind) -> TagRefIter<'a> {
         TagRefIter {
             data,

@@ -14,8 +14,8 @@ pub(super) mod function {
     use crate::{
         index_as_worktree::traits::{CompareBlobs, SubmoduleStatus},
         index_as_worktree_with_renames::{
-            function::rewrite::ModificationOrDirwalkEntry, Context, Entry, Error, Options, Outcome, RewriteSource,
-            VisitEntry,
+            Context, Entry, Error, Options, Outcome, RewriteSource, VisitEntry,
+            function::rewrite::ModificationOrDirwalkEntry,
         },
         is_dir_to_mode,
     };
@@ -384,7 +384,7 @@ pub(super) mod function {
     mod dirwalk {
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        use gix_dir::{entry::Status, walk::Action, EntryRef};
+        use gix_dir::{EntryRef, entry::Status, walk::Action};
 
         use super::Event;
 

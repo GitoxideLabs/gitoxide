@@ -146,8 +146,8 @@ mod v1 {
 
     mod arguments {
         use bstr::ByteSlice;
-        use gix_protocol::{fetch, Command};
-        use gix_transport::{client::Capabilities, Protocol};
+        use gix_protocol::{Command, fetch};
+        use gix_transport::{Protocol, client::Capabilities};
 
         use crate::fetch::{response::id, transport};
 
@@ -198,7 +198,10 @@ mod v1 {
 
             let _response = args.send(&mut transport, true).await?;
             drop(_response);
-            assert_eq!(out.as_slice().as_bstr(), "009ewant aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa thin-pack side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative multi_ack_detailed filter\n000ddeepen 1\n0014deepen-relative\n0018deepen-since 123456\n0013deepen-not tag\n0035shallow 97c5a932b3940a09683e924ef6a92b31a6f7c6de\n00000032have bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n0009done\n");
+            assert_eq!(
+                out.as_slice().as_bstr(),
+                "009ewant aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa thin-pack side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative multi_ack_detailed filter\n000ddeepen 1\n0014deepen-relative\n0018deepen-since 123456\n0013deepen-not tag\n0035shallow 97c5a932b3940a09683e924ef6a92b31a6f7c6de\n00000032have bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n0009done\n"
+            );
             Ok(())
         }
     }
@@ -214,11 +217,11 @@ mod v2 {
             self,
             response::{Acknowledgement, ShallowUpdate},
         };
+        use gix_transport::Protocol;
         #[cfg(feature = "async-client")]
         use gix_transport::client::async_io::HandleProgress;
         #[cfg(feature = "blocking-client")]
         use gix_transport::client::blocking_io::HandleProgress;
-        use gix_transport::Protocol;
 
         use crate::fetch::response::{id, mock_reader};
 
@@ -386,8 +389,8 @@ mod v2 {
 
     mod arguments {
         use bstr::ByteSlice;
-        use gix_protocol::{fetch, Command};
-        use gix_transport::{client::Capabilities, Protocol};
+        use gix_protocol::{Command, fetch};
+        use gix_transport::{Protocol, client::Capabilities};
 
         use crate::fetch::{response::id, transport};
 

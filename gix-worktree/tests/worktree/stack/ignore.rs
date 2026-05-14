@@ -3,9 +3,9 @@ use std::fs::Metadata;
 use bstr::{BStr, ByteSlice};
 use gix_fs::stack::ToNormalPathComponents;
 use gix_index::entry::Mode;
-use gix_worktree::{stack::state::ignore::Source, Stack};
+use gix_worktree::{Stack, stack::state::ignore::Source};
 
-use crate::{hex_to_id, worktree::stack::probe_case};
+use crate::{hex_to_id, stack::probe_case};
 
 struct IgnoreExpectations<'a> {
     lines: bstr::Lines<'a>,
@@ -34,7 +34,7 @@ impl<'a> Iterator for IgnoreExpectations<'a> {
 
 #[test]
 fn exclude_by_dir_is_handled_just_like_git() {
-    let dir = gix_testtools::scripted_fixture_read_only_standalone("make_special_exclude_case.sh").unwrap();
+    let dir = crate::scripted_fixture_read_only("make_special_exclude_case.sh").unwrap();
     let git_dir = dir.join(".git");
 
     let mut buf = Vec::new();
@@ -102,7 +102,7 @@ fn metadata_to_mode(meta: Metadata) -> Mode {
 
 #[test]
 fn check_against_baseline() -> crate::Result {
-    let dir = gix_testtools::scripted_fixture_read_only_standalone("make_ignore_and_attributes_setup.sh")?;
+    let dir = crate::scripted_fixture_read_only("make_ignore_and_attributes_setup.sh")?;
     let worktree_dir = dir.join("repo");
     let git_dir = worktree_dir.join(".git");
     let mut buf = Vec::new();

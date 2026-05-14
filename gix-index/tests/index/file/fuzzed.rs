@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use filetime::FileTime;
 
@@ -58,6 +58,37 @@ fn tree_extension_with_trailing_bytes_is_reported_without_panicking() {
     }));
 
     assert!(result.is_ok(), "malformed TREE extensions must not panic during decode");
+}
+
+#[test]
+fn tree_extension_with_large_entry_count_is_reported_without_panicking_while_writing() {
+    let object_hash = gix_hash::Kind::Sha1;
+    let (state, _checksum) = gix_index::State::from_bytes(
+        include_bytes!("../../fixtures/fuzzed/tree-extension-entry-count-overflow.git-index"),
+        FileTime::from_unix_time(0, 0),
+        object_hash,
+        Default::default(),
+    )
+    .expect("fuzzed input should decode before being written");
+
+    let file = gix_index::File::from_state(state, PathBuf::from("fuzz-input.index"));
+    assert_eq!(
+        file.tree().and_then(|tree| tree.num_entries),
+        Some(547345820),
+        "bogus entries are still present"
+    );
+    assert_eq!(
+        file.verify_extensions(false, gix_object::find::Never)
+            .unwrap_err()
+            .to_string(),
+        "TREE entry '' declared 547345820 entries, but the index only contains 0 entries",
+        "verifying extension can catch it though."
+    );
+    let mut out = Vec::new();
+    assert!(
+        file.write_to(&mut out, Default::default()).is_ok(),
+        "just like Git, read and write garbage without explicit validation"
+    );
 }
 
 #[test]

@@ -3,7 +3,7 @@ use std::io;
 use bstr::BStr;
 use gix_date::parse::TimeBuf;
 
-use crate::{encode, encode::NL, Kind, Tag, TagRef};
+use crate::{Kind, Tag, TagRef, encode, encode::NL};
 
 /// An Error used in [`Tag::write_to()`][crate::WriteTo::write_to()].
 #[derive(Debug, thiserror::Error)]

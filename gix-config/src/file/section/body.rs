@@ -3,7 +3,7 @@ use std::{borrow::Cow, iter::FusedIterator, ops::Range};
 use bstr::{BStr, BString, ByteVec};
 
 use crate::{
-    parse::{section::ValueName, Event},
+    parse::{Event, section::ValueName},
     value::{normalize, normalize_bstr, normalize_bstring},
 };
 

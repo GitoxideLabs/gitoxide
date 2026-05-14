@@ -3,9 +3,8 @@ use std::process::Stdio;
 use bstr::{BStr, BString};
 
 use crate::{
-    driver,
-    driver::{process, substitute_f_parameter, Operation, Process, State},
-    Driver,
+    Driver, driver,
+    driver::{Operation, Process, State, process, substitute_f_parameter},
 };
 
 /// The error returned by [State::maybe_launch_process()][super::State::maybe_launch_process()].
@@ -105,7 +104,7 @@ fn spawn_driver(
             return Err(Error::SpawnCommand {
                 source: err,
                 command: cmd,
-            })
+            });
         }
     };
     Ok((child, cmd))

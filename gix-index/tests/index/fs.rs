@@ -3,7 +3,7 @@ mod metadata {
 
     #[test]
     fn from_path_no_follow() -> crate::Result {
-        let root = gix_testtools::scripted_fixture_read_only_standalone("file_metadata.sh")?;
+        let root = crate::scripted_fixture_read_only("file_metadata.sh")?;
 
         // For now, don't assert on the values of the metadata as these depends on the filesystem,
         // which might truncate it, or fail entirely.

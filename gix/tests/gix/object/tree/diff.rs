@@ -81,31 +81,59 @@ fn changes_against_tree_modified() -> crate::Result {
     assert_eq!(i, 3);
 
     let actual = repo.diff_tree_to_tree(&from, &to, None)?;
-    insta::assert_debug_snapshot!(actual, @r#"
-    [
-        Modification {
-            location: "a",
-            previous_entry_mode: EntryMode(0o100644),
-            previous_id: Sha1(78981922613b2afb6025042ff6bd878ac1994e85),
-            entry_mode: EntryMode(0o100644),
-            id: Sha1(b4f17b61de71d9b2e54ac9e62b1629ae2d97a6a7),
-        },
-        Modification {
-            location: "dir",
-            previous_entry_mode: EntryMode(0o40000),
-            previous_id: Sha1(e5c63aefe4327cb1c780c71966b678ce8e4225da),
-            entry_mode: EntryMode(0o40000),
-            id: Sha1(c7ac5f82f536976f3561c9999b5f11e5893358be),
-        },
-        Modification {
-            location: "dir/c",
-            previous_entry_mode: EntryMode(0o100644),
-            previous_id: Sha1(6695780ceb14b05e076a99bbd2babf34723b3464),
-            entry_mode: EntryMode(0o100644),
-            id: Sha1(40006fcef15a8853a1b7ae186d93b7d680fd29cf),
-        },
-    ]
-    "#);
+    match repo.object_hash() {
+        gix::hash::Kind::Sha1 => insta::assert_debug_snapshot!(actual, @r#"
+        [
+            Modification {
+                location: "a",
+                previous_entry_mode: EntryMode(0o100644),
+                previous_id: Sha1(78981922613b2afb6025042ff6bd878ac1994e85),
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(b4f17b61de71d9b2e54ac9e62b1629ae2d97a6a7),
+            },
+            Modification {
+                location: "dir",
+                previous_entry_mode: EntryMode(0o40000),
+                previous_id: Sha1(e5c63aefe4327cb1c780c71966b678ce8e4225da),
+                entry_mode: EntryMode(0o40000),
+                id: Sha1(c7ac5f82f536976f3561c9999b5f11e5893358be),
+            },
+            Modification {
+                location: "dir/c",
+                previous_entry_mode: EntryMode(0o100644),
+                previous_id: Sha1(6695780ceb14b05e076a99bbd2babf34723b3464),
+                entry_mode: EntryMode(0o100644),
+                id: Sha1(40006fcef15a8853a1b7ae186d93b7d680fd29cf),
+            },
+        ]
+        "#),
+        gix::hash::Kind::Sha256 => insta::assert_debug_snapshot!(actual, @r#"
+        [
+            Modification {
+                location: "a",
+                previous_entry_mode: EntryMode(0o100644),
+                previous_id: Sha256(f8625e43f9e04f24291f77cdbe4c71b3c2a3b0003f60419b3ed06a058d766c8b),
+                entry_mode: EntryMode(0o100644),
+                id: Sha256(6eba3a291223ebd59db7f157409b70bb1f929be92ed8df0fba98cb81852ff378),
+            },
+            Modification {
+                location: "dir",
+                previous_entry_mode: EntryMode(0o40000),
+                previous_id: Sha256(0d8c11bd683002c6f7c29c94e952cc3ebe2e0e10bd781846285998a509ebd746),
+                entry_mode: EntryMode(0o40000),
+                id: Sha256(730477dc62b02d7046105a95e8c37dc204943f24c70da12d33a88012ac7d2613),
+            },
+            Modification {
+                location: "dir/c",
+                previous_entry_mode: EntryMode(0o100644),
+                previous_id: Sha256(b7bb7be9f73f0d01719f57dcb697689692e2ae9737f4bb59216902b9a0e2adb1),
+                entry_mode: EntryMode(0o100644),
+                id: Sha256(8cf8e3576bb1c632c9f2e1196d2aa6b1ae36c6f651d7619dca4894b784065819),
+            },
+        ]
+        "#),
+        _ => unreachable!(),
+    }
 
     assert_eq!(
         from.changes()?.stats(&to)?,
@@ -125,8 +153,8 @@ mod track_rewrites {
 
     use gix::{
         diff::{
-            rewrites::{Copies, CopySource},
             Rewrites,
+            rewrites::{Copies, CopySource},
         },
         object::tree::diff::Change,
     };
@@ -140,6 +168,11 @@ mod track_rewrites {
         ignore = "Fails on some Window systems, like the fixture doesn't get set up correctly."
     )]
     fn jj_realistic_needs_to_be_more_clever() -> crate::Result {
+        // The test case only works (and is only needed) for SHA-1.
+        // Ideally this can be ported to SHA-256 once rename tracking is par with Git.
+        if gix_testtools::object_hash() == gix::hash::Kind::Sha256 {
+            return Ok(());
+        }
         let repo = named_subrepo_opts("make_diff_repos.sh", "jj-trackcopy-1", gix::open::Options::isolated())?;
 
         let mut expected = HashMap::<&BStr, (&BStr, u32)>::new();
@@ -419,6 +452,11 @@ mod track_rewrites {
         ignore = "Fails on some Window systems, like the fixture doesn't get set up correctly."
     )]
     fn jj_realistic_directory_rename() -> crate::Result {
+        // The test case only works (and is only needed) for SHA-1.
+        // Ideally this can be ported to SHA-256 once rename tracking is par with Git.
+        if gix_testtools::object_hash() == gix::hash::Kind::Sha256 {
+            return Ok(());
+        }
         let repo = named_subrepo_opts("make_diff_repos.sh", "jj-trackcopy-1", gix::open::Options::isolated())?;
 
         let from = tree_named(&repo, "@~1");

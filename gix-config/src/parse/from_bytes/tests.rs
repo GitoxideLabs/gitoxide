@@ -16,18 +16,14 @@ where
 
     fn parse(self, input: &'a [u8]) -> Result<T, ()> {
         let (remaining, value) = self.parse_peek(input)?;
-        if remaining.is_empty() {
-            Ok(value)
-        } else {
-            Err(())
-        }
+        if remaining.is_empty() { Ok(value) } else { Err(()) }
     }
 }
 
 mod config {
     use super::from_bytes;
-    use crate::parse::tests::util::{name_event, newline_event, value_event, whitespace_event};
     use crate::parse::Event;
+    use crate::parse::tests::util::{name_event, newline_event, value_event, whitespace_event};
 
     #[test]
     fn key_value_before_first_section_is_accepted() {
@@ -51,7 +47,7 @@ mod config {
 mod section_headers {
     use std::borrow::Cow;
 
-    use super::{section_header, ParsePeekExt};
+    use super::{ParsePeekExt, section_header};
     use crate::parse::{
         section,
         tests::util::{fully_consumed, section_header as parsed_section_header},
@@ -212,7 +208,7 @@ mod section_headers {
 mod sub_section {
     use std::borrow::Cow;
 
-    use super::{quoted_sub_section, ParsePeekExt};
+    use super::{ParsePeekExt, quoted_sub_section};
 
     #[test]
     fn zero_copy_simple() {
@@ -230,7 +226,7 @@ mod sub_section {
 }
 
 mod config_name {
-    use super::{config_name, ParsePeekExt};
+    use super::{ParsePeekExt, config_name};
     use crate::parse::tests::util::fully_consumed;
 
     #[test]
@@ -258,13 +254,13 @@ mod config_name {
 
 mod section {
     use crate::parse::{
+        Event, Section,
         error::ParseNode,
         tests::util::{
             comment_event, fully_consumed, name_event, newline_custom_event, newline_event,
             section_header as parsed_section_header, value_done_event, value_event, value_not_done_event,
             whitespace_event,
         },
-        Event, Section,
     };
 
     fn section<'a>(mut i: &'a [u8], node: &mut ParseNode) -> Result<(&'a [u8], Section<'a>), ()> {
@@ -599,8 +595,8 @@ mod value_continuation {
     use bstr::ByteSlice;
 
     use crate::parse::{
-        tests::util::{newline_custom_event, newline_event, value_done_event, value_not_done_event},
         Event,
+        tests::util::{newline_custom_event, newline_event, value_done_event, value_not_done_event},
     };
 
     pub fn value<'a>(mut i: &'a [u8], events: &mut Vec<Event<'a>>) -> Result<(&'a [u8], ()), ()> {
@@ -869,9 +865,9 @@ mod value_no_continuation {
 
 mod key_value_pair {
     use crate::parse::{
+        Event,
         error::ParseNode,
         tests::util::{name_event, value_event, whitespace_event},
-        Event,
     };
 
     fn key_value<'a>(mut i: &'a [u8], node: &mut ParseNode, events: &mut Vec<Event<'a>>) -> Result<(&'a [u8], ()), ()> {
@@ -935,8 +931,8 @@ mod key_value_pair {
 mod value {
     use super::value;
     use crate::parse::{
-        tests::util::{newline_custom_event, newline_event, value_done_event, value_event, value_not_done_event},
         Event,
+        tests::util::{newline_custom_event, newline_event, value_done_event, value_event, value_not_done_event},
     };
 
     fn parse(mut input: &[u8]) -> Result<(&[u8], Vec<Event<'_>>), ()> {
@@ -1071,7 +1067,7 @@ mod value {
 }
 
 mod comment {
-    use super::{comment, ParsePeekExt};
+    use super::{ParsePeekExt, comment};
     use crate::parse::tests::util::{comment as parsed_comment, fully_consumed};
 
     #[test]

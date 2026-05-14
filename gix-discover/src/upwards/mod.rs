@@ -12,10 +12,10 @@ pub(crate) mod function {
     #[cfg(unix)]
     use crate::upwards::util::device_id;
     use crate::{
+        DOT_GIT_DIR,
         is::git_with_metadata as is_git_with_metadata,
         is_git,
         upwards::util::{find_ceiling_height, shorten_path_with_cwd},
-        DOT_GIT_DIR,
     };
 
     /// Find the location of the git repository directly in `directory` or in any of its parent directories and provide
@@ -155,7 +155,7 @@ pub(crate) mod function {
                                 path: dir.into_owned(),
                                 candidate: cursor,
                                 required: required_trust,
-                            })
+                            });
                         }
                     }
                 }

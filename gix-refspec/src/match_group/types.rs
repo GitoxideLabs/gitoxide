@@ -14,7 +14,7 @@ pub struct MatchGroup<'a> {
 
 ///
 pub mod match_lhs {
-    use crate::{match_group::Mapping, MatchGroup};
+    use crate::{MatchGroup, match_group::Mapping};
 
     /// The outcome of any matching operation of a [`MatchGroup`].
     ///
@@ -30,7 +30,7 @@ pub mod match_lhs {
 
 ///
 pub mod match_rhs {
-    use crate::{match_group::Mapping, MatchGroup};
+    use crate::{MatchGroup, match_group::Mapping};
 
     /// The outcome of any matching operation of a [`MatchGroup`].
     ///

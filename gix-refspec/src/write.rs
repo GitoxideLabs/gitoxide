@@ -1,8 +1,8 @@
 use bstr::BString;
 
 use crate::{
-    instruction::{Fetch, Push},
     Instruction, RefSpecRef,
+    instruction::{Fetch, Push},
 };
 
 impl RefSpecRef<'_> {

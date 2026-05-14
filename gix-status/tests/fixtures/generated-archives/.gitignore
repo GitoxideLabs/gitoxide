@@ -1,6 +1,24 @@
+# Archives below are intentionally not tracked: each fixture script uses
+# host-only features (symlinks, FIFOs, or restrictive permissions) that cannot
+# be round-tripped through a tar archive across all platforms (notably Windows).
+# The scripts are re-run on the test host instead.
+
+# Uses `ln -sf` to create a symlink (`dir/sub-dir/symlink`).
 status_unchanged.tar
+status_unchanged_sha256.tar
+# Same as above; also relies on a `chmod -x` toggle.
 status_changed.tar
+status_changed_sha256.tar
+# Composed entirely of symlinks (including a symlink-to-base-dir).
 symlink_stack.tar
+symlink_stack_sha256.tar
+# Uses `mkfifo`; FIFOs cannot be represented in archives extracted on Windows.
 status_nonfile.tar
+status_nonfile_sha256.tar
+# Uses `ln -sf` plus installation-wide `core.autocrlf` line-ending normalization
+# on checkout.
 status_unchanged_filter.tar
+status_unchanged_filter_sha256.tar
+# Uses `chmod 000` on a tracked file; the unreadable mode is not portable.
 unreadable_untracked.tar
+unreadable_untracked_sha256.tar

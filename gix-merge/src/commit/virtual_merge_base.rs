@@ -35,7 +35,7 @@ pub(super) mod function {
     use super::Error;
     use crate::{
         blob::builtin_driver,
-        tree::{treat_as_unresolved, TreatAsUnresolved},
+        tree::{TreatAsUnresolved, treat_as_unresolved},
     };
 
     /// Create a single virtual merge-base by merging `first_commit`, `second_commit` and `others` into one.

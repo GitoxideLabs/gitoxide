@@ -1,6 +1,7 @@
 use crate::{
+    Remote,
     bstr::{BStr, BString},
-    config, remote, Remote,
+    config, remote,
 };
 
 /// The error returned by [`Remote::save_to()`].

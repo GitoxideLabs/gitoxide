@@ -6,6 +6,7 @@ use futures_io::{AsyncRead, AsyncWrite};
 use futures_lite::AsyncWriteExt;
 
 use crate::{
+    Protocol, Service,
     client::{
         self,
         async_io::{RequestWriter, SetServiceResponse},
@@ -13,10 +14,9 @@ use crate::{
         git::{self, ConnectionState},
     },
     packetline::{
-        async_io::{StreamingPeekableIter, Writer},
         PacketLineRef,
+        async_io::{StreamingPeekableIter, Writer},
     },
-    Protocol, Service,
 };
 
 /// A TCP connection to either a `git` daemon or a spawned `git` process.
@@ -164,8 +164,8 @@ mod async_net {
     use async_std::net::TcpStream;
 
     use crate::client::{
-        git::{async_io::Connection, ConnectMode},
         Error,
+        git::{ConnectMode, async_io::Connection},
     };
 
     impl Connection<TcpStream, TcpStream> {

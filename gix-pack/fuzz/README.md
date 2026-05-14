@@ -31,6 +31,6 @@ done
 
 The `artifacts/<target>` directories contain minimized reproducer inputs produced by libFuzzer or Google OSS-Fuzz.
 
-The integration test module `fuzzed` reads every regular file in the populated artifact directories and runs it through the parser under test. This lets `cargo test -p gix-pack-tests fuzzed` reproduce known fuzz failures without starting a fuzzing session.
+The integration test module `fuzzed` reads every regular file in the populated artifact directories and runs it through the parser under test. This lets `cargo test -p gix-pack fuzzed` reproduce known fuzz failures without starting a fuzzing session.
 
-When OSS-Fuzz reports a new failure, place the minimized testcase in the matching `artifacts/<target>` directory, then run `cargo test -p gix-pack-tests fuzzed`. To confirm it against the original harness, run `cargo fuzz run <target> artifacts/<target>/<reproducer>` from this directory.
+When OSS-Fuzz reports a new failure, place the minimized testcase in the matching `artifacts/<target>` directory, then run `cargo test -p gix-pack fuzzed`. To confirm it against the original harness, run `cargo fuzz run <target> artifacts/<target>/<reproducer>` from this directory.

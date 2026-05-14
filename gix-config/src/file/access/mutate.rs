@@ -4,10 +4,10 @@ use bstr::BStr;
 use gix_features::threading::OwnShared;
 
 use crate::{
-    file::{self, rename_section, write::ends_with_newline, Metadata, SectionBodyIdsLut, SectionId, SectionMut},
-    lookup,
-    parse::{section, Event, FrontMatterEvents},
     File,
+    file::{self, Metadata, SectionBodyIdsLut, SectionId, SectionMut, rename_section, write::ends_with_newline},
+    lookup,
+    parse::{Event, FrontMatterEvents, section},
 };
 
 /// Mutating low-level access methods.
@@ -317,8 +317,7 @@ impl<'event> File<'event> {
     pub fn push_section(&mut self, section: file::Section<'event>) -> SectionMut<'_, 'event> {
         let id = self.push_section_internal(section);
         let nl = self.detect_newline_style_smallvec();
-        let section = self.sections.get_mut(&id).expect("each id yields a section").to_mut(nl);
-        section
+        self.sections.get_mut(&id).expect("each id yields a section").to_mut(nl)
     }
 
     /// Renames the section with `name` and `subsection_name`, modifying the last matching section

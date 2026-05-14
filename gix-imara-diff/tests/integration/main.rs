@@ -4,9 +4,9 @@ use expect_test::expect;
 // use git::bstr::BStr;
 // use git_repository as git;
 
-use gix_imara_diff::sources::words;
 use gix_imara_diff::BasicLineDiffPrinter;
 use gix_imara_diff::InternedInput;
+use gix_imara_diff::sources::words;
 use gix_imara_diff::{Algorithm, Diff, UnifiedDiffConfig};
 
 const ALL_ALGORITHMS: [Algorithm; 2] = [Algorithm::Histogram, Algorithm::Myers];
@@ -88,7 +88,9 @@ fn words_tokenizer() {
     let tokens = words(text).collect::<Vec<_>>();
     assert_eq!(
         tokens,
-        vec!["Hello", ",", "  ", "imara", "!", "\n", " ", "(", "foo", "-", "bar_baz", ")"]
+        vec![
+            "Hello", ",", "  ", "imara", "!", "\n", " ", "(", "foo", "-", "bar_baz", ")"
+        ]
     );
 }
 

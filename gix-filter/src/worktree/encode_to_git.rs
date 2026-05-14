@@ -57,7 +57,7 @@ pub(crate) mod function {
             DecoderResult::Malformed(_, _) => {
                 return Err(Error::Malformed {
                     encoding: src_encoding.name(),
-                })
+                });
             }
         }
 

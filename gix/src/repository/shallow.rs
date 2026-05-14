@@ -1,6 +1,6 @@
 use std::{borrow::Cow, path::PathBuf};
 
-use crate::{config::tree::gitoxide, Repository};
+use crate::{Repository, config::tree::gitoxide};
 
 impl Repository {
     /// Return `true` if the repository is a shallow clone, i.e. contains history only up to a certain depth.

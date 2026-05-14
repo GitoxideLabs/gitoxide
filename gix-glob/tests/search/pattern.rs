@@ -4,8 +4,8 @@ mod list {
     use gix_glob::{
         pattern::Case,
         search::{
-            pattern::{List, Mapping},
             Pattern,
+            pattern::{List, Mapping},
         },
     };
 

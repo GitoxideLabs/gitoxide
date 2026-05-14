@@ -5,7 +5,7 @@ fn oid(hex: &str) -> gix_hash::ObjectId {
     gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
 }
 
-use gix_protocol::handshake::{refs, Ref};
+use gix_protocol::handshake::{Ref, refs};
 
 #[maybe_async::test(feature = "blocking-client", async(feature = "async-client", async_std::test))]
 async fn extract_references_from_v2_refs() {

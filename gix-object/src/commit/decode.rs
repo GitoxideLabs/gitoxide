@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use smallvec::SmallVec;
 
-use crate::{parse, parse::ParseResult, BStr, ByteSlice, CommitRef};
+use crate::{BStr, ByteSlice, CommitRef, parse, parse::ParseResult};
 
 /// Parse the commit message after the header/message separator.
 ///
@@ -37,13 +37,13 @@ pub fn message<'a>(i: &mut &'a [u8]) -> ParseResult<&'a BStr> {
 /// This parser is not transactional as a whole: if a later required field or
 /// the final message parse fails, `i` may already have been advanced past
 /// earlier successfully parsed fields.
-pub fn commit<'a>(i: &mut &'a [u8], hash_kind: gix_hash::Kind) -> ParseResult<CommitRef<'a>> {
-    let tree = parse::header_field(i, b"tree", |value| parse::hex_hash(value, hash_kind))?;
+pub fn commit<'a>(i: &mut &'a [u8], object_hash: gix_hash::Kind) -> ParseResult<CommitRef<'a>> {
+    let tree = parse::header_field(i, b"tree", |value| parse::hex_hash(value, object_hash))?;
 
     let mut parents = SmallVec::new();
     loop {
         let before = *i;
-        match parse::header_field(i, b"parent", |value| parse::hex_hash(value, hash_kind)) {
+        match parse::header_field(i, b"parent", |value| parse::hex_hash(value, object_hash)) {
             Ok(parent) => parents.push(parent),
             Err(_) => {
                 *i = before;

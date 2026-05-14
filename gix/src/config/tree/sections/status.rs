@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, sections::Status, Key, Section},
+    config::tree::{Key, Section, keys, sections::Status},
 };
 
 impl Status {

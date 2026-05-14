@@ -122,11 +122,7 @@ mod context {
 
     fn winfix(expected: impl Into<String>) -> String {
         // Unclear why it's not debug-printing the env on windows.
-        if cfg!(windows) {
-            "\"\"".into()
-        } else {
-            expected.into()
-        }
+        if cfg!(windows) { "\"\"".into() } else { expected.into() }
     }
 
     #[test]
@@ -512,10 +508,12 @@ mod spawn {
 
     #[test]
     fn direct_command_execution_searches_in_path() -> crate::Result {
-        assert!(gix_command::prepare(if cfg!(unix) { "ls" } else { "attrib.exe" })
-            .spawn()?
-            .wait()?
-            .success());
+        assert!(
+            gix_command::prepare(if cfg!(unix) { "ls" } else { "attrib.exe" })
+                .spawn()?
+                .wait()?
+                .success()
+        );
         Ok(())
     }
 
@@ -532,11 +530,13 @@ mod spawn {
         #[test]
         fn command_in_path_with_args() -> crate::Result {
             // `ls` is occasionaly a builtin, as in busybox ash, but it is usually external.
-            assert!(gix_command::prepare(if cfg!(unix) { "ls -l" } else { "attrib.exe /d" })
-                .command_may_be_shell_script()
-                .spawn()?
-                .wait()?
-                .success());
+            assert!(
+                gix_command::prepare(if cfg!(unix) { "ls -l" } else { "attrib.exe /d" })
+                    .command_may_be_shell_script()
+                    .spawn()?
+                    .wait()?
+                    .success()
+            );
             Ok(())
         }
 
@@ -614,11 +614,13 @@ mod spawn {
 
         #[test]
         fn sh_shell_specific_script_code() -> crate::Result {
-            assert!(gix_command::prepare(":;:;:")
-                .command_may_be_shell_script()
-                .spawn()?
-                .wait()?
-                .success());
+            assert!(
+                gix_command::prepare(":;:;:")
+                    .command_may_be_shell_script()
+                    .spawn()?
+                    .wait()?
+                    .success()
+            );
             Ok(())
         }
 

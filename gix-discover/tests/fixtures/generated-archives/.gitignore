@@ -1,1 +1,5 @@
+# The fixture creates linked worktrees (`git worktree add`) whose
+# `.git` files and `.git/worktrees/*/gitdir` entries store absolute paths into
+# the host's working directory. Re-running the script on the test host produces
+# the correct paths for that machine.
 /make_basic_repo.tar

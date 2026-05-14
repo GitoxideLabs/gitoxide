@@ -5,7 +5,7 @@ pub(super) mod function {
         process::{Command, Stdio},
     };
 
-    use anyhow::{bail, Context};
+    use anyhow::{Context, bail};
     use gix::bstr::ByteSlice;
     use regex::bytes::Regex;
     use std::sync::LazyLock;

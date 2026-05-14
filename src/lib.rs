@@ -20,7 +20,6 @@
     doc = ::document_features::document_features!()
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
-#![deny(rust_2018_idioms)]
 #![allow(missing_docs)]
 #![deny(unsafe_code)]
 

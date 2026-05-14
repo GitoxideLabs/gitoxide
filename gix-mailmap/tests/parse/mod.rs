@@ -1,4 +1,4 @@
-use gix_mailmap::{parse, Entry};
+use gix_mailmap::{Entry, parse};
 use gix_testtools::fixture_bytes;
 
 #[test]

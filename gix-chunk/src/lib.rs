@@ -27,7 +27,7 @@
 //! assert_eq!(decoded.data_by_id(&data, *b"DATA")?, b"xyz");
 //! # Ok(()) }
 //! ```
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 /// An identifier to describe the kind of chunk, unique within a chunk file, typically in ASCII
 pub type Id = [u8; 4];

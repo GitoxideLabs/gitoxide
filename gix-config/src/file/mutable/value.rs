@@ -4,7 +4,7 @@ use bstr::BStr;
 
 use crate::{
     file,
-    file::{mutable::section::SectionMut, Index, Size},
+    file::{Index, Size, mutable::section::SectionMut},
     lookup,
     parse::section,
 };

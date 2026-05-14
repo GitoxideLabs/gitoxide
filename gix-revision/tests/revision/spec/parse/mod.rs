@@ -1,8 +1,8 @@
-use gix_error::{bail, message, ErrorExt, Exn};
+use gix_error::{ErrorExt, Exn, bail, message};
 use gix_object::bstr::{BStr, BString};
 use gix_revision::{
     spec,
-    spec::parse::{delegate, Delegate},
+    spec::parse::{Delegate, delegate},
 };
 
 #[derive(Default, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -242,7 +242,7 @@ fn all_characters_are_taken_verbatim_which_includes_whitespace() {
 }
 
 mod fuzz {
-    use crate::spec::parse::{try_parse_opts, Options};
+    use crate::spec::parse::{Options, try_parse_opts};
 
     #[test]
     fn failures() {

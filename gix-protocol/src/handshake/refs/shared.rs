@@ -2,7 +2,7 @@ use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
     fetch::response::ShallowUpdate,
-    handshake::{refs::parse::Error, Ref},
+    handshake::{Ref, refs::parse::Error},
 };
 
 impl From<InternalRef> for Ref {
@@ -230,7 +230,7 @@ pub(in crate::handshake::refs) fn parse_v2(line: &BStr) -> Result<Ref, Error> {
                                 return Err(Error::UnknownAttribute {
                                     attribute: attribute.to_owned().into(),
                                     line: trimmed.to_owned().into(),
-                                })
+                                });
                             }
                         }
                     }

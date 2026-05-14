@@ -1,7 +1,7 @@
 pub use gix_config::*;
 use gix_features::threading::OnceCell;
 
-use crate::{bstr::BString, repository::identity, Repository};
+use crate::{Repository, bstr::BString, repository::identity};
 
 pub(crate) mod cache;
 mod snapshot;

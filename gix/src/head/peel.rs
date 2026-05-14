@@ -1,7 +1,7 @@
 use crate::{
+    Head,
     ext::{ObjectIdExt, ReferenceExt},
     head::Kind,
-    Head,
 };
 
 mod error {

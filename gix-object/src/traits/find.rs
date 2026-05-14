@@ -20,7 +20,7 @@ pub trait Find {
     /// Returns `Some` object if it was present in the database, or the error that occurred during lookup or object
     /// retrieval.
     fn try_find<'a>(&self, id: &gix_hash::oid, buffer: &'a mut Vec<u8>)
-        -> Result<Option<crate::Data<'a>>, find::Error>;
+    -> Result<Option<crate::Data<'a>>, find::Error>;
 }
 
 /// Find the header of an object in the object store.
@@ -153,7 +153,7 @@ mod _impls {
 }
 
 mod ext {
-    use crate::{find, BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter};
+    use crate::{BlobRef, CommitRef, CommitRefIter, Kind, ObjectRef, TagRef, TagRefIter, TreeRef, TreeRefIter, find};
 
     macro_rules! make_obj_lookup {
         ($method:ident, $object_variant:path, $object_kind:path, $object_type:ty) => {

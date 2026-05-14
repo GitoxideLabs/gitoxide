@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::{File, Marker, DOT_LOCK_SUFFIX};
+use crate::{DOT_LOCK_SUFFIX, File, Marker};
 
 fn strip_lock_suffix(lock_path: &Path) -> PathBuf {
     let ext = lock_path

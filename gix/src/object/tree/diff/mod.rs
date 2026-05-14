@@ -1,6 +1,6 @@
 use gix_diff::tree;
 
-use crate::{bstr::BStr, Id, Tree};
+use crate::{Id, Tree, bstr::BStr};
 
 /// Returned by the `for_each` function to control flow.
 ///

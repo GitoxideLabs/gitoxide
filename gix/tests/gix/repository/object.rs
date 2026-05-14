@@ -3,7 +3,7 @@ use gix_odb::Header;
 use gix_pack::Find;
 use gix_testtools::tempfile;
 
-use crate::util::{hex_to_id, named_subrepo_opts};
+use crate::util::named_subrepo_opts;
 
 mod object_database_impl {
     use gix_object::{Exists, Find, FindHeader};
@@ -45,10 +45,10 @@ mod edit_tree {
         let (repo, _tmp) = crate::repo_rw("make_packed_and_loose.sh")?;
         let head_tree_id = repo.head_tree_id()?;
         assert_eq!(
-            display_tree(head_tree_id, &repo),
-            "24374df94315568adfaee119d038f710d1f45397
-├── that ce013625030ba8dba906f756967f9e9ca394464a.100644
-└── this 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+            display_tree_snapshot(head_tree_id, &repo),
+            "Oid(1)
+├── that Oid(2).100644
+└── this Oid(3).100644
 "
         );
         let this_id = hex_to_id("317e9677c3bcffd006f9fc84bbb0a54ef1676197");
@@ -64,13 +64,13 @@ mod edit_tree {
             .write()?;
 
         assert_eq!(
-            display_tree(actual, &repo),
-            "fe02a8bd15e4c0476d938f772f1eece6d164b1bd
+            display_tree_snapshot(actual, &repo),
+            "Oid(1)
 ├── a
-│   └── b 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+│   └── b Oid(2).100644
 └── this
     └── subdir
-        └── that 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+        └── that Oid(2).100644
 ",
             "all trees are actually written, or else we couldn't visualize them."
         );
@@ -81,13 +81,13 @@ mod edit_tree {
             .remove(BStr::new("does-not-exist"))?
             .write()?;
         assert_eq!(
-            display_tree(actual, &repo),
-            "219596ff52fc84b6b39bc327f202d408cc02e1db
+            display_tree_snapshot(actual, &repo),
+            "Oid(1)
 ├── a
-│   └── b ce013625030ba8dba906f756967f9e9ca394464a.100644
+│   └── b Oid(2).100644
 └── this
     └── subdir
-        └── that 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+        └── that Oid(3).100644
 ",
             "existing blobs can also be changed"
         );
@@ -101,23 +101,23 @@ mod edit_tree {
             .write()?;
 
         assert_eq!(
-            display_tree(actual, &repo),
-            "35ea623106198f21b6959dd2731740e5153db2bb
+            display_tree_snapshot(actual, &repo),
+            "Oid(1)
 ├── a
-│   └── b 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+│   └── b Oid(2).100644
 └── this
     └── subdir
-        └── that ce013625030ba8dba906f756967f9e9ca394464a.100644
+        └── that Oid(3).100644
 ",
             "all remaining subtrees are written from the cursor position"
         );
 
         let actual = editor.write()?;
         assert_eq!(
-            display_tree(actual, &repo),
-            "9ebdc2c1d22e91636fa876a51521464f8a88dd6f
+            display_tree_snapshot(actual, &repo),
+            "Oid(1)
 ├── a
-│   └── b ce013625030ba8dba906f756967f9e9ca394464a.100644
+│   └── b Oid(2).100644
 ├── something
 │   └── very
 │       └── nested
@@ -126,13 +126,13 @@ mod edit_tree {
 │                   └── entries
 │                       └── to
 │                           ├── a
-│                           │   └── b 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+│                           │   └── b Oid(3).100644
 │                           └── this
 │                               └── subdir
-│                                   └── that ce013625030ba8dba906f756967f9e9ca394464a.100644
+│                                   └── that Oid(2).100644
 └── this
     └── subdir
-        └── that 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+        └── that Oid(3).100644
 ",
             "it looks as it should when seen from the root tree"
         );
@@ -140,10 +140,10 @@ mod edit_tree {
         editor.set_root(&head_tree_id.object()?.into_tree())?;
         let actual = editor.write()?;
         assert_eq!(
-            display_tree(actual, &repo),
-            "24374df94315568adfaee119d038f710d1f45397
-├── that ce013625030ba8dba906f756967f9e9ca394464a.100644
-└── this 317e9677c3bcffd006f9fc84bbb0a54ef1676197.100644
+            display_tree_snapshot(actual, &repo),
+            "Oid(1)
+├── that Oid(2).100644
+└── this Oid(3).100644
 ",
             "it's possible to set the editor to any tree after creating it, could help with memory re-use"
         );
@@ -178,17 +178,18 @@ mod edit_tree {
             "nulls are pruned before writing the tree, so it just rewrites the same tree"
         );
 
+        let missing_id = "a".repeat(repo.object_hash().len_in_hex());
         let err = editor
             .upsert(
                 "non-existing",
                 EntryKind::Blob,
-                hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                gix_hash::ObjectId::from_hex(missing_id.as_bytes()).expect("valid object id"),
             )?
             .write()
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            "The object aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (100644) at 'non-existing' could not be found",
+            format!("The object {missing_id} (100644) at 'non-existing' could not be found"),
             "each entry to be written is checked for existence"
         );
 
@@ -200,7 +201,7 @@ mod edit_tree {
             .expect_err(".git is universally forbidden in trees");
         assert_eq!(
             err.to_string(),
-            "The object 317e9677c3bcffd006f9fc84bbb0a54ef1676197 (100644) has an invalid filename: '.git'",
+            format!("The object {this_id} (100644) has an invalid filename: '.git'"),
             "each component is validated"
         );
 
@@ -209,8 +210,8 @@ mod edit_tree {
 
     mod utils {
         use gix::{
-            bstr::{BStr, ByteSlice},
             Repository,
+            bstr::{BStr, ByteSlice},
         };
         use gix_hash::ObjectId;
 
@@ -252,6 +253,10 @@ mod edit_tree {
         }
     }
     use utils::display_tree;
+
+    fn display_tree_snapshot(tree_id: impl Into<gix_hash::ObjectId>, odb: &gix::Repository) -> String {
+        gix_testtools::normalize_hashes(&display_tree(tree_id, odb)).0
+    }
 }
 mod write_object {
     use crate::repository::object::empty_bare_in_memory_repo;
@@ -312,15 +317,15 @@ mod write_object {
 mod write_blob {
     use std::io::{Seek, SeekFrom};
 
-    use crate::{
-        repository::object::{empty_bare_in_memory_repo, empty_bare_repo},
-        util::hex_to_id,
+    use crate::repository::{
+        blob_id,
+        object::{empty_bare_in_memory_repo, empty_bare_repo},
     };
 
     #[test]
     fn from_slice() -> crate::Result {
         let (_tmp, repo) = empty_bare_repo()?;
-        let expected = hex_to_id("95d09f2b10159347eece71399a7e2e907ea3df4f");
+        let expected = blob_id(&repo, b"hello world");
         assert!(!repo.has_object(expected));
 
         let oid = repo.write_blob(b"hello world")?;
@@ -348,15 +353,11 @@ mod write_blob {
         let mut seek_cursor = cursor.clone();
         let mut repo = repo.without_freelist();
         let oid = repo.write_blob_stream(&mut cursor)?;
-        assert_eq!(oid, hex_to_id("95d09f2b10159347eece71399a7e2e907ea3df4f"));
+        assert_eq!(oid, blob_id(&repo, b"hello world"));
 
         seek_cursor.seek(SeekFrom::Start(6))?;
         let oid = repo.write_blob_stream(&mut seek_cursor)?;
-        assert_eq!(
-            oid,
-            hex_to_id("04fea06420ca60892f73becee3614f6d023a4b7f"),
-            "it computes the object size correctly"
-        );
+        assert_eq!(oid, blob_id(&repo, b"world"), "it computes the object size correctly");
 
         assert_eq!(
             oid.object()?.data,
@@ -686,6 +687,24 @@ mod commit {
 
     use crate::{freeze_time, restricted_and_git, util::hex_to_id};
 
+    fn assert_stable_id(
+        repo: &gix::Repository,
+        actual: gix_hash::ObjectId,
+        expected_sha1: &str,
+        expected_sha256: &str,
+    ) {
+        assert_eq!(actual.kind(), repo.object_hash());
+        let expected_hash = match repo.object_hash() {
+            gix_hash::Kind::Sha1 => expected_sha1,
+            gix_hash::Kind::Sha256 => expected_sha256,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            actual,
+            gix_hash::ObjectId::from_hex(expected_hash.as_bytes()).expect("valid sha1")
+        );
+    }
+
     #[test]
     fn parent_in_initial_commit_causes_failure() -> crate::Result {
         let tmp = tempfile::tempdir()?;
@@ -713,10 +732,14 @@ mod commit {
     fn single_line_initial_commit_empty_tree_ref_nonexisting() -> crate::Result {
         let _env = freeze_time();
         let tmp = tempfile::tempdir()?;
+        let object_hash = gix_testtools::object_hash();
         let repo = gix::ThreadSafeRepository::init_opts(
             &tmp,
             gix::create::Kind::WithWorktree,
-            Default::default(),
+            gix::create::Options {
+                object_hash: Some(object_hash),
+                ..Default::default()
+            },
             restricted_and_git(),
         )?
         .to_thread_local();
@@ -760,10 +783,11 @@ mod commit {
             "try and non-try work the same"
         );
         let first_commit_id = repo.commit("HEAD", "hello there \r\n\nthe body", empty_tree_id, Some(parent))?;
-        assert_eq!(
-            first_commit_id,
-            hex_to_id("e7c7273539cfc1a52802fa9d61aa578f6ccebcb4"),
-            "the commit id is stable"
+        assert_stable_id(
+            &repo,
+            first_commit_id.into(),
+            "e7c7273539cfc1a52802fa9d61aa578f6ccebcb4",
+            "10d26eeb1167a0cefa12fa0738d36eb4e55adb43e8837dfa3d38e7f8b019140e",
         );
 
         let head_log_entries: Vec<_> = repo
@@ -789,10 +813,11 @@ mod commit {
             Some(first_commit_id),
         )?;
 
-        assert_eq!(
-            second_commit_id,
-            hex_to_id("e1412f169e0812eb260601bdab3854ca0f1a7b33"),
-            "the second commit id is stable"
+        assert_stable_id(
+            &repo,
+            second_commit_id.into(),
+            "e1412f169e0812eb260601bdab3854ca0f1a7b33",
+            "0e0844f01f6ee495e23f7c5ca0431205e4b547347905df2e4dbd3d6812cb79da",
         );
 
         let mut branch = repo.find_reference("new-branch")?;
@@ -836,9 +861,15 @@ fn new_commit_as() -> crate::Result {
         gix::commit::NO_PARENT_IDS,
     )?;
 
+    assert_eq!(commit.id.kind(), repo.object_hash());
+    let expected_hex = match repo.object_hash() {
+        gix_hash::Kind::Sha1 => "b51277f2b2ea77676dd6fa877b5eb5ba2f7094d9",
+        gix_hash::Kind::Sha256 => "9e0929adee3bcd10a6f37c45101712d819f951102707b70baee48d4868d45b0d",
+        _ => unreachable!(),
+    };
     assert_eq!(
         commit.id,
-        hex_to_id("b51277f2b2ea77676dd6fa877b5eb5ba2f7094d9"),
+        gix_hash::ObjectId::from_hex(expected_hex.as_bytes()).expect("valid object id"),
         "The commit-id is stable as the author/committer is controlled"
     );
 
@@ -881,10 +912,14 @@ fn empty_bare_in_memory_repo() -> crate::Result<gix::Repository> {
 
 fn empty_bare_repo() -> crate::Result<(tempfile::TempDir, gix::Repository)> {
     let tmp = tempfile::tempdir()?;
+    let object_hash = gix_testtools::object_hash();
     let repo = gix::ThreadSafeRepository::init_opts(
         tmp.path(),
         gix::create::Kind::Bare,
-        gix::create::Options::default(),
+        gix::create::Options {
+            object_hash: Some(object_hash),
+            ..gix::create::Options::default()
+        },
         gix::open::Options::isolated(),
     )?
     .into();

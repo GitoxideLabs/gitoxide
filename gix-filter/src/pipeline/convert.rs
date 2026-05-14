@@ -2,7 +2,7 @@ use std::{io::Read, path::Path};
 
 use bstr::BStr;
 
-use crate::{driver, eol, ident, pipeline::util::Configuration, worktree, Pipeline};
+use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktree};
 
 ///
 pub mod configuration {

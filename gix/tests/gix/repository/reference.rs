@@ -23,15 +23,11 @@ mod set_namespace {
             "no references are in the namespace yet"
         );
 
-        repo.tag_reference(
-            "new-tag",
-            gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
-            PreviousValue::MustNotExist,
-        )?;
+        repo.tag_reference("new-tag", repo.object_hash().empty_tree(), PreviousValue::MustNotExist)?;
 
         repo.reference(
             "refs/heads/new-branch",
-            gix::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+            repo.object_hash().empty_tree(),
             PreviousValue::MustNotExist,
             "message",
         )?;

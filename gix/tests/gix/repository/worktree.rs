@@ -1,11 +1,18 @@
 use gix_ref::bstr;
 
+/// The buffer length for SHA1 archives.
 #[cfg(target_pointer_width = "64")]
 #[cfg(feature = "worktree-stream")]
 const EXPECTED_BUFFER_LENGTH: usize = 102;
+/// The buffer length for SHA1 archives on 32bit machines.
 #[cfg(target_pointer_width = "32")]
 #[cfg(feature = "worktree-stream")]
 const EXPECTED_BUFFER_LENGTH: usize = 86;
+
+#[cfg(feature = "worktree-stream")]
+fn expected_buffer_length(repo: &gix::Repository) -> usize {
+    EXPECTED_BUFFER_LENGTH + repo.object_hash().len_in_hex() - gix::hash::Kind::Sha1.len_in_hex()
+}
 
 #[test]
 #[cfg(feature = "worktree-stream")]
@@ -14,7 +21,7 @@ fn stream() -> crate::Result {
     let mut stream = repo.worktree_stream(repo.head_commit()?.tree_id()?)?.0.into_read();
     assert_eq!(
         std::io::copy(&mut stream, &mut std::io::sink())?,
-        EXPECTED_BUFFER_LENGTH as u64,
+        expected_buffer_length(&repo) as u64,
         "there is some content in the stream, it works"
     );
     Ok(())
@@ -34,7 +41,7 @@ fn archive() -> crate::Result {
         &std::sync::atomic::AtomicBool::default(),
         Default::default(),
     )?;
-    assert_eq!(buf.len(), EXPECTED_BUFFER_LENGTH, "default format is internal");
+    assert_eq!(buf.len(), expected_buffer_length(&repo), "default format is internal");
     Ok(())
 }
 

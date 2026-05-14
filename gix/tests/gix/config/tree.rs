@@ -61,20 +61,26 @@ mod keys {
 
     #[test]
     fn remote_name() {
-        assert!(gix::config::tree::Remote::PUSH_DEFAULT
-            .validate("origin".into())
-            .is_ok());
-        assert!(gix::config::tree::Remote::PUSH_DEFAULT
-            .validate("https://github.com/byron/gitoxide".into())
-            .is_ok());
+        assert!(
+            gix::config::tree::Remote::PUSH_DEFAULT
+                .validate("origin".into())
+                .is_ok()
+        );
+        assert!(
+            gix::config::tree::Remote::PUSH_DEFAULT
+                .validate("https://github.com/byron/gitoxide".into())
+                .is_ok()
+        );
     }
 
     #[test]
     fn unsigned_integer() {
         for valid in [0, 1, 100_124] {
-            assert!(gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
-                .validate(valid.to_string().as_bytes().into())
-                .is_ok());
+            assert!(
+                gix::config::tree::Core::DELTA_BASE_CACHE_LIMIT
+                    .validate(valid.to_string().as_bytes().into())
+                    .is_ok()
+            );
         }
 
         for invalid in [-1, -100] {
@@ -99,7 +105,7 @@ mod keys {
 }
 
 mod branch {
-    use gix::config::tree::{branch, Branch, Key};
+    use gix::config::tree::{Branch, Key, branch};
 
     use crate::config::tree::bcow;
 
@@ -686,15 +692,32 @@ mod extensions {
 
     #[test]
     fn object_format() -> crate::Result {
-        assert_eq!(
-            Extensions::OBJECT_FORMAT.try_into_object_format(bcow("sha1"))?,
-            gix_hash::Kind::Sha1
-        );
-        assert_eq!(
-            Extensions::OBJECT_FORMAT.try_into_object_format(bcow("SHA1"))?,
-            gix_hash::Kind::Sha1,
-            "case-insensitive"
-        );
+        #[cfg(feature = "sha1")]
+        {
+            assert_eq!(
+                Extensions::OBJECT_FORMAT.try_into_object_format(bcow("sha1"))?,
+                gix_hash::Kind::Sha1
+            );
+            assert_eq!(
+                Extensions::OBJECT_FORMAT.try_into_object_format(bcow("SHA1"))?,
+                gix_hash::Kind::Sha1,
+                "case-insensitive"
+            );
+            assert!(Extensions::OBJECT_FORMAT.validate("sha1".into()).is_ok());
+        }
+        #[cfg(feature = "sha256")]
+        {
+            assert_eq!(
+                Extensions::OBJECT_FORMAT.try_into_object_format(bcow("sha256"))?,
+                gix_hash::Kind::Sha256
+            );
+            assert_eq!(
+                Extensions::OBJECT_FORMAT.try_into_object_format(bcow("SHA256"))?,
+                gix_hash::Kind::Sha256,
+                "case-insensitive"
+            );
+            assert!(Extensions::OBJECT_FORMAT.validate("sha256".into()).is_ok());
+        }
         assert_eq!(
             Extensions::OBJECT_FORMAT
                 .try_into_object_format(bcow("invalid"))
@@ -702,7 +725,6 @@ mod extensions {
                 .to_string(),
             "The key \"extensions.objectFormat=invalid\" was invalid"
         );
-        assert!(Extensions::OBJECT_FORMAT.validate("sha1".into()).is_ok());
         assert!(Extensions::OBJECT_FORMAT.validate("invalid".into()).is_err());
         Ok(())
     }
@@ -834,7 +856,7 @@ mod gitoxide {
     mod http {
         use std::time::Duration;
 
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn connect_timeout() -> crate::Result {
@@ -846,7 +868,7 @@ mod gitoxide {
         }
     }
     mod allow {
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn protocol_from_user() {
@@ -859,7 +881,7 @@ mod gitoxide {
         }
     }
     mod commit {
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn author_and_committer_date() {
@@ -878,7 +900,7 @@ mod gitoxide {
         }
     }
     mod author {
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn name_and_email_fallback() {
@@ -897,7 +919,7 @@ mod gitoxide {
         }
     }
     mod committer {
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn name_and_email_fallback() {
@@ -916,7 +938,7 @@ mod gitoxide {
         }
     }
     mod objects {
-        use gix::config::tree::{gitoxide, Key};
+        use gix::config::tree::{Key, gitoxide};
 
         #[test]
         fn alloc_limit() -> crate::Result {
@@ -1133,15 +1155,19 @@ mod remote {
     #[test]
     fn refspecs() {
         let fetch_spec = "+refs/heads/*:refs/remotes/origin/*";
-        assert!(Remote::FETCH
-            .try_into_refspec(bcow(fetch_spec), gix_refspec::parse::Operation::Fetch)
-            .is_ok());
+        assert!(
+            Remote::FETCH
+                .try_into_refspec(bcow(fetch_spec), gix_refspec::parse::Operation::Fetch)
+                .is_ok()
+        );
         assert!(Remote::FETCH.validate(fetch_spec.into()).is_ok());
 
         let push_spec = "HEAD:refs/heads/name";
-        assert!(Remote::PUSH
-            .try_into_refspec(bcow(push_spec), gix_refspec::parse::Operation::Push)
-            .is_ok());
+        assert!(
+            Remote::PUSH
+                .try_into_refspec(bcow(push_spec), gix_refspec::parse::Operation::Push)
+                .is_ok()
+        );
         assert!(Remote::PUSH.validate(push_spec.into()).is_ok());
 
         assert_eq!(

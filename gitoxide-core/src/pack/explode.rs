@@ -2,16 +2,16 @@ use std::{
     fs,
     io::Read,
     path::Path,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use gix::{
+    NestedProgress,
     hash::ObjectId,
     object, objs, odb,
     odb::{loose, pack},
     prelude::Write,
-    NestedProgress,
 };
 
 #[derive(Default, Clone, Eq, PartialEq, Debug)]

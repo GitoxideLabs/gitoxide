@@ -1,1 +1,5 @@
+# The fixture script uses `ln -s`, an executable-bit toggle, and a
+# filter driver — features that cannot be round-tripped through an archive
+# extracted on every supported platform (notably Windows). The script is re-run
+# on the test host instead.
 basic.tar

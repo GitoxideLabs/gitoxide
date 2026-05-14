@@ -7,6 +7,7 @@ fn odb() -> crate::Result<gix_odb::Handle> {
 
 mod depthfirst {
     use gix_object::FindExt;
+    use gix_testtools::normalize_debug_snapshot;
     use gix_traverse::{tree, tree::recorder::Location};
 
     use super::*;
@@ -23,138 +24,144 @@ mod depthfirst {
             .tree();
 
         gix_traverse::tree::depthfirst(tree, &mut state, &db, &mut recorder)?;
-        insta::assert_debug_snapshot!(recorder.records, @r#"
+        insta::assert_snapshot!(
+            normalize_debug_snapshot(&recorder.records).0,
+            @r#"
         [
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "d",
-                oid: Sha1(496d6428b9cf92981dc9495211e6e1120fb6f2ba),
+                oid: Oid(2),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "d/a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "e",
-                oid: Sha1(4277b6e69d25e5efa77c455340557b384a4c018a),
+                oid: Oid(3),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "e/b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "f",
-                oid: Sha1(70fb16fc77b03e16acb4a5b1a6caf79ba302919a),
+                oid: Oid(4),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "f/d",
-                oid: Sha1(5805b676e247eb9a8046ad0c4d249cd2fb2513df),
+                oid: Oid(5),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/d/x",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/z",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
         ]
-        "#);
+        "#
+        );
 
         recorder.records.clear();
         recorder = recorder.track_location(Some(Location::FileName));
         gix_traverse::tree::depthfirst(tree, state, &db, &mut recorder)?;
-        insta::assert_debug_snapshot!(recorder.records, @r#"
+        insta::assert_snapshot!(
+            normalize_debug_snapshot(&recorder.records).0,
+            @r#"
         [
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "d",
-                oid: Sha1(496d6428b9cf92981dc9495211e6e1120fb6f2ba),
+                oid: Oid(2),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "e",
-                oid: Sha1(4277b6e69d25e5efa77c455340557b384a4c018a),
+                oid: Oid(3),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "f",
-                oid: Sha1(70fb16fc77b03e16acb4a5b1a6caf79ba302919a),
+                oid: Oid(4),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o40000),
                 filepath: "d",
-                oid: Sha1(5805b676e247eb9a8046ad0c4d249cd2fb2513df),
+                oid: Oid(5),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "x",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "z",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
         ]
-        "#);
+        "#
+        );
         Ok(())
     }
 
@@ -169,60 +176,68 @@ mod depthfirst {
             .tree();
 
         gix_traverse::tree::depthfirst(tree, &mut state, &db, &mut recorder)?;
-        insta::assert_debug_snapshot!(recorder.records.into_iter().filter(|e| e.mode.is_no_tree()).collect::<Vec<_>>(), @r#"
+        let blobs = recorder
+            .records
+            .into_iter()
+            .filter(|e| e.mode.is_no_tree())
+            .collect::<Vec<_>>();
+        insta::assert_snapshot!(
+            normalize_debug_snapshot(&blobs).0,
+            @r#"
         [
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "d/a",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "e/b",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/FUNDING.yml",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/ISSUE_TEMPLATE/x",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/c",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/dependabot.yml",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
             Entry {
                 mode: EntryMode(0o100644),
                 filepath: "f/z",
-                oid: Sha1(e69de29bb2d1d6434b8b29ae775ad8c2e48c5391),
+                oid: Oid(1),
             },
         ]
-        "#);
+        "#
+        );
         Ok(())
     }
 }

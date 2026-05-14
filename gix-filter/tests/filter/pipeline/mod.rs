@@ -65,7 +65,7 @@ fn pipeline(
             eol_config,
             encodings_with_roundtrip_check,
             crlf_roundtrip_check,
-            object_hash: gix_testtools::hash_kind_from_env().unwrap_or_default(),
+            object_hash: gix_testtools::object_hash(),
         },
     );
     Ok((cache, pipe))

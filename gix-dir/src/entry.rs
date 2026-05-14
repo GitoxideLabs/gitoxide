@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fs::FileType};
 
-use crate::{walk::ForDeletionMode, Entry, EntryRef};
+use crate::{Entry, EntryRef, walk::ForDeletionMode};
 
 /// A way of attaching additional information to an [Entry] .
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]

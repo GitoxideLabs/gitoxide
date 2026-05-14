@@ -6,8 +6,8 @@ use std::{
 
 use bstr::ByteVec;
 use gix_transport::{
-    client::{blocking_io::http, TransportWithoutIO},
     Protocol,
+    client::{TransportWithoutIO, blocking_io::http},
 };
 
 use crate::fixture_bytes;

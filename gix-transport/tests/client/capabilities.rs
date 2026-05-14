@@ -1,13 +1,13 @@
 use bstr::ByteSlice;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
-use gix_packetline::async_io::{encode, StreamingPeekableIter};
+use gix_packetline::async_io::{StreamingPeekableIter, encode};
 #[cfg(all(feature = "blocking-client", not(feature = "async-client")))]
-use gix_packetline::blocking_io::{encode, StreamingPeekableIter};
+use gix_packetline::blocking_io::{StreamingPeekableIter, encode};
+use gix_transport::client::Capabilities;
 #[cfg(all(feature = "async-client", not(feature = "blocking-client")))]
 use gix_transport::client::capabilities::async_recv::Handshake;
 #[cfg(all(feature = "blocking-client", not(feature = "async-client")))]
 use gix_transport::client::capabilities::blocking_recv::Handshake;
-use gix_transport::client::Capabilities;
 
 #[test]
 fn from_bytes() -> crate::Result {

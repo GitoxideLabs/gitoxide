@@ -4,20 +4,19 @@ use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
 use gix_hash::ObjectId;
 use gix_object::{
-    tree,
+    FindExt, tree,
     tree::{EntryKind, EntryMode},
-    FindExt,
 };
 
 use crate::tree::{
-    utils::{
-        apply_change, perform_blob_merge, possibly_rewritten_location, rewrite_location_with_renamed_directory,
-        to_components, track, unique_path_in_tree, ChangeList, ChangeListRef, PossibleConflict, TrackedChange,
-        TreeNodes,
-    },
     Conflict, ConflictIndexEntry, ConflictIndexEntryPathHint, ConflictMapping,
     ConflictMapping::{Original, Swapped},
     ContentMerge, Error, Options, Outcome, Resolution, ResolutionFailure, ResolveWith,
+    utils::{
+        ChangeList, ChangeListRef, PossibleConflict, TrackedChange, TreeNodes, apply_change, perform_blob_merge,
+        possibly_rewritten_location, rewrite_location_with_renamed_directory, to_components, track,
+        unique_path_in_tree,
+    },
 };
 
 /// Perform a merge between `our_tree` and `their_tree`, using `base_tree` as merge-base.
@@ -267,7 +266,9 @@ where
                             .map(|idx| &mut our_changes[idx]);
 
                             if let Some(ours) = ours {
-                                gix_trace::debug!("Turning a case we could probably handle into a conflict for now. theirs: {theirs:#?} ours: {ours:#?} kind: {match_kind:?}");
+                                gix_trace::debug!(
+                                    "Turning a case we could probably handle into a conflict for now. theirs: {theirs:#?} ours: {ours:#?} kind: {match_kind:?}"
+                                );
                                 let conflict = Conflict::unknown((&ours.inner, theirs, Original, outer_side));
                                 if let Some(ResolveWith::Ours) = tree_conflicts {
                                     apply_our_resolution(&ours.inner, theirs, outer_side, &mut editor)?;
@@ -328,7 +329,9 @@ where
                                 editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
                                 their_changes[theirs_idx].was_written = true;
                             } else {
-                                gix_trace::debug!("Couldn't figure out how to handle {match_kind:?} theirs: {theirs:#?} candidate: {candidate:#?}");
+                                gix_trace::debug!(
+                                    "Couldn't figure out how to handle {match_kind:?} theirs: {theirs:#?} candidate: {candidate:#?}"
+                                );
                             }
                             continue;
                         };
@@ -824,7 +827,9 @@ where
                             ) if ours.location() != theirs.location() => {
                                 match tree_conflicts {
                                     None => {
-                                        unreachable!("modification/deletion pair should prevent modification/addition from happening")
+                                        unreachable!(
+                                            "modification/deletion pair should prevent modification/addition from happening"
+                                        )
                                     }
                                     Some(ResolveWith::Ancestor) => {}
                                     Some(ResolveWith::Ours) => {
@@ -1232,7 +1237,7 @@ where
                                 debug_assert!(
                                     match_kind.is_none()
                                         || (ours.location() == theirs.location()
-                                        || ours.source_location() == theirs.source_location()),
+                                            || ours.source_location() == theirs.source_location()),
                                     "BUG: right now it's not known to be possible to match changes from different paths: {match_kind:?} {candidate:?}"
                                 );
                                 if let Some(ResolveWith::Ours) = tree_conflicts {

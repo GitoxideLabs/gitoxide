@@ -3,9 +3,8 @@ use std::{borrow::Cow, collections::HashSet, path::Path};
 use bstr::BStr;
 
 use crate::{
-    config,
+    File, IsActivePlatform, config,
     config::{Branch, FetchRecurse, Ignore, Update},
-    File, IsActivePlatform,
 };
 
 /// High-Level Access
@@ -48,13 +47,15 @@ impl File {
         &'a self,
         config: &'a gix_config::File<'static>,
         defaults: gix_pathspec::Defaults,
-        attributes: &'a mut (dyn FnMut(
+        attributes: &'a mut (
+                    dyn FnMut(
             &BStr,
             gix_pathspec::attributes::glob::pattern::Case,
             bool,
             &mut gix_pathspec::attributes::search::Outcome,
         ) -> bool
-                     + 'a),
+                        + 'a
+                ),
     ) -> Result<
         impl Iterator<Item = (&'a BStr, Result<bool, gix_config::value::Error>)> + 'a,
         crate::is_active_platform::Error,

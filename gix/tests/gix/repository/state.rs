@@ -1,4 +1,4 @@
-use crate::{named_repo, Result};
+use crate::{Result, named_repo};
 
 #[test]
 fn apply_mailbox() -> Result {

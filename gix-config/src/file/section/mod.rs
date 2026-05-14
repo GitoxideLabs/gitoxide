@@ -7,7 +7,7 @@ use crate::{
     file,
     file::{Metadata, Section, SectionMut},
     parse,
-    parse::{section, Event},
+    parse::{Event, section},
 };
 
 pub(crate) mod body;
@@ -15,8 +15,8 @@ pub use body::{Body, BodyIter};
 use gix_features::threading::OwnShared;
 
 use crate::file::{
-    write::{extract_newline, platform_newline},
     SectionId,
+    write::{extract_newline, platform_newline},
 };
 
 impl<'a> Deref for Section<'a> {

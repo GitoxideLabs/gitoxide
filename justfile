@@ -44,6 +44,10 @@ clippy-fix:
 check:
     cargo check --workspace
     cargo check --no-default-features --features small
+    etc/scripts/check-gix-crates-without-hash-features.sh
+    etc/scripts/check-gix-crates-require-hash-features.sh
+    etc/scripts/check-gix-crates-do-not-default-hash-features.sh
+    etc/scripts/check-gix-crate-hash-feature-combinations.sh
     cargo check -p gix-packetline --all-features 2>/dev/null
     cargo check -p gix-transport --all-features 2>/dev/null
     # assure compile error occurs
@@ -64,48 +68,20 @@ check:
     cargo check --no-default-features --features max
     cargo check -p gitoxide-core --features gix/sha1,blocking-client
     cargo check -p gitoxide-core --features gix/sha1,async-client
-    cargo check -p gix-pack --no-default-features 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-pack --no-default-features --features sha1
     cargo check -p gix-pack --no-default-features --features sha1,generate
     cargo check -p gix-pack --no-default-features --features sha1,streaming-input
     cargo check -p gix-hash --all-features
-    cargo check -p gix-hash 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-hash --features sha1
-    cargo check -p gix-hash --features sha256
-    cargo check -p gix-hashtable 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-hashtable --features sha1
     cargo check -p gix-object --all-features
-    cargo check -p gix-object 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-object --features sha1
-    cargo check -p gix-archive 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-archive --features sha1
     cargo check -p gix-attributes --features serde
-    cargo check -p gix-blame 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-blame --features sha1
     cargo check -p gix-glob --features serde
     cargo check -p gix-worktree --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-worktree --features sha1,serde
     cargo check -p gix-worktree --no-default-features --features sha1
-    cargo check -p gix-worktree-state 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-worktree-state --features sha1
-    cargo check -p gix-worktree-stream 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-worktree-stream --features sha1
     cargo check -p gix-actor --features serde
     cargo check -p gix-date --features serde
-    cargo check -p gix-dir 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-dir --features sha1
-    cargo check -p gix-discover 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-discover --features sha1
-    cargo check -p gix-filter 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-filter --features sha1
-    cargo check -p gix-fsck 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-fsck --features sha1
     cargo check -p gix-tempfile --features signals
     cargo check -p gix-tempfile --features hp-hashmap
-    cargo check -p gix-merge 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-merge --features sha1
-    cargo check -p gix-negotiate 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-negotiate --features sha1
     cargo check -p gix-pack --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-pack --features sha1,serde
     cargo check -p gix-pack --features sha1,pack-cache-lru-static
@@ -117,26 +93,12 @@ check:
     cargo check -p gix-index --features sha1,serde
     cargo check -p gix-credentials --features serde
     cargo check -p gix-sec --features serde
-    cargo check -p gix-ref 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-ref --features sha1
-    cargo check -p gix-refspec 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-refspec --features sha1
     cargo check -p gix-revision --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-revision --features sha1,serde
     cargo check -p gix-revision --no-default-features --features sha1,describe
-    cargo check -p gix-revwalk 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-revwalk --features sha1
-    cargo check -p gix-shallow 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-shallow --features sha1
     cargo check -p gix-mailmap --features serde
     cargo check -p gix-url --all-features
-    cargo check -p gix-status 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-status --features sha1
     cargo check -p gix-status --all-features
-    cargo check -p gix-submodule 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-submodule --features sha1
-    cargo check -p gix-traverse 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
-    cargo check -p gix-traverse --features sha1
     cargo check -p gix-features --all-features
     cargo check -p gix-features --features parallel
     cargo check -p gix-features --features fs-read-dir
@@ -145,10 +107,8 @@ check:
     cargo check -p gix-features --features crc32
     cargo check -p gix-features --features zlib
     cargo check -p gix-features --features cache-efficiency-debug
-    cargo check -p gix-commitgraph 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-commitgraph --all-features
     cargo check -p gix-config-value --all-features
-    cargo check -p gix-config 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-config --all-features
     cargo check -p gix-diff --no-default-features 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-diff --no-default-features --features sha1
@@ -197,13 +157,16 @@ unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-testtools --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features tar --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features tar_gz --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features zip --no-fail-fast
-    cargo nextest run -p gix-status-tests --features gix-features-parallel --no-fail-fast
-    cargo nextest run -p gix-worktree-state-tests --features gix-features-parallel --no-fail-fast
-    cargo nextest run -p gix-worktree-tests --features gix-features-parallel --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features sha1,tar_gz --no-fail-fast
+    cargo nextest run -p gix-archive --no-default-features --features sha1,zip --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-diff --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-diff --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-status --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-status --no-fail-fast
+    cargo nextest run -p gix-worktree-state --features parallel --no-fail-fast
+    cargo nextest run -p gix-worktree --features parallel --no-fail-fast
     cargo nextest run -p gix-error --no-fail-fast --test auto-chain-error --features auto-chain-error
     cargo nextest run -p gix-error --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-filter --no-fail-fast
@@ -219,16 +182,16 @@ unit-tests:
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-object --no-fail-fast
     cargo nextest run -p gix-tempfile --features signals --no-fail-fast
     cargo nextest run -p gix-features --all-features --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-ref-tests --all-features --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-ref-tests --all-features --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-ref --all-features --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-ref --all-features --no-fail-fast
     cargo nextest run -p gix-odb --all-features --no-fail-fast
-    cargo nextest run -p gix-odb-tests --features gix-features-parallel --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-pack --all-features --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-pack --all-features --no-fail-fast
-    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-diff-tests --no-fail-fast
-    cargo nextest run -p gix-pack-tests --features all-features --no-fail-fast
-    cargo nextest run -p gix-pack-tests --features gix-features-parallel --no-fail-fast
-    cargo nextest run -p gix-index-tests --features gix-features-parallel --no-fail-fast
+    cargo nextest run -p gix-odb --features parallel --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-pack --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-pack --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-diff --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-diff --no-fail-fast
+    cargo nextest run -p gix-pack --features parallel --no-fail-fast
+    cargo nextest run -p gix-index --features parallel --no-fail-fast
     cargo nextest run -p gix-packetline --features blocking-io,maybe-async/is_sync --test blocking-packetline --no-fail-fast
     cargo nextest run -p gix-packetline --features async-io --test async-packetline --no-fail-fast
     cargo nextest run -p gix-transport --features http-client-curl,maybe-async/is_sync --no-fail-fast
@@ -236,16 +199,21 @@ unit-tests:
     cargo nextest run -p gix-transport --features http-client-reqwest,maybe-async/is_sync --no-fail-fast
     cargo nextest run -p gix-transport --no-default-features --features blocking-client,http-client-reqwest,http-client-insecure-credentials,maybe-async/is_sync --test blocking-transport --no-fail-fast
     cargo nextest run -p gix-transport --features async-client --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-traverse --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-traverse --no-fail-fast
     cargo nextest run -p gix-protocol --features blocking-client --no-fail-fast
     cargo nextest run -p gix-protocol --features async-client --no-fail-fast
-    cargo nextest run -p gix-blame --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-blame --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-blame --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-refspec --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-refspec --no-fail-fast
-    cargo nextest run -p gix --no-default-features --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-stream --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-stream --features sha256 --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance-safe --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,extras,comfort,need-more-recent-msrv --no-fail-fast
     cargo nextest run -p gix --features async-network-client --no-fail-fast
     cargo nextest run -p gix --features blocking-network-client --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --no-fail-fast
     cargo nextest run -p gitoxide-core --lib --no-tests=warn --no-fail-fast
 
 # Run all doctests

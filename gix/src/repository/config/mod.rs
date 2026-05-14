@@ -68,7 +68,7 @@ impl crate::Repository {
     {
         use crate::config::{
             cache::util::ApplyLeniency,
-            tree::{gitoxide, Core, Ssh},
+            tree::{Core, Ssh, gitoxide},
         };
 
         let config = &self.config.resolved;

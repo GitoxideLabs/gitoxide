@@ -6,8 +6,8 @@ mod deflate_stream {
 
     use bstr::ByteSlice;
 
-    use crate::zlib::stream::deflate;
     use crate::zlib::Decompress;
+    use crate::zlib::stream::deflate;
 
     /// Provide streaming decompression using the `std::io::Read` trait.
     /// If `std::io::BufReader` is used, an allocation for the input buffer will be performed.

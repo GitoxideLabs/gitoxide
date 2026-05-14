@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gix_testtools::fixture_path_standalone;
+use gix_testtools::fixture_path;
 
 use crate::{file::store_with_packed_refs, packed::write_packed_refs_with};
 
@@ -23,7 +23,7 @@ fn empty_buffers_should_not_exist_but_are_fine_to_open() -> crate::Result {
 fn unsorted_buffers_or_those_without_a_header_can_be_opened_and_searched() {
     for (fixture, cutoff) in [("without-header", 20u64), ("unsorted", 32 * 1024)] {
         let buffer = gix_ref::packed::Buffer::open(
-            fixture_path_standalone(Path::new("packed-refs").join(fixture).to_str().expect("utf8")),
+            fixture_path(Path::new("packed-refs").join(fixture).to_str().expect("utf8")),
             cutoff,
             HASH_KIND,
         )

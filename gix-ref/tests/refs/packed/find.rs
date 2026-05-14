@@ -1,5 +1,5 @@
 use gix_ref::packed;
-use gix_testtools::fixture_path_standalone;
+use gix_testtools::fixture_path;
 
 use crate::{
     file::{store_at, store_with_packed_refs},
@@ -48,7 +48,7 @@ fn all_iterable_refs_can_be_found() -> crate::Result {
 #[test]
 fn binary_search_a_name_past_the_end_of_the_packed_refs_file() -> crate::Result {
     let packed_refs = packed::Buffer::open(
-        fixture_path_standalone("packed-refs").join("triggers-out-of-bounds"),
+        fixture_path("packed-refs").join("triggers-out-of-bounds"),
         32,
         HASH_KIND,
     )?;

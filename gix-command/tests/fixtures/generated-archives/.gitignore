@@ -1,1 +1,7 @@
+# The fixture seeds a tree of files with `.exe`/`.com` names that
+# carry no content beyond their stub shebang. On Windows, executable extensions
+# are interpreted at runtime and committing such a tree adds little value over
+# regenerating it locally — every test host can produce the same files in a
+# fraction of a second. Re-running the script also keeps the test aligned with
+# installation-wide Git line-ending and executable-bit behavior on extraction.
 win_path_lookup.tar

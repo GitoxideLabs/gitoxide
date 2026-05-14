@@ -164,7 +164,7 @@ where
                             Ok(r) => Ok((
                                 gix_object::Data {
                                     kind: r.kind,
-                                    hash_kind: pack.object_hash(),
+                                    object_hash: pack.object_hash(),
                                     data: buffer.as_slice(),
                                 },
                                 Some(gix_pack::data::entry::Location {
@@ -266,7 +266,7 @@ where
                                     (
                                         gix_object::Data {
                                             kind: r.kind,
-                                            hash_kind: pack.object_hash(),
+                                            object_hash: pack.object_hash(),
                                             data: buffer.as_slice(),
                                         },
                                         Some(gix_pack::data::entry::Location {
@@ -365,7 +365,10 @@ where
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
 
-        assert!(self.store_ref().replacements.is_empty() || self.ignore_replacements, "Everything related to packing must not use replacements. These are not used here, but it should be turned off for good measure.");
+        assert!(
+            self.store_ref().replacements.is_empty() || self.ignore_replacements,
+            "Everything related to packing must not use replacements. These are not used here, but it should be turned off for good measure."
+        );
 
         let mut snapshot = self.snapshot.borrow_mut();
         let mut inflate = self.inflate.borrow_mut();

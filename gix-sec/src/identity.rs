@@ -88,7 +88,7 @@ mod impl_ {
         path: &Path,
     ) -> io::Result<Vec<u8>> {
         use windows_sys::Win32::{
-            Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER},
+            Foundation::{ERROR_INSUFFICIENT_BUFFER, GetLastError},
             Security::GetTokenInformation,
         };
 
@@ -156,12 +156,12 @@ mod impl_ {
 
     pub fn is_path_owned_by_current_user(path: &Path) -> io::Result<bool> {
         use windows_sys::Win32::{
-            Foundation::{LocalFree, ERROR_INVALID_FUNCTION, ERROR_SUCCESS},
+            Foundation::{ERROR_INVALID_FUNCTION, ERROR_SUCCESS, LocalFree},
             Security::{
                 Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT},
-                CheckTokenMembership, EqualSid, IsWellKnownSid, TokenElevationType, TokenElevationTypeLimited,
-                TokenLinkedToken, TokenUser, WinBuiltinAdministratorsSid, OWNER_SECURITY_INFORMATION,
-                PSECURITY_DESCRIPTOR, TOKEN_ELEVATION_TYPE, TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER,
+                CheckTokenMembership, EqualSid, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+                TOKEN_ELEVATION_TYPE, TOKEN_LINKED_TOKEN, TOKEN_QUERY, TOKEN_USER, TokenElevationType,
+                TokenElevationTypeLimited, TokenLinkedToken, TokenUser, WinBuiltinAdministratorsSid,
             },
             System::Threading::{GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken},
         };

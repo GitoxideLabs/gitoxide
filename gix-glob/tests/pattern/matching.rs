@@ -344,6 +344,18 @@ fn fuzzed_exponential_runaway_denial_of_service() {
 }
 
 #[test]
+fn star_literal_scan_propagates_abort_to_avoid_pathological_retry() {
+    let pattern: &BStr =
+        b"lud\xd1\xd6/////=////\xa4/'///////x*x**x*x*xxx*x**x;\x01R:\xfb\xfe\xffxxxx\x01\xaa:F".as_bstr();
+    let path: &BStr = b"lud\xd1\xd6/////=////\xa4/'///////x*x**x*x*xxx*x**x;\x01*R*:\xfb\xfe\xffxxxx***\x01*\xaa*:F\xfb\xfe\xffxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx**\x01*x*\xaa*\xa6\xa6\xe1"
+        .as_bstr();
+
+    let pattern = pat(pattern);
+    assert!(!match_path(&pattern, path, Some(false), Case::Sensitive));
+    assert!(!match_path(&pattern, path, Some(false), Case::Fold));
+}
+
+#[test]
 fn pathological_recursive_globstar_matches_at_various_depths() {
     let pattern = pat("***/**/****/***/onfig");
 

@@ -1,4 +1,4 @@
-use crate::spec::parse::{parse, try_parse_opts, Options};
+use crate::spec::parse::{Options, parse, try_parse_opts};
 
 #[test]
 fn short_hex_literals_are_considered_prefixes() {

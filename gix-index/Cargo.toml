@@ -7,21 +7,30 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A work-in-progress crate of the gitoxide project dedicated implementing the git index file"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 
 [lib]
 doctest = false
 test = true
 
+[[bench]]
+name = "from-tree"
+harness = false
+path = "./benches/from_tree.rs"
+
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "smallvec/serde", "gix-hash/serde"]
+## Enable parallel implementations of common algorithms.
+## If not set, there can be no parallelism.
+parallel = ["gix-features/parallel"]
 
 [dependencies]
 gix-features = { version = "^0.48.0", path = "../gix-features", features = [
@@ -33,10 +42,10 @@ gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-validate = { version = "^0.11.1", path = "../gix-validate" }
 gix-traverse = { version = "^0.57.0", path = "../gix-traverse" }
 gix-lock = { version = "^23.0.0", path = "../gix-lock" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-utils = { version = "^0.3.2", path = "../gix-utils" }
 
-hashbrown = "0.16.0"
+hashbrown = "0.17.0"
 fnv = "1.0.7"
 thiserror = "2.0.18"
 memmap2 = "0.9.10"
@@ -57,11 +66,17 @@ rustix = { version = "1.1.2", default-features = false, features = [
     "std",
     "fs",
 ] }
-libc = { version = "0.2.182" }
+libc = { version = "0.2.186" }
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
+criterion = "0.8.2"
+gix-testtools = { path = "../tests/tools", default-features = false }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+gix-hashtable = { path = "../gix-hashtable" }
+gix-odb = { path = "../gix-odb" }
+gix-object = { path = "../gix-object" }
+filetime = "0.2.27"
+insta = { version = "1.46.3", features = ["filters"] }
 
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]

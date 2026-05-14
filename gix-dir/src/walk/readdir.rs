@@ -7,17 +7,15 @@ use std::{
 use bstr::{BStr, BString, ByteSlice};
 
 use crate::{
-    entry,
+    Entry, EntryRef, entry,
     entry::{PathspecMatch, Status},
     walk,
     walk::{
-        classify,
-        function::{can_recurse, emit_entry},
         Action, CollapsedEntriesEmissionMode, Context, Delegate,
         EmissionMode::CollapseDirectory,
-        Error, ForDeletionMode, Options, Outcome,
+        Error, ForDeletionMode, Options, Outcome, classify,
+        function::{can_recurse, emit_entry},
     },
-    Entry, EntryRef,
 };
 
 /// ### Deviation

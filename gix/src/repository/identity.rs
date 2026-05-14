@@ -3,7 +3,7 @@ use std::time::SystemTime;
 use crate::{
     bstr::{BString, ByteSlice},
     config,
-    config::tree::{gitoxide, keys, Author, Committer, Key, User},
+    config::tree::{Author, Committer, Key, User, gitoxide, keys},
 };
 
 /// Identity handling.

@@ -2,7 +2,7 @@ mod util;
 
 use gix_testtools::Env;
 use serial_test::serial;
-use util::{assert_section_value, Condition, GitEnv};
+use util::{Condition, GitEnv, assert_section_value};
 
 use crate::file::init::from_paths::escape_backslashes;
 
@@ -245,9 +245,5 @@ fn dot_path_matching_symlink_with_icase() -> crate::Result {
 }
 
 fn original_value_on_windows(c: Condition) -> Condition {
-    if cfg!(windows) {
-        c.expect_original_value()
-    } else {
-        c
-    }
+    if cfg!(windows) { c.expect_original_value() } else { c }
 }

@@ -10,7 +10,9 @@ pub mod entries {
     #[derive(Debug, thiserror::Error)]
     #[allow(missing_docs)]
     pub enum Error {
-        #[error("Entry '{current_path}' (stage = {current_stage}) at index {current_index} should order after prior entry '{previous_path}' (stage = {previous_stage})")]
+        #[error(
+            "Entry '{current_path}' (stage = {current_stage}) at index {current_index} should order after prior entry '{previous_path}' (stage = {previous_stage})"
+        )]
         OutOfOrder {
             current_index: usize,
             current_path: BString,
@@ -58,7 +60,10 @@ impl State {
 
     /// Note: `objects` cannot be `Option<F>` as we can't call it with a closure then due to the indirection through `Some`.
     pub fn verify_extensions(&self, use_find: bool, objects: impl gix_object::Find) -> Result<(), extensions::Error> {
-        self.tree().map(|t| t.verify(use_find, objects)).transpose()?;
+        if let Some(tree) = self.tree() {
+            tree.verify(use_find, objects)?;
+            tree.verify_entries_count(self.entries.len())?;
+        }
         // TODO: verify links by running the whole set of tests on the index
         //       - do that once we load it as well, or maybe that's lazy loaded? Too many questions for now.
         Ok(())

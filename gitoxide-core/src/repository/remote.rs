@@ -3,7 +3,7 @@ mod refs_impl {
     use anyhow::bail;
     use gix::{
         protocol::handshake,
-        refspec::{match_group::validate::Fix, RefSpec},
+        refspec::{RefSpec, match_group::validate::Fix},
         remote::fetch::refmap::Source,
     };
 
@@ -222,7 +222,9 @@ mod refs_impl {
             }
         }
         if refspecs.is_empty() {
-            bail!("Without refspecs there is nothing to show here. Add refspecs as arguments or configure them in .git/config.")
+            bail!(
+                "Without refspecs there is nothing to show here. Add refspecs as arguments or configure them in .git/config."
+            )
         }
         Ok(())
     }
@@ -327,7 +329,7 @@ mod refs_impl {
     }
 }
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-pub use refs_impl::{refs, refs_fn as refs, JsonRef};
+pub use refs_impl::{JsonRef, refs, refs_fn as refs};
 
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub(crate) fn by_name_or_url<'repo>(

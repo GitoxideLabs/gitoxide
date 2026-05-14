@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::{search::Spec, MagicSignature, Pattern, Search};
+use crate::{MagicSignature, Pattern, Search, search::Spec};
 
 /// Create a new specification to support matches from `pathspec`, [normalizing](Pattern::normalize()) it with `prefix` and `root`.
 fn mapping_from_pattern(

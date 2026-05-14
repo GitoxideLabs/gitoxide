@@ -4,12 +4,11 @@ use bstr::{BStr, BString, ByteVec};
 
 use crate::{
     file::{
-        self,
-        mutable::{escape_value, Whitespace},
-        Section, SectionId,
+        self, Section, SectionId,
+        mutable::{Whitespace, escape_value},
     },
     lookup,
-    parse::{section, Event},
+    parse::{Event, section},
     value::{normalize_bstr, normalize_bstring},
 };
 

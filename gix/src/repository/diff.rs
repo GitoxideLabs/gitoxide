@@ -1,8 +1,8 @@
 use gix_object::TreeRefIter;
 
 use crate::{
-    repository::{diff_resource_cache, diff_tree_to_tree},
     Repository, Tree,
+    repository::{diff_resource_cache, diff_tree_to_tree},
 };
 
 /// Diff-utilities

@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
 use gix_features::{interrupt, parallel::in_parallel_with_finalize};
-use gix_worktree::{stack, Stack};
+use gix_worktree::{Stack, stack};
 
 use crate::checkout::chunk;
 

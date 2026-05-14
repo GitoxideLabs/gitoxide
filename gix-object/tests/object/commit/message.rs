@@ -1,5 +1,5 @@
 use bstr::ByteSlice;
-use gix_object::commit::{message::body::TrailerRef, MessageRef};
+use gix_object::commit::{MessageRef, message::body::TrailerRef};
 
 #[test]
 fn only_title_no_trailing_newline() {
@@ -169,8 +169,8 @@ fn folded_trailer_as_sole_body_content_via_message_ref() {
 mod body {
     use bstr::ByteSlice;
     use gix_object::commit::{
-        message::{body::TrailerRef, BodyRef},
         MessageRef,
+        message::{BodyRef, body::TrailerRef},
     };
 
     fn body(input: &str) -> BodyRef<'_> {
@@ -355,8 +355,7 @@ mod body {
 
     #[test]
     fn mixed_footer_with_recognized_prefix_and_prose_is_a_trailer_block() {
-        let input =
-            "not a trailer\nSigned-off-by: Alice <alice@example.com>\nanother note\nSigned-off-by: Bob <bob@example.com>";
+        let input = "not a trailer\nSigned-off-by: Alice <alice@example.com>\nanother note\nSigned-off-by: Bob <bob@example.com>";
         let body = body(input);
         assert_eq!(
             body.trailers().collect::<Vec<_>>(),
@@ -453,9 +452,9 @@ mod summary {
 
     use gix_actor::SignatureRef;
     use gix_object::{
+        CommitRef,
         bstr::{BStr, ByteSlice},
         commit::MessageRef,
-        CommitRef,
     };
 
     fn summary(input: &[u8]) -> Cow<'_, BStr> {

@@ -1,23 +1,23 @@
 use std::{
-    io::{stdin, BufReader},
+    io::{BufReader, stdin},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{CommandFactory, Parser};
 use gitoxide_core as core;
 use gitoxide_core::{pack::verify, repository::PathsOrPatterns};
-use gix::bstr::{io::BufReadExt, BString};
+use gix::bstr::{BString, io::BufReadExt};
 
 use crate::{
     plumbing::{
         options::{
-            attributes, branch, commit, commitgraph, config, credential, exclude, free, fsck, index, mailmap, merge,
-            odb, revision, tag, tree, Args, Subcommands,
+            Args, Subcommands, attributes, branch, commit, commitgraph, config, credential, exclude, free, fsck, index,
+            mailmap, merge, odb, revision, tag, tree,
         },
         show_progress,
     },
@@ -199,6 +199,8 @@ pub fn main() -> Result<()> {
                         tree_favor,
                         debug,
                     },
+                message,
+                update_head,
                 ours,
                 base,
                 theirs,
@@ -223,6 +225,8 @@ pub fn main() -> Result<()> {
                             in_memory,
                             tree_favor: tree_favor.map(Into::into),
                             debug,
+                            message,
+                            update_head,
                         },
                     )
                 },
@@ -257,6 +261,8 @@ pub fn main() -> Result<()> {
                             tree_favor: tree_favor.map(Into::into),
                             in_memory,
                             debug,
+                            message: None,
+                            update_head: false,
                         },
                     )
                 },
@@ -433,6 +439,38 @@ pub fn main() -> Result<()> {
                             Submodules::Modifications => core::repository::status::Submodules::Modifications,
                             Submodules::None => core::repository::status::Submodules::None,
                         }),
+                    },
+                )
+            },
+        ),
+        Subcommands::Dirwalk(crate::plumbing::options::dirwalk::Platform {
+            statistics,
+            untracked,
+            pathspec,
+        }) => prepare_and_run(
+            "dirwalk",
+            trace,
+            auto_verbose,
+            progress,
+            progress_keep_open,
+            None,
+            move |_progress, out, err| {
+                core::repository::dirwalk::walk(
+                    repository(Mode::Lenient)?,
+                    pathspec,
+                    out,
+                    err,
+                    core::repository::dirwalk::Options {
+                        output_format: format,
+                        statistics,
+                        untracked: match untracked {
+                            crate::plumbing::options::dirwalk::Untracked::Collapsed => {
+                                core::repository::dirwalk::Untracked::Collapsed
+                            }
+                            crate::plumbing::options::dirwalk::Untracked::Matching => {
+                                core::repository::dirwalk::Untracked::Matching
+                            }
+                        },
                     },
                 )
             },

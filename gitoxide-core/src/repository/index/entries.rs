@@ -24,16 +24,15 @@ pub(crate) mod function {
     };
 
     use gix::{
+        Repository,
         bstr::{BStr, BString},
         index::entry::Stage,
         worktree::IndexPersistedOrInMemory,
-        Repository,
     };
 
     use crate::{
-        is_dir_to_mode,
+        OutputFormat, is_dir_to_mode,
         repository::index::entries::{Attributes, Options},
-        OutputFormat,
     };
 
     pub fn entries(

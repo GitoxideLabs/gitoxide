@@ -21,7 +21,7 @@ fn from_environment_overrides() {
 #[test]
 #[serial]
 fn from_git_dir() -> crate::Result {
-    let worktree_dir = gix_testtools::scripted_fixture_read_only_standalone("make_config_repo.sh")?;
+    let worktree_dir = crate::scripted_fixture_read_only("make_config_repo.sh")?;
     let git_dir = worktree_dir.join(".git");
     let worktree_dir = worktree_dir.canonicalize()?;
     let _env = Env::new()
@@ -88,7 +88,7 @@ fn from_git_dir() -> crate::Result {
 #[test]
 #[serial]
 fn from_git_dir_with_worktree_extension() -> crate::Result {
-    let git_dir = gix_testtools::scripted_fixture_read_only_standalone("config_with_worktree_extension.sh")?
+    let git_dir = crate::scripted_fixture_read_only("config_with_worktree_extension.sh")?
         .join("main-worktree")
         .join(".git");
     let config = gix_config::File::from_git_dir(git_dir)?;

@@ -254,8 +254,8 @@ pub mod persist {
     use std::path::Path;
 
     use crate::{
-        handle::{expect_none, Closed, Writable},
         Handle, REGISTRY,
+        handle::{Closed, Writable, expect_none},
     };
 
     mod error {

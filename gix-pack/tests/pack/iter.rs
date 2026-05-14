@@ -21,10 +21,7 @@ mod new_from_header {
         pack::data::input::{EntryDataMode, Mode},
     };
 
-    use crate::{
-        fixture_path,
-        pack::{SMALL_PACK, V2_PACKS_AND_INDICES},
-    };
+    use crate::{SMALL_PACK, V2_PACKS_AND_INDICES, fixture_path};
 
     #[test]
     fn header_encode() -> Result<(), Box<dyn std::error::Error>> {

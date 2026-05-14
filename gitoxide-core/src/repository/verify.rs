@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicBool;
 
-use crate::{pack, OutputFormat};
+use crate::{OutputFormat, pack};
 
 /// A general purpose context for many operations provided here
 pub struct Context {

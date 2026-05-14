@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use crate::{bstr::BStr, config, remote, remote::find, Remote};
+use crate::{Remote, bstr::BStr, config, remote, remote::find};
 
 impl crate::Repository {
     /// Create a new remote available at the given `url`.

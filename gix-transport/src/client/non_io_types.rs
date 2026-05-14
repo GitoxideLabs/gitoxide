@@ -65,9 +65,7 @@ pub(crate) mod connect {
         #[error("The '{0}' protocol is currently unsupported")]
         UnsupportedScheme(gix_url::Scheme),
         #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
-        #[error(
-            "'{0}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature"
-        )]
+        #[error("'{0}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature")]
         CompiledWithoutHttp(gix_url::Scheme),
     }
 

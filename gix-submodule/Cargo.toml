@@ -7,8 +7,8 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dealing git submodules"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
@@ -16,7 +16,9 @@ doctest = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-config/sha1", "gix-refspec/sha1"]
+sha1 = ["gix-refspec/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-refspec/sha256"]
 
 [dependencies]
 gix-pathspec = { version = "^0.18.0", path = "../gix-pathspec" }

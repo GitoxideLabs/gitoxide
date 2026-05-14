@@ -4,8 +4,8 @@ use gix_hash::ObjectId;
 use gix_ref::FullNameRef;
 
 use crate::{
-    ext::{ObjectIdExt, ReferenceExt},
     Head,
+    ext::{ObjectIdExt, ReferenceExt},
 };
 
 /// Represents the kind of `HEAD` reference.
@@ -124,7 +124,7 @@ impl<'repo> Head<'repo> {
 
 mod remote {
     use super::Head;
-    use crate::{remote, Remote};
+    use crate::{Remote, remote};
 
     /// Remote
     impl<'repo> Head<'repo> {

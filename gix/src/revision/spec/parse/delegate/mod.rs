@@ -1,9 +1,9 @@
-use super::{error, Delegate, ObjectKindHint};
+use super::{Delegate, ObjectKindHint, error};
 use crate::{
-    ext::{ObjectIdExt, ReferenceExt},
     Repository,
+    ext::{ObjectIdExt, ReferenceExt},
 };
-use gix_error::{message, ErrorExt, Exn, ResultExt};
+use gix_error::{ErrorExt, Exn, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_revision::spec::{parse, parse::delegate};
 use smallvec::SmallVec;

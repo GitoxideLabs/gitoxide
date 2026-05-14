@@ -48,8 +48,8 @@ pub(crate) mod function {
     use crate::{
         clear_and_set_capacity,
         eol::{
-            convert_to_git::{Error, IndexObjectFn, Options, RoundTripCheck},
             AttributesDigest, Stats,
+            convert_to_git::{Error, IndexObjectFn, Options, RoundTripCheck},
         },
     };
 
@@ -115,7 +115,7 @@ pub(crate) mod function {
                         return Err(Error::RoundTrip {
                             msg: "CRLF would be replaced by LF",
                             path: rela_path.to_owned(),
-                        })
+                        });
                     }
                     #[allow(unused_variables)]
                     RoundTripCheck::Warn { rela_path } => {
@@ -132,7 +132,7 @@ pub(crate) mod function {
                         return Err(Error::RoundTrip {
                             msg: "LF would be replaced by CRLF",
                             path: rela_path.to_owned(),
-                        })
+                        });
                     }
                     #[allow(unused_variables)]
                     RoundTripCheck::Warn { rela_path } => {

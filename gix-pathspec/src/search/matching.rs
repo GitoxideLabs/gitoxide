@@ -2,8 +2,8 @@ use bstr::{BStr, BString, ByteSlice};
 use gix_glob::pattern::Case;
 
 use crate::{
-    search::{Match, MatchKind, MatchKind::*, Spec},
     MagicSignature, Pattern, Search, SearchMode,
+    search::{Match, MatchKind, MatchKind::*, Spec},
 };
 
 impl Search {

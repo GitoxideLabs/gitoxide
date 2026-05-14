@@ -32,7 +32,7 @@ fn fuzz(input: &[u8]) -> Result<()> {
     if index.num_objects() > 0 {
         let first = index.oid_at_index(0).to_owned();
         _ = black_box(index.pack_id_and_pack_offset_at_index(0));
-        _ = black_box(index.lookup(&first));
+        _ = black_box(index.lookup(first));
 
         if let Ok(prefix) = Prefix::new(first.as_ref(), 7) {
             let mut candidates = empty_candidates();

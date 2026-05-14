@@ -1,4 +1,4 @@
-use crate::spec::parse::{parse, try_parse_opts, Options, PrefixHintOwned};
+use crate::spec::parse::{Options, PrefixHintOwned, parse, try_parse_opts};
 
 fn anchor_hint() -> Option<PrefixHintOwned> {
     Some(PrefixHintOwned::DescribeAnchor {

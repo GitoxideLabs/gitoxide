@@ -7,15 +7,16 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "Calculate differences between various git objects"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [features]
 default = ["blob", "index"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## Enable diffing of blobs using imara-diff.
 blob = [
     "dep:imara-diff",
@@ -54,7 +55,7 @@ gix-filter = { version = "^0.30.0", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.52.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
 gix-command = { version = "^0.9.0", path = "../gix-command", optional = true }
 gix-path = { version = "^0.12.0", path = "../gix-path", optional = true }
-gix-fs = { version = "^0.21.0", path = "../gix-fs", optional = true }
+gix-fs = { version = "^0.21.1", path = "../gix-fs", optional = true }
 gix-tempfile = { version = "^23.0.0", path = "../gix-tempfile", optional = true }
 gix-trace = { version = "^0.1.19", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.57.0", path = "../gix-traverse", optional = true }
@@ -69,7 +70,20 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-index = { path = "../gix-index" }
+gix-pathspec = { path = "../gix-pathspec" }
+gix-fs = { path = "../gix-fs" }
+gix-worktree = { path = "../gix-worktree" }
+gix-object = { path = "../gix-object" }
+gix-odb = { path = "../gix-odb" }
+gix-filter = { path = "../gix-filter" }
+gix-traverse = { path = "../gix-traverse" }
+
+insta = "1.46.3"
+shell-words = "1"
+pretty_assertions = "1.4.0"
 
 [package.metadata.docs.rs]
 all-features = true

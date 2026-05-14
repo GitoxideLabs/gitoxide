@@ -1,7 +1,7 @@
 use gix_attributes::State;
 use gix_pathspec::{MagicSignature, SearchMode};
 
-use crate::parse::{check_against_baseline, check_valid_inputs, NormalizedPattern};
+use crate::parse::{NormalizedPattern, check_against_baseline, check_valid_inputs};
 
 #[test]
 fn repeated_matcher_keywords() {

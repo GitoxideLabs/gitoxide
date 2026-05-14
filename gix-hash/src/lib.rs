@@ -26,25 +26,25 @@
     doc = ::document_features::document_features!()
 )]
 #![cfg_attr(all(doc, feature = "document-features"), feature(doc_cfg))]
-#![deny(missing_docs, rust_2018_idioms, unsafe_code)]
+#![deny(missing_docs, unsafe_code)]
 
 #[cfg(all(not(feature = "sha1"), not(feature = "sha256")))]
 compile_error!("Please set either the `sha1` or the `sha256` feature flag");
 
 #[path = "oid.rs"]
 mod borrowed;
-pub use borrowed::{oid, Error};
+pub use borrowed::{Error, oid};
 
 /// Hash functions and hash utilities
 pub mod hasher;
-pub use hasher::_impl::{hasher, Hasher};
+pub use hasher::_impl::{Hasher, hasher};
 
 /// Error types for utility hash functions
 pub mod io;
 pub use io::_impl::{bytes, bytes_of_file, bytes_with_hasher};
 
 mod object_id;
-pub use object_id::{decode, ObjectId};
+pub use object_id::{ObjectId, decode};
 
 ///
 pub mod prefix;

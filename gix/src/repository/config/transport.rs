@@ -57,7 +57,7 @@ impl crate::Repository {
                         config,
                         config::{
                             cache::util::ApplyLeniency,
-                            tree::{gitoxide, Key, Remote},
+                            tree::{Key, Remote, gitoxide},
                         },
                     };
                     fn try_cow_to_string(

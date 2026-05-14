@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use crate::{
+    CommitRef,
     bstr::{BStr, BString, ByteSlice, ByteVec},
     commit::MessageRef,
-    CommitRef,
 };
 
 ///

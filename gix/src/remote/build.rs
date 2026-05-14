@@ -1,4 +1,4 @@
-use crate::{bstr::BStr, remote, Remote};
+use crate::{Remote, bstr::BStr, remote};
 
 /// Builder methods
 impl Remote<'_> {

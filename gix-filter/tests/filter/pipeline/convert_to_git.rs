@@ -48,7 +48,7 @@ fn all_stages_mean_streaming_is_impossible() -> gix_testtools::Result {
         )
     })?;
 
-    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+    let source_hash = match gix_testtools::object_hash() {
         gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
         gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
         _ => unimplemented!(),
@@ -83,7 +83,7 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
         )
     })?;
 
-    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+    let source_hash = match gix_testtools::object_hash() {
         gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
         gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
         _ => unimplemented!(),
@@ -118,7 +118,7 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
         (vec![], Vec::new(), CrlfRoundTripCheck::Fail, Default::default())
     })?;
 
-    let source_hash = match gix_testtools::hash_kind_from_env().unwrap_or_default() {
+    let source_hash = match gix_testtools::object_hash() {
         gix_hash::Kind::Sha1 => "2188d1cdee2b93a80084b61af431a49d21bc7cc0",
         gix_hash::Kind::Sha256 => "66b8b3bf4f18bcb5f74e09b24ac62e10934e9453a1de9793edb9390dc2ab1d6b",
         _ => unimplemented!(),

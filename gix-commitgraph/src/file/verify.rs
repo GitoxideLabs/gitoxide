@@ -5,9 +5,9 @@ use std::{
     path::Path,
 };
 
-use gix_error::{message, ErrorExt, Exn, Message, ResultExt};
+use gix_error::{ErrorExt, Exn, Message, ResultExt, message};
 
-use crate::{file, File, GENERATION_NUMBER_INFINITY, GENERATION_NUMBER_MAX};
+use crate::{File, GENERATION_NUMBER_INFINITY, GENERATION_NUMBER_MAX, file};
 
 /// The positive result of [`File::traverse()`] providing some statistical information.
 #[derive(Clone, Debug, Eq, PartialEq)]

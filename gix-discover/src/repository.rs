@@ -26,9 +26,9 @@ mod path {
     use std::path::PathBuf;
 
     use crate::{
+        DOT_GIT_DIR,
         path::without_dot_git_dir,
         repository::{Kind, Path},
-        DOT_GIT_DIR,
     };
 
     impl AsRef<std::path::Path> for Path {

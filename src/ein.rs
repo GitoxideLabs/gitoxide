@@ -1,4 +1,4 @@
-#![deny(rust_2018_idioms, unsafe_code)]
+#![deny(unsafe_code)]
 
 fn main() -> anyhow::Result<()> {
     gitoxide::porcelain::main()

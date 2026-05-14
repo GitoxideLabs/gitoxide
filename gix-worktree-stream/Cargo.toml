@@ -7,8 +7,8 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "generate a byte-stream from a git-tree"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
-rust-version = "1.82"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src/**/*", "/LICENSE-*"]
 
 [lib]
@@ -16,7 +16,9 @@ doctest = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-filter/sha1", "gix-hash/sha1", "gix-object/sha1", "gix-traverse/sha1"]
+sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
+sha256 = ["gix-hash/sha256"]
 
 [dependencies]
 gix-features = { version = "^0.48.0", path = "../gix-features", features = ["progress", "io-pipe"] }
@@ -25,14 +27,16 @@ gix-object = { version = "^0.60.0", path = "../gix-object" }
 gix-attributes = { version = "^0.33.0", path = "../gix-attributes" }
 gix-filter = { version = "^0.30.0", path = "../gix-filter" }
 gix-traverse = { version = "^0.57.0", path = "../gix-traverse" }
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 gix-path = { version = "^0.12.0", path = "../gix-path" }
 
 gix-error = { version = "^0.2.3", path = "../gix-error" }
 parking_lot = "0.12.4"
 
 [dev-dependencies]
+gix-worktree-stream = { path = ".", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools" }
+gix-hash = { path = "../gix-hash" }
 gix-odb = { path = "../gix-odb" }
 gix-worktree = { path = "../gix-worktree", default-features = false, features = ["attributes"] }
 

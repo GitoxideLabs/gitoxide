@@ -1,5 +1,5 @@
-use crate::parse::parse_signature;
 use crate::TagRef;
+use crate::parse::parse_signature;
 
 mod decode;
 

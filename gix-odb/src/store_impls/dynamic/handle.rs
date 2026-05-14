@@ -2,13 +2,13 @@ use std::{
     cell::RefCell,
     ops::Deref,
     rc::Rc,
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
 };
 
 use gix_features::threading::OwnShared;
 use gix_hash::oid;
 
-use crate::store::{handle, types, RefreshMode};
+use crate::store::{RefreshMode, handle, types};
 
 pub(crate) enum SingleOrMultiIndex {
     Single {
@@ -349,7 +349,7 @@ impl TryFrom<&super::Store> for super::Store {
             &mut s.replacements(),
             crate::store::init::Options {
                 slots: crate::store::init::Slots::Given(s.files.len().try_into().expect("BUG: too many slots")),
-                object_hash: Default::default(),
+                object_hash: s.object_hash,
                 use_multi_pack_index: false,
                 alloc_limit_bytes: s.alloc_limit_bytes,
                 current_dir: s.current_dir.clone().into(),

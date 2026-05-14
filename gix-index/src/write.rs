@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use crate::{entry, extension, write::util::CountBytes, State, Version};
+use crate::{State, Version, entry, extension, write::util::CountBytes};
 
 /// A way to specify which of the optional extensions to write.
 #[derive(Default, Debug, Copy, Clone)]

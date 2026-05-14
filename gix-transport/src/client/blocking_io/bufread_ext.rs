@@ -3,11 +3,11 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
-use gix_packetline::{blocking_io::WithSidebands, read::ProgressAction, PacketLineRef};
+use gix_packetline::{PacketLineRef, blocking_io::WithSidebands, read::ProgressAction};
 
 use crate::{
-    client::{Error, MessageKind},
     Protocol,
+    client::{Error, MessageKind},
 };
 /// A function `f(is_error, text)` receiving progress or error information.
 pub type HandleProgress<'a> = Box<dyn FnMut(bool, &[u8]) -> ProgressAction + 'a>;

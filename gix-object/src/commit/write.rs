@@ -2,7 +2,7 @@ use std::io;
 
 use bstr::ByteSlice;
 
-use crate::{encode, encode::NL, Commit, CommitRef, Kind};
+use crate::{Commit, CommitRef, Kind, encode, encode::NL};
 
 impl crate::WriteTo for Commit {
     /// Serializes this instance to `out` in the git serialization format.

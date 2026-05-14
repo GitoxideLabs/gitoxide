@@ -8,6 +8,18 @@ static VAR1: &str = "VAR_03FC4045_6043_4A61_9D15_852236CB632B";
 static VAR2: &str = "VAR_8C135840_05DB_4F3A_BFDD_FC755EC35B89";
 static VAR3: &str = "VAR_9B23A2BE_E20B_4670_93E2_3A6A8D47F274";
 
+fn set_var(var: &str, value: &str) {
+    // SAFETY: These tests are marked serial and isolate their environment
+    // variables with unique names.
+    unsafe { env::set_var(var, value) };
+}
+
+fn remove_var(var: &str) {
+    // SAFETY: These tests are marked serial and isolate their environment
+    // variables with unique names.
+    unsafe { env::remove_var(var) };
+}
+
 struct TestEnv;
 
 impl TestEnv {
@@ -21,9 +33,9 @@ impl TestEnv {
 
 impl Drop for TestEnv {
     fn drop(&mut self) {
-        env::remove_var(VAR1);
-        env::remove_var(VAR2);
-        env::remove_var(VAR3);
+        remove_var(VAR1);
+        remove_var(VAR2);
+        remove_var(VAR3);
     }
 }
 
@@ -31,8 +43,8 @@ impl Drop for TestEnv {
 #[serial]
 fn nonoverlapping() {
     let _meta = TestEnv::new();
-    env::set_var(VAR1, "old1");
-    env::set_var(VAR2, "old2");
+    set_var(VAR1, "old1");
+    set_var(VAR2, "old2");
     {
         let _env = Env::new().set(VAR1, "new1").unset(VAR2).set(VAR3, "new3");
         assert_eq!(env::var_os(VAR1), Some("new1".into()));
@@ -59,7 +71,7 @@ fn overlapping_reset() {
 #[serial]
 fn overlapping_unset() {
     let _meta = TestEnv::new();
-    env::set_var(VAR1, "old1");
+    set_var(VAR1, "old1");
     {
         let _env = Env::new().unset(VAR1).unset(VAR1);
         assert_eq!(env::var_os(VAR1), None);
@@ -71,8 +83,8 @@ fn overlapping_unset() {
 #[serial]
 fn overlapping_combo() {
     let _meta = TestEnv::new();
-    env::set_var(VAR1, "old1");
-    env::set_var(VAR2, "old2");
+    set_var(VAR1, "old1");
+    set_var(VAR2, "old2");
     {
         let _env = Env::new()
             .set(VAR1, "new1A")

@@ -1,7 +1,7 @@
 use crate::transport::client::blocking_io::ReadlineBufRead;
 use crate::{
     fetch::response::ShallowUpdate,
-    handshake::{refs, refs::parse::Error, Ref},
+    handshake::{Ref, refs, refs::parse::Error},
 };
 
 /// Parse refs from the given input line by line. Protocol V2 is required for this to succeed.

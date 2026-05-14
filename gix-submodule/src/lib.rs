@@ -1,5 +1,5 @@
 //! Primitives for describing git submodules.
-#![deny(rust_2018_idioms, missing_docs)]
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 use std::{borrow::Cow, collections::BTreeMap};
@@ -55,7 +55,7 @@ impl File {
 
         let values = {
             let mut v: Vec<_> = values.into_iter().collect();
-            v.sort_by_key(|a| a.0 .0);
+            v.sort_by_key(|a| a.0.0);
             v
         };
 

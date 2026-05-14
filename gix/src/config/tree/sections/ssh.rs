@@ -1,6 +1,6 @@
 use crate::{
     config,
-    config::tree::{keys, Key, Section, Ssh},
+    config::tree::{Key, Section, Ssh, keys},
 };
 
 impl Ssh {

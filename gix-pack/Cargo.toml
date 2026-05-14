@@ -7,10 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
 license = "MIT OR Apache-2.0"
 description = "Implements git packs and related data structures"
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
-autotests = false
+rust-version = "1.85"
 
 [lib]
 doctest = false
@@ -19,6 +18,8 @@ doctest = false
 default = ["generate", "streaming-input"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
+## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
+sha256 = ["gix-hash/sha256"]
 ## generate new packs from a set of objects.
 generate = ["dep:gix-traverse", "dep:gix-diff", "dep:parking_lot", "dep:gix-hashtable"]
 ## Receive a pack as datastream and resolve it
@@ -32,6 +33,8 @@ pack-cache-lru-dynamic = ["dep:clru"]
 object-cache-dynamic = ["dep:clru", "dep:gix-hashtable"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-object/serde"]
+## Enable parallel algorithms.
+parallel = ["gix-features/parallel"]
 ## Make it possible to compile to the `wasm32-unknown-unknown` target.
 wasm = ["gix-diff?/wasm"]
 
@@ -66,9 +69,15 @@ document-features = { version = "0.2.0", optional = true }
 gix-tempfile = { version = "^23.0.0", default-features = false, path = "../gix-tempfile", optional = true }
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
-gix-hash = { version = "^0.25.0", path = "../gix-hash", features = ["sha256"] }
+gix-pack = { path = ".", features = ["sha1", "sha256", "pack-cache-lru-dynamic", "pack-cache-lru-static", "object-cache-dynamic", "serde"] }
+gix-testtools = { path = "../tests/tools", default-features = false }
+gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
+gix-object = { path = "../gix-object" }
+gix-traverse = { path = "../gix-traverse" }
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
+maplit = "1.0.2"
+memmap2 = "0.9.10"
 
 [package.metadata.docs.rs]
 all-features = true
-features = ["sha1", "document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]
+features = ["sha1", "sha256", "document-features", "pack-cache-lru-dynamic", "object-cache-dynamic", "serde"]

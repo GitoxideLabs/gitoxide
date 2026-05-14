@@ -177,11 +177,7 @@ impl TryInto<String> for S {
     type Error = ();
 
     fn try_into(self) -> Result<String, ()> {
-        if self.0 {
-            Ok(String::from("!2345"))
-        } else {
-            Err(())
-        }
+        if self.0 { Ok(String::from("!2345")) } else { Err(()) }
     }
 }
 

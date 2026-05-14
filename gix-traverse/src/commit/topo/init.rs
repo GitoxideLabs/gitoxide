@@ -1,10 +1,9 @@
-use gix_hash::{oid, ObjectId};
-use gix_revwalk::{graph::IdMap, PriorityQueue};
+use gix_hash::{ObjectId, oid};
+use gix_revwalk::{PriorityQueue, graph::IdMap};
 
 use crate::commit::{
-    find,
-    topo::{iter::gen_and_commit_time, Error, Sorting, WalkFlags},
-    Info, Parents, Topo,
+    Info, Parents, Topo, find,
+    topo::{Error, Sorting, WalkFlags, iter::gen_and_commit_time},
 };
 
 /// Builder for [`Topo`].
@@ -139,15 +138,15 @@ where
         {
             *w.indegrees.entry(*id).or_default() = 1;
             let commit = find(w.commit_graph.as_ref(), &w.find, id, &mut w.buf)?;
-            let (gen, time) = gen_and_commit_time(commit)?;
+            let (generation, time) = gen_and_commit_time(commit)?;
 
-            if gen < w.min_gen {
-                w.min_gen = gen;
+            if generation < w.min_gen {
+                w.min_gen = generation;
             }
 
             w.states.insert(*id, flags);
-            w.explore_queue.insert((gen, time), *id);
-            w.indegree_queue.insert((gen, time), *id);
+            w.explore_queue.insert((generation, time), *id);
+            w.indegree_queue.insert((generation, time), *id);
         }
 
         // NOTE: Parents of the ends must also be marked uninteresting for some

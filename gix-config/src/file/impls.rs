@@ -3,11 +3,11 @@ use std::{borrow::Cow, fmt::Display, str::FromStr};
 use bstr::{BStr, BString, ByteVec};
 
 use crate::{
+    File,
     file::Metadata,
     parse,
-    parse::{section, Event},
+    parse::{Event, section},
     value::normalize,
-    File,
 };
 
 impl FromStr for File<'static> {

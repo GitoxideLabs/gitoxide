@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project dedicated to implementing the git transport layer"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [lib]
 doctest = false
@@ -127,6 +127,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 gix-pack = { path = "../gix-pack", default-features = false, features = [
+    "sha1",
     "streaming-input",
 ] }
 gix-hash = { path = "../gix-hash", features = ["sha1"] }

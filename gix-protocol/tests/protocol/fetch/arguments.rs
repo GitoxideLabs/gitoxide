@@ -26,12 +26,11 @@ mod impls {
 
     use bstr::BStr;
     use gix_transport::{
-        client,
+        Protocol, Service, client,
         client::{
-            blocking_io::{RequestWriter, SetServiceResponse},
             Error, MessageKind, WriteMode,
+            blocking_io::{RequestWriter, SetServiceResponse},
         },
-        Protocol, Service,
     };
 
     use super::Transport;
@@ -88,12 +87,11 @@ mod impls {
     use async_trait::async_trait;
     use bstr::BStr;
     use gix_transport::{
-        client::{
-            self,
-            async_io::{RequestWriter, SetServiceResponse},
-            Error, MessageKind, WriteMode,
-        },
         Protocol, Service,
+        client::{
+            self, Error, MessageKind, WriteMode,
+            async_io::{RequestWriter, SetServiceResponse},
+        },
     };
 
     use super::Transport;
@@ -307,17 +305,17 @@ mod v2 {
         arguments.want(id("ff333369de1221f9bfbbe03a3a13e9a09bc1ffff"));
         arguments.send(&mut t, true).await.expect("sending to buffer to work");
         assert_eq!(
-                out.as_bstr(),
-                b"0012command=fetch
+            out.as_bstr(),
+            b"0012command=fetch
 0001000ethin-pack
 000eofs-delta
 0010include-tag
 0032want ff333369de1221f9bfbbe03a3a13e9a09bc1ffff
 0009done
 0000"
-                    .as_bstr(),
-                "we filter features/capabilities without value as these apparently shouldn't be listed (remote dies otherwise)"
-            );
+                .as_bstr(),
+            "we filter features/capabilities without value as these apparently shouldn't be listed (remote dies otherwise)"
+        );
     }
 
     #[maybe_async::test(feature = "blocking-client", async(feature = "async-client", async_std::test))]
@@ -335,8 +333,8 @@ mod v2 {
         arguments.want(id("ff333369de1221f9bfbbe03a3a13e9a09bc1ffff"));
         arguments.send(&mut t, true).await.expect("sending to buffer to work");
         assert_eq!(
-                out.as_bstr(),
-                b"0012command=fetch
+            out.as_bstr(),
+            b"0012command=fetch
 0001000ethin-pack
 000eofs-delta
 0010no-progress
@@ -346,9 +344,9 @@ mod v2 {
 0032want ff333369de1221f9bfbbe03a3a13e9a09bc1ffff
 0009done
 0000"
-                    .as_bstr(),
-                "we filter features/capabilities without value as these apparently shouldn't be listed (remote dies otherwise)"
-            );
+                .as_bstr(),
+            "we filter features/capabilities without value as these apparently shouldn't be listed (remote dies otherwise)"
+        );
     }
 
     #[maybe_async::test(feature = "blocking-client", async(feature = "async-client", async_std::test))]

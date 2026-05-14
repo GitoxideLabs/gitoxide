@@ -11,19 +11,17 @@ use bstr::BStr;
 pub use traits::{Error, GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
+    Protocol, Service,
     client::{
-        self,
+        self, MessageKind,
         blocking_io::{
-            self,
+            self, ExtendedBufRead, HandleProgress, RequestWriter, SetServiceResponse,
             bufread_ext::ReadlineBufRead,
             http::options::{HttpVersion, SslVersionRangeInclusive},
-            ExtendedBufRead, HandleProgress, RequestWriter, SetServiceResponse,
         },
         capabilities::blocking_recv::Handshake,
-        MessageKind,
     },
-    packetline::{blocking_io::StreamingPeekableIter, PacketLineRef},
-    Protocol, Service,
+    packetline::{PacketLineRef, blocking_io::StreamingPeekableIter},
 };
 
 #[cfg(feature = "http-client-curl")]

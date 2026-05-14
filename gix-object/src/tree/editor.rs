@@ -1,6 +1,6 @@
 use std::{
     cmp::Ordering,
-    collections::{hash_map, HashMap},
+    collections::{HashMap, hash_map},
     fmt::Formatter,
 };
 
@@ -8,9 +8,8 @@ use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_hash::ObjectId;
 
 use crate::{
-    tree,
+    Tree, tree,
     tree::{Editor, EntryKind},
-    Tree,
 };
 
 /// A way to constrain all [tree-edits](Editor) to a given subtree.
@@ -379,12 +378,11 @@ mod cursor {
     use gix_hash::ObjectId;
 
     use crate::{
-        tree,
+        Tree, tree,
         tree::{
-            editor::{Cursor, UpsertMode, WriteMode},
             Editor, EntryKind,
+            editor::{Cursor, UpsertMode, WriteMode},
         },
-        Tree,
     };
 
     /// Cursor handling

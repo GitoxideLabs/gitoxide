@@ -1,7 +1,7 @@
 use gix_error::message;
 use gix_hash::ObjectId;
 
-use crate::{bstr, bstr::BString, ext::ObjectIdExt, Repository};
+use crate::{Repository, bstr, bstr::BString, ext::ObjectIdExt};
 
 /// Additional information about candidates that caused ambiguity.
 #[derive(Debug)]

@@ -4,7 +4,7 @@ use std::{borrow::Cow, ffi::OsStr, path::Path};
 ///
 /// At the expense of extra-compute, it does nothing if there is no work to be done, returning the original input without allocating.
 pub fn precompose(s: Cow<'_, str>) -> Cow<'_, str> {
-    use unicode_normalization::{is_nfc, UnicodeNormalization};
+    use unicode_normalization::{UnicodeNormalization, is_nfc};
     if is_nfc(s.as_ref()) {
         s
     } else {
@@ -16,7 +16,7 @@ pub fn precompose(s: Cow<'_, str>) -> Cow<'_, str> {
 ///
 /// At the expense of extra-compute, it does nothing if there is no work to be done, returning the original input without allocating.
 pub fn decompose(s: Cow<'_, str>) -> Cow<'_, str> {
-    use unicode_normalization::{is_nfd, UnicodeNormalization};
+    use unicode_normalization::{UnicodeNormalization, is_nfd};
     if is_nfd(s.as_ref()) {
         s
     } else {

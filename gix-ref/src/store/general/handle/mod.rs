@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use crate::{store, Namespace};
+use crate::{Namespace, store};
 
 #[derive(Clone)]
 pub(crate) enum State {

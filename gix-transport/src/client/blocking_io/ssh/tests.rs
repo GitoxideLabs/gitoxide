@@ -1,6 +1,6 @@
 mod options {
     mod ssh_command {
-        use crate::client::blocking_io::ssh::{connect::Options, ProgramKind};
+        use crate::client::blocking_io::ssh::{ProgramKind, connect::Options};
 
         #[test]
         fn no_field_means_ssh() {
@@ -100,8 +100,8 @@ mod program_kind {
         use std::ffi::OsStr;
 
         use crate::{
-            client::blocking_io::ssh::{self, ProgramKind},
             Protocol,
+            client::blocking_io::ssh::{self, ProgramKind},
         };
 
         #[test]
@@ -337,9 +337,7 @@ mod program_kind {
         fn tortoiseplink_putty_plink() {
             for kind in [ProgramKind::TortoisePlink, ProgramKind::Plink, ProgramKind::Putty] {
                 assert_eq!(
-                    kind
-                        .line_to_err("publickey".into())
-                        .map(|err| err.kind()),
+                    kind.line_to_err("publickey".into()).map(|err| err.kind()),
                     Ok(std::io::ErrorKind::PermissionDenied),
                     "this program pops up error messages in a window, no way to extract information from it. Maybe there is other ways to use it, 'publickey' they mention all"
                 );

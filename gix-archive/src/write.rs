@@ -1,6 +1,6 @@
 #[cfg(any(feature = "tar", feature = "tar_gz", feature = "zip"))]
 use gix_error::ResultExt;
-use gix_error::{message, ErrorExt};
+use gix_error::{ErrorExt, message};
 use gix_worktree_stream::{Entry, Stream};
 
 use crate::{Error, Format, Options};

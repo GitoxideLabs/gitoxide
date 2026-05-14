@@ -2,9 +2,9 @@ use std::ops::ControlFlow;
 
 use gix_hash::ObjectId;
 pub use gix_object::tree::{EntryKind, EntryMode};
-use gix_object::{bstr::BStr, tree::next_entry, FindExt, TreeRefIter};
+use gix_object::{FindExt, TreeRefIter, bstr::BStr, tree::next_entry};
 
-use crate::{object::find, Id, ObjectDetached, Repository, Tree};
+use crate::{Id, ObjectDetached, Repository, Tree, object::find};
 
 /// All state needed to conveniently edit a tree, using only [update-or-insert](Editor::upsert()) and [removals](Editor::remove()).
 #[cfg(feature = "tree-editor")]

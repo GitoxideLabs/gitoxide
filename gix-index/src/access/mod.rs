@@ -4,9 +4,9 @@ use bstr::{BStr, ByteSlice, ByteVec};
 use filetime::FileTime;
 
 use crate::{
-    entry,
+    AccelerateLookup, Entry, PathStorage, PathStorageRef, State, Version, entry,
     entry::{Stage, StageRaw},
-    extension, AccelerateLookup, Entry, PathStorage, PathStorageRef, State, Version,
+    extension,
 };
 
 // TODO: integrate this somehow, somewhere, depending on later usage.

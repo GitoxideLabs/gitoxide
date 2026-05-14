@@ -1,7 +1,7 @@
 use std::{error::Error, path::Path};
 
+use crate::scripted_fixture_read_only;
 use gix_index::State;
-use gix_testtools::scripted_fixture_read_only_standalone;
 
 #[test]
 fn from_tree() -> crate::Result {
@@ -13,7 +13,7 @@ fn from_tree() -> crate::Result {
     ];
 
     for fixture in fixtures {
-        let worktree_dir = scripted_fixture_read_only_standalone(fixture)?;
+        let worktree_dir = scripted_fixture_read_only(fixture)?;
 
         let tree_id = tree_id(&worktree_dir);
 
@@ -30,7 +30,7 @@ fn from_tree() -> crate::Result {
 
 #[test]
 fn from_tree_validation() -> crate::Result {
-    let root = scripted_fixture_read_only_standalone("make_traverse_literal_separators.sh")?;
+    let root = scripted_fixture_read_only("make_traverse_literal_separators.sh")?;
     for repo_name in [
         "traverse_dotdot_slashes",
         "traverse_dotgit_slashes",
@@ -49,6 +49,30 @@ fn from_tree_validation() -> crate::Result {
             r"Note that this effectively tests what would happen on Windows, where \ also isn't allowed"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn from_tree_returns_file_directory_conflicts_until_fixed() -> crate::Result {
+    let worktree_dir = scripted_fixture_read_only("make_symlink_prefix_reuse_advisory.sh")?;
+    let tree_id = tree_id(&worktree_dir);
+    let odb = gix_odb::at(worktree_dir.join(".git").join("objects"))?;
+
+    let actual_state = State::from_tree(&tree_id, &odb, Default::default())?;
+    actual_state
+        .verify_entries()
+        .expect("valid, even though invariants aren't met");
+
+    let paths: Vec<_> = actual_state
+        .entries()
+        .iter()
+        .map(|entry| entry.path(&actual_state).to_owned())
+        .collect();
+    assert_eq!(
+        paths,
+        ["a", "a/post-checkout", "payload"],
+        "from_tree currently returns malformed file/directory conflicts; update this expected unfixed state once fixed"
+    );
     Ok(())
 }
 

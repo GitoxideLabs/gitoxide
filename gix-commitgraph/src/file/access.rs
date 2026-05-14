@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
-    file::{self, commit::Commit, COMMIT_DATA_ENTRY_SIZE_SANS_HASH},
     File,
+    file::{self, COMMIT_DATA_ENTRY_SIZE_SANS_HASH, commit::Commit},
 };
 
 /// Access
@@ -82,7 +82,7 @@ impl File {
         let mut lower_bound = if first_byte != 0 { self.fan[first_byte - 1] } else { 0 };
 
         while lower_bound < upper_bound {
-            let mid = (lower_bound + upper_bound) / 2;
+            let mid = u32::midpoint(lower_bound, upper_bound);
             let mid_sha = self.id_at(file::Position(mid));
 
             use std::cmp::Ordering::*;

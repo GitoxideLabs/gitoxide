@@ -106,7 +106,10 @@ mod set {
             assert_eq!(prev_value.as_deref().expect("prev value set"), expected_prev_value);
         }
 
-        assert_eq!(config.to_string(), "\n        [a]\n            a = \n            b = \" a\"\n            c=\"b\\t\"\n            d\"; comment\"\n            e =a\\n\\tc  d\\\\ \\\"x\\\"\n");
+        assert_eq!(
+            config.to_string(),
+            "\n        [a]\n            a = \n            b = \" a\"\n            c=\"b\\t\"\n            d\"; comment\"\n            e =a\\n\\tc  d\\\\ \\\"x\\\"\n"
+        );
         assert_eq!(
             config
                 .section_mut("a", None)?

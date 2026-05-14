@@ -1,8 +1,8 @@
 use gix_object::bstr::BString;
 
 use crate::{
-    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog, Target},
     PartialNameRef,
+    transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog, Target},
 };
 
 /// An extension trait to perform commonly used operations on edits across different ref stores.

@@ -1,10 +1,10 @@
 use anyhow::Context;
 use gix::{
+    ObjectId,
     bstr::{BString, ByteSlice},
     objs::tree::EntryMode,
     odb::store::RefreshMode,
     prelude::ObjectIdExt,
-    ObjectId,
 };
 
 pub fn tree(

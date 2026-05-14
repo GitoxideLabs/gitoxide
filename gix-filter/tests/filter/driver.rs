@@ -20,7 +20,7 @@ mod baseline {
 mod shutdown {
     use std::time::Duration;
 
-    use gix_filter::driver::{shutdown::Mode, Operation, Process};
+    use gix_filter::driver::{Operation, Process, shutdown::Mode};
 
     use crate::driver::apply::driver_with_process;
 
@@ -63,13 +63,12 @@ pub(crate) mod apply {
 
     use bstr::{BStr, BString, ByteSlice};
     use gix_filter::{
-        driver,
-        driver::{apply, apply::Delay, Operation},
-        Driver,
+        Driver, driver,
+        driver::{Operation, apply, apply::Delay},
     };
     use serial_test::serial;
 
-    use crate::driver::{shutdown::extract_client, DRIVER};
+    use crate::driver::{DRIVER, shutdown::extract_client};
 
     fn driver_no_process() -> Driver {
         let mut driver = driver_with_process();
@@ -97,24 +96,28 @@ pub(crate) mod apply {
         let mut state = gix_filter::driver::State::default();
         let mut driver = driver_no_process();
         driver.smudge = None;
-        assert!(state
-            .apply(
-                &driver,
-                &mut std::io::empty(),
-                Operation::Smudge,
-                context_from_path("ignored")
-            )?
-            .is_none());
+        assert!(
+            state
+                .apply(
+                    &driver,
+                    &mut std::io::empty(),
+                    Operation::Smudge,
+                    context_from_path("ignored")
+                )?
+                .is_none()
+        );
 
         driver.clean = None;
-        assert!(state
-            .apply(
-                &driver,
-                &mut std::io::empty(),
-                Operation::Clean,
-                context_from_path("ignored")
-            )?
-            .is_none());
+        assert!(
+            state
+                .apply(
+                    &driver,
+                    &mut std::io::empty(),
+                    Operation::Clean,
+                    context_from_path("ignored")
+                )?
+                .is_none()
+        );
         Ok(())
     }
 
@@ -159,9 +162,11 @@ pub(crate) mod apply {
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
 
-        assert!(client
-            .invoke("next-smudge-aborts", &mut None.into_iter(), &mut &b""[..])?
-            .is_success());
+        assert!(
+            client
+                .invoke("next-smudge-aborts", &mut None.into_iter(), &mut &b""[..])?
+                .is_success()
+        );
         assert!(
             matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "abort")
         );
@@ -186,13 +191,15 @@ pub(crate) mod apply {
         let driver = driver_with_process();
         let client = extract_client(state.maybe_launch_process(&driver, Operation::Clean, "does not matter".into())?);
 
-        assert!(client
-            .invoke(
-                "next-invocation-returns-strange-status-and-smudge-fails-permanently",
-                &mut None.into_iter(),
-                &mut &b""[..]
-            )?
-            .is_success());
+        assert!(
+            client
+                .invoke(
+                    "next-invocation-returns-strange-status-and-smudge-fails-permanently",
+                    &mut None.into_iter(),
+                    &mut &b""[..]
+                )?
+                .is_success()
+        );
         assert!(
             matches!(state.apply(&driver, &mut std::io::empty(), Operation::Smudge, context_from_path("any")), Err(driver::apply::Error::ProcessStatus {status: driver::process::Status::Named(name), ..}) if name == "send-term-signal")
         );

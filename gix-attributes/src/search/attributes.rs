@@ -1,12 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, ByteSlice};
-use gix_glob::search::{pattern, Pattern};
+use gix_glob::search::{Pattern, pattern};
 
 use super::Attributes;
 use crate::{
-    search::{Assignments, MetadataCollection, Outcome, TrackedAssignment, Value},
     Search,
+    search::{Assignments, MetadataCollection, Outcome, TrackedAssignment, Value},
 };
 
 /// Instantiation and initialization.

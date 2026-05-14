@@ -1,4 +1,4 @@
-use crate::{stack::State, PathIdMapping};
+use crate::{PathIdMapping, stack::State};
 
 /// Various aggregate numbers related to the stack delegate itself.
 #[derive(Default, Clone, Copy, Debug)]

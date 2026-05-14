@@ -6,8 +6,8 @@ enum Error {
     TryFromError,
 }
 
-/// Needed for roundtripping object types that take a `hash_kind` parameter.
-/// This is the same as `round_trip`, but for types that have `from_bytes()` with `hash_kind`.
+/// Needed for roundtripping object types that take a `object_hash` parameter.
+/// This is the same as `round_trip`, but for types that have `from_bytes()` with `object_hash`.
 macro_rules! round_trip_with_hash_kind {
     ($owned:ty, $borrowed:ty, $( $files:literal ), +) => {
         #[test]
@@ -107,7 +107,7 @@ mod commit {
 }
 
 mod tree {
-    use gix_object::{tree, tree::EntryKind, WriteTo};
+    use gix_object::{WriteTo, tree, tree::EntryKind};
 
     #[test]
     fn write_to_does_not_validate() {
@@ -186,7 +186,7 @@ mod blob {
             let w = &mut output;
             w.write_all(&item.loose_header())?;
             item.write_to(w)?;
-            let parsed = ObjectRef::from_loose(&output, gix_testtools::hash_kind_from_env().unwrap_or_default())?;
+            let parsed = ObjectRef::from_loose(&output, gix_testtools::object_hash())?;
             let item2 = BlobRef::try_from(parsed).or(Err(super::Error::TryFromError))?;
             assert_eq!(
                 item2,
@@ -202,7 +202,7 @@ mod blob {
         let w = &mut output;
         w.write_all(&item.loose_header())?;
         item.write_to(w)?;
-        let parsed = ObjectRef::from_loose(&output, gix_testtools::hash_kind_from_env().unwrap_or_default())?;
+        let parsed = ObjectRef::from_loose(&output, gix_testtools::object_hash())?;
         let parsed_borrowed = BlobRef::try_from(parsed).or(Err(super::Error::TryFromError))?;
         let item2: Blob = parsed_borrowed.into();
         assert_eq!(
@@ -219,7 +219,7 @@ mod blob {
 
 mod loose_header {
     use bstr::ByteSlice;
-    use gix_object::{decode, encode, Kind};
+    use gix_object::{Kind, decode, encode};
 
     #[test]
     fn round_trip() -> Result<(), Box<dyn std::error::Error>> {

@@ -22,10 +22,12 @@ mod canonicalized {
     fn file_that_is_current_dir_is_absolutized() -> crate::Result {
         let url = gix_url::parse(".".into())?;
         assert!(gix_path::from_bstr(Cow::Borrowed(url.path.as_ref())).is_relative());
-        assert!(gix_path::from_bstr(Cow::Borrowed(
-            url.canonicalized(&std::env::current_dir()?)?.path.as_ref()
-        ))
-        .is_absolute());
+        assert!(
+            gix_path::from_bstr(Cow::Borrowed(
+                url.canonicalized(&std::env::current_dir()?)?.path.as_ref()
+            ))
+            .is_absolute()
+        );
         Ok(())
     }
 }

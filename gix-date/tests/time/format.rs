@@ -1,6 +1,6 @@
 use gix_date::{
-    time::{format, Format},
     Time,
+    time::{Format, format},
 };
 
 #[test]

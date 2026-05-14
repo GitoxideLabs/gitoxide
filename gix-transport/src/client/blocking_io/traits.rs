@@ -3,11 +3,11 @@ use std::{io::Write, ops::DerefMut};
 use bstr::BString;
 
 use crate::{
-    client::{
-        blocking_io::{request::RequestWriter, ExtendedBufRead, ReadlineBufRead},
-        Capabilities, Error, MessageKind, TransportWithoutIO, WriteMode,
-    },
     Protocol, Service,
+    client::{
+        Capabilities, Error, MessageKind, TransportWithoutIO, WriteMode,
+        blocking_io::{ExtendedBufRead, ReadlineBufRead, request::RequestWriter},
+    },
 };
 
 /// The response of the [`handshake()`][Transport::handshake()] method.

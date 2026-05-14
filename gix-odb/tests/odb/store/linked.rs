@@ -5,7 +5,7 @@ mod iter {
     use gix_odb::Header;
     use gix_pack::Find;
 
-    use crate::odb::db;
+    use crate::db;
 
     #[test]
     fn a_bunch_of_loose_and_packed_objects() -> crate::Result {
@@ -30,14 +30,15 @@ mod locate {
     use gix_odb::Handle;
     use gix_pack::Find;
 
-    use crate::{hex_to_id, odb::db};
+    use crate::{db, hex_to_id};
 
     fn can_locate(db: &Handle, hex_id: &str) {
         let mut buf = vec![];
-        assert!(db
-            .try_find(&hex_to_id(hex_id), &mut buf)
-            .expect("no read error")
-            .is_some());
+        assert!(
+            db.try_find(&hex_to_id(hex_id), &mut buf)
+                .expect("no read error")
+                .is_some()
+        );
     }
 
     #[test]
@@ -57,7 +58,7 @@ mod init {
     use gix_hash::ObjectId;
     use gix_object::Exists;
 
-    use crate::odb::{alternate::alternate, db};
+    use crate::{alternate::alternate, db};
 
     #[test]
     fn multiple_linked_repositories_via_alternates() -> crate::Result {

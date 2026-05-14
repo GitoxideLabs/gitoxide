@@ -10,12 +10,11 @@ use std::{
 
 use bstr::ByteSlice;
 use gix_transport::{
-    client::{
-        self,
-        blocking_io::{http, SetServiceResponse, Transport, TransportV2Ext},
-        TransportWithoutIO,
-    },
     Protocol, Service,
+    client::{
+        self, TransportWithoutIO,
+        blocking_io::{SetServiceResponse, Transport, TransportV2Ext, http},
+    },
 };
 
 use crate::fixture_bytes;

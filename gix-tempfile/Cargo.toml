@@ -7,9 +7,9 @@ repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A tempfile implementation with a global registry to assure cleanup"
 authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
-edition = "2021"
+edition = "2024"
 include = ["/src/**/*", "/LICENSE-*", "/README.md"]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [[example]]
 name = "delete-tempfiles-on-sigterm"
@@ -31,7 +31,7 @@ doctest = true
 test = true
 
 [dependencies]
-gix-fs = { version = "^0.21.0", path = "../gix-fs" }
+gix-fs = { version = "^0.21.1", path = "../gix-fs" }
 parking_lot = "0.12.4"
 dashmap = { version = "6.0.1", optional = true }
 tempfile = "3.26.0"
@@ -50,7 +50,7 @@ signals = ["dep:signal-hook", "dep:signal-hook-registry"]
 hp-hashmap = ["dep:dashmap"]
 
 [target.'cfg(not(windows))'.dependencies]
-libc = { version = "0.2.182", default-features = false }
+libc = { version = "0.2.186", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
