@@ -298,6 +298,54 @@ fn from_nonbare_parent_repo_set_workdir() -> gix_testtools::Result {
     Ok(())
 }
 
+#[test]
+#[cfg(feature = "worktree-mutation")]
+fn add_worktree_simple() -> gix_testtools::Result {
+    use core::sync::atomic::AtomicBool;
+    use gix::{progress, repository};
+    use gix_ref::Target;
+
+    let (mut repo, _tmp_copy) = crate::basic_rw_repo()?;
+
+    let tempdir = gix_testtools::tempfile::tempdir()?;
+    let wt_dir = tempdir.path().join("test-wt");
+
+    let head = repo.head_name()?.expect("Should have named HEAD");
+
+    let target = Target::Symbolic(head);
+
+    gix::worktree::add::add_worktree(
+        &mut repo,
+        &wt_dir,
+        target,
+        &progress::Discard,
+        &progress::Discard,
+        &AtomicBool::new(false),
+        Default::default(),
+    )?;
+
+    let wts = repo.worktrees().unwrap();
+    assert_eq!(1, wts.len(), "Should have exactly one worktree");
+
+    let wt_proxy = &wts[0];
+    let wt_repo = wt_proxy.clone().into_repo()?;
+    let wt  = wt_repo.worktree().unwrap();
+
+    assert_eq!(wt.base(), wt_dir, "Worktree location should match");
+    assert!(wt.dot_git_exists(), ".git should exist in the worktree");
+    assert!(!wt.is_locked(), "Worktree should not be locked");
+    assert!(!wt.is_main(), "Worktree should not be main");
+    assert_eq!(wt_repo.kind(), repository::Kind::LinkedWorkTree, "Should be a worktree");
+
+    assert_eq!(wt_repo.main_repo()?, repo, "Main repo should match the original repo");
+
+    assert_eq!(repo.head_id().unwrap(), wt_repo.head_id().unwrap(), "Head ids should match");
+    assert!(wt_dir.join("this").exists(), "Files should be checked out");
+    assert!(wt_repo.index_path().exists(), "Index file should exist");
+
+    Ok(())
+}
+
 fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
     assert_eq!(main_repo.is_bare(), should_be_bare);
     assert_eq!(main_repo.kind(), gix::repository::Kind::Common);
