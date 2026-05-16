@@ -37,6 +37,9 @@ pub enum Error {
     #[error("Can't checkout a worktree dir")]
     CantCheckoutWorktreeDir(#[from] checkout::Error),
 
+    #[error("Failed to reopen object database")]
+    OpenOdb(#[from] std::io::Error),
+
     #[error("Can't prepare linked worktree HEAD update")]
     PrepareHeadUpdate(#[from] gix_ref::file::transaction::prepare::Error),
 
@@ -81,7 +84,7 @@ pub fn add_worktree(
     let res = checkout(
         &mut target_idx,
         wt_dir,
-        repo.objects.clone(),
+        repo.objects.clone().into_arc()?,
         files,
         bytes,
         should_interrupt,
