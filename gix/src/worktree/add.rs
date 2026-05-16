@@ -48,8 +48,8 @@ pub enum Error {
 }
 
 ///
-pub fn add_worktree<'repo>(
-    repo: &'repo mut Repository,
+pub fn add_worktree(
+    repo: &mut Repository,
     wt_dir: &Path,
     target: gix_ref::Target,
     files: &dyn gix_features::progress::Count,
@@ -62,7 +62,7 @@ pub fn add_worktree<'repo>(
     let wt_repo_git_dir = wt_dir.join(".git");
     let wt_name = wt_dir.file_name().unwrap_or(OsStr::new("wt"));
 
-    let wt_data_dir = create_wt_data_dir(&base_git_dir, wt_name)?;
+    let wt_data_dir = create_wt_data_dir(base_git_dir, wt_name)?;
     std::fs::create_dir_all(wt_dir).map_err(Error::CantCreateWorktreeDir)?;
     std::fs::write(wt_data_dir.join("commondir"), "../..\n").map_err(Error::CantSetupWorktreeDir)?;
     std::fs::write(wt_data_dir.join("gitdir"), format!("{}\n", wt_repo_git_dir.display()))
