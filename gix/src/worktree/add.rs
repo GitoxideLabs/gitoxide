@@ -5,7 +5,10 @@ use std::{
 };
 
 use gix_lock::acquire;
-use gix_ref::transaction::{self, RefEdit};
+use gix_ref::{
+    bstr::BString,
+    transaction::{self, RefEdit},
+};
 use gix_worktree_state::checkout;
 
 use crate::{Commit, RefStore, Repository};
@@ -83,11 +86,15 @@ pub fn add_worktree<'repo>(
         bytes,
         should_interrupt,
         options,
-    )
-    ?;
+    )?;
     target_idx.write(Default::default())?;
-    std::fs::write(&wt_repo_git_dir, format!("gitdir: {}\n", wt_data_dir.display()))
-        .map_err(Error::CantSetupWorktreeDir)?;
+    std::fs::write(&wt_repo_git_dir, {
+        let mut res = BString::new(b"gitdir: ".into());
+        res.extend_from_slice(&gix_path::into_bstr(&wt_data_dir));
+        res.extend_from_slice(b"\n");
+        res
+    })
+    .map_err(Error::CantSetupWorktreeDir)?;
 
     let store = RefStore::for_linked_worktree(wt_data_dir.clone(), base_git_dir.into(), Default::default());
     let edit = RefEdit {

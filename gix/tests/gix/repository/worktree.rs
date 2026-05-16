@@ -329,7 +329,7 @@ fn add_worktree_simple() -> gix_testtools::Result {
 
     let wt_proxy = &wts[0];
     let wt_repo = wt_proxy.clone().into_repo()?;
-    let wt  = wt_repo.worktree().unwrap();
+    let wt = wt_repo.worktree().unwrap();
 
     assert_eq!(wt.base(), wt_dir, "Worktree location should match");
     assert!(wt.dot_git_exists(), ".git should exist in the worktree");
@@ -339,7 +339,11 @@ fn add_worktree_simple() -> gix_testtools::Result {
 
     assert_eq!(wt_repo.main_repo()?, repo, "Main repo should match the original repo");
 
-    assert_eq!(repo.head_id().unwrap(), wt_repo.head_id().unwrap(), "Head ids should match");
+    assert_eq!(
+        repo.head_id().unwrap(),
+        wt_repo.head_id().unwrap(),
+        "Head ids should match"
+    );
     assert!(wt_dir.join("this").exists(), "Files should be checked out");
     assert!(wt_repo.index_path().exists(), "Index file should exist");
 
