@@ -149,9 +149,10 @@ fn create_wt_data_dir(git_dir: &Path, wt_name: &OsStr) -> Result<PathBuf, Error>
             name
         };
         let wt_dir = wts_dir.join(wt_dir_name);
-        match std::fs::create_dir_all(&wt_dir) {
+        match std::fs::create_dir(&wt_dir) {
             Ok(()) => return Ok(wt_dir),
-            Err(err) => last_error = Some(err),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last_error = Some(err),
+            Err(err) => return Err(Error::CantCreateWorktreeDir(err)),
         }
     }
 
