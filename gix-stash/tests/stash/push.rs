@@ -337,3 +337,206 @@ fn push_returns_empty_repository_on_no_commits() -> gix_testtools::Result {
     // See `gix::Repository::stash_push` for the porcelain-level guard.
     Ok(())
 }
+
+/// Open the symlink push fixture using `Creation::Execute` so that the symlink
+/// created by the script is preserved in the writable copy.
+fn push_symlink_fixture() -> gix_testtools::Result<gix_testtools::tempfile::TempDir> {
+    gix_testtools::scripted_fixture_writable_with_args(
+        "make_push_symlink_repo.sh",
+        None::<String>,
+        gix_testtools::Creation::Execute,
+    )
+}
+
+/// When `include_untracked=true` an untracked symlink must be captured with
+/// entry mode `Link` and a blob containing the **link target path**, not the
+/// content of the file the link points to.
+#[test]
+fn push_captures_symlink_target_for_untracked_links() -> gix_testtools::Result {
+    let tmp = push_symlink_fixture()?;
+    let worktree = tmp.path();
+
+    // Verify the fixture produced a symlink on disk.
+    let link_path = worktree.join("mylink");
+    assert!(
+        link_path.symlink_metadata()?.file_type().is_symlink(),
+        "fixture must create mylink as a symlink"
+    );
+
+    // Also make a tracked change so push doesn't bail with NoLocalChanges
+    // when the symlink is the only untracked entry.
+    std::fs::write(worktree.join("tracked.txt"), "changed\n")?;
+
+    let repo = Repo::open(worktree)?;
+    let index = repo.load_index()?;
+    let head_oid = head_commit_oid(worktree, &repo.refs, &repo.odb)?;
+    let head_tree = commit_tree(&repo.odb, head_oid)?;
+    let head_branch: gix_ref::FullName = "refs/heads/main".try_into().expect("valid ref name");
+
+    let committer = test_committer();
+    let mut time_buf = TimeBuf::default();
+    let committer_ref = committer.to_ref(&mut time_buf);
+
+    let outcome = gix_stash::push(
+        gix_stash::PushContext {
+            refs: &repo.refs,
+            objects: &repo.odb,
+            index: &index,
+            worktree,
+            committer: committer_ref,
+            checkout_options: Default::default(),
+        },
+        head_oid,
+        head_tree,
+        Some(head_branch.as_ref()),
+        gix_stash::PushOptions {
+            include_untracked: true,
+            ..Default::default()
+        },
+    )?;
+
+    // The untracked commit must exist (mylink was captured).
+    let untracked_commit_oid = outcome
+        .untracked_commit
+        .expect("untracked_commit must be Some when symlink was captured");
+
+    // The blob stored for mylink must be the link target "tracked.txt",
+    // NOT the content of tracked.txt.
+    let untracked_tree = commit_tree(&repo.odb, untracked_commit_oid)?;
+    let blob_bytes = blob_content_in_tree(&repo.odb, untracked_tree, b"mylink")?;
+    assert_eq!(
+        blob_bytes, b"tracked.txt",
+        "symlink blob must store the link target path, not the target file content"
+    );
+
+    // Verify the mode stored in the tree is Link.
+    use gix_object::FindExt;
+    let mut buf = Vec::new();
+    let tree = repo.odb.find_tree(&untracked_tree, &mut buf)?;
+    let entry = tree
+        .entries
+        .iter()
+        .find(|e| e.filename == "mylink")
+        .expect("mylink entry must exist in untracked tree");
+    assert_eq!(
+        entry.mode.kind(),
+        gix_object::tree::EntryKind::Link,
+        "symlink must be stored with EntryKind::Link"
+    );
+
+    Ok(())
+}
+
+/// When `include_untracked=true` but there are no untracked files (and no
+/// staged/WIP changes either), `push` must return `Err(NoLocalChanges)`.
+#[test]
+fn push_returns_no_local_changes_with_include_untracked_when_nothing_to_save() -> gix_testtools::Result {
+    let tmp = push_fixture()?;
+    let worktree = tmp.path();
+    let repo = Repo::open(worktree)?;
+    let index = repo.load_index()?;
+    let head_oid = head_commit_oid(worktree, &repo.refs, &repo.odb)?;
+    let head_tree = commit_tree(&repo.odb, head_oid)?;
+    let head_branch: gix_ref::FullName = "refs/heads/main".try_into().expect("valid ref name");
+
+    let committer = test_committer();
+    let mut time_buf = TimeBuf::default();
+    let committer_ref = committer.to_ref(&mut time_buf);
+
+    let result = gix_stash::push(
+        gix_stash::PushContext {
+            refs: &repo.refs,
+            objects: &repo.odb,
+            index: &index,
+            worktree,
+            committer: committer_ref,
+            checkout_options: Default::default(),
+        },
+        head_oid,
+        head_tree,
+        Some(head_branch.as_ref()),
+        gix_stash::PushOptions {
+            include_untracked: true,
+            ..Default::default()
+        },
+    );
+
+    match result {
+        Err(gix_stash::PushError::NoLocalChanges) => {}
+        Ok(_) => {
+            return Err(
+                "BUG: push with include_untracked=true on a clean repo must return NoLocalChanges, \
+                 not succeed with an empty stash commit"
+                    .into(),
+            );
+        }
+        Err(e) => return Err(e.into()),
+    }
+
+    Ok(())
+}
+
+/// `push` with `keep_index=true` must leave the WT reflecting the **index**
+/// state (staged changes visible on disk) rather than resetting to HEAD.
+#[test]
+fn push_with_keep_index_preserves_staged_changes_in_wt() -> gix_testtools::Result {
+    let tmp = push_fixture()?;
+    let worktree = tmp.path();
+
+    // Stage a modification.
+    std::fs::write(worktree.join("tracked.txt"), "staged content\n")?;
+    std::process::Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(worktree)
+        .status()?;
+
+    let repo = Repo::open(worktree)?;
+    let index = repo.load_index()?;
+    let head_oid = head_commit_oid(worktree, &repo.refs, &repo.odb)?;
+    let head_tree = commit_tree(&repo.odb, head_oid)?;
+    let head_branch: gix_ref::FullName = "refs/heads/main".try_into().expect("valid ref name");
+
+    let committer = test_committer();
+    let mut time_buf = TimeBuf::default();
+    let committer_ref = committer.to_ref(&mut time_buf);
+
+    let outcome = gix_stash::push(
+        gix_stash::PushContext {
+            refs: &repo.refs,
+            objects: &repo.odb,
+            index: &index,
+            worktree,
+            committer: committer_ref,
+            checkout_options: gix_worktree_state::checkout::Options {
+                overwrite_existing: true,
+                ..Default::default()
+            },
+        },
+        head_oid,
+        head_tree,
+        Some(head_branch.as_ref()),
+        gix_stash::PushOptions {
+            keep_index: true,
+            ..Default::default()
+        },
+    )?;
+
+    // refs/stash must be set.
+    assert!(
+        repo.refs.try_find("refs/stash")?.is_some(),
+        "refs/stash must be created by push"
+    );
+
+    // The stash must have been recorded.
+    let _ = outcome.stash;
+
+    // With keep_index=true the WT file must still contain the staged content,
+    // not the HEAD content.
+    let wt_content = std::fs::read(worktree.join("tracked.txt"))?;
+    assert_eq!(
+        wt_content, b"staged content\n",
+        "keep_index=true must leave the staged content on disk"
+    );
+
+    Ok(())
+}

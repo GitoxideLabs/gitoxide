@@ -198,17 +198,30 @@ pub(crate) mod function {
             checkout_options,
         } = ctx;
         // ------------------------------------------------------------------ //
-        // Build the WIP and index trees early so we can detect the no-changes
-        // case before writing any commits or updating any refs.
+        // Build all three trees before writing any commits so the
+        // NoLocalChanges check can see the full picture.
         // ------------------------------------------------------------------ //
         let wip_tree_oid = write_wip_tree(index, objects, objects, head_tree, worktree)?;
         let index_tree_oid = write_tree_from_index(index, objects, objects, head_tree)?;
 
-        // Guard: if neither the working tree nor the index differs from HEAD,
-        // and we are not capturing untracked files, there is nothing to stash.
+        // Collect untracked files (trees only, no commits yet) so we can
+        // include them in the NoLocalChanges decision below.
+        let (pending_untracked_tree, pending_untracked_paths) = if options.include_untracked {
+            let (tree, paths) = write_untracked_tree(objects, objects, worktree, index)?;
+            (Some(tree), paths)
+        } else {
+            (None, Vec::new())
+        };
+
+        // Guard: nothing to stash when all three trees are empty / identical
+        // to HEAD.  Checking the untracked tree against the empty-tree OID
+        // guards against the case where `include_untracked=true` but the
+        // worktree has no untracked files.
         let has_wt_changes = wip_tree_oid != head_tree;
         let has_index_changes = index_tree_oid != head_tree;
-        if !has_wt_changes && !has_index_changes && !options.include_untracked {
+        let empty_tree = ObjectId::empty_tree(head_commit.kind());
+        let has_untracked = pending_untracked_tree.as_ref().is_some_and(|t| *t != empty_tree);
+        if !has_wt_changes && !has_index_changes && !has_untracked {
             return Err(Error::NoLocalChanges);
         }
 
@@ -236,9 +249,7 @@ pub(crate) mod function {
         // ------------------------------------------------------------------ //
         // parent[2] — untracked files commit (optional).
         // ------------------------------------------------------------------ //
-        let (untracked_commit_oid, untracked_paths) = if options.include_untracked {
-            let empty_tree = ObjectId::empty_tree(head_commit.kind());
-            let (untracked_tree, paths) = write_untracked_tree(objects, objects, worktree, index)?;
+        let (untracked_commit_oid, untracked_paths) = if let Some(untracked_tree) = pending_untracked_tree {
             if untracked_tree != empty_tree {
                 let msg = format!(
                     "untracked files on {branch}: {short} {subj}",
@@ -254,7 +265,7 @@ pub(crate) mod function {
                         committer,
                         msg.as_bytes().as_bstr(),
                     )?),
-                    paths,
+                    pending_untracked_paths,
                 )
             } else {
                 (None, Vec::new())
@@ -323,15 +334,17 @@ pub(crate) mod function {
             .commit(committer_owned.to_ref(&mut time_buf))?;
 
         // ------------------------------------------------------------------ //
-        // Reset working tree to HEAD.
+        // Reset working tree — to HEAD, or to the index when keep_index=true.
         // ------------------------------------------------------------------ //
-        // Build a fresh index from HEAD's tree, then use gix_worktree_state::checkout
-        // to overwrite the working tree with HEAD content.
-        let mut head_index =
-            gix_index::State::from_tree(&head_tree, objects, gix_validate::path::component::Options::default())?;
+        // With keep_index=true the WT is reset to the *index* state (staged
+        // changes are preserved on disk) rather than to HEAD.  We already
+        // computed `index_tree_oid` above, so we just reuse it.
+        let reset_tree = if options.keep_index { index_tree_oid } else { head_tree };
+        let mut reset_index =
+            gix_index::State::from_tree(&reset_tree, objects, gix_validate::path::component::Options::default())?;
         let should_interrupt = std::sync::atomic::AtomicBool::new(false);
         gix_worktree_state::checkout(
-            &mut head_index,
+            &mut reset_index,
             worktree,
             objects.clone(),
             &gix_features::progress::Discard,
@@ -573,19 +586,26 @@ pub(crate) mod function {
                     continue;
                 }
 
-                let content = std::fs::read(&abs_path).map_err(|e| Error::ReadFile {
-                    path: abs_path.clone(),
-                    source: e,
-                })?;
-                let blob_oid = odb
-                    .write_buf(gix_object::Kind::Blob, &content)
-                    .map_err(Error::WriteBlob)?;
-
-                let kind = if file_type.is_symlink() {
-                    EntryKind::Link
+                let (blob_content, kind) = if file_type.is_symlink() {
+                    // Store the symlink target path as the blob, not the
+                    // content of the file the link points to.
+                    let target = std::fs::read_link(&abs_path).map_err(|e| Error::ReadFile {
+                        path: abs_path.clone(),
+                        source: e,
+                    })?;
+                    let target_bytes = gix_path::into_bstr(target);
+                    (target_bytes.as_ref().to_vec(), EntryKind::Link)
                 } else {
-                    EntryKind::Blob
+                    let content = std::fs::read(&abs_path).map_err(|e| Error::ReadFile {
+                        path: abs_path.clone(),
+                        source: e,
+                    })?;
+                    (content, EntryKind::Blob)
                 };
+
+                let blob_oid = odb
+                    .write_buf(gix_object::Kind::Blob, &blob_content)
+                    .map_err(Error::WriteBlob)?;
 
                 let rela_bstr: &bstr::BStr = rela.as_bstr();
                 let components: Vec<&bstr::BStr> =
