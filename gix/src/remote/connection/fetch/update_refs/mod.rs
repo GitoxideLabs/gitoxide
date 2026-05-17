@@ -547,10 +547,7 @@ fn build_lookup_fast_path(repo: &Repository) -> Option<LookupFastPath> {
         .filter_map(Result::ok)
         .map(|r| r.name.as_bstr().to_owned())
         .collect();
-    Some(LookupFastPath {
-        packed,
-        loose_shadows,
-    })
+    Some(LookupFastPath { packed, loose_shadows })
 }
 
 #[cfg(test)]
