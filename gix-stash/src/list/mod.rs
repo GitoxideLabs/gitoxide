@@ -33,14 +33,22 @@ pub struct Outcome {
 
 /// Errors returned by [`function::list`].
 #[derive(Debug, thiserror::Error)]
-#[allow(missing_docs)]
 pub enum Error {
-    #[error("not implemented yet")]
-    NotImplemented,
+    /// The reflog file for `refs/stash` could not be read or seeked.
+    ///
+    /// This is extracted from [`gix_ref::file::log::Error`] since I/O is
+    /// the only variant that can occur when a hard-coded, valid ref name is used.
+    #[error("failed to perform I/O while reading the refs/stash reflog")]
+    Io(#[from] std::io::Error),
+    /// An individual reflog line failed to decode.
+    #[error("failed to decode a reflog line for refs/stash")]
+    DecodeReflog(#[from] gix_ref::file::log::iter::reverse::Error),
 }
 
 pub(crate) mod function {
-    use super::{Error, Outcome};
+    use gix_ref::FullName;
+
+    use super::{Entry, Error, Outcome};
 
     /// Walk the reflog of `refs/stash` and return every stash entry, newest
     /// first.
@@ -48,8 +56,50 @@ pub(crate) mod function {
     /// Returns an empty [`Outcome`] when `refs/stash` is unborn — matching
     /// `git stash list` which prints nothing in that case.
     ///
-    /// Returns [`Error::NotImplemented`] until the MVP lands.
-    pub fn list() -> Result<Outcome, Error> {
-        Err(Error::NotImplemented)
+    /// `refs` is the file-based ref store for the repository (typically the
+    /// `.git/` directory or the common-dir for linked worktrees).
+    pub fn list(refs: &gix_ref::file::Store) -> Result<Outcome, Error> {
+        // Parse the well-known ref name once.  FullName validates at
+        // creation time so the expect is safe for this hard-coded literal.
+        let stash_name: FullName = "refs/stash".try_into().expect("refs/stash is a valid ref name");
+
+        // 4 KiB sliding window for the reverse-reflog iterator.
+        let mut buf = vec![0u8; 4 * 1024];
+
+        let iter = match refs
+            .reflog_iter_rev(stash_name.as_ref(), &mut buf)
+            .map_err(|e| match e {
+                gix_ref::file::log::Error::Io(io) => Error::Io(io),
+                // Cannot happen: we pass a hard-coded valid ref name.
+                gix_ref::file::log::Error::RefnameValidation(_) => {
+                    unreachable!("refs/stash is always a valid ref name")
+                }
+            })? {
+            // refs/stash has never been written — no stash entries exist.
+            None => return Ok(Outcome::default()),
+            Some(iter) => iter,
+        };
+
+        let mut entries: Vec<Entry> = Vec::new();
+
+        for line_result in iter {
+            let line = line_result?;
+
+            let commit = line.new_oid;
+            let message = line.message.clone();
+            // `gix_actor::Signature` carries a parsed `gix_date::Time` field
+            // whose `seconds` is `i64`; stash entries cannot predate the epoch.
+            let time_seconds = line.signature.time.seconds.max(0) as u64;
+
+            entries.push(Entry {
+                // entries are read newest-first, so index 0 = newest.
+                index: entries.len(),
+                commit,
+                message,
+                time_seconds,
+            });
+        }
+
+        Ok(Outcome { entries })
     }
 }
