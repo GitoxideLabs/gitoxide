@@ -1,7 +1,13 @@
 #![allow(clippy::result_large_err)]
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    path::PathBuf,
+};
 
-use gix_object::Exists;
+use gix_object::{
+    Exists,
+    bstr::{BString, ByteSlice},
+};
 use gix_ref::{
     Target, TargetRef,
     transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
@@ -77,6 +83,15 @@ pub(crate) fn update(
     let mut edit_indices_to_validate = Vec::new();
 
     let mut checked_out_branches = worktree_branches(repo)?;
+    // For wide-refs fetches (e.g. mirror clones with 100k+ branches in
+    // `packed-refs`) the per-mapping `repo.try_find_reference()` call below
+    // dominates wall time: each call does one filesystem stat for a loose
+    // ref plus a binary search over `packed-refs`. The fast path here is
+    // purely additive — if either snapshot fails to build, fall through to
+    // the original lookup with unchanged semantics. Loose refs shadow
+    // packed entries, so the HashMap is only consulted when no loose ref
+    // exists for that name.
+    let lookup_fast_path = build_lookup_fast_path(repo);
     let implicit_tag_refspec = fetch_tags
         .to_refspec()
         .filter(|_| matches!(fetch_tags, crate::remote::fetch::Tags::Included));
@@ -113,7 +128,12 @@ pub(crate) fn update(
         }
         let (mode, edit_index, type_change) = match local {
             Some(name) => {
-                let (mode, reflog_message, name, previous_value) = match repo.try_find_reference(name)? {
+                let existing = match lookup_fast_path.as_ref().map(|fp| fp.lookup(name.as_bstr())) {
+                    Some(LookupOutcome::Hit(r)) => Some(crate::Reference::from_ref(r, repo)),
+                    Some(LookupOutcome::NotFound) => None,
+                    Some(LookupOutcome::TakeSlowPath) | None => repo.try_find_reference(name)?,
+                };
+                let (mode, reflog_message, name, previous_value) = match existing {
                     Some(existing) => {
                         if let Some(wt_dirs) = checked_out_branches.get_mut(existing.name()) {
                             wt_dirs.sort();
@@ -469,6 +489,68 @@ fn worktree_branches(repo: &Repository) -> Result<BTreeMap<gix_ref::FullName, Ve
         insert_head(repo.head().ok(), &mut map)?;
     }
     Ok(map)
+}
+
+/// A precomputed snapshot of packed-refs plus the set of loose ref names that
+/// shadow them, used to answer `repo.try_find_reference()`-style queries for
+/// the bulk of the `update()` loop without touching the filesystem or doing a
+/// binary search per call.
+struct LookupFastPath {
+    /// Packed-refs keyed by ref name (e.g. `refs/remotes/origin/foo`).
+    packed: HashMap<BString, gix_ref::Reference>,
+    /// Names of loose refs which shadow entries in `packed` and must take the
+    /// slow path so existing precedence is preserved.
+    loose_shadows: HashSet<BString>,
+}
+
+/// Result of a fast-path lookup. `TakeSlowPath` is distinct from `NotFound`:
+/// the former means "we can't answer from the snapshot alone, defer to
+/// `repo.try_find_reference()`" (e.g. a loose ref shadows this name), while
+/// the latter means "we are certain no ref exists with this name".
+enum LookupOutcome {
+    Hit(gix_ref::Reference),
+    NotFound,
+    TakeSlowPath,
+}
+
+impl LookupFastPath {
+    fn lookup(&self, name: &gix_object::bstr::BStr) -> LookupOutcome {
+        if self.loose_shadows.contains(name) {
+            return LookupOutcome::TakeSlowPath;
+        }
+        match self.packed.get(name) {
+            Some(r) => LookupOutcome::Hit(r.clone()),
+            None => LookupOutcome::NotFound,
+        }
+    }
+}
+
+/// Build [`LookupFastPath`] for the repo, returning `None` if either of the
+/// inputs (packed-refs snapshot, loose refs enumeration) is unavailable. A
+/// `None` return causes the caller to fall back to the unmodified slow path,
+/// so the optimization is purely additive.
+fn build_lookup_fast_path(repo: &Repository) -> Option<LookupFastPath> {
+    let buf = repo.refs.cached_packed_buffer().ok().flatten()?;
+    let iter = buf.iter().ok()?;
+    let packed: HashMap<BString, gix_ref::Reference> = iter
+        .filter_map(Result::ok)
+        .map(|r| {
+            let name = r.name.as_bstr().to_owned();
+            let r: gix_ref::Reference = r.into();
+            (name, r)
+        })
+        .collect();
+    let loose_shadows: HashSet<BString> = repo
+        .refs
+        .loose_iter()
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|r| r.name.as_bstr().to_owned())
+        .collect();
+    Some(LookupFastPath {
+        packed,
+        loose_shadows,
+    })
 }
 
 #[cfg(test)]
