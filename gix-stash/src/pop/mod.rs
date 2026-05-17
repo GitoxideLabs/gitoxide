@@ -140,6 +140,13 @@ pub(crate) mod function {
     /// If the stash commit has a third parent (`parent[2]`), its tree is
     /// treated as the untracked-files snapshot and those files are restored to
     /// the working tree after a clean merge.
+    ///
+    /// # Untracked-restore conflicts
+    ///
+    /// Before writing any file from `parent[2]`, all target paths are scanned
+    /// for pre-existing entries.  If any would be clobbered, [`Outcome::had_conflicts`]
+    /// is set to `true` and `refs/stash` is **not** dropped — no files from
+    /// `parent[2]` are written in this case, preventing data loss.
     pub fn pop<Objects>(ctx: Context<'_, Objects>, head_tree: ObjectId) -> Result<Outcome, Error>
     where
         Objects: gix_object::Find + gix_object::FindHeader + gix_object::Write + Send + Clone,
@@ -212,7 +219,7 @@ pub(crate) mod function {
             gix_merge::tree::Options::default(),
         )?;
 
-        let had_conflicts = merge_outcome.has_unresolved_conflicts(gix_merge::tree::TreatAsUnresolved::git());
+        let mut had_conflicts = merge_outcome.has_unresolved_conflicts(gix_merge::tree::TreatAsUnresolved::git());
 
         // Write the merged tree to the ODB.
         // `tree` is an Editor; we write it by consuming it via the write() method.
@@ -241,13 +248,21 @@ pub(crate) mod function {
         // ------------------------------------------------------------------ //
         // Restore untracked files if the stash had a parent[2] and merge clean.
         // ------------------------------------------------------------------ //
+        // First check whether any target path already exists on disk; if so,
+        // treat it as a conflict to avoid silent data loss.
         if !had_conflicts {
             if let Some(untracked_commit_oid) = untracked_commit {
                 let mut uc_buf = Vec::new();
                 let uc_commit = objects.find_commit(&untracked_commit_oid, &mut uc_buf)?;
                 let untracked_tree_oid = uc_commit.tree();
                 drop(uc_commit);
-                restore_tree_to_worktree(&untracked_tree_oid, worktree, objects)?;
+                if collect_restore_targets(&untracked_tree_oid, worktree, objects)? {
+                    // At least one target path already exists on disk — treat
+                    // this as a conflict.  Leave refs/stash intact and report.
+                    had_conflicts = true;
+                } else {
+                    restore_tree_to_worktree(&untracked_tree_oid, worktree, objects)?;
+                }
             }
         }
 
@@ -390,5 +405,55 @@ pub(crate) mod function {
             }
         }
         Ok(())
+    }
+
+    /// Walk `tree_oid` recursively and return `true` if any leaf file path
+    /// already exists on disk under `dir`.
+    ///
+    /// Used as a pre-flight check before [`restore_tree_to_worktree`] to avoid
+    /// silently clobbering files the user created after stashing.
+    fn collect_restore_targets(
+        tree_oid: &gix_hash::oid,
+        dir: &Path,
+        find: &impl gix_object::FindExt,
+    ) -> Result<bool, super::Error> {
+        let mut buf = Vec::new();
+        collect_restore_targets_recursive(tree_oid, dir, find, &mut buf)
+    }
+
+    fn collect_restore_targets_recursive(
+        tree_oid: &gix_hash::oid,
+        dir: &Path,
+        find: &impl gix_object::FindExt,
+        buf: &mut Vec<u8>,
+    ) -> Result<bool, super::Error> {
+        use gix_object::tree::EntryKind;
+
+        buf.clear();
+        let tree = find.find_tree(tree_oid, buf)?.to_owned();
+
+        for entry in tree.entries {
+            let name_bytes: &bstr::BStr = entry.filename.as_ref();
+            let entry_path = dir.join(gix_path::from_bstr(name_bytes));
+
+            match entry.mode.kind() {
+                EntryKind::Tree => {
+                    let mut sub_buf = Vec::new();
+                    if collect_restore_targets_recursive(&entry.oid, &entry_path, find, &mut sub_buf)? {
+                        return Ok(true);
+                    }
+                }
+                EntryKind::Blob | EntryKind::BlobExecutable | EntryKind::Link => {
+                    if entry_path.try_exists().map_err(|e| super::Error::RestoreUntracked {
+                        path: entry_path.clone(),
+                        source: e,
+                    })? {
+                        return Ok(true);
+                    }
+                }
+                EntryKind::Commit => {}
+            }
+        }
+        Ok(false)
     }
 }

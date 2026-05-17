@@ -17,6 +17,10 @@ fn pop_untracked_fixture() -> gix_testtools::Result<gix_testtools::tempfile::Tem
     gix_testtools::scripted_fixture_writable("make_pop_untracked_repo.sh")
 }
 
+fn pop_untracked_conflict_fixture() -> gix_testtools::Result<gix_testtools::tempfile::TempDir> {
+    gix_testtools::scripted_fixture_writable("make_pop_untracked_conflict_repo.sh")
+}
+
 fn pop_conflict_fixture() -> gix_testtools::Result<gix_testtools::tempfile::TempDir> {
     gix_testtools::scripted_fixture_writable("make_pop_conflict_repo.sh")
 }
@@ -303,6 +307,85 @@ fn pop_conflicts_leave_ref_intact() -> gix_testtools::Result {
     assert_eq!(
         stash_tip_after, stash_tip_before,
         "refs/stash must not be updated on a conflicted pop"
+    );
+
+    Ok(())
+}
+
+/// When restoring untracked files (`parent[2]`) during `pop`, if a target
+/// path already exists on disk, the pop must report a conflict and leave
+/// `refs/stash` intact so no data is lost.
+#[test]
+fn pop_conflicts_on_untracked_restore_when_target_exists() -> gix_testtools::Result {
+    let tmp = pop_untracked_conflict_fixture()?;
+    let worktree = tmp.path();
+    let gd = git_dir(worktree);
+    let refs = open_ref_store(&gd);
+    let odb = open_odb(&gd)?;
+
+    // The fixture leaves untracked.txt on disk after stashing.
+    assert!(
+        worktree.join("untracked.txt").exists(),
+        "fixture post-condition: untracked.txt must exist on disk"
+    );
+
+    let stash_tip_before = refs
+        .find("refs/stash")?
+        .target
+        .try_id()
+        .expect("refs/stash OID")
+        .to_owned();
+
+    let head_oid = head_commit_oid(worktree, &refs, &odb)?;
+    let head_tree = commit_tree(&odb, head_oid)?;
+
+    let committer = test_committer();
+    let mut time_buf = TimeBuf::default();
+    let committer_ref = committer.to_ref(&mut time_buf);
+
+    let mut diff_cache = new_diff_cache(worktree);
+    let mut blob_merge = new_blob_merge_platform(worktree);
+
+    let outcome = gix_stash::pop(
+        gix_stash::PopContext {
+            refs: &refs,
+            objects: &odb,
+            committer: committer_ref,
+            worktree,
+            blob_merge: &mut blob_merge,
+            diff_cache: &mut diff_cache,
+            checkout_options: gix_worktree_state::checkout::Options {
+                overwrite_existing: true,
+                ..Default::default()
+            },
+        },
+        head_tree,
+    )?;
+
+    // had_conflicts must be true — an existing file would be clobbered.
+    assert!(
+        outcome.had_conflicts,
+        "pop must report had_conflicts=true when untracked restore would clobber an existing file"
+    );
+
+    // refs/stash must still point at the original stash commit.
+    let stash_tip_after = refs
+        .find("refs/stash")?
+        .target
+        .try_id()
+        .expect("refs/stash OID")
+        .to_owned();
+    assert_eq!(
+        stash_tip_after, stash_tip_before,
+        "refs/stash must not be dropped when untracked restore has a conflict"
+    );
+
+    // The user's file must not have been overwritten.
+    let content = std::fs::read_to_string(worktree.join("untracked.txt"))?;
+    assert_eq!(
+        content.trim(),
+        "user's own content",
+        "existing file must not be clobbered during a conflicted pop"
     );
 
     Ok(())
