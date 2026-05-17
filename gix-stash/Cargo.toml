@@ -20,23 +20,20 @@ sha1 = ["gix-hash/sha1", "gix-index/sha1", "gix-object/sha1"]
 
 [dependencies]
 gix-hash         = { version = "^0.25.0", path = "../gix-hash" }
-gix-object       = { version = "^0.60.0", path = "../gix-object" }
-gix-index        = { version = "^0.51.0", path = "../gix-index" }
-gix-ref          = { version = "^0.63.0", path = "../gix-ref" }
+gix-object       = { version = "^0.61.0", path = "../gix-object" }
+gix-index        = { version = "^0.52.0", path = "../gix-index" }
+gix-ref          = { version = "^0.64.0", path = "../gix-ref" }
 gix-actor        = { version = "^0.41.0", path = "../gix-actor" }
 gix-date         = { version = "^0.15.3", path = "../gix-date" }
-gix-trace        = { version = "^0.1.19", path = "../gix-trace" }
 gix-features     = { version = "^0.48.0", path = "../gix-features", features = ["progress"] }
 gix-path         = { version = "^0.12.0", path = "../gix-path" }
 gix-validate     = { version = "^0.11.1", path = "../gix-validate" }
-gix-dir          = { version = "^0.25.0", path = "../gix-dir" }
-gix-diff         = { version = "^0.63.0", path = "../gix-diff", default-features = false, features = ["blob"] }
-gix-merge        = { version = "^0.16.0", path = "../gix-merge" }
-gix-worktree-state = { version = "^0.30.0", path = "../gix-worktree-state" }
+gix-diff         = { version = "^0.64.0", path = "../gix-diff", default-features = false, features = ["blob"] }
+gix-merge        = { version = "^0.17.0", path = "../gix-merge" }
+gix-worktree-state = { version = "^0.31.0", path = "../gix-worktree-state" }
 gix-lock         = { version = "^23.0.0", path = "../gix-lock" }
 
 bstr      = { version = "1.12.0", default-features = false, features = ["std"] }
-smallvec  = "1.15.1"
 thiserror = "2.0.18"
 
 [dev-dependencies]

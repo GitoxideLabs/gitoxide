@@ -394,7 +394,29 @@ pub(crate) mod function {
                     }
                     // Remove any existing entry before creating the symlink.
                     let _ = std::fs::remove_file(&entry_path);
-                    std::os::unix::fs::symlink(&target, &entry_path).map_err(|e| super::Error::RestoreUntracked {
+
+                    #[cfg(unix)]
+                    let symlink_result = std::os::unix::fs::symlink(&target, &entry_path);
+
+                    // Windows symlinks need a kind hint (file vs directory) and
+                    // typically require admin or Developer Mode.  We try the file
+                    // variant first; callers that need full symlink semantics on
+                    // Windows can resolve manually using the preserved
+                    // `refs/stash`.  The pre-flight scan in
+                    // `collect_restore_targets_recursive` already short-circuits
+                    // before any writes when a target exists, so a partial
+                    // restore here only happens when the file system rejects the
+                    // call (e.g. insufficient privileges).
+                    #[cfg(windows)]
+                    let symlink_result = std::os::windows::fs::symlink_file(&target, &entry_path);
+
+                    #[cfg(not(any(unix, windows)))]
+                    let symlink_result = Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "symlink creation is not supported on this platform",
+                    ));
+
+                    symlink_result.map_err(|e| super::Error::RestoreUntracked {
                         path: entry_path,
                         source: e,
                     })?;

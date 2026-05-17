@@ -20,11 +20,11 @@
 //!
 //! # API
 //!
-//! * [`push`] — capture working tree (+ index, + optional untracked) and reset
-//!   to `HEAD`.
-//! * [`pop`] — apply the latest stash to the working tree (3-way merge) and
+//! * [`push()`] — capture working tree (+ index, + optional untracked) and
+//!   reset to `HEAD`.
+//! * [`pop()`] — apply the latest stash to the working tree (3-way merge) and
 //!   drop it from `refs/stash`.
-//! * [`list`] — walk the `refs/stash` reflog and return every stash entry.
+//! * [`list()`] — walk the `refs/stash` reflog and return every stash entry.
 //!
 //! All three operate on plumbing handles (index, ODB, ref store, worktree
 //! path) rather than a high-level repository — the porcelain layer in `gix`
