@@ -113,6 +113,8 @@ pub use gix_actor as actor;
 pub use gix_attributes as attrs;
 #[cfg(feature = "blame")]
 pub use gix_blame as blame;
+#[cfg(feature = "stash")]
+pub use gix_stash as stash;
 #[cfg(feature = "command")]
 pub use gix_command as command;
 pub use gix_commitgraph as commitgraph;
