@@ -96,5 +96,26 @@ pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> Resul
     Ok(packed::Reference { name, target, object })
 }
 
+/// Extract the name bytes from a packed-refs record without validating the
+/// name as a [`FullNameRef`][crate::FullNameRef] or the hash as hex.
+///
+/// Used by the binary search in [`super::Buffer::binary_search_by`], where
+/// only the name bytes are needed for ordered comparison — the final match
+/// is re-parsed through [`reference`] which validates fully. Returns `None`
+/// when the record does not have the expected `<hash><space><name><newline>`
+/// shape, which the caller can treat as a parse failure.
+pub(crate) fn name_at_record_start(input: &[u8], object_hash: gix_hash::Kind) -> Option<&[u8]> {
+    let hex_len = object_hash.len_in_hex();
+    if input.get(hex_len) != Some(&b' ') {
+        return None;
+    }
+    let after = &input[hex_len + 1..];
+    let end = after.iter().position(|&b| b == b'\r' || b == b'\n')?;
+    if end == 0 {
+        return None;
+    }
+    Some(&after[..end])
+}
+
 #[cfg(test)]
 mod tests;
