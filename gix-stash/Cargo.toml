@@ -27,6 +27,8 @@ gix-actor        = { version = "^0.41.0", path = "../gix-actor" }
 gix-date         = { version = "^0.15.3", path = "../gix-date" }
 gix-trace        = { version = "^0.1.19", path = "../gix-trace" }
 gix-features     = { version = "^0.48.0", path = "../gix-features", features = ["progress"] }
+gix-path         = { version = "^0.12.0", path = "../gix-path" }
+gix-validate     = { version = "^0.11.1", path = "../gix-validate" }
 gix-dir          = { version = "^0.25.0", path = "../gix-dir" }
 gix-diff         = { version = "^0.63.0", path = "../gix-diff", default-features = false, features = ["blob"] }
 gix-merge        = { version = "^0.16.0", path = "../gix-merge" }

@@ -39,5 +39,7 @@ pub mod pop;
 pub mod push;
 
 pub use list::{Entry as ListEntry, Outcome as ListOutcome, function::list};
-pub use pop::{Context as PopContext, Outcome as PopOutcome, function::pop};
-pub use push::{Context as PushContext, Options as PushOptions, Outcome as PushOutcome, function::push};
+pub use pop::{Context as PopContext, Error as PopError, Outcome as PopOutcome, function::pop};
+pub use push::{
+    Context as PushContext, Error as PushError, Options as PushOptions, Outcome as PushOutcome, function::push,
+};
