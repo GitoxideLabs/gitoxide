@@ -530,23 +530,26 @@ impl LookupFastPath {
 /// `None` return causes the caller to fall back to the unmodified slow path,
 /// so the optimization is purely additive.
 fn build_lookup_fast_path(repo: &Repository) -> Option<LookupFastPath> {
+    // `cached_packed_buffer()` returns raw, namespace-prefixed names from
+    // `packed-refs`, while lookups here use namespace-stripped local names.
+    // Defer to the slow path, which applies the namespace correctly.
+    if repo.refs.namespace.is_some() {
+        return None;
+    }
     let buf = repo.refs.cached_packed_buffer().ok().flatten()?;
-    let iter = buf.iter().ok()?;
-    let packed: HashMap<BString, gix_ref::Reference> = iter
-        .filter_map(Result::ok)
-        .map(|r| {
-            let name = r.name.as_bstr().to_owned();
-            let r: gix_ref::Reference = r.into();
-            (name, r)
-        })
-        .collect();
-    let loose_shadows: HashSet<BString> = repo
-        .refs
-        .loose_iter()
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|r| r.name.as_bstr().to_owned())
-        .collect();
+    let mut packed = HashMap::new();
+    for r in buf.iter().ok()? {
+        // Bail to the slow path on parse errors so corruption surfaces via
+        // `repo.try_find_reference()` instead of being silently dropped.
+        let r = r.ok()?;
+        let name = r.name.as_bstr().to_owned();
+        packed.insert(name, r.into());
+    }
+    let mut loose_shadows = HashSet::new();
+    for r in repo.refs.loose_iter().ok()? {
+        let r = r.ok()?;
+        loose_shadows.insert(r.name.as_bstr().to_owned());
+    }
     Some(LookupFastPath { packed, loose_shadows })
 }
 
