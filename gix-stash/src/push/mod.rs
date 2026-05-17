@@ -198,9 +198,17 @@ pub(crate) mod function {
             checkout_options,
         } = ctx;
         // ------------------------------------------------------------------ //
-        // Guard: make sure there is something to stash.
+        // Build the WIP and index trees early so we can detect the no-changes
+        // case before writing any commits or updating any refs.
         // ------------------------------------------------------------------ //
-        if index.entries().is_empty() && !options.include_untracked {
+        let wip_tree_oid = write_wip_tree(index, objects, objects, head_tree, worktree)?;
+        let index_tree_oid = write_tree_from_index(index, objects, objects, head_tree)?;
+
+        // Guard: if neither the working tree nor the index differs from HEAD,
+        // and we are not capturing untracked files, there is nothing to stash.
+        let has_wt_changes = wip_tree_oid != head_tree;
+        let has_index_changes = index_tree_oid != head_tree;
+        if !has_wt_changes && !has_index_changes && !options.include_untracked {
             return Err(Error::NoLocalChanges);
         }
 
@@ -210,11 +218,6 @@ pub(crate) mod function {
         let head_subject = first_line_of_commit_message(objects, head_commit)?;
         let short_hash = short_id(head_commit);
         let branch_name: BString = head_branch.map_or_else(|| BString::from("HEAD"), |n| n.shorten().to_owned());
-
-        // ------------------------------------------------------------------ //
-        // parent[1] — "index on <branch>: …"
-        // ------------------------------------------------------------------ //
-        let index_tree_oid = write_tree_from_index(index, objects, objects, head_tree)?;
 
         let index_msg = format!(
             "index on {branch}: {short} {subj}",
@@ -272,8 +275,6 @@ pub(crate) mod function {
             )
             .into()
         });
-
-        let wip_tree_oid = write_wip_tree(index, objects, objects, head_tree, worktree)?;
 
         let mut stash_parents: Vec<ObjectId> = vec![head_commit, index_commit_oid];
         if let Some(u) = untracked_commit_oid {
