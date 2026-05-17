@@ -184,19 +184,17 @@ impl Url {
         path: BString,
         serialize_alternative_form: bool,
     ) -> Result<Self, parse::Error> {
-        parse(
-            Url {
-                scheme,
-                user,
-                password,
-                host,
-                port,
-                path,
-                serialize_alternative_form,
-            }
-            .to_bstring()
-            .as_bstr(),
-        )
+        let serialized = Url {
+            scheme,
+            user,
+            password,
+            host,
+            port,
+            path,
+            serialize_alternative_form,
+        }
+        .to_bstring();
+        parse(BStr::new(&serialized))
     }
 }
 
