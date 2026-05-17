@@ -24,16 +24,20 @@
 //!   to `HEAD`.
 //! * [`pop`] — apply the latest stash to the working tree (3-way merge) and
 //!   drop it from `refs/stash`.
+//! * [`list`] — walk the `refs/stash` reflog and return every stash entry.
 //!
-//! Both functions operate on plumbing handles (index, ODB, ref store, worktree
+//! All three operate on plumbing handles (index, ODB, ref store, worktree
 //! path) rather than a high-level repository — the porcelain layer in `gix`
-//! wraps them and provides `Repository::stash_push` / `Repository::stash_pop`.
+//! wraps them and provides `Repository::stash_push` / `Repository::stash_pop`
+//! / `Repository::stash_list`.
 
 #![deny(missing_docs, rust_2018_idioms)]
 #![forbid(unsafe_code)]
 
+pub mod list;
 pub mod pop;
 pub mod push;
 
+pub use list::{Entry as ListEntry, Outcome as ListOutcome, function::list};
 pub use pop::{Outcome as PopOutcome, function::pop};
 pub use push::{Options as PushOptions, Outcome as PushOutcome, function::push};
