@@ -3,7 +3,7 @@
 //! ## Examples
 //!
 //! ```
-//! let mut url = gix_url::parse("ssh://git@example.com/gitoxide".into()).unwrap();
+//! let mut url = gix_url::parse("ssh://git@example.com/gitoxide").unwrap();
 //! assert_eq!(url.user(), Some("git"));
 //! assert_eq!(url.host(), Some("example.com"));
 //! assert_eq!(url.to_bstring(), "ssh://git@example.com/gitoxide");
@@ -12,7 +12,7 @@
 //! assert_eq!(url.user_argument_safe(), Some("byron"));
 //! assert_eq!(url.to_bstring(), "ssh://byron@example.com/gitoxide");
 //!
-//! let suspicious = gix_url::parse("ssh://-Fconfig@host/repo".into()).unwrap();
+//! let suspicious = gix_url::parse("ssh://-Fconfig@host/repo").unwrap();
 //! assert_eq!(suspicious.user_argument_safe(), None, "The user isn't returned as it looks like an argument");
 //! ```
 //! ## Feature Flags
@@ -47,8 +47,9 @@ mod simple_url;
 ///
 /// We cannot and should never have to deal with UTF-16 encoded windows strings, so bytes input is acceptable.
 /// For file-paths, we don't expect UTF8 encoding either.
-pub fn parse(input: &BStr) -> Result<Url, parse::Error> {
+pub fn parse<'a>(input: impl Into<&'a BStr>) -> Result<Url, parse::Error> {
     use parse::InputScheme;
+    let input = input.into();
     match parse::find_scheme(input) {
         InputScheme::Local => parse::local(input),
         InputScheme::Url { protocol_end } if input[..protocol_end].eq_ignore_ascii_case(b"file") => {
@@ -194,7 +195,7 @@ impl Url {
                 serialize_alternative_form,
             }
             .to_bstring()
-            .as_ref(),
+            .as_bstr(),
         )
     }
 }
