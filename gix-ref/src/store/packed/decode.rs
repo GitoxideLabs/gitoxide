@@ -101,9 +101,14 @@ pub fn reference<'a>(input: &mut &'a [u8], object_hash: gix_hash::Kind) -> Resul
 ///
 /// Used by the binary search in [`super::Buffer::binary_search_by`], where
 /// only the name bytes are needed for ordered comparison — the final match
-/// is re-parsed through [`reference`] which validates fully. Returns `None`
-/// when the record does not have the expected `<hash><space><name><newline>`
-/// shape, which the caller can treat as a parse failure.
+/// is re-parsed through [`reference`] which validates fully.
+///
+/// Returns `None` when the record does not have the expected
+/// `<hash><space><name><newline>` shape (including an empty name or input
+/// shorter than the hash plus separator). The caller is expected to treat
+/// `None` as a parse failure and flip its parse-failure flag so a search
+/// miss can be surfaced as [`super::Error::Parse`] rather than silently
+/// reported as `Ok(None)`.
 pub(crate) fn name_at_record_start(input: &[u8], object_hash: gix_hash::Kind) -> Option<&[u8]> {
     let hex_len = object_hash.len_in_hex();
     if input.get(hex_len) != Some(&b' ') {

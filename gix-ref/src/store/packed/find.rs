@@ -93,8 +93,9 @@ impl packed::Buffer {
             // The binary search only needs the name bytes for ordered
             // comparison; skip ref-name and hex-hash validation here and let
             // the final match site re-parse the record via `decode::reference`
-            // (which validates fully). On a 154k-ref packed-refs this saves
-            // ~17× redundant `gix_validate::reference::name` calls per query.
+            // (which validates fully). This saves the `log₂(n)` per-query
+            // `gix_validate::reference::name` calls the previous comparator
+            // ran, which dominate fetch CPU on wide-refs mirrors.
             match packed::decode::name_at_record_start(line, self.object_hash) {
                 Some(name) => name,
                 None => {
