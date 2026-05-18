@@ -272,6 +272,112 @@ fn index_path_surfaces_parse_failures_on_miss() -> crate::Result {
     Ok(())
 }
 
+/// Profiling helper: simulate a wide-refs fetch's `update_refs` loop and
+/// break down where the time goes. Run with:
+///
+/// ```text
+/// cargo test -p gix-ref --release --features sha1 --test refs \
+///     -- --ignored --nocapture loose_stat_overhead_profile
+/// ```
+///
+/// Reports total time for two strategies against a ~150k-packed-ref repo:
+///   A. `store.try_find(name)` — the current `try_find_reference` path,
+///      which `stat`s the loose-ref file before falling through to packed.
+///   B. Pre-built `HashSet` of loose names → bypass the stat when the name
+///      isn't in it, then `packed.try_find(name)` directly.
+///
+/// The delta (A − B) is the loose-stat overhead that a hypothetical
+/// `file::Store`-level loose-name cache (or a caller-side enumeration like
+/// the original #2605) would reclaim on top of this PR's packed-buffer
+/// index. Useful for deciding whether such a follow-up is worth its
+/// complexity, since the answer is workload-dependent (warm vs cold cache,
+/// loose-ref count, filesystem characteristics).
+#[test]
+#[ignore = "profiling only; expensive and times vary across machines"]
+fn loose_stat_overhead_profile() -> crate::Result {
+    use std::collections::HashSet;
+    use std::time::Instant;
+
+    let store = store_at("make_repository_with_lots_of_packed_refs.sh")?;
+    let packed = store.open_packed_buffer()?.expect("packed-refs present");
+
+    // Collect all 150k packed ref names — these are what fetch's update_refs
+    // would iterate over.
+    let collect_start = Instant::now();
+    let packed_names: Vec<_> = packed
+        .iter()?
+        .filter_map(Result::ok)
+        .map(|r| r.name.to_owned())
+        .collect();
+    eprintln!(
+        "Collected {} packed ref names in {:?}",
+        packed_names.len(),
+        collect_start.elapsed()
+    );
+
+    // Strategy A — current behavior, with loose-stat per call.
+    let warmup = Instant::now();
+    for name in packed_names.iter().take(1000) {
+        let _ = store.try_find(name.as_ref())?;
+    }
+    eprintln!("Warmup (1000 lookups): {:?}", warmup.elapsed());
+
+    let a_start = Instant::now();
+    let mut a_found = 0usize;
+    for name in &packed_names {
+        if store.try_find(name.as_ref())?.is_some() {
+            a_found += 1;
+        }
+    }
+    let a_elapsed = a_start.elapsed();
+    eprintln!(
+        "Strategy A (store.try_find — per-call loose stat): {:?}, found {} of {} ({:.1} µs/lookup)",
+        a_elapsed,
+        a_found,
+        packed_names.len(),
+        a_elapsed.as_secs_f64() * 1_000_000.0 / packed_names.len() as f64,
+    );
+
+    // Strategy B — simulated loose-index: pre-enumerate loose names, skip stat
+    // when name isn't present.
+    let loose_set_start = Instant::now();
+    let loose_set: HashSet<_> = store.loose_iter()?.filter_map(Result::ok).map(|r| r.name).collect();
+    eprintln!(
+        "Built loose-name set ({} entries) in {:?}",
+        loose_set.len(),
+        loose_set_start.elapsed()
+    );
+
+    let b_start = Instant::now();
+    let mut b_found = 0usize;
+    for name in &packed_names {
+        if loose_set.contains(name) {
+            // Take slow path for shadowed entries.
+            if store.try_find(name.as_ref())?.is_some() {
+                b_found += 1;
+            }
+        } else if packed.try_find(name.as_ref())?.is_some() {
+            b_found += 1;
+        }
+    }
+    let b_elapsed = b_start.elapsed();
+    eprintln!(
+        "Strategy B (loose-set short-circuit + packed direct): {:?}, found {} of {} ({:.1} µs/lookup)",
+        b_elapsed,
+        b_found,
+        packed_names.len(),
+        b_elapsed.as_secs_f64() * 1_000_000.0 / packed_names.len() as f64,
+    );
+
+    eprintln!(
+        "Loose-stat overhead reclaimable by an in-Store loose-name cache: {:?} ({:.1}% of A)",
+        a_elapsed.saturating_sub(b_elapsed),
+        (a_elapsed.saturating_sub(b_elapsed).as_secs_f64() / a_elapsed.as_secs_f64()) * 100.0,
+    );
+    assert_eq!(a_found, b_found, "both strategies find the same number of refs");
+    Ok(())
+}
+
 #[test]
 fn find_speed() -> crate::Result {
     let store = store_at("make_repository_with_lots_of_packed_refs.sh")?;
