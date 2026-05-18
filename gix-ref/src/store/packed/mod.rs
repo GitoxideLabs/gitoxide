@@ -1,5 +1,6 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf, sync::atomic::AtomicUsize};
 
+use gix_features::threading::OnceCell;
 use gix_hash::ObjectId;
 use gix_object::bstr::{BStr, BString};
 use memmap2::Mmap;
@@ -26,6 +27,35 @@ pub struct Buffer {
     offset: usize,
     /// The path from which we were loaded
     path: PathBuf,
+    /// Number of [`Self::try_find_full_name`] calls served by the binary
+    /// search so far. After it crosses [`find::INDEX_BUILD_AFTER_LOOKUPS`]
+    /// the next lookup eagerly builds [`name_index`] for O(1) lookups, so
+    /// single-shot callers (typical CLI commands) don't pay the build cost.
+    pub(crate) lookup_count: AtomicUsize,
+    /// Lazily populated map from ref name to the offset of its record in
+    /// [`AsRef::as_ref`]. Built once per buffer snapshot and consulted on
+    /// every subsequent lookup, bypassing the per-call binary search.
+    pub(crate) name_index: OnceCell<NameIndex>,
+}
+
+/// A name → record-offset index for fast `try_find_full_name` lookups.
+///
+/// Stored alongside [`Buffer`] inside a [`OnceCell`] so that once built it
+/// is shared by every clone of the snapshot. Records that don't parse are
+/// still detected: their presence flips [`Self::encountered_parse_failure`]
+/// so a miss against a corrupt packed-refs file surfaces as
+/// [`find::Error::Parse`] rather than `Ok(None)`, matching the binary-search
+/// path's behavior.
+#[derive(Debug)]
+pub(crate) struct NameIndex {
+    /// Maps a ref's full name to the byte offset of its record's first
+    /// byte in [`Buffer::as_ref`] (i.e. the hash byte, not the line break
+    /// before it).
+    pub(crate) by_name: HashMap<BString, usize>,
+    /// True if any record in the file failed to parse while the index was
+    /// being built. A missed lookup is reported as `Error::Parse` when this
+    /// is set, mirroring the binary-search path's parse-failure flag.
+    pub(crate) encountered_parse_failure: bool,
 }
 
 struct Edit {
