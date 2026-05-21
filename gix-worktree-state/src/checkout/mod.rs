@@ -55,6 +55,10 @@ pub struct Options {
     /// even if they appear to be changed. When creating directories that clash with existing worktree entries,
     /// these will try to delete the existing entry.
     /// This is similar in behaviour as `git checkout --force`.
+    ///
+    /// Note that when `destination_is_initially_empty` is `false`, existing files may still have their
+    /// executable bit updated to match the index. This option prevents overwriting file contents, but
+    /// does not necessarily prevent metadata updates.
     pub overwrite_existing: bool,
     /// If true, default false, try to checkout as much as possible and don't abort on first error which isn't
     /// due to a conflict.
