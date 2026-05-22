@@ -17,9 +17,15 @@ pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputF
 
     for proxy in main_repo.worktrees()? {
         let base = gix::path::realpath(proxy.base()?)?;
-        let worktree_repo = proxy.into_repo()?;
 
-        worktrees.push(create_worktree_info(&worktree_repo, base)?);
+        match proxy.into_repo() {
+            Ok(worktree_repo) => {
+                worktrees.push(create_worktree_info(&worktree_repo, base)?);
+            }
+            Err(_) => {
+                worktrees.push(create_inaccessible_worktree_info(base));
+            }
+        }
     }
 
     let path_width = worktrees.iter().map(|worktree| worktree.base.len()).max().unwrap_or(0);
@@ -66,4 +72,12 @@ fn create_worktree_info(repo: &gix::Repository, base: std::path::PathBuf) -> any
         head,
         branch,
     })
+}
+
+fn create_inaccessible_worktree_info(base: std::path::PathBuf) -> WorktreeInfo {
+    WorktreeInfo {
+        base: base.display().to_string(),
+        head: ZERO_HEAD.to_string(),
+        branch: "<unknown>".to_string(),
+    }
 }
