@@ -14,7 +14,7 @@ pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputF
     }
 
     for proxy in main_repo.worktrees()? {
-        let base = proxy.base()?;
+        let base = gix::path::realpath(proxy.base()?)?;
         let worktree_repo = proxy.into_repo()?;
 
         worktrees.push(create_worktree_info(&worktree_repo, base)?);
