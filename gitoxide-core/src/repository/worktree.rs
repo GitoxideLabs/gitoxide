@@ -3,7 +3,7 @@ use anyhow::bail;
 use crate::OutputFormat;
 
 const HEAD_LENGTH: usize = 9;
-
+const ZERO_HEAD: &str = "000000000";
 pub fn list(repo: gix::Repository, out: &mut dyn std::io::Write, format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Human {
         bail!("JSON output isn't implemented yet");
@@ -51,7 +51,11 @@ impl WorktreeInfo {
 }
 
 fn create_worktree_info(repo: &gix::Repository, base: std::path::PathBuf) -> anyhow::Result<WorktreeInfo> {
-    let head = repo.head_id()?.to_hex_with_len(HEAD_LENGTH).to_string();
+    let head = repo
+        .head_id()
+        .map(|id| id.to_hex_with_len(HEAD_LENGTH).to_string())
+        .unwrap_or_else(|_| ZERO_HEAD.to_string());
+
     let branch = repo.head_name()?.map_or_else(
         || "<detached>".to_string(),
         |name| name.shorten().to_owned().to_string(),
