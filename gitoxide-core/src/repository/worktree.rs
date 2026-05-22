@@ -50,10 +50,10 @@ impl WorktreeInfo {
 
 fn create_worktree_info(repo: &gix::Repository, base: std::path::PathBuf) -> anyhow::Result<WorktreeInfo> {
     let head = repo.head_id()?.to_hex_with_len(9).to_string();
-    let branch = repo
-        .head_name()?
-        .map_or("<detached>".into(), |name| name.shorten().to_owned())
-        .to_string();
+    let branch = repo.head_name()?.map_or_else(
+        || "<detached>".to_string(),
+        |name| name.shorten().to_owned().to_string(),
+    );
 
     Ok(WorktreeInfo {
         base: base.display().to_string(),
