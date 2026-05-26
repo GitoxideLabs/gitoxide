@@ -1,7 +1,6 @@
 use crate::{Id, config::tree::Mailmap};
 
 impl crate::Repository {
-    // TODO: tests
     /// Similar to [`open_mailmap_into()`][crate::Repository::open_mailmap_into()], but ignores all errors and returns at worst
     /// an empty mailmap, e.g. if there is no mailmap or if there were errors loading them.
     ///
@@ -13,7 +12,6 @@ impl crate::Repository {
         out
     }
 
-    // TODO: tests
     /// Try to merge mailmaps from the following locations into `target`:
     ///
     /// - read the `.mailmap` file without following symlinks from the working tree, if present
