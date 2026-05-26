@@ -6,6 +6,17 @@ use std::{
 
 pub use error::Error;
 
+/// Whether a `file::Store` name lookup consults the loose references on disk, or resolves from the
+/// packed buffer alone. Named (rather than a `bool`) so call sites read unambiguously and can't be
+/// transposed with the neighbouring `consider_pseudo_ref` flag.
+#[derive(Clone, Copy)]
+pub(crate) enum LooseRefs {
+    /// Probe the loose reference file first, so a loose ref shadows a packed one (git semantics).
+    Consult,
+    /// Don't touch the filesystem; resolve from the packed buffer only.
+    Skip,
+}
+
 use crate::{
     BStr, BString, FullNameRef, PartialName, PartialNameRef, Reference, file,
     name::is_pseudo_ref,
@@ -40,7 +51,7 @@ impl file::Store {
         Error: From<E>,
     {
         let packed = self.assure_packed_refs_uptodate()?;
-        self.find_one_with_verified_input(partial.try_into()?, packed.as_ref().map(|b| &***b))
+        self.find_one_with_verified_input(partial.try_into()?, packed.as_ref().map(|b| &***b), LooseRefs::Consult)
     }
 
     /// Similar to [`file::Store::find()`] but a non-existing ref is treated as error.
@@ -53,7 +64,7 @@ impl file::Store {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Error: From<E>,
     {
-        self.find_one_with_verified_input(partial.try_into()?, None)
+        self.find_one_with_verified_input(partial.try_into()?, None, LooseRefs::Consult)
             .map(|r| r.map(Into::into))
     }
 
@@ -67,13 +78,41 @@ impl file::Store {
         Name: TryInto<&'a PartialNameRef, Error = E>,
         Error: From<E>,
     {
-        self.find_one_with_verified_input(partial.try_into()?, packed)
+        self.find_one_with_verified_input(partial.try_into()?, packed, LooseRefs::Consult)
+    }
+
+    /// Like [`file::Store::try_find_packed()`], but resolves `partial` exclusively from the
+    /// snapshotted `packed` buffer, **never touching the loose references on disk**.
+    ///
+    /// This skips the per-lookup `open()` of the loose reference file that
+    /// [`try_find()`](Self::try_find())/[`try_find_packed()`](Self::try_find_packed()) always
+    /// perform first, which is a large saving when resolving very many names against a store
+    /// whose references are known to be packed (e.g. building a have-set during fetch
+    /// negotiation on a freshly-packed mirror).
+    ///
+    /// ### Caveat: loose precedence is NOT honored
+    ///
+    /// Because the loose refs are ignored, a name that exists both loose and packed resolves to
+    /// the **packed** value here, whereas git (and [`try_find()`](Self::try_find())) return the
+    /// loose one. Callers that need git semantics must consult [`loose_iter()`](Self::loose_iter())
+    /// (or otherwise know the name is not loose) before using this method for a given name.
+    pub fn try_find_packed_only<'a, Name, E>(
+        &self,
+        partial: Name,
+        packed: Option<&packed::Buffer>,
+    ) -> Result<Option<Reference>, Error>
+    where
+        Name: TryInto<&'a PartialNameRef, Error = E>,
+        Error: From<E>,
+    {
+        self.find_one_with_verified_input(partial.try_into()?, packed, LooseRefs::Skip)
     }
 
     pub(crate) fn find_one_with_verified_input(
         &self,
         partial_name: &PartialNameRef,
         packed: Option<&packed::Buffer>,
+        loose: LooseRefs,
     ) -> Result<Option<Reference>, Error> {
         fn decompose_if(mut r: Reference, input_changed_to_precomposed: bool) -> Reference {
             if input_changed_to_precomposed {
@@ -115,6 +154,7 @@ impl file::Store {
                     packed,
                     &mut buf,
                     consider_pseudo_ref,
+                    loose,
                 ) {
                     Ok(Some(r)) => return Ok(Some(decompose_if(r, precomposed_partial_name.is_some()))),
                     Ok(None) => {
@@ -145,6 +185,7 @@ impl file::Store {
                 None,
                 &mut buf,
                 true, /* consider-pseudo-ref */
+                loose,
             )
             .map(|res| res.map(|r| decompose_if(r, precomposed_partial_name_storage.is_some())))
         } else {
@@ -152,6 +193,7 @@ impl file::Store {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn find_inner(
         &self,
         inbetween: &str,
@@ -160,19 +202,25 @@ impl file::Store {
         packed: Option<&packed::Buffer>,
         path_buf: &mut BString,
         consider_pseudo_ref: bool,
+        loose: LooseRefs,
     ) -> Result<Option<Reference>, Error> {
         let full_name = precomposed_partial_name
             .unwrap_or(partial_name)
             .construct_full_name_ref(inbetween, path_buf, consider_pseudo_ref);
-        let content_buf = match self.ref_contents(full_name) {
-            Ok(content_buf) => content_buf,
-            Err(err) if err.kind() == io::ErrorKind::NotADirectory => return Ok(None),
-            Err(err) => {
-                return Err(Error::ReadFileContents {
-                    source: err,
-                    path: self.reference_path(full_name),
-                });
-            }
+        // `LooseRefs::Skip` resolves from `packed` only, so we avoid the loose-ref `open()` here;
+        // a `None` content buffer then falls through to the packed lookup below.
+        let content_buf = match loose {
+            LooseRefs::Skip => None,
+            LooseRefs::Consult => match self.ref_contents(full_name) {
+                Ok(content_buf) => content_buf,
+                Err(err) if err.kind() == io::ErrorKind::NotADirectory => return Ok(None),
+                Err(err) => {
+                    return Err(Error::ReadFileContents {
+                        source: err,
+                        path: self.reference_path(full_name),
+                    });
+                }
+            },
         };
 
         match content_buf {
@@ -408,7 +456,7 @@ pub mod existing {
             let path = partial
                 .try_into()
                 .map_err(|err| Error::Find(find::Error::RefnameValidation(err.into())))?;
-            match self.find_one_with_verified_input(path, packed) {
+            match self.find_one_with_verified_input(path, packed, super::LooseRefs::Consult) {
                 Ok(Some(r)) => Ok(r),
                 Ok(None) => Err(Error::NotFound {
                     name: path.to_partial_path().to_owned(),

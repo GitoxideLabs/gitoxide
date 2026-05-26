@@ -224,3 +224,60 @@ mod loose {
         Ok(())
     }
 }
+
+/// Locks the safety contract of `try_find_packed_only`: it resolves names from the packed buffer
+/// only, deliberately ignoring loose refs (and thus loose-over-packed precedence). This is what
+/// lets fetch negotiation skip a per-ref `open()` syscall for refs it knows are packed.
+mod try_find_packed_only {
+    use crate::file::store_at;
+
+    #[test]
+    fn skips_loose_and_honors_packed() -> crate::Result {
+        let store = store_at("make_packed_and_loose_ref_repository.sh")?;
+        let snapshot = store.cached_packed_buffer()?;
+        let packed = snapshot.as_ref().map(|b| &***b);
+        assert!(packed.is_some(), "fixture has a packed-refs file");
+
+        // 'stable' is packed-only at C1; 'main'/'both' are packed at C1 but loose at C2.
+        let c1 = store.find("stable")?.target.into_id();
+        let c2 = store.find("main")?.target.into_id();
+        assert_ne!(c1, c2, "the loose update must have moved the ref to a new commit");
+
+        // Packed-only ref: identical to `find`.
+        assert_eq!(
+            store
+                .try_find_packed_only("stable", packed)?
+                .expect("packed")
+                .target
+                .into_id(),
+            c1,
+            "a packed-only ref resolves to its packed value",
+        );
+
+        // Loose-over-packed ref: `find` sees the loose C2 (git semantics), but the packed-only
+        // path returns the stale packed C1 — the documented, deliberate divergence.
+        assert_eq!(store.find("both")?.target.into_id(), c2, "find honors loose precedence");
+        assert_eq!(
+            store
+                .try_find_packed_only("both", packed)?
+                .expect("packed")
+                .target
+                .into_id(),
+            c1,
+            "try_find_packed_only ignores the loose ref and returns the packed value",
+        );
+
+        // Loose-only ref: `find` resolves it, packed-only cannot see it at all.
+        assert_eq!(
+            store.find("fresh")?.target.into_id(),
+            c2,
+            "find resolves a loose-only ref"
+        );
+        assert!(
+            store.try_find_packed_only("fresh", packed)?.is_none(),
+            "try_find_packed_only does not see a loose-only ref",
+        );
+
+        Ok(())
+    }
+}

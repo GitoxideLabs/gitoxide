@@ -363,68 +363,82 @@ mod blocking_and_async_io {
                 gix::protocol::transport::Protocol::V1,
                 gix::protocol::transport::Protocol::V2,
             ] {
-                let (mut client_repo, _tmp) = {
-                    let client_repo = remote::repo("multi_round/client");
-                    let daemon = spawn_git_daemon_if_async(client_repo.workdir().expect("non-bare"))?;
-                    let tmp = TempDir::new()?;
-                    let repo = gix::prepare_clone_bare(
-                        daemon.as_ref().map_or_else(
-                            || client_repo.git_dir().to_owned(),
-                            |d| std::path::PathBuf::from(format!("{}/", d.url)),
-                        ),
-                        tmp.path(),
-                    )?
-                    .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
-                    .await?
-                    .0;
-                    (repo, tmp)
-                };
+                // Run the same negotiation twice: once with the freshly-cloned (loose) tracking
+                // refs, and once after packing them. The have-set build resolves local refs
+                // differently in each case (`find` vs the `try_find_packed_only` fast path that
+                // skips the loose `open()`), but the negotiation result must be identical.
+                for pack_refs in [false, true] {
+                    let (mut client_repo, _tmp) = {
+                        let client_repo = remote::repo("multi_round/client");
+                        let daemon = spawn_git_daemon_if_async(client_repo.workdir().expect("non-bare"))?;
+                        let tmp = TempDir::new()?;
+                        let repo = gix::prepare_clone_bare(
+                            daemon.as_ref().map_or_else(
+                                || client_repo.git_dir().to_owned(),
+                                |d| std::path::PathBuf::from(format!("{}/", d.url)),
+                            ),
+                            tmp.path(),
+                        )?
+                        .fetch_only(gix::progress::Discard, &std::sync::atomic::AtomicBool::default())
+                        .await?
+                        .0;
+                        (repo, tmp)
+                    };
 
-                {
-                    let mut config = client_repo.config_snapshot_mut();
-                    config.set_value(
-                        &gix::config::tree::Protocol::VERSION,
-                        (version as u8).to_string().as_str(),
-                    )?;
-                    config.set_value(
-                        &gix::config::tree::Fetch::NEGOTIATION_ALGORITHM,
-                        algorithm.to_string().as_str(),
-                    )?;
-                }
-                let server_repo = remote::repo("multi_round/server");
-                let daemon = spawn_git_daemon_if_async(server_repo.workdir().expect("non-bare"))?;
-                let remote = into_daemon_remote_if_async(
-                    client_repo.remote_at(server_repo.workdir().expect("non-bare"))?,
-                    daemon.as_ref(),
-                    None,
-                );
-                let changes = remote
-                    .with_refspecs(Some("refs/heads/*:refs/remotes/origin/*"), Fetch)?
-                    .connect(Fetch)
-                    .await?
-                    .prepare_fetch(gix::progress::Discard, Default::default())
-                    .await?
-                    .receive(gix::progress::Discard, &AtomicBool::default())
-                    .await?;
-
-                match changes.status {
-                    Status::Change {
-                        write_pack_bundle,
-                        negotiate,
-                        ..
-                    } => {
-                        assert_eq!(
-                            negotiate.rounds.len(),
-                            expected_negotiation_rounds,
-                            "we need multiple rounds"
-                        );
-                        // the server only has our `b1` and an extra commit or two.
-                        assert_eq!(
-                            write_pack_bundle.index.num_objects, 7,
-                            "this is the number git gets as well, we are quite perfectly aligned :)"
-                        );
+                    if pack_refs {
+                        let status = std::process::Command::new("git")
+                            .args(["pack-refs", "--all"])
+                            .current_dir(client_repo.git_dir())
+                            .status()?;
+                        assert!(status.success(), "git pack-refs --all should succeed");
                     }
-                    _ => unreachable!("We expect a pack for sure"),
+
+                    {
+                        let mut config = client_repo.config_snapshot_mut();
+                        config.set_value(
+                            &gix::config::tree::Protocol::VERSION,
+                            (version as u8).to_string().as_str(),
+                        )?;
+                        config.set_value(
+                            &gix::config::tree::Fetch::NEGOTIATION_ALGORITHM,
+                            algorithm.to_string().as_str(),
+                        )?;
+                    }
+                    let server_repo = remote::repo("multi_round/server");
+                    let daemon = spawn_git_daemon_if_async(server_repo.workdir().expect("non-bare"))?;
+                    let remote = into_daemon_remote_if_async(
+                        client_repo.remote_at(server_repo.workdir().expect("non-bare"))?,
+                        daemon.as_ref(),
+                        None,
+                    );
+                    let changes = remote
+                        .with_refspecs(Some("refs/heads/*:refs/remotes/origin/*"), Fetch)?
+                        .connect(Fetch)
+                        .await?
+                        .prepare_fetch(gix::progress::Discard, Default::default())
+                        .await?
+                        .receive(gix::progress::Discard, &AtomicBool::default())
+                        .await?;
+
+                    match changes.status {
+                        Status::Change {
+                            write_pack_bundle,
+                            negotiate,
+                            ..
+                        } => {
+                            assert_eq!(
+                                negotiate.rounds.len(),
+                                expected_negotiation_rounds,
+                                "we need multiple rounds (pack_refs={pack_refs})"
+                            );
+                            // the server only has our `b1` and an extra commit or two.
+                            assert_eq!(
+                                write_pack_bundle.index.num_objects, 7,
+                                "this is the number git gets as well, we are quite perfectly aligned :) (pack_refs={pack_refs})"
+                            );
+                        }
+                        _ => unreachable!("We expect a pack for sure"),
+                    }
                 }
             }
         }

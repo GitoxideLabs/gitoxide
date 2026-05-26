@@ -159,13 +159,28 @@ where
     let mut remote_ref_target_known: Vec<bool> = std::iter::repeat_n(false, ref_map.mappings.len()).collect();
     let mut remote_ref_included: Vec<bool> = std::iter::repeat_n(false, ref_map.mappings.len()).collect();
 
-    // This loop is the dominant cost of `mark_complete_and_common_ref` on repos
-    // with very many refs (e.g. the AUR mirror, ~90k mappings): for each mapping
-    // it does one `refs.find()` (packed-ref lookup) plus one
-    // `graph.get_or_insert_commit()` (ODB object load + commit-graph insert).
-    // The two `find_ms` / `commit_ms` totals split those costs apart so it's
-    // clear which one to optimize. The `Instant` reads are a few ns each and
-    // dwarfed by the work they bracket, so they stay unconditional.
+    // The `have`-set lookups below are the dominant cost of this function on repos with very many
+    // refs (the AUR mirror has ~155k mappings): for each mapping we resolve the local ref to an id,
+    // then load its commit. `Store::find` probes the loose ref file on disk *before* consulting
+    // packed-refs, so on a freshly-packed mirror that is one wasted `open()` syscall per ref. To
+    // avoid it we snapshot packed-refs once and the set of loose ref names once, then resolve
+    // packed-only names straight from the snapshot via `try_find_packed_only`. Names that are
+    // actually loose still go through `find`, preserving loose-over-packed precedence; if either
+    // snapshot is unavailable we fall back to `find` for everything (correctness over speed). The
+    // `find_ms` / `commit_ms` span fields split the two phases so the win is measurable.
+    //
+    // Enumerating the loose names walks the entire `refs/` tree, so it only pays off when there
+    // are enough mappings to amortize the walk: a small fetch into a repository with many loose
+    // refs would otherwise trade O(mapped refs) probes for an O(all loose refs) scan. Below the
+    // threshold every name takes the plain `find` path, exactly as before.
+    const MIN_MAPPINGS_FOR_LOOSE_NAME_SNAPSHOT: usize = 256;
+    let packed_snapshot = refs.cached_packed_buffer().ok().flatten();
+    let packed = packed_snapshot.as_ref().map(|b| &***b);
+    let loose_names: Option<std::collections::HashSet<bstr::BString>> = packed
+        .filter(|_| ref_map.mappings.len() >= MIN_MAPPINGS_FOR_LOOSE_NAME_SNAPSHOT)
+        .and(refs.loose_iter().ok())
+        .map(|iter| iter.filter_map(Result::ok).map(|r| r.name.into()).collect());
+
     let mappings_span = gix_trace::detail!(
         "mark mappings",
         mappings = ref_map.mappings.len(),
@@ -178,9 +193,17 @@ where
         let want_id = mapping.remote.as_id();
         let find_start = std::time::Instant::now();
         let have_id = mapping.local.as_ref().and_then(|name| {
+            // Skip the loose-ref `open()` for names we know are packed-only; otherwise (a loose
+            // ref, or the fast path being unavailable) use the full lookup that honors loose
+            // precedence.
+            let reference = match (&loose_names, packed) {
+                (Some(loose), Some(packed)) if !loose.contains(name) => {
+                    refs.try_find_packed_only(name, Some(packed))
+                }
+                _ => refs.try_find(name),
+            };
             // this is the only time git uses the peer-id.
-            let r = refs.find(name).ok()?;
-            r.target.try_id().map(ToOwned::to_owned)
+            reference.ok().flatten()?.target.try_id().map(ToOwned::to_owned)
         });
         find_time += find_start.elapsed();
 
