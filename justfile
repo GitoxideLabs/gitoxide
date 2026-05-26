@@ -142,6 +142,7 @@ check:
     cargo check -p gix --no-default-features --features blame --tests
     cargo check -p gix --no-default-features --features sha1
     cargo check -p gix --no-default-features --features sha1,sha256
+    cargo check -p gix --no-default-features --features sha256
     cargo check -p gix --no-default-features 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-odb --features serde 2>&1 >/dev/null | grep 'Please set either the `sha1` or the `sha256` feature flag'
     cargo check -p gix-odb --features sha1,serde

@@ -46,14 +46,14 @@ impl StageOne {
             .transpose()?
             .unwrap_or_default();
         let object_hash = (repo_format_version != 1)
-            .then_some(Ok(gix_hash::Kind::Sha1))
+            .then_some(Ok(gix_hash::Kind::default()))
             .or_else(|| {
                 config
                     .string(Extensions::OBJECT_FORMAT)
                     .map(|format| Extensions::OBJECT_FORMAT.try_into_object_format(format))
             })
             .transpose()?
-            .unwrap_or(gix_hash::Kind::Sha1);
+            .unwrap_or_else(gix_hash::Kind::default);
 
         let extension_worktree = util::config_bool(
             &config,
