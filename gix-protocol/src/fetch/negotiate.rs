@@ -159,13 +159,30 @@ where
     let mut remote_ref_target_known: Vec<bool> = std::iter::repeat_n(false, ref_map.mappings.len()).collect();
     let mut remote_ref_included: Vec<bool> = std::iter::repeat_n(false, ref_map.mappings.len()).collect();
 
+    // This loop is the dominant cost of `mark_complete_and_common_ref` on repos
+    // with very many refs (e.g. the AUR mirror, ~90k mappings): for each mapping
+    // it does one `refs.find()` (packed-ref lookup) plus one
+    // `graph.get_or_insert_commit()` (ODB object load + commit-graph insert).
+    // The two `find_ms` / `commit_ms` totals split those costs apart so it's
+    // clear which one to optimize. The `Instant` reads are a few ns each and
+    // dwarfed by the work they bracket, so they stay unconditional.
+    let mappings_span = gix_trace::detail!(
+        "mark mappings",
+        mappings = ref_map.mappings.len(),
+        find_ms = 0u64,
+        commit_ms = 0u64
+    );
+    let mut find_time = std::time::Duration::ZERO;
+    let mut commit_time = std::time::Duration::ZERO;
     for (mapping_idx, mapping) in ref_map.mappings.iter().enumerate() {
         let want_id = mapping.remote.as_id();
+        let find_start = std::time::Instant::now();
         let have_id = mapping.local.as_ref().and_then(|name| {
             // this is the only time git uses the peer-id.
             let r = refs.find(name).ok()?;
             r.target.try_id().map(ToOwned::to_owned)
         });
+        find_time += find_start.elapsed();
 
         // Even for ignored mappings we want to know if the `want` is already present locally, so skip nothing else.
         if !mapping_is_ignored(mapping) {
@@ -176,6 +193,7 @@ where
             }
         }
 
+        let commit_start = std::time::Instant::now();
         if let Some(commit) = want_id
             .and_then(|id| graph.get_or_insert_commit(id.into(), |_| {}).transpose())
             .transpose()?
@@ -185,7 +203,13 @@ where
         } else if want_id.is_some_and(|maybe_annotated_tag| objects.exists(maybe_annotated_tag)) {
             remote_ref_target_known[mapping_idx] = true;
         }
+        commit_time += commit_start.elapsed();
     }
+    mappings_span
+        .record("find_ms", u64::try_from(find_time.as_millis()).unwrap_or(u64::MAX))
+        .record("commit_ms", u64::try_from(commit_time.as_millis()).unwrap_or(u64::MAX));
+    #[allow(clippy::drop_non_drop)] // needed when the `tracing` feature is disabled
+    drop(mappings_span);
 
     if matches!(shallow, Shallow::NoChange) {
         if num_mappings_with_change == 0 {
