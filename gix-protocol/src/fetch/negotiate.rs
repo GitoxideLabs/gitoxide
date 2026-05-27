@@ -193,17 +193,25 @@ where
         let want_id = mapping.remote.as_id();
         let find_start = std::time::Instant::now();
         let have_id = mapping.local.as_ref().and_then(|name| {
-            // Skip the loose-ref `open()` for names we know are packed-only; otherwise (a loose
-            // ref, or the fast path being unavailable) use the full lookup that honors loose
-            // precedence.
-            let reference = match (&loose_names, packed) {
-                (Some(loose), Some(packed)) if !loose.contains(name) => {
-                    refs.try_find_packed_only(name, Some(packed))
-                }
-                _ => refs.try_find(name),
-            };
             // this is the only time git uses the peer-id.
-            reference.ok().flatten()?.target.try_id().map(ToOwned::to_owned)
+            match (&loose_names, packed) {
+                // Packed-only ref: a borrowed lookup straight from the buffer skips both the
+                // loose-ref `open()` syscall *and* the per-ref owned-`Reference` allocation that
+                // `try_find_packed_only` performs — the latter dominated `find_ms` on a large
+                // mirror. Packed refs are always direct, so `target()` is the id we want.
+                (Some(loose), Some(packed)) if !loose.contains(name) => {
+                    packed.try_find(name).ok().flatten().map(|r| r.target())
+                }
+                // A loose ref (or the fast path being unavailable): use the full lookup that
+                // honors loose-over-packed precedence.
+                _ => refs
+                    .try_find(name)
+                    .ok()
+                    .flatten()?
+                    .target
+                    .try_id()
+                    .map(ToOwned::to_owned),
+            }
         });
         find_time += find_start.elapsed();
 
