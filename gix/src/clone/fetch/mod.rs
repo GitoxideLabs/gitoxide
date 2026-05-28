@@ -52,6 +52,16 @@ pub enum Error {
     RefMap(#[from] crate::remote::ref_map::Error),
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
+    #[error(
+        "Remote now uses {remote} even though the local repository was reconfigured to {local} \
+         to match the remote's previously advertised object format. The server is advertising \
+         inconsistent formats; if the correct one is known, pass `create::Options {{ \
+         object_hash: Some(gix_hash::Kind::{remote:?}), .. }}` to `PrepareFetch::new` to pin it."
+    )]
+    IncompatibleObjectHash {
+        local: gix_hash::Kind,
+        remote: gix_hash::Kind,
+    },
     #[cfg(feature = "sha256")]
     #[error("Failed to reopen the local repository after adopting the remote's object format")]
     ReopenWithObjectHash(#[from] crate::open::Error),
@@ -96,6 +106,10 @@ impl PrepareFetch {
         P::SubProgress: 'static,
     {
         // A fresh clone may find the remote uses a different object format; adopt it and retry.
+        #[cfg(feature = "sha256")]
+        let mut already_retried = false;
+        // Only the sha256 adoption path below loops; otherwise the first attempt always returns.
+        #[cfg_attr(not(feature = "sha256"), allow(clippy::never_loop))]
         loop {
             match self.fetch_only_attempt(&mut progress, should_interrupt).await? {
                 Attempt::Done(repo, outcome) => return Ok((repo, outcome)),
@@ -108,9 +122,17 @@ impl PrepareFetch {
                         .repo
                         .as_ref()
                         .expect("user error: multiple calls are allowed only until it succeeds");
+                    if already_retried {
+                        // A second mismatch after adopting should never happen; fail instead of looping.
+                        return Err(Error::IncompatibleObjectHash {
+                            local: repo.object_hash(),
+                            remote: remote_object_hash,
+                        });
+                    }
                     // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
                     let new_repo = util::reinitialize_with_object_hash(repo, remote_name.as_ref(), remote_object_hash)?;
                     self.repo = Some(new_repo);
+                    already_retried = true;
                 }
             }
         }
