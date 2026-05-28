@@ -814,6 +814,154 @@ fn packed_refs_are_looked_up_when_checking_existing_values() -> crate::Result {
     Ok(())
 }
 
+/// Pad `real` with enough filler creations to cross the loose-name-snapshot threshold in
+/// `prepare_inner` (256 edits), so the packed-only fast path engages for the assertions below.
+/// The fillers don't exist loose or packed and are created with `MustNotExist`, so they never
+/// interfere; `real` goes last so any expected failure is attributable to it.
+fn with_filler_edits(real: RefEdit) -> Vec<RefEdit> {
+    (0..256)
+        .map(|i| RefEdit {
+            change: Change::Update {
+                log: LogChange::default(),
+                new: Target::Object(crate::fixture_hash_kind().null()),
+                expected: PreviousValue::MustNotExist,
+            },
+            name: format!("refs/heads/filler-{i:03}").try_into().expect("valid"),
+            deref: false,
+        })
+        .chain(Some(real))
+        .collect()
+}
+
+/// Resolving each edit's current value to verify its precondition takes a fast
+/// path for packed-only names (reading packed-refs directly instead of probing
+/// for a loose file that isn't there — the dominant cost when applying a
+/// transaction on a many-ref store). This asserts that fast path returns the
+/// real packed value, while a loose ref still shadows its packed entry so the
+/// fast path is *not* taken — in both the pass and fail directions.
+/// `prepare()` performs the check, so no commit is needed.
+#[test]
+fn resolving_existing_values_reads_packed_only_refs_and_honors_loose_precedence() -> crate::Result {
+    let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
+    let packed = store.open_packed_buffer()?.expect("packed-refs present");
+    let new = Target::Object(crate::fixture_hash_kind().null());
+    let wrong = Target::Object(hex_to_id("0000000000000000000000000000000000000001"));
+
+    let update = |name: &str, expected: PreviousValue| RefEdit {
+        change: Change::Update {
+            log: LogChange::default(),
+            new: new.clone(),
+            expected,
+        },
+        name: name.try_into().expect("valid"),
+        deref: false,
+    };
+
+    // `main` is packed-only — resolved via the fast path.
+    assert!(store.try_find_loose("main")?.is_none(), "main must be packed-only");
+    let main_packed = Target::Object(packed.find("main")?.target());
+    store.transaction().prepare(
+        with_filler_edits(update(
+            "refs/heads/main",
+            PreviousValue::MustExistAndMatch(main_packed.clone()),
+        )),
+        Fail::Immediately,
+        Fail::Immediately,
+    )?;
+    // A wrong value must error with the *actual* packed value, proving the fast
+    // path returned the packed target rather than `None`.
+    match store.transaction().prepare(
+        with_filler_edits(update(
+            "refs/heads/main",
+            PreviousValue::MustExistAndMatch(wrong.clone()),
+        )),
+        Fail::Immediately,
+        Fail::Immediately,
+    ) {
+        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
+            assert_eq!(full_name, "refs/heads/main");
+            assert_eq!(actual, main_packed, "the fast path resolved the packed value");
+        }
+        _ => unreachable!("expected ReferenceOutOfDate for a packed-only ref"),
+    }
+
+    // `newer-as-loose` is a loose ref shadowing an *outdated* packed entry: the
+    // loose value must win, so the fast path must NOT be taken for it.
+    let loose_val = store.find_loose("newer-as-loose")?.target;
+    let packed_val = Target::Object(packed.find("newer-as-loose")?.target());
+    assert_ne!(loose_val, packed_val, "fixture must diverge loose vs packed");
+    store.transaction().prepare(
+        with_filler_edits(update(
+            "refs/heads/newer-as-loose",
+            PreviousValue::MustExistAndMatch(loose_val.clone()),
+        )),
+        Fail::Immediately,
+        Fail::Immediately,
+    )?;
+    // Matching the shadowed packed value must fail — current value is the loose one.
+    match store.transaction().prepare(
+        with_filler_edits(update(
+            "refs/heads/newer-as-loose",
+            PreviousValue::MustExistAndMatch(packed_val),
+        )),
+        Fail::Immediately,
+        Fail::Immediately,
+    ) {
+        Err(transaction::prepare::Error::ReferenceOutOfDate { full_name, actual, .. }) => {
+            assert_eq!(full_name, "refs/heads/newer-as-loose");
+            assert_eq!(actual, loose_val, "loose shadows packed; precedence preserved");
+        }
+        _ => unreachable!("expected ReferenceOutOfDate honoring loose-over-packed precedence"),
+    }
+    Ok(())
+}
+
+/// `HEAD` lives in the `.git` root, not in the `refs/` hierarchy the loose-name snapshot
+/// enumerates, and is never packed: the packed-only fast path must not be taken for it, or an
+/// existing `HEAD` would be treated as absent.
+#[test]
+fn resolving_existing_values_in_large_transactions_sees_pseudo_refs_like_head() -> crate::Result {
+    let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
+    let head_target = store.find_loose("HEAD")?.target;
+
+    // An existing HEAD must be seen, so matching its current value passes…
+    store.transaction().prepare(
+        with_filler_edits(RefEdit {
+            change: Change::Update {
+                log: LogChange::default(),
+                new: head_target.clone(),
+                expected: PreviousValue::MustExistAndMatch(head_target.clone()),
+            },
+            name: "HEAD".try_into()?,
+            deref: false,
+        }),
+        Fail::Immediately,
+        Fail::Immediately,
+    )?;
+
+    // …and `MustNotExist` must fail rather than treat HEAD as absent.
+    match store.transaction().prepare(
+        with_filler_edits(RefEdit {
+            change: Change::Update {
+                log: LogChange::default(),
+                new: Target::Object(hex_to_id("0000000000000000000000000000000000000001")),
+                expected: PreviousValue::MustNotExist,
+            },
+            name: "HEAD".try_into()?,
+            deref: false,
+        }),
+        Fail::Immediately,
+        Fail::Immediately,
+    ) {
+        Err(transaction::prepare::Error::MustNotExist { full_name, actual, .. }) => {
+            assert_eq!(full_name, "HEAD");
+            assert_eq!(actual, head_target, "the existing HEAD value is reported");
+        }
+        _ => unreachable!("an existing HEAD must fail MustNotExist"),
+    }
+    Ok(())
+}
+
 #[test]
 fn packed_refs_creation_with_tag_loop_are_not_handled_and_cannot_exist_due_to_object_hashes() {
     // Tag loops cannot exist as you cannot create them thanks to hashing.

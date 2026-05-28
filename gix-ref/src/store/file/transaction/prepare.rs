@@ -20,7 +20,25 @@ impl Transaction<'_, '_> {
         store: &file::Store,
         name: &FullNameRef,
         packed: Option<&packed::Buffer>,
+        loose_names: Option<&std::collections::HashSet<FullName>>,
     ) -> Result<Option<Reference>, Error> {
+        // Packed-only fast path: the name has no loose file, so packed-refs is
+        // authoritative. Skip `ref_contents` — on a freshly-packed mirror that
+        // probe is a futile ENOENT `open()` syscall, and a fetch on a large
+        // mirror does one per edit (it dominated the transaction's wall time).
+        // This mirrors the negotiate/update_refs fast paths; precedence still
+        // holds because any loose ref is in `loose_names` and takes the full
+        // lookup below. The snapshot only enumerates the `refs/` hierarchy,
+        // so pseudo refs like `HEAD` (which live in the `.git` root and are
+        // never packed) must always take the full lookup.
+        if let (Some(loose), Some(packed)) = (loose_names, packed) {
+            if name.as_bstr().starts_with(b"refs/") && !loose.contains(name) {
+                return packed
+                    .try_find(name)
+                    .map(|opt| opt.map(Into::into))
+                    .map_err(Error::from);
+            }
+        }
         store
             .ref_contents(name)
             .map_err(Error::from)
@@ -61,14 +79,17 @@ impl Transaction<'_, '_> {
         }
     }
 
-    fn lock_ref_and_apply_change(
+    /// Acquire the lock for `change`'s reference without reading its current value yet.
+    ///
+    /// All edits of a transaction are locked before any current value is resolved: a cooperative
+    /// writer must hold the same lock to change a ref, so once every lock is held, neither the
+    /// loose-name snapshot taken afterwards nor any value read in [`apply_change`](Self::apply_change)
+    /// can go stale for an edited ref.
+    fn acquire_ref_lock(
         store: &file::Store,
         lock_fail_mode: gix_lock::acquire::Fail,
-        packed: Option<&packed::Buffer>,
-        change: &mut Edit,
-        direct_to_packed_refs: bool,
-    ) -> Result<(), Error> {
-        use std::io::Write;
+        change: &Edit,
+    ) -> Result<HeldLock, Error> {
         assert!(
             change.lock.is_none(),
             "locks can only be acquired once and it's all or nothing"
@@ -80,18 +101,46 @@ impl Transaction<'_, '_> {
         // returning the configured validation error.
         store.check_windows_device_name(change.update.name.as_ref())?;
 
-        let lock = match &mut change.update.change {
-            Change::Delete { expected, .. } => {
-                let (base, relative_path) = store.reference_path_with_base(change.update.name.as_ref());
-                let lock = gix_lock::Marker::acquire_to_hold_resource(
-                    base.join(relative_path.as_ref()),
-                    lock_fail_mode,
-                    Some(base.clone().into_owned()),
-                )
-                .map_err(|err| Self::lock_acquire_error(err, "borrowcheck won't allow change.name()"))?;
+        let (base, relative_path) = store.reference_path_with_base(change.update.name.as_ref());
+        let resource = base.join(relative_path.as_ref());
+        match change.update.change {
+            Change::Delete { .. } => {
+                gix_lock::Marker::acquire_to_hold_resource(resource, lock_fail_mode, Some(base.clone().into_owned()))
+                    .map(HeldLock::Delete)
+                    .map_err(|err| Self::lock_acquire_error(err, "borrowcheck won't allow change.name()"))
+            }
+            Change::Update { .. } => {
+                gix_lock::File::acquire_to_update_resource(resource, lock_fail_mode, Some(base.clone().into_owned()))
+                    .map(HeldLock::Update)
+                    .map_err(|err| {
+                        Self::lock_acquire_error(
+                            err,
+                            "borrowcheck won't allow change.name() and this will be corrected by caller",
+                        )
+                    })
+            }
+        }
+    }
 
-                let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
+    /// Resolve the current value of `change`'s reference and verify its precondition, using the
+    /// lock previously acquired by [`acquire_ref_lock`](Self::acquire_ref_lock).
+    fn apply_change(
+        store: &file::Store,
+        packed: Option<&packed::Buffer>,
+        change: &mut Edit,
+        held_lock: HeldLock,
+        direct_to_packed_refs: bool,
+        loose_names: Option<&std::collections::HashSet<FullName>>,
+        find_time: &mut std::time::Duration,
+    ) -> Result<(), Error> {
+        use std::io::Write;
 
+        let resolve_start = std::time::Instant::now();
+        let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed, loose_names)?;
+        *find_time += resolve_start.elapsed();
+
+        let lock = match (&mut change.update.change, held_lock) {
+            (Change::Delete { expected, .. }, HeldLock::Delete(lock)) => {
                 match (&expected, &existing_ref) {
                     (PreviousValue::MustNotExist, _) => {
                         panic!("BUG: MustNotExist constraint makes no sense if references are to be deleted")
@@ -126,25 +175,7 @@ impl Transaction<'_, '_> {
 
                 Some(lock)
             }
-            Change::Update { expected, new, .. } => {
-                let (base, relative_path) = store.reference_path_with_base(change.update.name.as_ref());
-                let obtain_lock = || {
-                    gix_lock::File::acquire_to_update_resource(
-                        base.join(relative_path.as_ref()),
-                        lock_fail_mode,
-                        Some(base.clone().into_owned()),
-                    )
-                    .map_err(|err| {
-                        Self::lock_acquire_error(
-                            err,
-                            "borrowcheck won't allow change.name() and this will be corrected by caller",
-                        )
-                    })
-                };
-                let mut lock = obtain_lock()?;
-
-                let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed)?;
-
+            (Change::Update { expected, new, .. }, HeldLock::Update(mut lock)) => {
                 match (&expected, &existing_ref) {
                     (PreviousValue::Any, _)
                     | (PreviousValue::MustExist, Some(_))
@@ -217,10 +248,20 @@ impl Transaction<'_, '_> {
                     None
                 }
             }
+            _ => unreachable!("BUG: the lock kind always matches the change kind"),
         };
         change.lock = lock;
         Ok(())
     }
+}
+
+/// A lock held for a single ref edit, acquired for all edits of a transaction before any of
+/// their current values are read.
+enum HeldLock {
+    /// Holds the resource of a reference that is to be deleted.
+    Delete(gix_lock::Marker),
+    /// A writable lock for a reference that is to be created or updated.
+    Update(gix_lock::File),
 }
 
 impl Transaction<'_, '_> {
@@ -377,42 +418,78 @@ impl Transaction<'_, '_> {
             }
         }
 
+        // Acquire every edit's lock before resolving any current value: a cooperative writer
+        // must hold the same lock to change a ref, so once all locks are held, the loose-name
+        // snapshot below cannot go stale for an edited ref. Reading values against a snapshot
+        // taken before the locks would let a concurrent loose write slip in unseen, making the
+        // CAS check pass against the stale packed value and overwrite the concurrent update.
+        let mut held_locks = Vec::with_capacity(updates.len());
         for cid in 0..updates.len() {
+            let change = &updates[cid];
+            match Self::acquire_ref_lock(store, ref_files_lock_fail_mode, change) {
+                Ok(lock) => held_locks.push(lock),
+                Err(err) => {
+                    let err = match err {
+                        Error::LockAcquire {
+                            source,
+                            full_name: _bogus,
+                        } => Error::LockAcquire {
+                            source,
+                            full_name: {
+                                let mut cursor = change.parent_index;
+                                let mut ref_name = change.name();
+                                while let Some(parent_idx) = cursor {
+                                    let parent = &updates[parent_idx];
+                                    if parent.parent_index.is_none() {
+                                        ref_name = parent.name();
+                                    } else {
+                                        cursor = parent.parent_index;
+                                    }
+                                }
+                                ref_name
+                            },
+                        },
+                        other => other,
+                    };
+                    return Err(err);
+                }
+            }
+        }
+
+        // Resolving each edit's current value to verify its precondition is the
+        // dominant cost of applying a transaction on a many-ref store (~155k on
+        // the AUR mirror). Snapshot packed-refs and the set of loose ref names
+        // once so packed-only names resolve straight from packed-refs without a
+        // per-edit loose `open()` (see `read_existing_ref`). `find_ms`
+        // on the span below splits out that resolution time, mirroring the
+        // `mark mappings` / `update_refs()` spans on the other two ref passes.
+        //
+        // Enumerating the loose names walks the entire `refs/` tree, so it only pays off when
+        // there are enough edits to amortize the walk: a small transaction against a store with
+        // many loose refs would otherwise trade O(edits) probes for an O(all loose refs) scan.
+        // Below the threshold every edit takes the plain loose-first lookup, exactly as before.
+        const MIN_EDITS_FOR_LOOSE_NAME_SNAPSHOT: usize = 256;
+        let packed_buffer = self.packed_transaction.as_ref().and_then(packed::Transaction::buffer);
+        let loose_names: Option<std::collections::HashSet<FullName>> = packed_buffer
+            .filter(|_| updates.len() >= MIN_EDITS_FOR_LOOSE_NAME_SNAPSHOT)
+            .and(store.loose_iter().ok())
+            .map(|iter| iter.filter_map(Result::ok).map(|r| r.name).collect());
+        let mut find_time = std::time::Duration::ZERO;
+        let resolve_span = gix_features::trace::detail!("ref tx resolve", edits = updates.len(), find_ms = 0u64);
+        for (cid, held_lock) in held_locks.into_iter().enumerate() {
             let change = &mut updates[cid];
-            if let Err(err) = Self::lock_ref_and_apply_change(
+            Self::apply_change(
                 self.store,
-                ref_files_lock_fail_mode,
-                self.packed_transaction.as_ref().and_then(packed::Transaction::buffer),
+                packed_buffer,
                 change,
+                held_lock,
                 matches!(
                     self.packed_refs,
                     PackedRefs::DeletionsAndNonSymbolicUpdatesRemoveLooseSourceReference(_)
                 ),
-            ) {
-                let err = match err {
-                    Error::LockAcquire {
-                        source,
-                        full_name: _bogus,
-                    } => Error::LockAcquire {
-                        source,
-                        full_name: {
-                            let mut cursor = change.parent_index;
-                            let mut ref_name = change.name();
-                            while let Some(parent_idx) = cursor {
-                                let parent = &updates[parent_idx];
-                                if parent.parent_index.is_none() {
-                                    ref_name = parent.name();
-                                } else {
-                                    cursor = parent.parent_index;
-                                }
-                            }
-                            ref_name
-                        },
-                    },
-                    other => other,
-                };
-                return Err(err);
-            }
+                loose_names.as_ref(),
+                &mut find_time,
+            )?;
 
             // traverse parent chain from leaf/peeled ref and set the leaf previous oid accordingly
             // to help with their reflog entries
@@ -427,6 +504,7 @@ impl Transaction<'_, '_> {
                 }
             }
         }
+        resolve_span.record("find_ms", u64::try_from(find_time.as_millis()).unwrap_or(u64::MAX));
         self.updates = Some(updates);
         Ok(self)
     }
