@@ -24,6 +24,15 @@ use crate::{
     packetline::{PacketLineRef, blocking_io::StreamingPeekableIter},
 };
 
+/// The counter type behind [`Options::download_progress`]: `std`'s `AtomicU64` where the target
+/// supports 64-bit atomics, with a `portable-atomic` fallback everywhere else (mirroring `gix-status`).
+#[cfg(not(target_has_atomic = "64"))]
+pub use portable_atomic::AtomicU64;
+/// The counter type behind [`Options::download_progress`]: `std`'s `AtomicU64` where the target
+/// supports 64-bit atomics, with a `portable-atomic` fallback everywhere else (mirroring `gix-status`).
+#[cfg(target_has_atomic = "64")]
+pub use std::sync::atomic::AtomicU64;
+
 #[cfg(feature = "http-client-curl")]
 ///
 pub mod curl;
@@ -182,6 +191,13 @@ pub struct Options {
     pub http_version: Option<HttpVersion>,
     /// Backend specific options, if available.
     pub backend: Option<Arc<Mutex<dyn Any + Send + Sync + 'static>>>,
+    /// If set, the backend adds the byte length of each response-body chunk it
+    /// receives to this counter as the chunk arrives. Lets a caller render live
+    /// download progress for phases the protocol layer reports no progress for
+    /// (e.g. the v2 `ls-refs` ref advertisement). Cumulative across requests on
+    /// the same transport; the caller owns resetting it if it wants per-request
+    /// figures. Only the curl backend honors it.
+    pub download_progress: Option<Arc<AtomicU64>>,
 }
 
 impl Default for Options {
@@ -203,6 +219,7 @@ impl Default for Options {
             ssl_verify: true,
             http_version: None,
             backend: None,
+            download_progress: None,
         }
     }
 }

@@ -57,6 +57,42 @@ fn http_status_500_is_communicated_via_special_io_error() -> crate::Result {
     Ok(())
 }
 
+#[cfg(feature = "http-client-curl")]
+#[test]
+fn download_progress_counts_response_body_bytes() -> crate::Result {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    use gix_transport::client::blocking_io::http::AtomicU64;
+
+    // The curl backend must add every response-body chunk it receives to
+    // `http::Options::download_progress`. Response headers travel through the
+    // separate `header()` callback, never `write()`, so the count is purely
+    // body bytes — here the whole v1 ref advertisement. (gitaur drives its live
+    // `network` throughput row off this counter; it's the only progress signal
+    // during the otherwise-silent v2 `ls-refs` advertisement.)
+    let (_server, mut c) = mock::serve_and_connect(
+        "v1/http-handshake.response",
+        "path/not/important/due/to/mock",
+        Protocol::V1,
+    )?;
+    let counter = Arc::new(AtomicU64::new(0));
+    let opts = http::Options {
+        download_progress: Some(Arc::clone(&counter)),
+        ..Default::default()
+    };
+    c.configure(&opts).expect("curl backend accepts http::Options");
+
+    c.handshake(Service::UploadPack, &[])?;
+
+    let downloaded = counter.load(Ordering::Relaxed);
+    assert!(
+        downloaded > 0,
+        "every response-body chunk should be added to download_progress; got {downloaded}"
+    );
+    Ok(())
+}
+
 #[test]
 fn http_identity_is_picked_up_from_url() -> crate::Result {
     let transport = gix_transport::client::blocking_io::http::connect::<Remote>(

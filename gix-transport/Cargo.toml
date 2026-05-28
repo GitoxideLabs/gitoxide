@@ -133,6 +133,9 @@ async-std = { version = "1.12.0", optional = true }
 
 document-features = { version = "0.2.0", optional = true }
 
+[target.'cfg(not(target_has_atomic = "64"))'.dependencies]
+portable-atomic = "1"
+
 [dev-dependencies]
 gix-transport = { path = ".", features = ["parking_lot"] }
 gix-pack = { path = "../gix-pack", default-features = false, features = [

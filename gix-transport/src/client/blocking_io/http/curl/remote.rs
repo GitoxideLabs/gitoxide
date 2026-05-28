@@ -3,6 +3,7 @@ use std::{
     io::{Read, Write},
     sync::{
         Arc,
+        atomic::Ordering,
         mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
     },
     thread,
@@ -15,7 +16,7 @@ use gix_features::io::pipe;
 use parking_lot::Mutex;
 
 use crate::client::blocking_io::http::{
-    self,
+    self, AtomicU64,
     curl::Error,
     curl::curl_is_spurious,
     options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
@@ -58,6 +59,9 @@ struct Handler {
     /// Caller-provided base URL used to derive the transport-visible base URL after redirects.
     base_url: String,
     redirected_base_url: SharedRedirectedBaseUrl,
+    /// Live byte counter the caller can poll; each `write()` adds the chunk it
+    /// received. See `http::Options::download_progress`.
+    download_progress: Option<Arc<AtomicU64>>,
 }
 
 impl Handler {
@@ -225,6 +229,9 @@ fn normalize_url_path(path: &str) -> String {
 impl curl::easy::Handler for Handler {
     fn write(&mut self, data: &[u8]) -> Result<usize, curl::easy::WriteError> {
         drop(self.send_header.take()); // signal header readers to stop trying
+        if let Some(counter) = &self.download_progress {
+            counter.fetch_add(data.len() as u64, Ordering::Relaxed);
+        }
         match self.send_data.as_mut() {
             Some(writer) => writer.write_all(data).map(|_| data.len()).or(Ok(0)),
             None => Ok(0), // nothing more to receive, reader is done
@@ -350,6 +357,7 @@ pub fn new() -> Worker {
                     ssl_verify,
                     http_version,
                     backend,
+                    download_progress,
                 },
         } in req_recv
         {
@@ -461,6 +469,7 @@ pub fn new() -> Worker {
             }
             let (receive_data, receive_headers, send_body, mut receive_body) = {
                 let handler = handle.get_mut();
+                handler.download_progress = download_progress;
                 let (send, receive_data) = pipe::unidirectional(1);
                 handler.send_data = Some(send);
                 let (send, receive_headers) = pipe::unidirectional(1);

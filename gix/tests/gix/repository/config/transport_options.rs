@@ -58,6 +58,7 @@ mod http {
             ssl_verify,
             http_version,
             backend,
+            download_progress,
         } = http_options(&repo, None, "https://example.com/does/not/matter");
         assert_eq!(
             extra_headers,
@@ -77,6 +78,10 @@ mod http {
         assert_eq!(connect_timeout, Some(std::time::Duration::from_millis(60 * 1024)));
         assert_eq!(no_proxy, None);
         assert!(!verbose, "verbose is disabled by default");
+        assert!(
+            download_progress.is_none(),
+            "download-progress counters are provided by callers, never from configuration"
+        );
         assert_eq!(ssl_ca_info.as_deref(), Some(std::path::Path::new("./CA.pem")));
         #[cfg(feature = "blocking-http-transport-reqwest")]
         {

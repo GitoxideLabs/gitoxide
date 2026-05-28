@@ -2571,6 +2571,7 @@ dependencies = [
  "gix-url",
  "parking_lot",
  "pin-project-lite",
+ "portable-atomic",
  "reqwest",
  "serde",
  "thiserror 2.0.18",
