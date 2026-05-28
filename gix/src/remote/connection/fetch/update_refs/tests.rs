@@ -4,7 +4,7 @@ pub fn restricted() -> crate::open::Options {
 
 /// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
 fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
-    gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
+    gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("valid hex object id")
 }
 
 mod update {
@@ -45,6 +45,14 @@ mod update {
         .unwrap();
         let repo = gix::open_opts(dir.path().join(name), restricted()).unwrap();
         (repo, dir)
+    }
+    /// Resolve `name` to its peeled object id, so expected ids track the fixture's hash (sha1 or sha256).
+    fn peeled_id(repo: &gix::Repository, name: &str) -> gix_hash::ObjectId {
+        repo.find_reference(name)
+            .expect("reference exists")
+            .peel_to_id()
+            .expect("ref peels to an object")
+            .detach()
     }
     use gix_ref::{
         Target, TargetRef,
@@ -130,14 +138,6 @@ mod update {
                 "checked out branches cannot be written, as it requires a merge of sorts which isn't done here",
             ),
             (
-                "ffffffffffffffffffffffffffffffffffffffff:refs/heads/invalid-source-object",
-                fetch::refs::update::Mode::RejectedSourceObjectNotFound {
-                    id: hex_to_id("ffffffffffffffffffffffffffffffffffffffff"),
-                },
-                None,
-                "checked out branches cannot be written, as it requires a merge of sorts which isn't done here",
-            ),
-            (
                 "refs/remotes/origin/g:refs/heads/not-currently-checked-out",
                 fetch::refs::update::Mode::FastForward,
                 Some("fast-forward (guessed in dry-run)"),
@@ -189,6 +189,32 @@ mod update {
                 }
             }
         }
+
+        let missing = "f".repeat(repo.object_hash().len_in_hex());
+        let (mapping, specs) = mapping_from_spec(&format!("{missing}:refs/heads/invalid-source-object"), &repo);
+        let out = fetch::refs::update(
+            &repo,
+            prefixed("action"),
+            &mapping,
+            &specs,
+            &[],
+            fetch::Tags::None,
+            fetch::DryRun::No,
+            fetch::WritePackedRefs::Never,
+        )
+        .unwrap();
+        assert_eq!(
+            out.updates,
+            vec![fetch::refs::Update {
+                type_change: None,
+                mode: fetch::refs::update::Mode::RejectedSourceObjectNotFound {
+                    id: hex_to_id(&missing),
+                },
+                edit_index: None,
+            }],
+            "a source object that isn't present is rejected"
+        );
+        assert_eq!(out.edits.len(), 0);
     }
 
     #[test]
@@ -378,7 +404,7 @@ mod update {
             }]
         );
         assert_eq!(out.edits.len(), 1);
-        let target = Target::Object(hex_to_id("66f16e4e8baf5c77bb6d0484495bebea80e916ce"));
+        let target = Target::Object(peeled_id(&remote_repo, "refs/heads/symbolic"));
         assert_eq!(
             out.edits[0],
             RefEdit {
@@ -463,6 +489,7 @@ mod update {
     #[test]
     fn local_symbolic_refs_can_be_overwritten() {
         let repo = repo("two-origins");
+        let main_id = peeled_id(&repo, "refs/heads/main");
         for (source, destination, expected_update, expected_edit) in [
             (
                 // attempt to overwrite HEAD isn't possible as the matching engine will normalize the path. That way, `HEAD`
@@ -522,7 +549,7 @@ mod update {
                         expected: PreviousValue::MustExistAndMatch(Target::Symbolic(
                             "refs/heads/main".try_into().expect("valid"),
                         )),
-                        new: Target::Object(hex_to_id("f99771fe6a1b535783af3163eba95a927aae21d5")),
+                        new: Target::Object(main_id),
                     },
                     name: "refs/heads/symbolic".try_into().expect("valid"),
                     deref: false,
@@ -544,9 +571,7 @@ mod update {
                             force_create_reflog: false,
                             message: "action: no update will be performed".into(),
                         },
-                        expected: PreviousValue::MustExistAndMatch(Target::Object(hex_to_id(
-                            "f99771fe6a1b535783af3163eba95a927aae21d5",
-                        ))),
+                        expected: PreviousValue::MustExistAndMatch(Target::Object(main_id)),
                         new: Target::Symbolic("refs/heads/main".try_into().expect("valid")),
                     },
                     name: "refs/remotes/origin/a".try_into().expect("valid"),
@@ -608,7 +633,7 @@ mod update {
         mappings.push(Mapping {
             remote: Source::Ref(gix_protocol::handshake::Ref::Direct {
                 full_ref_name: "refs/heads/main".into(),
-                object: hex_to_id("f99771fe6a1b535783af3163eba95a927aae21d5"),
+                object: peeled_id(&repo, "refs/heads/main"),
             }),
             local: Some("refs/heads/symbolic".into()),
             spec_index: SpecIndex::ExplicitInRemote(0),
@@ -731,7 +756,7 @@ mod update {
         mappings.push(Mapping {
             remote: Source::Ref(gix_protocol::handshake::Ref::Direct {
                 full_ref_name: "refs/heads/main".into(),
-                object: hex_to_id("f99771fe6a1b535783af3163eba95a927aae21d5"),
+                object: peeled_id(&repo, "refs/heads/main"),
             }),
             local: Some("refs/remotes/origin/main".into()),
             spec_index: SpecIndex::ExplicitInRemote(0),
@@ -917,8 +942,9 @@ mod update {
         let references = remote_repo.references().unwrap();
         let mut references: Vec<_> = references.all().unwrap().map(|r| into_remote_ref(r.unwrap())).collect();
         references.push(into_remote_ref(remote_repo.find_reference("HEAD").unwrap()));
+        let null = gix_hash::ObjectId::null(remote_repo.object_hash());
         let mappings = group
-            .match_lhs(references.iter().map(remote_ref_to_item))
+            .match_lhs(references.iter().map(|r| remote_ref_to_item(r, &null)))
             .mappings
             .into_iter()
             .map(|m| fetch::refmap::Mapping {
@@ -958,12 +984,14 @@ mod update {
         }
     }
 
-    fn remote_ref_to_item(r: &gix_protocol::handshake::Ref) -> gix_refspec::match_group::Item<'_> {
+    fn remote_ref_to_item<'a>(
+        r: &'a gix_protocol::handshake::Ref,
+        null: &'a gix_hash::oid,
+    ) -> gix_refspec::match_group::Item<'a> {
         let (full_ref_name, target, object) = r.unpack();
-        static NULL: gix_hash::ObjectId = gix_hash::Kind::Sha1.null();
         gix_refspec::match_group::Item {
             full_ref_name,
-            target: target.unwrap_or(NULL.as_ref()),
+            target: target.unwrap_or(null),
             object,
         }
     }
