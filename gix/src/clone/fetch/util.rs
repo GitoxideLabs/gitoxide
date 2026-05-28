@@ -28,6 +28,57 @@ pub fn write_remote_to_local_config_file(
     Ok(config)
 }
 
+/// Reconfigure the freshly-initialized, still-empty repository `repo` to use `object_hash`
+/// by rewriting its configuration file on disk, and return the reopened repository.
+///
+/// The remote we may have already persisted to that file is removed as well, so that a
+/// retried fetch re-adds it exactly once rather than duplicating the section.
+///
+/// Note that while `.git/config` is rewritten, the passed `repo` handle and its in-memory
+/// configuration are never mutated, so on error the caller can keep using it. Should the
+/// rewrite itself fail, the on-disk configuration may be incomplete, but as the clone
+/// destination is removed when `PrepareFetch` is dropped without persisting, such a
+/// partial write won't outlive the failed clone.
+#[cfg(feature = "sha256")]
+pub(super) fn reinitialize_with_object_hash(
+    repo: &crate::Repository,
+    remote_name: &BStr,
+    object_hash: gix_hash::Kind,
+) -> Result<crate::Repository, Error> {
+    use gix_config::parse::section::ValueName;
+
+    let git_dir = repo.git_dir();
+    let config_path = git_dir.join("config");
+
+    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    config.remove_section("remote", Some(remote_name));
+    // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
+    // `repositoryformatversion = 1` along with the `objectformat` extension.
+    let is_sha256 = object_hash == gix_hash::Kind::Sha256;
+    config
+        .section_mut("core", None)
+        .expect("freshly initialized repository has a core section")
+        .set(
+            ValueName::try_from("repositoryformatversion").expect("valid"),
+            if is_sha256 { "1" } else { "0" }.into(),
+        );
+    if is_sha256 {
+        config
+            .section_mut_or_create_new("extensions", None)
+            .expect("valid section name")
+            .set(
+                ValueName::try_from("objectformat").expect("valid"),
+                object_hash.to_string().as_str().into(),
+            );
+    } else {
+        // In a freshly initialized repository, this section exists solely to carry `objectformat`.
+        config.remove_section("extensions", None);
+    }
+    std::fs::write(&config_path, config.to_bstring())?;
+
+    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())?.to_thread_local())
+}
+
 fn local_config_meta(repo: &Repository) -> gix_config::file::Metadata {
     let meta = repo.config.resolved.meta().clone();
     assert_eq!(

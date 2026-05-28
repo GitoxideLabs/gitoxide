@@ -52,6 +52,21 @@ pub enum Error {
     RefMap(#[from] crate::remote::ref_map::Error),
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
+    #[cfg(feature = "sha256")]
+    #[error("Failed to reopen the local repository after adopting the remote's object format")]
+    ReopenWithObjectHash(#[from] crate::open::Error),
+}
+
+// Outcome of one `fetch_only` attempt.
+enum Attempt {
+    // Fetch completed: the persisted repository and its outcome.
+    Done(crate::Repository, crate::remote::fetch::Outcome),
+    // Remote and local object formats differ; the caller adopts the remote's and retries.
+    #[cfg(feature = "sha256")]
+    AdoptObjectHash {
+        remote_name: BString,
+        remote_object_hash: gix_hash::Kind,
+    },
 }
 
 /// Modification
@@ -76,6 +91,39 @@ impl PrepareFetch {
         mut progress: P,
         should_interrupt: &std::sync::atomic::AtomicBool,
     ) -> Result<(crate::Repository, crate::remote::fetch::Outcome), Error>
+    where
+        P: crate::NestedProgress,
+        P::SubProgress: 'static,
+    {
+        // A fresh clone may find the remote uses a different object format; adopt it and retry.
+        loop {
+            match self.fetch_only_attempt(&mut progress, should_interrupt).await? {
+                Attempt::Done(repo, outcome) => return Ok((repo, outcome)),
+                #[cfg(feature = "sha256")]
+                Attempt::AdoptObjectHash {
+                    remote_name,
+                    remote_object_hash,
+                } => {
+                    let repo = self
+                        .repo
+                        .as_ref()
+                        .expect("user error: multiple calls are allowed only until it succeeds");
+                    // Reopen the still-empty repo with the remote's format; on error the original is kept for a retry.
+                    let new_repo = util::reinitialize_with_object_hash(repo, remote_name.as_ref(), remote_object_hash)?;
+                    self.repo = Some(new_repo);
+                }
+            }
+        }
+    }
+
+    // One fetch attempt. On an object-format mismatch it returns `AdoptObjectHash` rather than adopting
+    // in place, since the handshake connection borrows the repo that would need reopening.
+    #[gix_protocol::maybe_async::maybe_async]
+    async fn fetch_only_attempt<P>(
+        &mut self,
+        progress: &mut P,
+        should_interrupt: &std::sync::atomic::AtomicBool,
+    ) -> Result<Attempt, Error>
     where
         P: crate::NestedProgress,
         P::SubProgress: 'static,
@@ -123,7 +171,7 @@ impl PrepareFetch {
                 }
                 let refmap = connection
                     .ref_map_by_ref(
-                        &mut progress,
+                        &mut *progress,
                         remote::ref_map::Options {
                             extra_refspecs: vec![
                                 gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
@@ -148,7 +196,7 @@ impl PrepareFetch {
                 }
                 let refmap = connection
                     .ref_map_by_ref(
-                        &mut progress,
+                        &mut *progress,
                         remote::ref_map::Options {
                             extra_refspecs: vec![
                                 gix_refspec::parse("HEAD".into(), gix_refspec::parse::Operation::Fetch)
@@ -264,7 +312,7 @@ impl PrepareFetch {
                 }
                 opts
             };
-            match connection.prepare_fetch(&mut progress, fetch_opts.clone()).await {
+            match connection.prepare_fetch(&mut *progress, fetch_opts.clone()).await {
                 Ok(prepare) => prepare,
                 Err(remote::fetch::prepare::Error::RefMap(remote::ref_map::Error::InitRefMap(
                     gix_protocol::fetch::refmap::init::Error::MappingValidation(err),
@@ -289,7 +337,7 @@ impl PrepareFetch {
                     // refspec, as git can do this without connecting twice.
                     let connection = remote.connect(remote::Direction::Fetch).await?;
                     fetch_opts.extra_refspecs.remove(head_refspec_idx);
-                    connection.prepare_fetch(&mut progress, fetch_opts).await?
+                    connection.prepare_fetch(&mut *progress, fetch_opts).await?
                 }
                 Err(err) => return Err(err.into()),
             }
@@ -299,8 +347,15 @@ impl PrepareFetch {
         if let Some(ref_name) = &self.ref_name {
             util::find_custom_refname(pending_pack.ref_map(), ref_name)?;
         }
+        // On an object-format mismatch: let the caller adopt the remote's format and retry.
+        // Only reachable with sha256, otherwise `gix_hash::Kind` has a single variant, so
+        // local and remote hashes can never differ.
+        #[cfg(feature = "sha256")]
         if pending_pack.ref_map().object_hash != repo.object_hash() {
-            unimplemented!("configure repository to expect a different object hash as advertised by the server")
+            return Ok(Attempt::AdoptObjectHash {
+                remote_name,
+                remote_object_hash: pending_pack.ref_map().object_hash,
+            });
         }
         let reflog_message = {
             let mut b = self.url.to_bstring();
@@ -313,7 +368,7 @@ impl PrepareFetch {
                 message: reflog_message.clone(),
             })
             .with_shallow(self.shallow.clone())
-            .receive(&mut progress, should_interrupt)
+            .receive(&mut *progress, should_interrupt)
             .await?;
 
         util::append_config_to_repo_config(repo, config);
@@ -325,7 +380,7 @@ impl PrepareFetch {
             self.ref_name.as_ref(),
         )?;
 
-        Ok((self.repo.take().expect("still present"), outcome))
+        Ok(Attempt::Done(self.repo.take().expect("still present"), outcome))
     }
 
     /// Similar to [`fetch_only()`][Self::fetch_only()`], but passes ownership to a utility type to configure a checkout operation.
