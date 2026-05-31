@@ -296,7 +296,8 @@ members = [
     "gix-fsck",
     "tests/tools",
     "tests/it",
-    "gix-shallow"
+    "gix-shallow",
+    "gix-stash",
 ]
 
 [workspace.dependencies]

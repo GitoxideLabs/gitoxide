@@ -151,6 +151,8 @@ pub use gix_ref as refs;
 pub use gix_refspec as refspec;
 pub use gix_revwalk as revwalk;
 pub use gix_sec as sec;
+#[cfg(feature = "stash")]
+pub use gix_stash as stash;
 pub use gix_tempfile as tempfile;
 pub use gix_trace as trace;
 pub use gix_traverse as traverse;
