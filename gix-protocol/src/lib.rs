@@ -71,3 +71,7 @@ pub use ls_refs::function::LsRefsCommand;
 
 mod util;
 pub use util::*;
+
+#[cfg(feature = "serve")]
+///
+pub mod serve;

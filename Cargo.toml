@@ -273,6 +273,7 @@ members = [
     "gix-transport",
     "gix-credentials",
     "gix-protocol",
+    "gix-serve",
     "gix-pack",
     "gix-odb",
     "gix-tempfile",
