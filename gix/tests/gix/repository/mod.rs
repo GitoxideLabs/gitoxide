@@ -11,6 +11,8 @@ mod config;
 mod excludes;
 #[cfg(feature = "attributes")]
 mod filter;
+#[cfg(feature = "mailmap")]
+mod mailmap;
 #[cfg(feature = "merge")]
 mod merge;
 mod object;
