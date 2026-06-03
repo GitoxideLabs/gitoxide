@@ -1,4 +1,4 @@
-use crate::{File, Graph, Position, file, file::Commit};
+use crate::{BloomFilterSettings, File, Graph, Position, file, file::Commit};
 
 /// Access
 impl Graph {
@@ -51,6 +51,11 @@ impl Graph {
     /// Returns the number of commits stored in this file.
     pub fn num_commits(&self) -> u32 {
         self.files.iter().map(File::num_commits).sum()
+    }
+
+    /// Return changed-path Bloom filter settings used by the top-most compatible graph layer, if available.
+    pub fn bloom_filter_settings(&self) -> Option<BloomFilterSettings> {
+        self.files.iter().rev().find_map(File::bloom_filter_settings)
     }
 }
 
