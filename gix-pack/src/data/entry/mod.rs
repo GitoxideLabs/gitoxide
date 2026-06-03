@@ -33,8 +33,7 @@ impl Entry {
     /// Compute the pack offset to the base entry of the object represented by this entry, or
     /// return `None` if the distance would underflow or is invalid.
     pub fn checked_base_pack_offset(&self, distance: u64) -> Option<data::Offset> {
-        let pack_offset = self.data_offset - self.header_size() as u64;
-        Header::verified_base_pack_offset(pack_offset, distance)
+        Header::verified_base_pack_offset(self.pack_offset(), distance)
     }
 
     /// Compute the pack offset to the base entry of the object represented by this entry.
@@ -52,7 +51,11 @@ impl Entry {
     }
     /// The amount of bytes used to describe this entry in the pack. The header starts at [`Self::pack_offset()`]
     pub fn header_size(&self) -> usize {
-        self.header.size(self.decompressed_size)
+        if self.encoded_header_size == 0 {
+            self.header.size(self.decompressed_size)
+        } else {
+            self.encoded_header_size.into()
+        }
     }
 }
 

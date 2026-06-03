@@ -55,6 +55,48 @@ fn oversized_pack_entry_header_is_reported_without_panicking() {
     );
 }
 
+#[test]
+fn non_canonical_pack_entry_header_is_accepted() {
+    fn deflate(bytes: &[u8]) -> Vec<u8> {
+        let mut out = gix_features::zlib::stream::deflate::Write::new(Vec::new());
+        out.write_all(bytes).expect("writing to deflater succeeds");
+        out.flush().expect("flushing deflater succeeds");
+        out.into_inner()
+    }
+
+    let mut bytes = data::header::encode(data::Version::V2, 1).to_vec();
+    bytes.extend_from_slice(&[0xb3, 0x00]);
+    bytes.extend_from_slice(&deflate(b"20\n"));
+    bytes.extend_from_slice(&[0; 20]);
+
+    let file = data::File::from_data(
+        bytes.as_slice(),
+        PathBuf::from("non-canonical-header.pack"),
+        gix_hash::Kind::Sha1,
+    )
+    .expect("pack header is syntactically valid");
+    let entry = file
+        .entry(12)
+        .expect("git-compatible non-canonical entry header is accepted");
+    assert_eq!(entry.header_size(), 2, "the actual header size is retained");
+    assert_eq!(entry.pack_offset(), 12, "the entry start remains recoverable");
+
+    let mut out = Vec::new();
+    let outcome = file
+        .decode_entry(
+            entry,
+            &mut out,
+            &mut Default::default(),
+            &|_, _| None,
+            &mut gix_pack::cache::Never,
+        )
+        .expect("non-canonical entry decodes like a canonical git object");
+
+    assert_eq!(out, b"20\n");
+    assert_eq!(outcome.kind, gix_object::Kind::Blob);
+    assert_eq!(outcome.object_size, 3);
+}
+
 /// Reproducer for the large-allocation fuzz case: attacker-controlled object sizes must not cause
 /// `decode_entry()` to attempt multi-gigabyte allocations.
 #[test]
