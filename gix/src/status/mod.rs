@@ -15,6 +15,12 @@ where
     index_worktree_options: index_worktree::Options,
     tree_index_renames: tree_index::TrackRenames,
     should_interrupt: Option<OwnedOrStaticAtomicBool>,
+    /// Windows-only: when `true` (default), run a single batched parallel
+    /// directory walk before status to precompute worktree stats so that the
+    /// per-entry pipeline can skip per-file `lstat`. Ignored on non-Windows.
+    /// See [`crate::status::Platform::index_worktree_stats_preprocessing`].
+    #[cfg(windows)]
+    precompute_worktree_stats: bool,
 }
 
 /// How to obtain a submodule's status.
@@ -114,6 +120,8 @@ impl Repository {
                 rewrites: None,
                 thread_limit: None,
             },
+            #[cfg(windows)]
+            precompute_worktree_stats: true,
         };
 
         let untracked = self
@@ -230,6 +238,42 @@ pub mod into_iter {
         #[error(transparent)]
         HeadTreeDiff(#[from] crate::status::tree_index::Error),
     }
+}
+
+/// Run the gitignore-aware Windows worktree stats preprocessing pass.
+/// One internal helper, called from the iterator on Windows unless
+/// preprocessing is disabled. Returns `None` when the repo lacks a workdir
+/// or the walk fails — callers fall through to live `lstat` either way, so
+/// surfacing the failure as a hard error would be unhelpful.
+#[cfg(windows)]
+pub(crate) fn precomputed_worktree_stats(
+    repo: &Repository,
+    index: &gix_index::State,
+    thread_limit: Option<usize>,
+) -> Option<gix_status::worktree_stats::WorktreeStats> {
+    let workdir = repo.workdir()?;
+    let sync_repo = repo.clone().into_sync();
+
+    let make_excludes = || -> Box<dyn FnMut(&crate::bstr::BStr) -> bool> {
+        let thread_repo = sync_repo.to_thread_local();
+        let Ok(stack) = thread_repo.excludes(
+            index,
+            None,
+            gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+        ) else {
+            return Box::new(|_| false);
+        };
+        let mut stack = stack.detach();
+        let objects = thread_repo.objects.clone();
+        Box::new(move |path: &crate::bstr::BStr| -> bool {
+            stack
+                .at_entry(path, Some(gix_index::entry::Mode::DIR), &objects)
+                .map(|p| p.is_excluded())
+                .unwrap_or(false)
+        })
+    };
+
+    gix_status::worktree_stats::prepare(workdir, thread_limit, make_excludes).ok()
 }
 
 mod platform;

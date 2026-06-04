@@ -124,4 +124,18 @@ where
         self.tree_index_renames = renames;
         self
     }
+
+    /// Enable or disable the Windows worktree stats preprocessing pass.
+    ///
+    /// On Windows, status runs a single batched parallel directory walk before
+    /// the per-entry pipeline so that modification checks can use precomputed
+    /// stat information instead of issuing one `lstat` per file. The walk is
+    /// fast (~30 ms / 90 k files) and replaces a much slower per-file pass.
+    /// Defaults to `true`; disabling falls back to per-file `lstat`. No-op on
+    /// non-Windows targets.
+    #[cfg(windows)]
+    pub fn index_worktree_stats_preprocessing(mut self, enable: bool) -> Self {
+        self.precompute_worktree_stats = enable;
+        self
+    }
 }

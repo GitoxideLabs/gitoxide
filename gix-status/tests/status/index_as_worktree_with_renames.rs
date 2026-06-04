@@ -339,6 +339,8 @@ fn fixture_filtered_detailed(
             current_dir: &cwd,
             ignore_case_index_lookup: None,
         },
+        #[cfg(windows)]
+        worktree_stats: None,
     };
     let options = Options {
         object_hash,

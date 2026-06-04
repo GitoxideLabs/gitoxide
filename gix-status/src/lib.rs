@@ -37,6 +37,15 @@ use portable_atomic::AtomicU64;
 pub mod index_as_worktree;
 pub use index_as_worktree::function::index_as_worktree;
 
+/// **Windows-only** worktree metadata preprocessing. Before per-entry
+/// modification checks, one batched parallel directory walk gathers stat
+/// results so that `index_as_worktree` can look them up instead of issuing a
+/// per-file `lstat`. This trade only pays off where per-file stat is expensive
+/// (Windows); on Linux/macOS `lstat` is sub-microsecond and the walk would be
+/// pure overhead.
+#[cfg(windows)]
+pub mod worktree_stats;
+
 #[cfg(feature = "worktree-rewrites")]
 pub mod index_as_worktree_with_renames;
 #[cfg(feature = "worktree-rewrites")]

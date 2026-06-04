@@ -3,6 +3,9 @@ use std::sync::atomic::AtomicBool;
 use bstr::{BStr, BString};
 use gix_index::entry;
 
+#[cfg(windows)]
+use crate::worktree_stats::WorktreeStats;
+
 /// The error returned by [index_as_worktree()`](crate::index_as_worktree()).
 #[derive(Debug, thiserror::Error)]
 #[allow(missing_docs)]
@@ -55,6 +58,11 @@ pub struct Context<'a> {
     pub filter: gix_filter::Pipeline,
     /// A flag to query to learn if cancellation is requested.
     pub should_interrupt: &'a AtomicBool,
+    /// Windows-only precomputed worktree stats from
+    /// [`crate::worktree_stats::prepare`]. Look-through: `None`/empty/partial
+    /// are all correct, misses fall through to a live `lstat`.
+    #[cfg(windows)]
+    pub worktree_stats: Option<&'a WorktreeStats>,
 }
 
 /// Provide additional information collected during the runtime of [`index_as_worktree()`](crate::index_as_worktree()).

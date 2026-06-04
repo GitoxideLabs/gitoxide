@@ -65,6 +65,14 @@ where
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
         let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
+        // Best-effort: if the prep walk fails (missing workdir, syscall error),
+        // silently fall through to stat-based status rather than abort.
+        #[cfg(windows)]
+        let worktree_stats = if self.precompute_worktree_stats {
+            crate::status::precomputed_worktree_stats(self.repo, &index, None)
+        } else {
+            None
+        };
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -134,6 +142,8 @@ where
                             &mut progress,
                             &should_interrupt,
                             options,
+                            #[cfg(windows)]
+                            worktree_stats.as_ref(),
                         )?;
                         Ok(Outcome {
                             index_worktree: out,
@@ -197,6 +207,8 @@ where
                 &mut progress,
                 &should_interrupt,
                 options,
+                #[cfg(windows)]
+                worktree_stats.as_ref(),
             )?;
             let mut iter = Iter {
                 items: Vec::new().into_iter(),
