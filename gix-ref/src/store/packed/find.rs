@@ -89,13 +89,20 @@ impl packed::Buffer {
         let mut encountered_parse_failure = false;
         a.binary_search_by_key(&full_name.as_ref(), |b: &u8| {
             let ofs = std::ptr::from_ref::<u8>(b) as usize - a.as_ptr() as usize;
-            let mut line = &a[search_start_of_record(ofs)..];
-            packed::decode::reference(&mut line, self.object_hash)
-                .map(|r| r.name.as_bstr().as_bytes())
-                .inspect_err(|_err| {
+            let line = &a[search_start_of_record(ofs)..];
+            // The binary search only needs the name bytes for ordered
+            // comparison; skip ref-name and hex-hash validation here and let
+            // the final match site re-parse the record via `decode::reference`
+            // (which validates fully). This saves the `log₂(n)` per-query
+            // `gix_validate::reference::name` calls the previous comparator
+            // ran, which dominate fetch CPU on wide-refs mirrors.
+            match packed::decode::name_at_record_start(line, self.object_hash) {
+                Some(name) => name,
+                None => {
                     encountered_parse_failure = true;
-                })
-                .unwrap_or(&[])
+                    &[]
+                }
+            }
         })
         .map(search_start_of_record)
         .map_err(|pos| (encountered_parse_failure, search_start_of_record(pos)))

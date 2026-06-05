@@ -86,6 +86,108 @@ mod reference {
     }
 }
 
+mod name_at_record_start {
+    use crate::store_impl::packed::decode;
+
+    const SHA1: gix_hash::Kind = gix_hash::Kind::Sha1;
+    const SHA256: gix_hash::Kind = gix_hash::Kind::Sha256;
+
+    #[test]
+    fn extracts_name_terminated_by_lf() {
+        let input = b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75 refs/heads/main\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            Some(b"refs/heads/main".as_slice()),
+        );
+    }
+
+    #[test]
+    fn extracts_name_terminated_by_cr() {
+        let input = b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75 refs/heads/main\r\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            Some(b"refs/heads/main".as_slice()),
+            "CR is treated as a name terminator, matching `until_line_end_without_separator`",
+        );
+    }
+
+    #[test]
+    fn does_not_validate_name_or_hash_contents() {
+        let input = b"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ not!a!valid!refname\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            Some(b"not!a!valid!refname".as_slice()),
+            "the binary-search comparator only needs name bytes; validation happens at the match site",
+        );
+    }
+
+    #[test]
+    fn rejects_missing_space_after_hash() {
+        let input = b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75-refs/heads/main\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            None,
+            "lines that do not have the expected shape are reported as a parse failure",
+        );
+    }
+
+    #[test]
+    fn rejects_truncated_input_without_newline() {
+        let input = b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75 refs/heads/main";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            None,
+            "missing line terminator means we can't bound the name",
+        );
+    }
+
+    #[test]
+    fn rejects_empty_name() {
+        let input = b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75 \n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            None,
+            "an empty name is treated as a shape mismatch so the slow path can surface it as a parse error",
+        );
+    }
+
+    #[test]
+    fn rejects_input_shorter_than_hash() {
+        assert_eq!(decode::name_at_record_start(b"", SHA1), None);
+        assert_eq!(decode::name_at_record_start(b"short", SHA1), None);
+        assert_eq!(
+            decode::name_at_record_start(b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75", SHA1),
+            None,
+            "input must be at least <hash><space> to be considered",
+        );
+    }
+
+    #[test]
+    fn sha256_record() {
+        let input = b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA256),
+            Some(b"refs/heads/main".as_slice()),
+        );
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            None,
+            "with a SHA1 hash kind the SHA256-sized prefix is not followed by a space at the expected offset",
+        );
+    }
+
+    #[test]
+    fn ignores_trailing_peeled_line() {
+        let input =
+            b"d53c4b0f91f1b29769c9430f2d1c0bcab1170c75 refs/tags/v1\n^e9cdc958e7ce2290e2d7958cdb5aa9323ef35d37\n";
+        assert_eq!(
+            decode::name_at_record_start(input, SHA1),
+            Some(b"refs/tags/v1".as_slice()),
+            "only the first line is considered; the peeled line is parsed by the match-site decoder",
+        );
+    }
+}
+
 mod header {
     use gix_object::bstr::ByteSlice;
 
