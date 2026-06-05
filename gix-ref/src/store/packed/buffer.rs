@@ -67,6 +67,8 @@ pub mod open {
                 data: backing,
                 path,
                 object_hash,
+                lookup_count: std::sync::atomic::AtomicUsize::new(0),
+                name_index: gix_features::threading::OnceCell::new(),
             })
         }
 
