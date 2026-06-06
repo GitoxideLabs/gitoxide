@@ -24,6 +24,8 @@ pub use events_type::{Events, FrontMatterEvents};
 mod comment;
 mod error;
 ///
+pub mod format;
+///
 pub mod section;
 
 #[cfg(test)]

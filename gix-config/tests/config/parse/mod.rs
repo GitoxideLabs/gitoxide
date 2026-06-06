@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use gix_config::parse::{Event, Events, Section};
 
 mod error;
+mod format;
 mod from_bytes;
 mod section;
 
