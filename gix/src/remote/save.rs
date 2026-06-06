@@ -73,8 +73,13 @@ impl Remote<'_> {
                 config.remove_section_by_id(id);
             }
         }
+        // Only reuse an existing section that belongs to the file we are writing to. Otherwise a
+        // section provided by another source (e.g. global config like `remote.<name>.prune`) would
+        // be mutated in place, mixing foreign metadata with our values and getting lost when the
+        // caller writes back only the local sections. In that case, create a fresh local section.
+        let target_meta = config.meta().clone();
         let mut section = config
-            .section_mut_or_create_new("remote", Some(name.as_ref()))
+            .section_mut_or_create_new_filter("remote", Some(name.as_ref()), |meta| *meta == target_meta)
             .expect("section name is validated and 'remote' is acceptable");
         if let Some(url) = self.url.as_ref() {
             section.push(as_key("url"), Some(url.to_bstring().as_ref()));

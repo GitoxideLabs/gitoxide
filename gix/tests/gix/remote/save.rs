@@ -118,6 +118,38 @@ mod save_as_to {
         );
         Ok(())
     }
+
+    #[test]
+    fn new_remote_in_presence_of_global_section_writes_to_local_file() -> crate::Result {
+        use gix::bstr::ByteSlice;
+        // A repo with no remotes, opened so that `remote.origin` exists only as a non-local (`Api`)
+        // override, mirroring global configuration like `remote.origin.prune = true` (issue #1951).
+        let repo = gix::ThreadSafeRepository::open_opts(
+            gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?,
+            gix::open::Options::isolated().config_overrides(["remote.origin.prune=true"]),
+        )?
+        .to_thread_local();
+
+        let mut config = repo.config_snapshot().plumbing().clone();
+        let local_meta = config.meta().clone();
+
+        repo.remote_at("https://example.com/")?
+            .save_as_to("origin", &mut config)?;
+
+        let url_is_in_local_section = config
+            .sections_by_name("remote")
+            .into_iter()
+            .flatten()
+            .filter(|s| s.header().subsection_name() == Some(b"origin".as_bstr()))
+            .any(|s| *s.meta() == local_meta && s.value("url").is_some());
+
+        assert!(
+            url_is_in_local_section,
+            "the new remote's url must be written to a section owned by the local config file, \
+             not merged into the global/override section"
+        );
+        Ok(())
+    }
 }
 
 fn uniformize(input: String) -> String {
