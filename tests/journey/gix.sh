@@ -200,6 +200,7 @@ title "gix commit-graph"
 (with "gix free"
   snapshot="$snapshot/no-repo"
   title "gix free pack"
+  (if test "$kind" != "delta-create"; then
   (when "running 'pack'"
     snapshot="$snapshot/pack"
 
@@ -702,4 +703,67 @@ title "gix commit-graph"
       )
     )
   )
+  fi)
+
+  title "gix free pack delta-create"
+  (if test "$kind" = "delta-create"; then
+  (with "the 'delta-create' sub-command"
+    snapshot="$snapshot/delta-create"
+    (pack-repo-in-sandbox
+      REPO_DIR="$PWD"
+      BLOB0=$(git rev-parse HEAD~3:file.txt)
+      BLOB1=$(git rev-parse HEAD~2:file.txt)
+      BLOB2=$(git rev-parse HEAD~1:file.txt)
+      BLOB3=$(git rev-parse HEAD:file.txt)
+
+      (with "new delta (blob#1 -> blob#0)"
+        (with "no output directory"
+          it "prints the pack name" && {
+            WITH_SNAPSHOT="$snapshot/new-delta-no-output-dir-success" \
+            expect_run $SUCCESSFULLY bash -c "printf '%s\\n%s\\n' '$BLOB1 $BLOB0' '$BLOB0' | '$exe_plumbing' --no-verbose free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1"
+          }
+        )
+        (with "output directory"
+          (sandbox
+            mkdir out
+            it "creates a pack file" && {
+              WITH_SNAPSHOT="$snapshot/new-delta-output-dir-success" \
+              expect_run $SUCCESSFULLY bash -c "printf '%s\\n%s\\n' '$BLOB1 $BLOB0' '$BLOB0' | '$exe_plumbing' --no-verbose free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1 -r '$REPO_DIR' -o out/"
+            }
+            it "writes a .pack file to the output directory" && {
+              WITH_SNAPSHOT="$snapshot/new-delta-output-dir-content" \
+              expect_run $SUCCESSFULLY ls out/
+            }
+          )
+        )
+        (with "statistics"
+          it "shows statistics" && {
+            WITH_SNAPSHOT="$snapshot/new-delta-statistics-success" \
+            expect_run $SUCCESSFULLY bash -c "printf '%s\\n%s\\n' '$BLOB1 $BLOB0' '$BLOB0' | '$exe_plumbing' --no-verbose free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1 -s"
+          }
+        )
+        (with "--format json"
+          it "outputs statistics as JSON" && {
+            WITH_SNAPSHOT="$snapshot/new-delta-statistics-json-success" \
+            expect_run $SUCCESSFULLY bash -c "printf '%s\\n%s\\n' '$BLOB1 $BLOB0' '$BLOB0' | '$exe_plumbing' --no-verbose --format json free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1 -s"
+          }
+        )
+      )
+
+      (with "new base (blob#0)"
+        it "stores as a full object" && {
+          WITH_SNAPSHOT="$snapshot/new-base-success" \
+          expect_run $SUCCESSFULLY bash -c "echo '$BLOB0' | '$exe_plumbing' --no-verbose free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1"
+        }
+      )
+
+      (with "reuse delta (blob#0 -> blob#3)"
+        it "copies the existing delta" && {
+          WITH_SNAPSHOT="$snapshot/reuse-delta-success" \
+          expect_run $SUCCESSFULLY bash -c "printf '%s\\n%s\\n' '$BLOB0 $BLOB3' '$BLOB3' | '$exe_plumbing' --no-verbose free pack delta-create --pack-cache-size-mb 1 --object-cache-size-mb 1"
+        }
+      )
+    )
+  )
+  fi)
 )

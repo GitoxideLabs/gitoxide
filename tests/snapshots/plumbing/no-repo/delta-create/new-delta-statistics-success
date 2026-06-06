@@ -1,0 +1,11 @@
+a2c6eb76193fba6f5993ff94f0e9d64e59c27535.pack
+counting phase
+	input objects                  2
+	expanded objects               0
+	decoded objects                2
+	total objects                  2
+generation phase
+	decoded and recompressed       0
+	pack-to-pack copies            0
+	ref-delta-objects              0
+	missing objects                0

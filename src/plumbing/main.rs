@@ -963,6 +963,36 @@ pub fn main() -> Result<()> {
                         },
                     )
                 }
+                #[cfg(feature = "gitoxide-core-tools-delta-create")]
+                free::pack::Subcommands::DeltaCreate {
+                    repository,
+                    statistics,
+                    nondeterministic_count,
+                    pack_cache_size_mb,
+                    counting_threads,
+                    object_cache_size_mb,
+                    output_directory,
+                } => prepare_and_run(
+                    "pack-create",
+                    trace,
+                    verbose,
+                    progress,
+                    progress_keep_open,
+                    core::pack::create::PROGRESS_RANGE,
+                    move |progress, out, _err| {
+                        let input = stdin_or_bail()?;
+                        let repository = repository.unwrap_or_else(|| PathBuf::from("."));
+                        let context = core::pack::delta_create::Context {
+                            thread_limit,
+                            nondeterministic_thread_count: nondeterministic_count.then_some(counting_threads),
+                            pack_cache_size_in_bytes: pack_cache_size_mb.unwrap_or(0) * 1_000_000,
+                            object_cache_size_in_bytes: object_cache_size_mb.unwrap_or(0) * 1_000_000,
+                            statistics: if statistics { Some(format) } else { None },
+                            out,
+                        };
+                        core::pack::delta_create::delta_create(repository, input, output_directory, progress, context)
+                    },
+                ),
                 #[cfg(feature = "gitoxide-core-async-client")]
                 free::pack::Subcommands::Receive {
                     protocol,

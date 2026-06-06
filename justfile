@@ -13,13 +13,13 @@ alias c := check
 alias nt := nextest
 
 # Run all tests, clippy, including journey tests, try building docs
-test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode
+test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-small journey-tests-async journey-tests check-mode journey-tests-delta-create
 
 # Run all tests, without clippy, and try building docs
 ci-test: check doc unit-tests check-mode
 
 # Run all journey tests - should be run in a fresh clone or after `cargo clean`
-ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests
+ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests journey-tests-delta-create
 
 # Clean the `target` directory
 clear-target:
@@ -260,6 +260,12 @@ journey-tests-async:
     cargo build --no-default-features --features lean-async
     cargo build -p gix-testtools
     dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" async
+
+# Run journey tests with delta-create feature enabled
+journey-tests-delta-create:
+    cargo build --no-default-features --features max-pure,gitoxide-core-tools-delta-create
+    cargo build -p gix-testtools --bin jtt
+    dbg="$({{ j }} dbg)" && tests/journey.sh "$dbg/ein" "$dbg/gix" "$dbg/jtt" delta-create
 
 # Build a customized `cross` container image for testing
 cross-image target:

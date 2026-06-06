@@ -59,6 +59,30 @@ function small-repo-in-sandbox() {
   } &>/dev/null
 }
 
+# Creates a repo with 4 versions of a file (blob#0..#3) in 50-line increments.
+# Aggressive repacking forces Git to build a delta chain.
+# blob#3 (latest/largest) becomes the base, with others as sequential deltas.
+function pack-repo-in-sandbox() {
+  sandbox
+  {
+    git init
+    git checkout -b main
+    git config commit.gpgsign false
+    git config tag.gpgsign false
+
+    for i in 0 1 2 3; do
+      python3 -c "
+for j in range(50 * ($i + 1)):
+    print(f'line {j}')
+" > file.txt
+      git add file.txt
+      git commit -m "blob#${i}"
+    done
+
+    git repack -a -d --window=10 --depth=4
+  } &>/dev/null
+}
+
 function launch-git-daemon() {
     local i git_daemon_url_file
 
