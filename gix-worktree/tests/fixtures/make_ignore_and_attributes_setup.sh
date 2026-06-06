@@ -37,6 +37,9 @@ EOF
 top-level-local-file-anywhere
 d/e/*
 e/f
+
+# directory ignored despite containing a tracked file
+bin/
 EOF
 
   mkdir dir-with-ignore
@@ -49,7 +52,11 @@ sub-Level-dir-anywhere/
 !/negated-dir/
 EOF
 
+  mkdir -p src/bin other/bin
+  echo "fn main() {}" >src/bin/stub_gen.rs
+
   git add .gitignore dir-with-ignore
+  git add -f src/bin/stub_gen.rs
   git commit --allow-empty -m "init"
 
   # just add this git-ignore file, so it's a new file that doesn't exist on disk.
@@ -64,8 +71,10 @@ EOF
 
   mkdir user-dir-anywhere user-dir-from-top dir-anywhere dir-from-top
   mkdir -p dir/user-dir-anywhere dir/dir-anywhere
+  echo "extra" >src/bin/extra.txt
+  echo "other" >other/bin/file.txt
 
-  git check-ignore -vn --stdin 2>&1 <<EOF >git-check-ignore.baseline || :
+  cat <<EOF >../git-check-ignore.paths
 dir-with-ignore/sub-level-dir-anywhere/
 dir-with-ignore/foo/Sub-level-dir-anywhere/
 dir-with-ignore/Sub-level-dir-anywhere
@@ -111,6 +120,12 @@ other-dir-with-ignore/other-sub-level-dir-anywhere/hello
 other-dir-with-ignore/other-sub-level-dir-anywhere/
 dir-with-ignore/negated
 dir-with-ignore/negated-dir/hello
+src/bin
+src/bin/
+src/bin/stub_gen.rs
+src/bin/extra.txt
+other/bin
+other/bin/file.txt
 User-file-ANYWHERE
 User-Dir-ANYWHERE
 a/b/C
@@ -129,4 +144,6 @@ e/F
 E/f
 E/F
 EOF
+
+  git check-ignore -vn --stdin 2>&1 <../git-check-ignore.paths >../git-check-ignore.baseline || :
 )
