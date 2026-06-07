@@ -138,7 +138,7 @@ pub enum ForDeletionMode {
 }
 
 /// Options for use in [`walk()`](function::walk()) function.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Options<'a> {
     /// If `true`, the filesystem will store paths as decomposed unicode, i.e. `ä` becomes `"a\u{308}"`, which means that
     /// we have to turn these forms back from decomposed to precomposed unicode before storing it in the index or generally
@@ -188,11 +188,34 @@ pub struct Options<'a> {
     ///
     /// In other words, for Git compatibility this flag should be `false`, the default, for `git2` compatibility it should be `true`.
     pub symlinks_to_directories_are_ignored_like_directories: bool,
+    /// If `true`, consult the untracked cache if it is present and otherwise applicable.
+    pub use_untracked_cache: bool,
     /// A set of all git worktree checkouts that are located within the main worktree directory.
     ///
     /// They will automatically be detected as 'tracked', but without providing index information (as there is no actual index entry).
     /// Note that the unicode composition must match the `precompose_unicode` field so that paths will match verbatim.
     pub worktree_relative_worktree_dirs: Option<&'a BTreeSet<BString>>,
+}
+
+impl Default for Options<'_> {
+    fn default() -> Self {
+        Self {
+            precompose_unicode: false,
+            ignore_case: false,
+            recurse_repositories: false,
+            emit_pruned: false,
+            emit_ignored: None,
+            for_deletion: None,
+            classify_untracked_bare_repositories: false,
+            emit_tracked: false,
+            emit_untracked: Default::default(),
+            emit_empty_directories: false,
+            emit_collapsed: None,
+            symlinks_to_directories_are_ignored_like_directories: false,
+            use_untracked_cache: true,
+            worktree_relative_worktree_dirs: None,
+        }
+    }
 }
 
 /// All information that is required to perform a dirwalk, and classify paths properly.
@@ -269,6 +292,12 @@ pub struct Outcome {
     pub returned_entries: usize,
     /// The amount of entries, prior to pathspecs filtering them out or otherwise excluding them.
     pub seen_entries: u32,
+    /// The number of directories whose contents were served entirely from the untracked cache,
+    /// avoiding a `read_dir` syscall.
+    pub untracked_cache_hits: u32,
+    /// The number of directories skipped by the untracked cache due to a failed per-directory
+    /// stat validation, falling back to a real `read_dir` call instead.
+    pub untracked_cache_misses: u32,
 }
 
 /// The error returned by [`walk()`](function::walk()).
@@ -306,3 +335,4 @@ pub enum Error {
 mod classify;
 pub(crate) mod function;
 mod readdir;
+mod untracked_cache;

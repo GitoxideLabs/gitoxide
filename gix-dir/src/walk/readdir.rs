@@ -32,9 +32,37 @@ pub(super) fn recursive(
     delegate: &mut dyn Delegate,
     out: &mut Outcome,
     state: &mut State,
+    untracked_cache: Option<&walk::untracked_cache::Validated<'_>>,
+    untracked_cache_dir: Option<usize>,
 ) -> Result<(Action, bool), Error> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err(Error::Interrupted);
+    }
+    let cache_attempted = untracked_cache.zip(untracked_cache_dir);
+    let cache_valid = cache_attempted.filter(|(cache, dir)| cache.is_dir_valid(*dir, current));
+    if cache_attempted.is_some() && cache_valid.is_none() {
+        out.untracked_cache_misses += 1;
+    }
+    if let Some((action, prevent_collapse)) = cache_valid
+        .map(|(cache, dir)| {
+            recursive_from_untracked_cache(
+                dir,
+                may_collapse,
+                current,
+                current_bstr,
+                current_info,
+                ctx,
+                opts,
+                delegate,
+                out,
+                state,
+                cache,
+            )
+        })
+        .transpose()?
+    {
+        out.untracked_cache_hits += 1;
+        return Ok((action, prevent_collapse));
     }
     out.read_dir_calls += 1;
     let entries = gix_fs::read_dir(current, opts.precompose_unicode).map_err(|err| Error::ReadDir {
@@ -94,6 +122,15 @@ pub(super) fn recursive(
                 delegate,
                 out,
                 state,
+                untracked_cache,
+                untracked_cache_dir.and_then(|dir| {
+                    untracked_cache.and_then(|cache| {
+                        let component = current_bstr
+                            .rfind_byte(b'/')
+                            .map_or(current_bstr.as_bstr(), |pos| current_bstr[pos + 1..].as_bstr());
+                        cache.child_dir(dir, component)
+                    })
+                }),
             )?;
             prevent_collapse |= subdir_prevent_collapse;
             if action.is_break() {
@@ -118,6 +155,148 @@ pub(super) fn recursive(
                 if action.is_break() {
                     return Ok((action, prevent_collapse));
                 }
+            }
+        }
+        current_bstr.truncate(prev_len);
+        current.pop();
+    }
+
+    let res = mark.reduce_held_entries(
+        num_entries,
+        state,
+        &mut prevent_collapse,
+        current,
+        current_bstr.as_bstr(),
+        current_info,
+        opts,
+        out,
+        ctx,
+        delegate,
+    );
+    Ok((res, prevent_collapse))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recursive_from_untracked_cache(
+    cache_dir: usize,
+    may_collapse: bool,
+    current: &mut PathBuf,
+    current_bstr: &mut BString,
+    current_info: classify::Outcome,
+    ctx: &mut Context<'_>,
+    opts: Options<'_>,
+    delegate: &mut dyn Delegate,
+    out: &mut Outcome,
+    state: &mut State,
+    untracked_cache: &walk::untracked_cache::Validated<'_>,
+) -> Result<(Action, bool), Error> {
+    let Some(cached) = untracked_cache.directory(cache_dir) else {
+        return Ok((std::ops::ControlFlow::Continue(()), false));
+    };
+
+    let mut num_entries = 0;
+    let mark = state.mark(may_collapse);
+    let mut prevent_collapse = current_info.status == Status::Tracked;
+
+    // Build the set of sub-directory names so we can skip their `"<name>/"` entries in
+    // `untracked_entries` — those are handled (with proper stat validation) below.
+    let subdir_names: std::collections::HashSet<&[u8]> = cached
+        .sub_directories()
+        .iter()
+        .filter_map(|&i| untracked_cache.directory(i))
+        .map(|d| d.name().as_bytes())
+        .collect();
+
+    for &subdir_idx in cached.sub_directories() {
+        let Some(subdir) = untracked_cache.directory(subdir_idx) else {
+            continue;
+        };
+        let prev_len = current_bstr.len();
+        if prev_len != 0 {
+            current_bstr.push(b'/');
+        }
+        current_bstr.extend_from_slice(subdir.name());
+        current.push(gix_path::from_bstr(subdir.name()));
+
+        let info = classify::path(
+            current,
+            current_bstr,
+            if prev_len == 0 { 0 } else { prev_len + 1 },
+            Some(entry::Kind::Directory),
+            || Some(entry::Kind::Directory),
+            opts,
+            ctx,
+        )?;
+        num_entries += 1;
+        if can_recurse(current_bstr.as_bstr(), info, opts.for_deletion, false, delegate) {
+            let subdir_may_collapse = state.may_collapse(current);
+            let (action, subdir_prevent_collapse) = recursive(
+                subdir_may_collapse,
+                current,
+                current_bstr,
+                info,
+                ctx,
+                opts,
+                delegate,
+                out,
+                state,
+                Some(untracked_cache),
+                Some(subdir_idx),
+            )?;
+            prevent_collapse |= subdir_prevent_collapse;
+            if action.is_break() {
+                return Ok((action, prevent_collapse));
+            }
+        } else if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
+            let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
+            if action.is_break() {
+                return Ok((action, prevent_collapse));
+            }
+        }
+        current_bstr.truncate(prev_len);
+        current.pop();
+    }
+
+    for file in cached.untracked_entries() {
+        // Git stores collapsed untracked directories in BOTH `sub_directories` AND as
+        // `"<name>/"` in `untracked_entries`. Skip the `untracked_entries` copy — the
+        // sub_directories loop above handles it (with proper per-directory stat
+        // validation via `recursive()`). Emitting from here would bypass the stat check
+        // and serve stale cache entries (e.g. if files inside were deleted).
+        let (file_name, is_collapsed_dir) = file
+            .as_slice()
+            .strip_suffix(b"/")
+            .map_or((file.as_slice(), false), |s| (s, true));
+        if is_collapsed_dir && subdir_names.contains(file_name) {
+            continue;
+        }
+
+        num_entries += 1;
+        let prev_len = current_bstr.len();
+        if prev_len != 0 {
+            current_bstr.push(b'/');
+        }
+        current_bstr.extend_from_slice(file_name);
+        current.push(gix_path::from_bstr(bstr::BStr::new(file_name)));
+        let current_path = current.clone();
+
+        let info = classify::path(
+            current,
+            current_bstr,
+            if prev_len == 0 { 0 } else { prev_len + 1 },
+            None,
+            || {
+                std::fs::symlink_metadata(&current_path)
+                    .ok()
+                    .map(|ft| ft.file_type().into())
+            },
+            opts,
+            ctx,
+        )?;
+        if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
+            let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
+            if action.is_break() {
+                return Ok((action, prevent_collapse));
             }
         }
         current_bstr.truncate(prev_len);

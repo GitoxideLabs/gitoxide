@@ -12,8 +12,22 @@ impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
     ///
     /// Used in conjunction with [`dirwalk()`](Self::dirwalk())
-    pub fn dirwalk_options(&self) -> Result<dirwalk::Options, config::boolean::Error> {
-        Ok(dirwalk::Options::from_fs_caps(self.filesystem_options()?))
+    pub fn dirwalk_options(&self) -> Result<dirwalk::Options, config::untracked_cache::Error> {
+        let use_untracked_cache = config::tree::Core::UNTRACKED_CACHE
+            .try_into_untracked_cache(self.config.resolved.boolean(config::tree::Core::UNTRACKED_CACHE))?;
+        let fs_caps = self.filesystem_options().map_err(|e| config::key::Error {
+            key: e.key,
+            value: e.value,
+            environment_override: e.environment_override,
+            source: e.source,
+        })?;
+        Ok(
+            dirwalk::Options::from_fs_caps(fs_caps).untracked_cache(if use_untracked_cache.unwrap_or(false) {
+                dirwalk::UntrackedCache::Use
+            } else {
+                dirwalk::UntrackedCache::Ignore
+            }),
+        )
     }
 
     /// Perform a directory walk configured with `options` under control of the `delegate`. Use `patterns` to
@@ -59,6 +73,7 @@ impl Repository {
         let fs_caps = self.filesystem_options()?;
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
+        let has_pathspecs = pathspec.search.patterns().len() != 0;
         let worktree_relative_worktree_dirs_storage;
         if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
             let linked_worktrees = self.worktrees()?;
@@ -100,7 +115,7 @@ impl Repository {
                 },
                 excludes: Some(&mut excludes.inner),
                 objects: &self.objects,
-                explicit_traversal_root: (!options.empty_patterns_match_prefix).then_some(workdir),
+                explicit_traversal_root: (!options.empty_patterns_match_prefix && has_pathspecs).then_some(workdir),
             },
             opts,
             delegate,

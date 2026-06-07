@@ -1,5 +1,6 @@
-use std::{collections::BTreeSet, sync::atomic::AtomicBool};
+use std::{collections::BTreeSet, process::Command, sync::atomic::AtomicBool};
 
+use bstr::ByteSlice;
 use gix_dir::{
     EntryRef, entry,
     entry::{Kind::*, PathspecMatch::*, Property::*, Status::*},
@@ -64,6 +65,7 @@ fn one_top_level_fifo() {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 2,
+            ..Default::default()
         }
     );
 
@@ -96,6 +98,7 @@ fn fifo_in_traversal() {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
 
@@ -132,6 +135,7 @@ fn symlink_to_dir_can_be_excluded() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 9,
+            ..Default::default()
         }
     );
 
@@ -167,6 +171,7 @@ fn symlink_to_dir_can_be_excluded() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 9,
+            ..Default::default()
         }
     );
 
@@ -265,6 +270,7 @@ fn assume_unchanged_submodule_replaced_with_symlink_is_hidden() -> crate::Result
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert!(
@@ -295,6 +301,7 @@ fn submodule_replaced_with_symlink_without_assume_unchanged_is_untracked() -> cr
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -333,6 +340,7 @@ fn empty_root() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -358,6 +366,7 @@ fn empty_root() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -378,6 +387,7 @@ fn complex_empty() -> crate::Result {
             read_dir_calls: 9,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -409,6 +419,7 @@ fn complex_empty() -> crate::Result {
             read_dir_calls: 9,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -435,6 +446,7 @@ fn complex_empty() -> crate::Result {
             read_dir_calls: 9,
             returned_entries: entries.len(),
             seen_entries: 9,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -477,6 +489,7 @@ fn ignored_with_prefix_pathspec_collapses_just_like_untracked() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 6,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -510,6 +523,7 @@ fn ignored_with_prefix_pathspec_collapses_just_like_untracked() -> crate::Result
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 8,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -551,6 +565,7 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -585,6 +600,7 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 2,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -619,7 +635,8 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
         walk::Outcome {
             read_dir_calls: 8,
             returned_entries: entries.len(),
-            seen_entries: 26
+            seen_entries: 26,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -664,6 +681,7 @@ fn ignored_with_cwd_handling() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
 
@@ -699,6 +717,7 @@ fn ignored_with_cwd_handling() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         }
     );
 
@@ -743,6 +762,7 @@ fn only_untracked_with_cwd_handling() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 9,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -781,6 +801,7 @@ fn only_untracked_with_cwd_handling() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -815,6 +836,7 @@ fn only_untracked_with_cwd_handling() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 8,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -855,6 +877,7 @@ fn only_untracked_with_cwd_handling() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -897,6 +920,7 @@ fn only_untracked_with_pathspec() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -929,6 +953,7 @@ fn only_untracked_with_pathspec() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -961,6 +986,7 @@ fn only_untracked_with_prefix_deletion() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -987,6 +1013,7 @@ fn only_untracked_with_prefix_deletion() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -1007,6 +1034,7 @@ fn only_untracked() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -1029,6 +1057,7 @@ fn only_untracked() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -1057,6 +1086,7 @@ fn only_untracked() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 7 + 2,
+            ..Default::default()
         },
         "There are 2 extra directories that we fold into, but ultimately discard"
     );
@@ -1097,6 +1127,7 @@ fn only_untracked_explicit_pathspec_selection() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1131,6 +1162,7 @@ fn only_untracked_explicit_pathspec_selection() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         },
         "no collapsing happens"
     );
@@ -1167,6 +1199,7 @@ fn only_untracked_explicit_pathspec_selection() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 2 + 3,
+            ..Default::default()
         },
         "collapsing happens just like Git"
     );
@@ -1188,6 +1221,7 @@ fn expendable_and_precious() {
             read_dir_calls: 6,
             returned_entries: entries.len(),
             seen_entries: 18,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -1233,6 +1267,7 @@ fn expendable_and_precious() {
             read_dir_calls: 6,
             returned_entries: entries.len(),
             seen_entries: 18 + 2,
+            ..Default::default()
         }
     );
 
@@ -1278,6 +1313,7 @@ fn expendable_and_precious() {
             read_dir_calls: 6,
             returned_entries: entries.len(),
             seen_entries: 16 + 2,
+            ..Default::default()
         }
     );
 
@@ -1301,6 +1337,7 @@ fn subdir_untracked() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         }
     );
     assert_eq!(entries, [entry("d/d/a", Untracked, File)]);
@@ -1320,6 +1357,7 @@ fn subdir_untracked() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         },
         "pruning has no actual effect here as there is no extra directories that could be avoided"
     );
@@ -1342,6 +1380,7 @@ fn subdir_untracked() -> crate::Result {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 7 + 1,
+            ..Default::default()
         },
         "there is a folded directory we added"
     );
@@ -1360,6 +1399,7 @@ fn only_untracked_from_subdir() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -1397,6 +1437,7 @@ fn untracked_and_ignored_pathspec_guidance() -> crate::Result {
                 read_dir_calls: 1,
                 returned_entries: entries.len(),
                 seen_entries: 1,
+                ..Default::default()
             },
             "we have to read the parent directory, just like git, as we can't assume a directory"
         );
@@ -1437,6 +1478,7 @@ fn untracked_and_ignored_for_deletion_negative_wildcard_spec() -> crate::Result 
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 23,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1492,6 +1534,7 @@ fn untracked_and_ignored_for_deletion_positive_wildcard_spec() -> crate::Result 
             read_dir_calls: 8,
             returned_entries: entries.len(),
             seen_entries: 27,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1545,6 +1588,7 @@ fn untracked_and_ignored_for_deletion_nonmatching_wildcard_spec() -> crate::Resu
             read_dir_calls: 8,
             returned_entries: entries.len(),
             seen_entries: 28,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -1691,6 +1735,7 @@ fn expendable_and_precious_in_ignored_dir_with_pathspec() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         },
     );
 
@@ -1733,6 +1778,7 @@ fn expendable_and_precious_in_ignored_dir_with_pathspec() -> crate::Result {
             read_dir_calls: 9,
             returned_entries: entries.len(),
             seen_entries: 19,
+            ..Default::default()
         },
     );
 
@@ -1787,6 +1833,7 @@ fn expendable_and_precious_in_ignored_dir_with_pathspec() -> crate::Result {
             read_dir_calls: 9,
             returned_entries: entries.len(),
             seen_entries: 19,
+            ..Default::default()
         },
     );
 
@@ -1835,6 +1882,7 @@ fn untracked_and_ignored() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21,
+            ..Default::default()
         },
         "some untracked ones are hidden by default"
     );
@@ -1881,6 +1929,7 @@ fn untracked_and_ignored() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21,
+            ..Default::default()
         },
         "basically the same result…"
     );
@@ -1913,6 +1962,7 @@ fn untracked_and_ignored() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21 + 1,
+            ..Default::default()
         },
         "we still encounter the same amount of entries, and 1 folded directory"
     );
@@ -1939,6 +1989,7 @@ fn untracked_and_ignored() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21 + 2,
+            ..Default::default()
         },
         "some untracked ones are hidden by default, folded directories"
     );
@@ -1981,6 +2032,7 @@ fn untracked_and_ignored() -> crate::Result {
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21 + 3,
+            ..Default::default()
         },
         "some untracked ones are hidden by default, and folded directories"
     );
@@ -2036,6 +2088,7 @@ fn untracked_and_ignored_collapse_handling_mixed() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         },
         "it has to read 'd/d' as 'd/d/b.o' isn't a directory candidate"
     );
@@ -2074,6 +2127,7 @@ fn untracked_and_ignored_collapse_handling_mixed() -> crate::Result {
                 read_dir_calls: 4,
                 returned_entries: entries.len(),
                 seen_entries: 21,
+                ..Default::default()
             },
         );
 
@@ -2124,7 +2178,8 @@ fn untracked_and_ignored_collapse_handling_mixed_with_prefix() -> crate::Result 
         walk::Outcome {
             read_dir_calls: 3,
             returned_entries: entries.len(),
-            seen_entries: 11
+            seen_entries: 11,
+            ..Default::default()
         },
         "this is not a directory, so the prefix is only 'd', not 'd/d'"
     );
@@ -2166,6 +2221,7 @@ fn untracked_and_ignored_collapse_handling_mixed_with_prefix() -> crate::Result 
                 read_dir_calls: 2,
                 returned_entries: entries.len(),
                 seen_entries: 6,
+                ..Default::default()
             },
         );
 
@@ -2216,7 +2272,8 @@ fn untracked_and_ignored_collapse_handling_for_deletion_with_wildcards() -> crat
         walk::Outcome {
             read_dir_calls: 8,
             returned_entries: entries.len(),
-            seen_entries: 26
+            seen_entries: 26,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -2262,7 +2319,8 @@ fn untracked_and_ignored_collapse_handling_for_deletion_with_wildcards() -> crat
         walk::Outcome {
             read_dir_calls: 8,
             returned_entries: entries.len(),
-            seen_entries: 28
+            seen_entries: 28,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -2320,6 +2378,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_with_prefix_wildcards() 
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 2,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -2352,6 +2411,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 21,
+            ..Default::default()
         },
     );
 
@@ -2381,6 +2441,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 5,
             returned_entries: entries.len(),
             seen_entries: 24,
+            ..Default::default()
         },
     );
 
@@ -2429,6 +2490,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 6,
+            ..Default::default()
         },
     );
 
@@ -2477,6 +2539,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         },
     );
 
@@ -2516,6 +2579,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         },
     );
 
@@ -2553,6 +2617,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 6,
+            ..Default::default()
         },
     );
 
@@ -2592,6 +2657,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         },
     );
 
@@ -2652,6 +2718,7 @@ fn precious_are_not_expendable() {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 10,
+            ..Default::default()
         },
     );
 
@@ -2694,6 +2761,7 @@ fn precious_are_not_expendable() {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 10,
+            ..Default::default()
         },
         "'d' is assumed to be a file, hence it's stripped to its base '', yielding one more call."
     );
@@ -2733,6 +2801,7 @@ fn precious_are_not_expendable() {
                 read_dir_calls: 2,
                 returned_entries: entries.len(),
                 seen_entries: 7,
+                ..Default::default()
             },
             "{equivalent_pathspec}: should yield same result, they also see the 'd' prefix directory"
         );
@@ -2768,6 +2837,7 @@ fn precious_are_not_expendable() {
             read_dir_calls: 3,
             returned_entries: entries.len(),
             seen_entries: 9,
+            ..Default::default()
         },
     );
 
@@ -2816,6 +2886,7 @@ fn decomposed_unicode_in_directory_is_returned_precomposed() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -2842,6 +2913,7 @@ fn decomposed_unicode_in_directory_is_returned_precomposed() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         },
         "note how it starts directly in the right repository"
     );
@@ -2876,6 +2948,7 @@ fn worktree_root_can_be_symlink() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -2884,6 +2957,571 @@ fn worktree_root_can_be_symlink() -> crate::Result {
         "it allows symlinks for the worktree itself"
     );
     Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn untracked_cache_can_avoid_read_dir_calls() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+    let ((uncached_out, _root), uncached_entries) = collect_with_repo_globals(&root, opts, false)?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "a valid UNTR cache should satisfy the walk without opening directories"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the fallback implementation should still hit the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "cached and uncached walks should produce identical output"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "collapsed untracked entries should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+fn invalidated_untracked_cache_falls_back_to_the_filesystem() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    std::fs::write(root.join("later"), "later")?;
+
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing the root directory contents must invalidate the cache"
+    );
+    assert!(
+        entries.iter().any(|(entry, _)| entry.rela_path.as_bstr() == "later"),
+        "the fallback traversal should see newly added files"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "fallback output should still match git status after invalidation"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn global_excludes_change_disables_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let excludes_file = root.join("global-excludes");
+    std::fs::write(&excludes_file, "global-ignored/\n")?;
+    git(
+        &root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("core.excludesFile"),
+            excludes_file.as_os_str(),
+        ],
+    )?;
+    std::fs::create_dir_all(root.join("global-ignored"))?;
+    std::fs::write(root.join("global-ignored/file"), "ignored")?;
+    refresh_untracked_cache(&root)?;
+
+    std::fs::write(&excludes_file, "")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, Some(&excludes_file), &[])?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing core.excludesFile contents must disable the UNTR fast path"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "global-ignored"),
+        "the filesystem fallback should see entries that were formerly hidden by a global exclude"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "global exclude changes should still produce git-compatible output"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn info_exclude_change_disables_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let info_dir = root.join(".git/info");
+    std::fs::create_dir_all(&info_dir)?;
+    let info_exclude = info_dir.join("exclude");
+    std::fs::write(&info_exclude, "info-excluded/\n")?;
+    std::fs::create_dir_all(root.join("info-excluded"))?;
+    std::fs::write(root.join("info-excluded/file"), "excluded")?;
+    refresh_untracked_cache(&root)?;
+
+    // Now change info/exclude so the cache's recorded stat+OID no longer matches.
+    std::fs::write(&info_exclude, "")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing .git/info/exclude contents must disable the UNTR fast path"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "info-excluded"),
+        "the filesystem fallback should see entries that were formerly hidden by info/exclude"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "info/exclude changes should still produce git-compatible output"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn global_excludes_file_present_and_unchanged_allows_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let excludes_file = root.join("global-excludes");
+    std::fs::write(&excludes_file, "global-ignored/\n")?;
+    std::fs::create_dir_all(root.join("global-ignored"))?;
+    std::fs::write(root.join("global-ignored/file"), "ignored")?;
+    git(
+        &root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("core.excludesFile"),
+            excludes_file.as_os_str(),
+        ],
+    )?;
+    refresh_untracked_cache(&root)?;
+
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, Some(&excludes_file), &[])?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "cache must serve all directories without read_dir when excludes_file is present but unchanged"
+    );
+    assert_eq!(
+        out.untracked_cache_hits,
+        out.untracked_cache_hits, // at least one hit
+        "cache hits should be non-zero"
+    );
+    assert!(
+        out.untracked_cache_hits > 0,
+        "expected cache hits but got 0 — the UNTR decode or excludes_file stat validation is broken"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "global-ignored"),
+        "globally-ignored directory must not appear in output"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "output with unchanged global excludes should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn nested_gitignore_change_invalidates_cached_subtree() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    std::fs::write(root.join("tracked/.gitignore"), "")?;
+    git(&root, ["add", "tracked/.gitignore"])?;
+    git(&root, ["commit", "-m", "tracked ignore"])?;
+    refresh_untracked_cache(&root)?;
+
+    std::fs::write(root.join("tracked/.gitignore"), "new/\n")?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "changing a nested .gitignore should invalidate the cached subtree"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "tracked/new"),
+        "the fallback traversal should honor the updated ignore file"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "nested .gitignore invalidation should still agree with git status"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn non_empty_pathspec_never_uses_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals_opts(&root, opts, true, None, &["tracked/"])?;
+    let ((uncached_out, _root), uncached_entries) =
+        collect_with_repo_globals_opts(&root, opts, false, None, &["tracked/"])?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "a non-empty pathspec should disable the UNTR fast path"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the uncached comparison should still traverse the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "pathspec filtering should match the uncached traversal"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &["tracked/"])?,
+        "pathspec-filtered collapsed output should match git status"
+    );
+    Ok(())
+}
+
+#[test]
+// On Windows, NTFS flushes directory metadata asynchronously. A directory that was
+// recently modified (like `tracked` here, after `tracked/new` was created) may report
+// a different `LastWriteTime` via different APIs or at different instants. This causes
+// the IOUC stat check for `tracked` to fail even after two `git status` runs, making
+// `read_dir_calls` flaky. Skip rather than accept a racy assertion.
+#[cfg_attr(windows, ignore)]
+fn matching_mode_with_tracked_intermediate_dirs_matches_uncached() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: Matching,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+    let ((uncached_out, _root), uncached_entries) = collect_with_repo_globals(&root, opts, false)?;
+
+    assert_eq!(
+        out.read_dir_calls, 0,
+        "matching mode should still use a valid UNTR cache"
+    );
+    assert_ne!(
+        uncached_out.read_dir_calls, 0,
+        "the comparison path should still hit the filesystem"
+    );
+    assert_eq!(
+        entries, uncached_entries,
+        "matching mode output should match the uncached traversal"
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Matching, &[])?,
+        "matching-mode untracked entries should match git status -uall"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn emit_tracked_true_bypasses_untracked_cache() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        emit_tracked: true,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert_ne!(
+        out.read_dir_calls, 0,
+        "emit_tracked=true must disable the UNTR fast path since the cache only records untracked entries"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(entry, _)| entry.rela_path.as_bstr() == "tracked/keep"),
+        "tracked file must appear in output when emit_tracked=true"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg_attr(windows, ignore)] // NTFS async metadata flush causes flaky mtime mismatches
+fn cached_subdir_becoming_repository_is_emitted() -> crate::Result {
+    let root = repo_with_untracked_cache()?;
+    // Turn `new/` (a regular untracked dir in the cache) into a nested repo.
+    // This changes `new/`'s mtime but not root's, so root's cache entry stays valid.
+    git(&root, ["init", "new"])?;
+    let opts = gix_dir::walk::Options {
+        emit_untracked: CollapseDirectory,
+        ..options()
+    };
+    let ((out, _root), entries) = collect_with_repo_globals(&root, opts, true)?;
+
+    assert!(
+        entries.iter().any(|(entry, _)| {
+            entry.rela_path.as_bstr() == "new" && entry.disk_kind == Some(gix_dir::entry::Kind::Repository)
+        }),
+        "a cached subdir that became a repository must still appear in output, but entries were: {:?}",
+        entries
+            .iter()
+            .map(|(e, _)| e.rela_path.as_bstr().to_owned())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        untracked_paths(&entries),
+        git_untracked_paths(&root, GitUntrackedMode::Collapsed, &[])?,
+        "output must match git status after subdir becomes a repository"
+    );
+    let _ = out;
+    Ok(())
+}
+
+fn repo_with_untracked_cache() -> crate::Result<std::path::PathBuf> {
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let base = tmp.path().to_path_buf();
+    std::mem::forget(tmp);
+    let root = base.join("repo");
+    std::fs::create_dir(&root)?;
+    git(&root, ["init"])?;
+    git(&root, ["config", "status.showUntrackedFiles", "all"])?;
+    git(&root, ["config", "user.name", "a"])?;
+    git(&root, ["config", "user.email", "a@example.com"])?;
+    std::fs::create_dir(root.join("tracked"))?;
+    std::fs::write(root.join("tracked/keep"), "keep")?;
+    git(&root, ["add", "tracked/keep"])?;
+    git(&root, ["commit", "-m", "init"])?;
+    std::fs::create_dir_all(root.join("tracked/new"))?;
+    std::fs::create_dir_all(root.join("new"))?;
+    std::fs::write(root.join("tracked/new/file"), "tracked-new")?;
+    std::fs::write(root.join("new/file"), "new")?;
+    refresh_untracked_cache(&root)?;
+    Ok(root)
+}
+
+fn git(cwd: &std::path::Path, args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>) -> crate::Result {
+    let status = Command::new("git").args(args).current_dir(cwd).status()?;
+    assert!(status.success());
+    Ok(())
+}
+
+fn git_output(
+    cwd: &std::path::Path,
+    args: impl IntoIterator<Item = impl AsRef<std::ffi::OsStr>>,
+) -> crate::Result<std::process::Output> {
+    Ok(Command::new("git").args(args).current_dir(cwd).output()?)
+}
+
+fn effective_excludes_file(root: &std::path::Path) -> crate::Result<Option<std::path::PathBuf>> {
+    let output = git_output(
+        root,
+        [
+            std::ffi::OsStr::new("config"),
+            std::ffi::OsStr::new("--path"),
+            std::ffi::OsStr::new("core.excludesFile"),
+        ],
+    )?;
+    if output.status.success() {
+        let path = gix_path::try_from_bstr(output.stdout.as_bstr().trim().as_bstr())
+            .ok()
+            .map(std::borrow::Cow::into_owned);
+        return Ok(path);
+    }
+    // No core.excludesFile configured — fall back to the XDG default, matching gix's
+    // `assemble_exclude_globals` which calls `xdg_config_path("ignore")`.
+    let xdg_ignore = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+        .map(|base| base.join("git").join("ignore"));
+    Ok(xdg_ignore.filter(|p| p.exists()))
+}
+
+fn refresh_untracked_cache(root: &std::path::Path) -> crate::Result {
+    git(root, ["update-index", "--force-untracked-cache"])?;
+    git(root, ["status", "--porcelain"])?;
+    // Run a second time so git validates the recorded directory stats and sets the valid
+    // bitmap. Some git versions only populate the structure on the first run and mark
+    // entries valid on the second. The double-run also lets the filesystem settle so the
+    // recorded stats match what gix will read.
+    git(root, ["status", "--porcelain"])?;
+    assert!(
+        index_has_untracked_cache(root),
+        "test repository must have a UNTR extension"
+    );
+    Ok(())
+}
+
+fn index_has_untracked_cache(root: &std::path::Path) -> bool {
+    std::fs::read(root.join(".git/index"))
+        .ok()
+        .and_then(|bytes| {
+            gix_index::State::from_bytes(
+                &bytes,
+                std::time::UNIX_EPOCH.into(),
+                gix_index::hash::Kind::Sha1,
+                Default::default(),
+            )
+            .ok()
+            .map(|(state, _)| state.untracked().is_some())
+        })
+        .unwrap_or(false)
+}
+
+type CollectedEntries = Vec<(gix_dir::Entry, Option<entry::Status>)>;
+type CollectOutcome = ((gix_dir::walk::Outcome, std::path::PathBuf), CollectedEntries);
+
+#[derive(Clone, Copy)]
+enum GitUntrackedMode {
+    Collapsed,
+    Matching,
+}
+
+fn git_untracked_paths(
+    root: &std::path::Path,
+    mode: GitUntrackedMode,
+    pathspecs: &[&str],
+) -> crate::Result<BTreeSet<String>> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root).arg("status").arg("--porcelain").arg(match mode {
+        GitUntrackedMode::Collapsed => "--untracked-files=normal",
+        GitUntrackedMode::Matching => "--untracked-files=all",
+    });
+    if !pathspecs.is_empty() {
+        cmd.arg("--");
+        cmd.args(pathspecs);
+    }
+    let output = cmd.output()?;
+    assert!(output.status.success());
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("?? "))
+        .map(|path| path.trim_end_matches('/').to_owned())
+        .collect())
+}
+
+fn untracked_paths(entries: &[(gix_dir::Entry, Option<entry::Status>)]) -> BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|(entry, _)| entry.status == Untracked)
+        .map(|(entry, _)| entry.rela_path.to_string())
+        .collect()
+}
+
+fn collect_with_repo_globals(
+    root: &std::path::Path,
+    opts: gix_dir::walk::Options<'static>,
+    use_cache: bool,
+) -> crate::Result<CollectOutcome> {
+    collect_with_repo_globals_opts(root, opts, use_cache, None, &[])
+}
+
+fn collect_with_repo_globals_opts(
+    root: &std::path::Path,
+    opts: gix_dir::walk::Options<'static>,
+    use_cache: bool,
+    excludes_file: Option<&std::path::Path>,
+    pathspecs: &[&str],
+) -> crate::Result<CollectOutcome> {
+    let git_dir = root.join(".git");
+    let bytes = std::fs::read(git_dir.join("index"))?;
+    let (mut index, _) = gix_index::State::from_bytes(
+        &bytes,
+        std::time::UNIX_EPOCH.into(),
+        gix_index::hash::Kind::Sha1,
+        Default::default(),
+    )
+    .expect("valid index");
+    for entry in index
+        .entries_mut()
+        .iter_mut()
+        .filter(|entry| !entry.flags.contains(gix_index::entry::Flags::SKIP_WORKTREE))
+    {
+        entry.flags |= gix_index::entry::Flags::UPTODATE;
+    }
+
+    let parse = gix_ignore::search::Ignore { support_precious: true };
+    let mut buf = Vec::new();
+    let excludes_file = match excludes_file {
+        Some(path) => Some(path.to_owned()),
+        None => effective_excludes_file(root)?,
+    };
+    let globals = gix_ignore::Search::from_git_dir(&git_dir, excludes_file, &mut buf, parse)?;
+    let mut stack = gix_worktree::Stack::from_state_and_ignore_case(
+        root,
+        false,
+        gix_worktree::stack::State::IgnoreStack(gix_worktree::stack::state::Ignore::new(
+            Default::default(),
+            globals,
+            None,
+            gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            parse,
+        )),
+        &index,
+        index.path_backing(),
+    );
+    let pathspecs = pathspecs
+        .iter()
+        .map(|pattern| {
+            gix_pathspec::Pattern::from_bytes(pattern.as_bytes(), Default::default()).expect("valid pathspec")
+        })
+        .collect::<Vec<_>>();
+    let mut search =
+        gix_pathspec::Search::from_specs(pathspecs, None::<&std::path::Path>, root).expect("empty pathspec is valid");
+    let git_dir_realpath = gix_path::realpath_opts(&git_dir, root, gix_path::realpath::MAX_SYMLINKS)?;
+    let lookup = index.prepare_icase_backing();
+    let mut collect = gix_dir::walk::delegate::Collect::default();
+    let opts = gix_dir::walk::Options {
+        use_untracked_cache: use_cache,
+        ..opts
+    };
+    let out = walk(
+        root,
+        gix_dir::walk::Context {
+            should_interrupt: None,
+            git_dir_realpath: &git_dir_realpath,
+            current_dir: root,
+            index: &index,
+            ignore_case_index_lookup: Some(&lookup),
+            pathspec: &mut search,
+            pathspec_attributes: &mut |_, _, _, _| false,
+            excludes: Some(&mut stack),
+            objects: &gix_object::find::Never,
+            explicit_traversal_root: None,
+        },
+        opts,
+        &mut collect,
+    )?;
+    Ok((out, collect.into_entries_by_path()))
 }
 
 #[test]
@@ -2900,6 +3538,7 @@ fn root_may_not_go_through_dot_git() -> crate::Result {
                 read_dir_calls: 0,
                 returned_entries: entries.len(),
                 seen_entries: 1,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -2945,6 +3584,7 @@ fn root_at_submodule_repository_allows_walk() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
 
@@ -2986,6 +3626,7 @@ fn root_in_submodule_repository_allows_walk() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3027,6 +3668,7 @@ fn root_in_submodule_from_superproject_repository_allows_walk() -> crate::Result
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3068,6 +3710,7 @@ fn root_enters_directory_with_dot_git_in_reconfigured_worktree_tracked() -> crat
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3102,6 +3745,7 @@ fn root_enters_directory_with_dot_git_in_reconfigured_worktree_tracked() -> crat
             read_dir_calls: 0,
             returned_entries: 0,
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3172,6 +3816,7 @@ fn root_may_not_go_through_nested_repository_unless_enabled() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -3200,6 +3845,7 @@ fn root_may_not_go_through_submodule() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         },
     );
     assert_eq!(
@@ -3221,6 +3867,7 @@ fn walk_with_submodule() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -3254,6 +3901,7 @@ fn root_that_is_tracked_file_is_returned() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3283,6 +3931,7 @@ fn root_that_is_untracked_file_is_returned() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3319,6 +3968,7 @@ fn root_can_be_pruned_early_with_pathspec() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3340,6 +3990,7 @@ fn submodules() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     let expected_content = [
@@ -3477,6 +4128,7 @@ fn file_root_is_shown_if_pathspec_matches_exactly() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         },
     );
 
@@ -3508,6 +4160,7 @@ fn root_that_is_tracked_and_ignored_is_considered_tracked() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
 
@@ -3542,6 +4195,7 @@ fn root_with_dir_that_is_tracked_and_ignored() -> crate::Result {
                 read_dir_calls: 2,
                 returned_entries: entries.len(),
                 seen_entries: 3,
+                ..Default::default()
             }
         );
 
@@ -3583,6 +4237,7 @@ fn empty_and_nested_untracked() -> crate::Result {
                 read_dir_calls: 3,
                 returned_entries: entries.len(),
                 seen_entries: 2,
+                ..Default::default()
             }
         );
 
@@ -3613,6 +4268,7 @@ fn empty_and_nested_untracked() -> crate::Result {
                 read_dir_calls: 3,
                 returned_entries: entries.len(),
                 seen_entries: 3,
+                ..Default::default()
             }
         );
 
@@ -3659,6 +4315,7 @@ fn root_that_is_ignored_is_listed_for_files_and_directories() -> crate::Result {
                     read_dir_calls: 0,
                     returned_entries: entries.len(),
                     seen_entries: 1,
+                    ..Default::default()
                 }
             );
 
@@ -3821,6 +4478,7 @@ fn nested_repos_in_ignored_directories() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
 
@@ -3852,6 +4510,7 @@ fn nested_repos_in_ignored_directories() -> crate::Result {
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 6,
+            ..Default::default()
         }
     );
 
@@ -3885,6 +4544,7 @@ fn nested_repos_in_ignored_directories() -> crate::Result {
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         }
     );
 
@@ -3940,6 +4600,7 @@ fn decomposed_unicode_in_root_is_returned_precomposed() -> crate::Result {
             read_dir_calls: 0,
             returned_entries: entries.len(),
             seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -3997,6 +4658,7 @@ fn untracked_and_ignored_collapse_mix() {
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 7,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4031,6 +4693,7 @@ fn untracked_and_ignored_collapse_mix() {
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 8,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4065,6 +4728,7 @@ fn untracked_and_ignored_collapse_mix() {
             read_dir_calls: 4,
             returned_entries: entries.len(),
             seen_entries: 8,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4105,6 +4769,7 @@ fn root_cannot_pass_through_case_altered_capital_dot_git_if_case_insensitive() -
                 read_dir_calls: 0,
                 returned_entries: entries.len(),
                 seen_entries: 1,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4167,6 +4832,7 @@ fn partial_checkout_cone_and_non_one() -> crate::Result {
                 read_dir_calls: 0,
                 returned_entries: entries.len(),
                 seen_entries: 1,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4212,6 +4878,7 @@ fn type_mismatch() {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
 
@@ -4254,6 +4921,7 @@ fn type_mismatch() {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3 + 1,
+            ..Default::default()
         }
     );
 
@@ -4299,6 +4967,7 @@ fn type_mismatch_ignore_case() {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4339,6 +5008,7 @@ fn type_mismatch_ignore_case() {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3 + 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4383,6 +5053,7 @@ fn type_mismatch_ignore_case_clash_dir_is_file() {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 2,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4424,6 +5095,7 @@ fn type_mismatch_ignore_case_clash_file_is_dir() {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 2,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4445,6 +5117,7 @@ fn top_level_slash_with_negations() -> crate::Result {
                 read_dir_calls: 2,
                 returned_entries: entries.len(),
                 seen_entries: 5,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4477,6 +5150,7 @@ fn top_level_slash_with_negations() -> crate::Result {
                 read_dir_calls: 2,
                 returned_entries: entries.len(),
                 seen_entries: 5,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4502,6 +5176,7 @@ fn subdir_slash_with_negations() -> crate::Result {
                 read_dir_calls: 3,
                 returned_entries: entries.len(),
                 seen_entries: 5,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4534,6 +5209,7 @@ fn subdir_slash_with_negations() -> crate::Result {
                 read_dir_calls: 3,
                 returned_entries: entries.len(),
                 seen_entries: 5,
+                ..Default::default()
             }
         );
         assert_eq!(
@@ -4558,6 +5234,7 @@ fn one_ignored_submodule() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 5,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4581,7 +5258,8 @@ fn one_ignored_submodule() -> crate::Result {
         walk::Outcome {
             read_dir_calls: 0,
             returned_entries: entries.len(),
-            seen_entries: 1
+            seen_entries: 1,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4602,6 +5280,7 @@ fn ignored_sub_repo() -> crate::Result {
             read_dir_calls: 1,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4636,6 +5315,7 @@ fn ignored_sub_repo() -> crate::Result {
                     read_dir_calls: 1,
                     returned_entries: entries.len(),
                     seen_entries: 3,
+                    ..Default::default()
                 }
             );
             assert_eq!(
@@ -4661,6 +5341,7 @@ fn in_repo_worktree() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4691,6 +5372,7 @@ fn in_repo_worktree() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4717,6 +5399,7 @@ fn in_repo_hidden_worktree() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4748,6 +5431,7 @@ fn in_repo_hidden_worktree() -> crate::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 4,
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -4786,6 +5470,7 @@ fn in_repo_hidden_worktree() -> crate::Result {
                     read_dir_calls: 4,
                     returned_entries: entries.len(),
                     seen_entries: 5,
+                    ..Default::default()
                 }
             );
             assert_eq!(
