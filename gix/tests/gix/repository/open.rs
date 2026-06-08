@@ -354,6 +354,32 @@ mod not_a_repository {
     }
 }
 
+mod object_format_extension {
+    use crate::util::named_subrepo_opts;
+
+    #[test]
+    fn rejects_object_format_on_v0_repo() -> crate::Result {
+        // objectFormat is a "v1-only" extension: git refuses to operate on a version-0 repo that
+        // sets it, even for sha1 (unlike grandfathered extensions like preciousObjects, which v0
+        // still honours). This rejection was introduced in git 2.29.0 (2020). We match it.
+        for name in [
+            "objectformat-sha256-with-repository-format-v0",
+            "objectformat-sha1-with-repository-format-v0",
+        ] {
+            let err = named_subrepo_opts("make_config_repos.sh", name, gix::open::Options::isolated())
+                .expect_err("a v0 repository setting extensions.objectFormat must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    gix::open::Error::Config(gix::config::Error::ObjectFormatRequiresV1)
+                ),
+                "objectFormat on a v0 repository must be rejected, got {err:?} for {name}"
+            );
+        }
+        Ok(())
+    }
+}
+
 mod open_path_as_is {
 
     use crate::util::{named_subrepo_opts, repo_opts};

@@ -165,6 +165,19 @@ mkdir not-a-repo-with-files;
   touch this that
 )
 
+# objectFormat is a v1-only extension; a version-0 repo that sets it is invalid (even for sha1).
+# Reach that state with git config independently of the fixture's default hash: first make a valid
+# v1+objectFormat repo, then flip the version to 0 as the last write. The flip must come last because
+# git config refuses to run once the repo is already invalid (v0 with a v1-only extension).
+for format in sha1 sha256; do
+  git init "objectformat-$format-with-repository-format-v0"
+  (cd "objectformat-$format-with-repository-format-v0"
+    git config core.repositoryFormatVersion 1
+    git config extensions.objectFormat "$format"
+    git config core.repositoryFormatVersion 0
+  )
+done
+
 git init ssl-verify-disabled
 (cd ssl-verify-disabled
   git config http.sslVerify false
