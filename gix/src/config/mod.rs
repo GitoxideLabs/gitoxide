@@ -86,6 +86,11 @@ pub enum Error {
     RefsNamespace(#[from] refs_namespace::Error),
     #[error("Cannot handle objects formatted as {:?}", .name)]
     UnsupportedObjectFormat { name: BString },
+    #[error(
+        "extensions.objectFormat is a v1-only extension, but the repository format version is 0; \
+         set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)"
+    )]
+    ObjectFormatRequiresV1,
     #[error(transparent)]
     CoreAbbrev(#[from] abbrev::Error),
     #[error("Could not read configuration file at \"{}\"", path.display())]

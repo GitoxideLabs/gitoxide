@@ -354,6 +354,27 @@ mod not_a_repository {
     }
 }
 
+mod object_format_extension {
+    use crate::util::named_subrepo_opts;
+
+    #[test]
+    fn rejects_object_format_on_v0_repo() -> crate::Result {
+        // objectFormat on a version-0 repo is rejected, even for sha1, matching git.
+        for name in ["objectformat-without-v1-sha256", "objectformat-without-v1-sha1"] {
+            let err = named_subrepo_opts("make_config_repos.sh", name, gix::open::Options::isolated())
+                .expect_err("a v0 repository setting extensions.objectFormat must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    gix::open::Error::Config(gix::config::Error::ObjectFormatRequiresV1)
+                ),
+                "objectFormat on a v0 repository must be rejected, got {err:?} for {name}"
+            );
+        }
+        Ok(())
+    }
+}
+
 mod open_path_as_is {
 
     use crate::util::{named_subrepo_opts, repo_opts};

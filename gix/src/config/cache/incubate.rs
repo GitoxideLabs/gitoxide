@@ -45,15 +45,12 @@ impl StageOne {
             .map(|version| Core::REPOSITORY_FORMAT_VERSION.try_into_usize(version))
             .transpose()?
             .unwrap_or_default();
-        let object_hash = (repo_format_version != 1)
-            .then_some(Ok(gix_hash::Kind::Sha1))
-            .or_else(|| {
-                config
-                    .string(Extensions::OBJECT_FORMAT)
-                    .map(|format| Extensions::OBJECT_FORMAT.try_into_object_format(format))
-            })
-            .transpose()?
-            .unwrap_or(gix_hash::Kind::Sha1);
+        let object_hash = match config.string(Extensions::OBJECT_FORMAT) {
+            // objectFormat is honored from repository format version 1 onwards.
+            Some(format) if repo_format_version >= 1 => Extensions::OBJECT_FORMAT.try_into_object_format(format)?,
+            Some(_) => return Err(Error::ObjectFormatRequiresV1),
+            None => legacy_object_hash()?,
+        };
 
         let extension_worktree = util::config_bool(
             &config,
@@ -101,6 +98,22 @@ impl StageOne {
             precompose_unicode,
             protect_windows,
         })
+    }
+}
+
+/// Return the object hash for a repository that does not set `extensions.objectFormat`.
+///
+/// Git interprets a missing objectFormat as the original Sha1 layout, so we return
+/// gix_hash::Kind::Sha1 whenever this build can handle it.
+/// In Sha256-only builds we cannot open such a repository, so return an error instead.
+fn legacy_object_hash() -> Result<gix_hash::Kind, Error> {
+    #[cfg(feature = "sha1")]
+    {
+        Ok(gix_hash::Kind::Sha1)
+    }
+    #[cfg(not(feature = "sha1"))]
+    {
+        Err(Error::UnsupportedObjectFormat { name: "sha1".into() })
     }
 }
 
@@ -156,4 +169,25 @@ fn load_config(
     )?;
 
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    /// `legacy_object_hash` has a feature-gated split: Sha1 when this build supports it, an error
+    /// otherwise. Assert the branch matching the current build so the sha256-only path is covered
+    /// when the lib tests run under `--no-default-features --features sha256`.
+    #[test]
+    fn legacy_object_hash_reflects_build_features() {
+        let actual = super::legacy_object_hash();
+        #[cfg(feature = "sha1")]
+        assert!(
+            matches!(actual, Ok(gix_hash::Kind::Sha1)),
+            "with sha1 support a missing objectFormat resolves to the legacy Sha1 layout, got {actual:?}"
+        );
+        #[cfg(not(feature = "sha1"))]
+        assert!(
+            matches!(actual, Err(super::Error::UnsupportedObjectFormat { .. })),
+            "without sha1 support a missing objectFormat cannot be opened, got {actual:?}"
+        );
+    }
 }

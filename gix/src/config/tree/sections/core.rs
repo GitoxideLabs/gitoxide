@@ -476,8 +476,11 @@ mod validate {
     pub struct Abbrev;
     impl keys::Validate for Abbrev {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            // TODO: when there is options, validate against all hashes and assure all fail to trigger a validation failure.
-            super::Core::ABBREV.try_into_abbreviation(value.into(), gix_hash::Kind::Sha1)?;
+            // The keys::Validate trait API doesn't take a hash kind, and passing one through
+            // would touch ~50 impl sites. The repo-aware check with the actual hash runs in
+            // config::cache::util::parse_core_abbrev, so here we just use Kind::longest()
+            // to allow the most permissive upper bound.
+            super::Core::ABBREV.try_into_abbreviation(value.into(), gix_hash::Kind::longest())?;
             Ok(())
         }
     }
