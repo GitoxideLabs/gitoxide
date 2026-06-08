@@ -84,6 +84,18 @@ mod streaming {
             }
             Ok(())
         }
+
+        #[test]
+        fn empty_sideband_payload_is_invalid_instead_of_panicking() {
+            let err = PacketLineRef::Data(b"")
+                .decode_band()
+                .expect_err("empty data cannot contain a sideband designator");
+            assert_eq!(
+                err.to_string(),
+                "attempt to decode a non-data line into a side-channel band",
+                "empty sideband data is reported as malformed input"
+            );
+        }
     }
 
     #[test]
