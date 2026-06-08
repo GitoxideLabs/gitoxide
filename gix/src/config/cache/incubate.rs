@@ -170,3 +170,24 @@ fn load_config(
 
     Ok(config)
 }
+
+#[cfg(test)]
+mod tests {
+    /// `legacy_object_hash` has a feature-gated split: Sha1 when this build supports it, an error
+    /// otherwise. Assert the branch matching the current build so the sha256-only path is covered
+    /// when the lib tests run under `--no-default-features --features sha256`.
+    #[test]
+    fn legacy_object_hash_reflects_build_features() {
+        let actual = super::legacy_object_hash();
+        #[cfg(feature = "sha1")]
+        assert!(
+            matches!(actual, Ok(gix_hash::Kind::Sha1)),
+            "with sha1 support a missing objectFormat resolves to the legacy Sha1 layout, got {actual:?}"
+        );
+        #[cfg(not(feature = "sha1"))]
+        assert!(
+            matches!(actual, Err(super::Error::UnsupportedObjectFormat { .. })),
+            "without sha1 support a missing objectFormat cannot be opened, got {actual:?}"
+        );
+    }
+}
