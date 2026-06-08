@@ -164,10 +164,11 @@ impl<'a> PacketLineRef<'a> {
     /// Decode the band of this [`slice`](PacketLineRef::as_slice())
     pub fn decode_band(&self) -> Result<BandRef<'a>, decode::band::Error> {
         let d = self.as_slice().ok_or(decode::band::Error::NonDataLine)?;
-        Ok(match d[0] {
-            1 => BandRef::Data(&d[1..]),
-            2 => BandRef::Progress(&d[1..]),
-            3 => BandRef::Error(&d[1..]),
+        let (&band_id, d) = d.split_first().ok_or(decode::band::Error::NonDataLine)?;
+        Ok(match band_id {
+            1 => BandRef::Data(d),
+            2 => BandRef::Progress(d),
+            3 => BandRef::Error(d),
             band => return Err(decode::band::Error::InvalidSideBand { band_id: band }),
         })
     }
@@ -196,7 +197,7 @@ impl<'a> TextRef<'a> {
 
 impl<'a> From<&'a [u8]> for TextRef<'a> {
     fn from(d: &'a [u8]) -> Self {
-        let d = if d[d.len() - 1] == b'\n' { &d[..d.len() - 1] } else { d };
+        let d = d.strip_suffix(b"\n").unwrap_or(d);
         TextRef(d)
     }
 }

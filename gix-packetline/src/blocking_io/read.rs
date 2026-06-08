@@ -34,7 +34,12 @@ where
     }
 
     fn read_line_inner<'a>(reader: &mut T, buf: &'a mut [u8]) -> io::Result<Result<PacketLineRef<'a>, decode::Error>> {
-        let (hex_bytes, data_bytes) = buf.split_at_mut(4);
+        if buf.len() < U16_HEX_BYTES {
+            return Ok(Err(decode::Error::NotEnoughData {
+                bytes_needed: U16_HEX_BYTES - buf.len(),
+            }));
+        }
+        let (hex_bytes, data_bytes) = buf.split_at_mut(U16_HEX_BYTES);
         reader.read_exact(hex_bytes)?;
         let num_data_bytes = match decode::hex_prefix(hex_bytes) {
             Ok(decode::PacketLineOrWantedSize::Line(line)) => return Ok(Ok(line)),

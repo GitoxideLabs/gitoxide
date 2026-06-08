@@ -202,6 +202,30 @@ async fn readline_reads_one_packet_line_at_a_time() -> crate::Result {
 }
 
 #[maybe_async::test(feature = "blocking-io", async(feature = "async-io", async_std::test))]
+async fn empty_progress_and_error_sidebands_are_forwarded_without_panic() -> crate::Result {
+    let input = b"0005\x020005\x030000";
+    let mut rd = StreamingPeekableIter::new(&input[..], &[PacketLineRef::Flush], false);
+    let mut seen = Vec::new();
+    let mut reader = rd.as_read_with_sidebands(|is_err, data| {
+        seen.push((is_err, data.to_owned()));
+        std::ops::ControlFlow::Continue(())
+    });
+
+    let mut out = Vec::new();
+    reader.read_to_end(&mut out).await?;
+    drop(reader);
+
+    assert_eq!(out, b"", "progress and error sidebands do not produce pack data");
+    assert_eq!(
+        seen,
+        [(false, Vec::new()), (true, Vec::new())],
+        "empty sideband payloads are still delivered to the progress handler"
+    );
+
+    Ok(())
+}
+
+#[maybe_async::test(feature = "blocking-io", async(feature = "async-io", async_std::test))]
 async fn peek_past_an_actual_eof_is_an_error() -> crate::Result {
     let input = b"0009ERR e";
     let mut rd = StreamingPeekableIter::new(&input[..], &[], false);
