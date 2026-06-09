@@ -559,6 +559,11 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
     * [ ] report-status, sideband, delete-refs, push-options and atomic pushes
     * [ ] object-format negotiation
 * [ ] upload-pack / receive-pack server plumbing for in-process transports
+    * [x] upload-pack V2 request/response plumbing for blocking in-process servers (command parsing, `ls-refs` response encoding, `fetch` section encoding, sideband pack streaming)
+    * [x] async upload-pack V2 bridge for async transport streams (`futures_lite::io::BlockOn` adapter wrapping blocking plumbing)
+    * [x] repository-backed upload-pack fetch negotiation wiring (`want`/`have` resolution, `ACK`/`NAK` generation, `want-ref` ref-store resolution)
+    * [x] upload-pack pack construction wiring
+    * [x] receive-pack V1/V2 server plumbing for blocking in-process servers (V1 command/capability/push-options parsing, V2 command/section parsing, report-status response encoding, async per-client bridge)
 * [ ] bundle-uri protocol integration
 * [ ] remote helper protocol and integration
 * [x] API documentation

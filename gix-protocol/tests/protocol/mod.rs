@@ -8,6 +8,10 @@ pub fn fixture_bytes(path: &str) -> Vec<u8> {
 mod command;
 pub mod fetch;
 mod handshake;
+#[cfg(feature = "blocking-server")]
+mod receive_pack;
+#[cfg(feature = "blocking-server")]
+mod upload_pack;
 pub use fetch::_impl::{FetchConnection, fetch};
 pub mod remote_progress;
 

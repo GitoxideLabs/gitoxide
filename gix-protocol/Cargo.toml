@@ -39,6 +39,27 @@ async-client = [
     "handshake",
     "fetch"
 ]
+## If set, blocking server-side upload-pack plumbing is available for in-process transports.
+blocking-server = [
+    "gix-transport/blocking-client",
+    "dep:gix-object",
+    "dep:gix-pack",
+    "dep:gix-traverse",
+    "dep:gix-zlib",
+]
+## If set, async server-side upload-pack plumbing is available for in-process transports.
+# no `dep:` for futures-lite (https://github.com/rust-secure-code/cargo-auditable/issues/124)
+async-server = [
+    "gix-transport/async-client",
+    "gix-transport/blocking-client",
+    "dep:async-trait",
+    "dep:futures-io",
+    "futures-lite",
+    "dep:gix-object",
+    "dep:gix-pack",
+    "dep:gix-traverse",
+    "dep:gix-zlib",
+]
 
 ## Add implementations for performing a `handshake` along with the dependencies needed for it.
 handshake = ["dep:gix-credentials"]
@@ -71,6 +92,16 @@ name = "async"
 path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
+[[test]]
+name = "async-server"
+path = "tests/async-server.rs"
+required-features = ["async-server"]
+
+[[example]]
+name = "receive-pack-async-per-client"
+path = "examples/receive-pack-async-per-client.rs"
+required-features = ["blocking-server", "async-client", "sha1"]
+
 [dependencies]
 gix-features = { version = "^0.49.0", path = "../gix-features", features = [
     "progress",
@@ -86,6 +117,9 @@ gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
 gix-negotiate = { version = "^0.34.0", path = "../gix-negotiate", optional = true }
 gix-object = { version = "^0.63.0", path = "../gix-object", optional = true }
 gix-revwalk = { version = "^0.34.0", path = "../gix-revwalk", optional = true }
+gix-pack = { version = "^0.73.0", path = "../gix-pack", optional = true }
+gix-traverse = { version = "^0.60.0", path = "../gix-traverse", optional = true }
+gix-zlib = { version = "^0.1.0", path = "../gix-zlib", optional = true }
 gix-credentials = { version = "^0.39.1", path = "../gix-credentials", optional = true }
 gix-refspec = { version = "^0.44.0", path = "../gix-refspec", optional = true }
 gix-lock = { version = "^24.0.0", path = "../gix-lock", optional = true }
@@ -112,6 +146,9 @@ document-features = { version = "0.2.0", optional = true }
 async-std = { version = "1.9.0", features = ["attributes"] }
 gix-packetline = { path = "../gix-packetline", version = "^0.22.0" }
 gix-protocol = { path = "../gix-protocol", features = ["sha1"] }
+gix-hash = { path = "../gix-hash", features = ["sha1"] }
+gix-odb = { path = "../gix-odb", features = ["sha1"] }
+proptest = "1.6.0"
 
 [package.metadata.docs.rs]
 features = ["sha1", "blocking-client", "document-features", "serde"]

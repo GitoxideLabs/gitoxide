@@ -87,6 +87,7 @@ impl<'a> RequestWriter<'a> {
             }
             MessageKind::Text(t) => {
                 if self.trace {
+                    #[allow(unused_imports)]
                     use bstr::ByteSlice;
                     gix_features::trace::trace!(">> {}", t.as_bstr());
                 }

@@ -52,6 +52,10 @@ pub use gix_transport as transport;
 pub mod fetch;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use fetch::function::fetch;
+#[cfg(feature = "blocking-server")]
+pub mod receive_pack;
+#[cfg(any(feature = "blocking-server", feature = "async-server"))]
+pub mod upload_pack;
 
 mod remote_progress;
 pub use remote_progress::RemoteProgress;
