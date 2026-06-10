@@ -129,6 +129,38 @@ fn assert_references(out: &Outcome) {
 }
 
 #[test]
+fn macros_are_only_expanded_when_set() -> crate::Result {
+    let (mut group, mut collection, base, input) = baseline::user_attributes("macro-states")?;
+
+    let mut buf = Vec::new();
+    group.add_patterns_file(
+        base.join(".gitattributes"),
+        false,
+        None,
+        &mut buf,
+        &mut collection,
+        true, /* allow macros */
+    )?;
+
+    let mut actual = Outcome::default();
+    actual.initialize(&collection);
+    for (rela_path, expected) in (baseline::Expectations { lines: input.lines() }) {
+        actual.reset();
+        group.pattern_matching_relative_path(rela_path, Case::Sensitive, None, &mut actual);
+        assert_references(&actual);
+        let actual: Vec<_> = actual
+            .iter()
+            .filter_map(|m| (!m.assignment.state.is_unspecified()).then_some(m.assignment))
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "{rela_path}: only set macros apply their expansion, like git"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn all_attributes_are_listed_in_declaration_order() -> crate::Result {
     let (mut group, mut collection, base, input) = baseline::user_attributes("lookup-order")?;
 

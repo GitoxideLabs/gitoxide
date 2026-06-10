@@ -97,6 +97,23 @@ function baseline() {
   baseline global
 )
 
+mkdir macro-states
+(cd macro-states
+  git init
+  : > user.attributes
+  cat <<'EOF' > .gitattributes
+[attr]mymacro attr-a attr-b=val -attr-c
+*.set mymacro
+*.unset -mymacro
+*.unspecified !mymacro
+*.value mymacro=other
+EOF
+  baseline file.set
+  baseline file.unset
+  baseline file.unspecified
+  baseline file.value
+)
+
 mkdir lookup-order
 (cd lookup-order
 
