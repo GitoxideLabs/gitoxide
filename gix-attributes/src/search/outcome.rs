@@ -188,6 +188,7 @@ impl Outcome {
             }
             // Let's be explicit - this is only non-empty for macros.
             let is_macro = !slot.macro_attributes.is_empty();
+            let expand_macro = is_macro && assignment.state.as_ref() == StateRef::Set;
 
             slot.r#match = Some(Match {
                 pattern: self.patterns.insert(pattern),
@@ -208,7 +209,7 @@ impl Outcome {
                 return true;
             }
 
-            if is_macro {
+            if expand_macro {
                 // TODO(borrowchk): one fine day we should be able to re-borrow `slot` without having to redo the array access.
                 let slot = &self.matches_by_id[id.0];
                 self.attrs_stack.extend(
