@@ -1014,6 +1014,54 @@ mod blocking_io {
         }
         Ok(())
     }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn fetch_only_adopts_remote_sha256_object_format() -> crate::Result {
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        assert_eq!(
+            gix::open_opts(&remote, gix::open::Options::isolated())?.object_hash(),
+            gix::hash::Kind::Sha256,
+            "precondition: the fixture remote uses SHA-256 regardless of GIX_TEST_FIXTURE_HASH"
+        );
+
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, out) = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::Bare,
+            Default::default(),
+            restricted(),
+        )?
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            repo.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the freshly initialized SHA-1 repository adopted the remote's SHA-256 object format"
+        );
+        assert!(
+            matches!(out.status, gix::remote::fetch::Status::Change { .. }),
+            "the SHA-256 pack was fetched, so a clone always carries a change"
+        );
+        let persisted = gix::open_opts(repo.git_dir(), gix::open::Options::isolated())?;
+        assert_eq!(
+            persisted.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the adopted object format is persisted on disk, not just in memory"
+        );
+        let config = persisted.config_snapshot();
+        let origin_remotes = config.plumbing().sections_by_name("remote").map_or(0, |sections| {
+            sections
+                .filter(|section| section.header().subsection_name() == Some("origin".into()))
+                .count()
+        });
+        assert_eq!(
+            origin_remotes, 1,
+            "exactly one `origin` remote is written despite the adoption retry"
+        );
+        Ok(())
+    }
 }
 
 #[test]
