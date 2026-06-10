@@ -268,6 +268,44 @@ fn given_attributes_are_made_available_in_given_order() -> crate::Result {
 }
 
 #[test]
+fn macro_attributes_expand_only_when_macro_is_set() {
+    let attributes =
+        b"[attr]mylfs filter=lfs\n*.bin mylfs\nspecial.bin -mylfs\nunspec.bin !mylfs\nvalued.bin mylfs=foo\n";
+
+    let mut search = gix_attributes::Search::default();
+    let mut collection = gix_attributes::search::MetadataCollection::default();
+    search.add_patterns_buffer(
+        attributes,
+        ".gitattributes".into(),
+        Some(std::path::Path::new("")),
+        &mut collection,
+        true, /* allow macros */
+    );
+
+    let mut out = Outcome::default();
+    out.initialize_with_selection(&collection, ["filter"]);
+    for (path, expected) in [
+        ("normal.bin", StateRef::Value("lfs".into())),
+        ("special.bin", StateRef::Unspecified),
+        ("unspec.bin", StateRef::Unspecified),
+        ("valued.bin", StateRef::Unspecified),
+    ] {
+        out.reset();
+        search.pattern_matching_relative_path(path.into(), Case::Sensitive, Some(false), &mut out);
+
+        let actual = out
+            .iter_selected()
+            .map(|m| m.assignment.state)
+            .next()
+            .expect("one selected attribute yields one match or unspecified placeholder");
+        assert_eq!(
+            actual, expected,
+            "{path}: only macros set to true expand to their attributes, matching git"
+        );
+    }
+}
+
+#[test]
 fn size_of_outcome() {
     let actual = std::mem::size_of::<Outcome>();
     let expected = 840;
