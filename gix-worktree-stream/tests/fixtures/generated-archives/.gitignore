@@ -2,3 +2,4 @@
 # `filter=arrow` filter driver. Symlinks cannot be unpacked on Windows without
 # elevated privileges, so the script is re-run on the test host instead.
 basic.tar
+basic_sha256.tar

@@ -26,9 +26,16 @@ mod blocking_io {
 
     fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
         let commits = repo.shallow_commits()?.expect(expected);
+        // `gix_shallow::read` returns these sorted by id; the expected side is sorted via `sorted(...)`.
         Ok(std::iter::once(commits.head)
             .chain(commits.tail.iter().copied())
             .collect())
+    }
+
+    fn sorted(ids: impl IntoIterator<Item = gix::ObjectId>) -> Vec<gix::ObjectId> {
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort();
+        ids
     }
 
     #[test]
@@ -59,12 +66,12 @@ mod blocking_io {
 
         assert_eq!(
             shallow_ids(&repo, "shallow")?,
-            [
+            sorted([
                 hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
                 hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
                 hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
                 hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85")
-            ],
+            ]),
             "shallow information is written"
         );
 
@@ -211,11 +218,11 @@ mod blocking_io {
             .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
         assert_eq!(
             shallow_ids(&repo, "present")?,
-            vec![
+            sorted([
                 hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
                 hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
                 hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
-            ]
+            ])
         );
         assert_eq!(
             repo.config_snapshot().boolean("my.marker"),
@@ -246,10 +253,10 @@ mod blocking_io {
         assert!(repo.is_shallow());
         assert_eq!(
             shallow_ids(&repo, "present")?,
-            vec![
+            sorted([
                 hex_to_id("2d9d136fb0765f2e24c44a0f91984318d580d03b"),
                 hex_to_id("dfd0954dabef3b64f458321ef15571cc1a46d552"),
-            ]
+            ])
         );
 
         let shallow_commit_count = repo.head_id()?.ancestors().all()?.count();
@@ -263,11 +270,11 @@ mod blocking_io {
 
         assert_eq!(
             shallow_ids(&repo, "present")?,
-            vec![
+            sorted([
                 hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
                 hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
                 hex_to_id("b5152869aedeb21e55696bb81de71ea1bb880c85"),
-            ],
+            ]),
             "the shallow boundary was changed"
         );
         assert!(
@@ -319,10 +326,10 @@ mod blocking_io {
         assert!(repo.is_shallow());
         assert_eq!(
             shallow_ids(&repo, "present")?,
-            vec![
+            sorted([
                 hex_to_id("27e71576a6335294aa6073ab767f8b36bdba81d0"),
                 hex_to_id("82024b2ef7858273337471cbd1ca1cedbdfd5616"),
-            ]
+            ])
         );
 
         let remote = repo.head()?.into_remote(Direction::Fetch).expect("present")?;
@@ -1012,6 +1019,54 @@ mod blocking_io {
             }
             _ => unreachable!("a clone always carries a change"),
         }
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "sha256")]
+    fn fetch_only_adopts_remote_sha256_object_format() -> crate::Result {
+        let remote = gix_testtools::scripted_fixture_read_only("make_sha256_remote.sh")?.join("remote");
+        assert_eq!(
+            gix::open_opts(&remote, gix::open::Options::isolated())?.object_hash(),
+            gix::hash::Kind::Sha256,
+            "precondition: the fixture remote uses SHA-256 regardless of GIX_TEST_FIXTURE_HASH"
+        );
+
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let (repo, out) = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::Bare,
+            Default::default(),
+            restricted(),
+        )?
+        .fetch_only(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            repo.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the freshly initialized SHA-1 repository adopted the remote's SHA-256 object format"
+        );
+        assert!(
+            matches!(out.status, gix::remote::fetch::Status::Change { .. }),
+            "the SHA-256 pack was fetched, so a clone always carries a change"
+        );
+        let persisted = gix::open_opts(repo.git_dir(), gix::open::Options::isolated())?;
+        assert_eq!(
+            persisted.object_hash(),
+            gix::hash::Kind::Sha256,
+            "the adopted object format is persisted on disk, not just in memory"
+        );
+        let config = persisted.config_snapshot();
+        let origin_remotes = config.plumbing().sections_by_name("remote").map_or(0, |sections| {
+            sections
+                .filter(|section| section.header().subsection_name() == Some("origin".into()))
+                .count()
+        });
+        assert_eq!(
+            origin_remotes, 1,
+            "exactly one `origin` remote is written despite the adoption retry"
+        );
         Ok(())
     }
 }

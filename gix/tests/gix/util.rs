@@ -111,12 +111,20 @@ static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<HashMap<&str, &str>> = std::sy
             "864c497e9bbd16208a87f7595aff2caa52d96e73436fc008810516ad1d84c29c",
         ),
         (
+            "d07c527cf14e524a8494ce6d5d08e28079f5c6ea",
+            "b07ba512b235bfe2b9b143ac1bd891f82efdaa565e711c98f5e592e6dadaaf89",
+        ),
+        (
             "d8523dfd5a7aa16562fa1c3e1d3b4a4494f97876",
             "07dee378fa15974a711e2353b3a0046b5a0fdeb8ec460ec837e5a868e51baa25",
         ),
         (
             "d95f3ad14dee633a758d2e331151e950dd13e4ed",
             "7c490ebf9db90b84753749c721ef2bedfeb85c1da94160f2619df1249c64bdda",
+        ),
+        (
+            "de303ef102bd5705a40a0c42ae2972eb1a668455",
+            "d60b1da3fb52545d0a8e70f970ffdec226ab0fc4ec870148058ab1c621330db0",
         ),
         (
             "dfd0954dabef3b64f458321ef15571cc1a46d552",
@@ -133,6 +141,10 @@ static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<HashMap<&str, &str>> = std::sy
         (
             "e7c7273539cfc1a52802fa9d61aa578f6ccebcb4",
             "10d26eeb1167a0cefa12fa0738d36eb4e55adb43e8837dfa3d38e7f8b019140e",
+        ),
+        (
+            "edc8cc8a25e64e73aacea469fc765564dd2c3f65",
+            "c23b49bd2cee82a036e7359dc45101f6c1ba5fb06db2818c646d764c24a2cf05",
         ),
         (
             "f99771fe6a1b535783af3163eba95a927aae21d5",

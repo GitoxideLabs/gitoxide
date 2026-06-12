@@ -52,7 +52,8 @@ impl RefMap {
         } = context;
         let num_explicit_specs = fetch_refspecs.len();
         let group = gix_refspec::MatchGroup::from_fetch_specs(all_refspecs.iter().map(gix_refspec::RefSpec::to_ref));
-        let null = gix_hash::ObjectId::null(gix_hash::Kind::Sha1); // OK to hardcode Sha1, it's not supposed to match, ever.
+        let object_hash = extract_object_hash(capabilities)?;
+        let null = gix_hash::ObjectId::null(object_hash);
         let (res, fixes) = group
             .match_lhs(remote_refs.iter().map(|r| {
                 let (full_ref_name, target, object) = r.unpack();
@@ -86,20 +87,6 @@ impl RefMap {
             })
             .collect();
 
-        // Assume sha1 if server says nothing, otherwise configure anything beyond sha1 in the local repo configuration
-        let object_hash = if let Some(object_format) = capabilities.capability("object-format").and_then(|c| c.value())
-        {
-            let object_format = object_format.to_str().map_err(|_| Error::UnknownObjectFormat {
-                format: object_format.into(),
-            })?;
-            match object_format {
-                "sha1" => gix_hash::Kind::Sha1,
-                unknown => return Err(Error::UnknownObjectFormat { format: unknown.into() }),
-            }
-        } else {
-            gix_hash::Kind::Sha1
-        };
-
         Ok(Self {
             mappings,
             refspecs: fetch_refspecs,
@@ -109,4 +96,24 @@ impl RefMap {
             object_hash,
         })
     }
+}
+
+/// Resolve the object format advertised by the server through the `object-format` capability.
+///
+/// When the capability is absent, the server is implicitly speaking Sha1 - older servers
+/// don't advertise it at all, and even newer ones may omit it for empty repositories.
+/// In builds whose `gix-hash` lacks the `sha1` feature, this is reported as an unsupported
+/// format rather than panicking.
+fn extract_object_hash(capabilities: &Capabilities) -> Result<gix_hash::Kind, Error> {
+    let object_format = match capabilities.capability("object-format").and_then(|c| c.value()) {
+        Some(object_format) => object_format.to_str().map_err(|_| Error::UnknownObjectFormat {
+            format: object_format.into(),
+        })?,
+        None => "sha1",
+    };
+    object_format
+        .parse::<gix_hash::Kind>()
+        .map_err(|_| Error::UnknownObjectFormat {
+            format: object_format.into(),
+        })
 }

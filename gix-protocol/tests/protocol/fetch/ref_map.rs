@@ -1,3 +1,57 @@
+mod from_refs {
+    use gix_protocol::fetch::{RefMap, refmap};
+    use gix_transport::client::Capabilities;
+
+    fn caps_with(after_nul: &[u8]) -> Capabilities {
+        let mut bytes: Vec<u8> = b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0".to_vec();
+        bytes.extend_from_slice(after_nul);
+        Capabilities::from_bytes(&bytes).expect("valid capabilities line").0
+    }
+
+    fn ctx() -> refmap::init::Context {
+        refmap::init::Context {
+            fetch_refspecs: Vec::new(),
+            extra_refspecs: Vec::new(),
+        }
+    }
+
+    /// An `object-format=sha1` capability resolves to `gix_hash::Kind::Sha1` on the resulting RefMap.
+    #[test]
+    fn sha1_capability_is_honored() {
+        let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha1 agent=git/2.54.0");
+        let map = RefMap::from_refs(Vec::new(), &caps, ctx()).expect("known format");
+        assert_eq!(map.object_hash, gix_hash::Kind::Sha1);
+    }
+
+    /// An `object-format=sha256` capability resolves to `gix_hash::Kind::Sha256`, so Sha256 servers
+    /// can be talked to without falling back to Sha1.
+    #[cfg(feature = "sha256")]
+    #[test]
+    fn sha256_capability_is_honored() {
+        let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha256 agent=git/2.54.0");
+        let map = RefMap::from_refs(Vec::new(), &caps, ctx()).expect("known format");
+        assert_eq!(map.object_hash, gix_hash::Kind::Sha256);
+    }
+
+    /// Any `object-format` value we don't recognize must surface as an UnknownObjectFormat error
+    /// rather than silently defaulting to Sha1, so callers can refuse to fetch from unsupported servers.
+    #[test]
+    fn unknown_object_format_errors() {
+        let caps = caps_with(b"symref=HEAD:refs/heads/main object-format=sha999 agent=git/2.54.0");
+        let err = RefMap::from_refs(Vec::new(), &caps, ctx()).expect_err("unknown format must error");
+        assert!(matches!(err, refmap::init::Error::UnknownObjectFormat { ref format } if format == "sha999"));
+    }
+
+    /// Servers that omit `object-format` are implicitly Sha1, so the RefMap should reflect that.
+    #[cfg(feature = "sha1")]
+    #[test]
+    fn missing_object_format_defaults_to_sha1() {
+        let caps = caps_with(b"symref=HEAD:refs/heads/main agent=git/2.54.0");
+        let map = RefMap::from_refs(Vec::new(), &caps, ctx()).expect("implicit sha1");
+        assert_eq!(map.object_hash, gix_hash::Kind::Sha1);
+    }
+}
+
 mod is_missing_required_mapping {
     use gix_protocol::{
         fetch::{
