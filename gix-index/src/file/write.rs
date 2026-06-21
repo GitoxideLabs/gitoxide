@@ -16,8 +16,9 @@ impl File {
     /// Write the index to `out` with `options`, to be readable by [`File::at()`], returning the version that was actually written
     /// to retain all information of this index.
     ///
-    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed from the
-    /// current entries; see [`File::write()`] for the implications and the recommended workaround.
+    /// Note that the `tree` (tree-cache) extension is written as-is and is **not** recomputed or
+    /// invalidated to match the current entries; see [`File::write()`] for the implications and the
+    /// recommended workaround.
     pub fn write_to(
         &self,
         mut out: impl std::io::Write,
@@ -45,12 +46,15 @@ impl File {
     /// ### The `tree` (tree-cache) extension is written as-is
     ///
     /// The `tree` extension (tree-cache) is serialized from its current in-memory state; it is
-    /// **not** recomputed to match the entries. If entries were modified since the index was read,
-    /// the now-stale tree-cache is written out, which can leave the index in a state that other Git
-    /// implementations misread: they consult the tree-cache to decide what changed, so modifications
-    /// may appear invisible to `git status`, or be committed incorrectly.
+    /// **not** recomputed or invalidated to match the entries. So if entries were modified since the
+    /// index was read, the tree-cache is written back still marked valid even though it is now stale.
     ///
-    /// Until updating the tree-cache on write is implemented (see [issue #2421]), remove it with
+    /// Git uses the tree-cache to skip unchanged directories when building a tree (on `git commit` /
+    /// `git write-tree`), so a stale-but-valid tree-cache can make a later commit capture outdated
+    /// subtree content; more generally, `git status` and later commits can disagree about what is
+    /// staged.
+    ///
+    /// Until the tree-cache is updated on write (see [issue #2421]), remove it with
     /// [`State::remove_tree()`](crate::State::remove_tree()) before writing whenever entries were
     /// changed:
     ///
