@@ -1381,6 +1381,37 @@ pub fn main() -> Result<()> {
                     )
                 },
             ),
+            commit::Subcommands::NameRev {
+                tags,
+                refs,
+                exclude,
+                always,
+                no_undefined,
+                name_only,
+                rev_spec,
+            } => prepare_and_run(
+                "commit-name-rev",
+                trace,
+                verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| {
+                    core::repository::commit::name_rev(
+                        repository(Mode::Strict)?,
+                        rev_spec.as_deref(),
+                        out,
+                        core::repository::commit::name_rev::Options {
+                            tags,
+                            refs,
+                            exclude,
+                            always,
+                            no_undefined,
+                            name_only,
+                        },
+                    )
+                },
+            ),
         },
         Subcommands::Tag(platform) => match platform.cmds {
             Some(tag::Subcommands::List) | None => prepare_and_run(

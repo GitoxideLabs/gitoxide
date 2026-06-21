@@ -141,6 +141,66 @@ pub fn describe(
     Ok(())
 }
 
+pub fn name_rev(
+    repo: gix::Repository,
+    rev_spec: Option<&str>,
+    mut out: impl std::io::Write,
+    name_rev::Options {
+        tags,
+        refs,
+        exclude,
+        always,
+        no_undefined,
+        name_only,
+    }: name_rev::Options,
+) -> Result<()> {
+    let commit = match rev_spec {
+        Some(spec) => repo
+            .rev_parse_single(format!("{spec}^{{commit}}").as_str())?
+            .object()?
+            .into_commit(),
+        None => repo.head_commit()?,
+    };
+    let mut platform = commit
+        .name_rev()
+        .names(if tags {
+            gix::commit::name_rev::SelectRef::AllTags
+        } else {
+            gix::commit::name_rev::SelectRef::AllRefs
+        })
+        .id_as_fallback(always);
+
+    for pattern in refs {
+        platform = platform.include_ref(pattern);
+    }
+    for pattern in exclude {
+        platform = platform.exclude_ref(pattern);
+    }
+
+    match platform.try_format()? {
+        Some(format) => {
+            if name_only {
+                let mut name = format.to_string();
+                if tags {
+                    name = name.strip_prefix("tags/").unwrap_or(&name).to_owned();
+                }
+                writeln!(out, "{name}")?;
+            } else {
+                let id_or_spec = rev_spec.map_or_else(|| commit.id.to_string(), ToOwned::to_owned);
+                writeln!(out, "{id_or_spec} {format}")?;
+            }
+        }
+        None if no_undefined => anyhow::bail!("Cannot describe '{}'", commit.id),
+        None if name_only => writeln!(out, "undefined")?,
+        None => {
+            let id_or_spec = rev_spec.map_or_else(|| commit.id.to_string(), ToOwned::to_owned);
+            writeln!(out, "{id_or_spec} undefined")?;
+        }
+    }
+
+    Ok(())
+}
+
 pub mod describe {
     #[derive(Debug, Clone)]
     pub struct Options {
@@ -152,5 +212,17 @@ pub mod describe {
         pub statistics: bool,
         pub max_candidates: usize,
         pub dirty_suffix: Option<String>,
+    }
+}
+
+pub mod name_rev {
+    #[derive(Debug, Clone)]
+    pub struct Options {
+        pub tags: bool,
+        pub refs: Vec<String>,
+        pub exclude: Vec<String>,
+        pub always: bool,
+        pub no_undefined: bool,
+        pub name_only: bool,
     }
 }
