@@ -1,0 +1,50 @@
+lints.workspace = true
+
+[package]
+name = "gix-serve"
+version = "0.1.0"
+repository = "https://github.com/GitoxideLabs/gitoxide"
+license = "MIT OR Apache-2.0"
+description = "A crate of the gitoxide project for serving git repositories"
+authors = ["Sebastian Thiel <sebastian.thiel@icloud.com>"]
+edition = "2021"
+include = ["src/**/*", "LICENSE-*"]
+rust-version = "1.82"
+
+[lib]
+doctest = false
+
+[features]
+## Enable support for SHA-1 hashes.
+sha1 = ["gix-hash/sha1"]
+## Blocking server support.
+blocking-server = [
+  "gix-protocol/blocking-server",
+  "gix-transport/blocking-server",
+]
+
+[dependencies]
+gix-ref = { version = "^0.61.0", path = "../gix-ref" }
+gix-hash = { version = "^0.23.0", path = "../gix-hash" }
+gix-pack = { version = "^0.68.0", path = "../gix-pack", features = [
+  "generate",
+] }
+gix-features = { version = "^0.46.2", path = "../gix-features" }
+gix-protocol = { version = "^0.59.0", path = "../gix-protocol", optional = true }
+gix-transport = { version = "^0.55.1", path = "../gix-transport", optional = true }
+bstr = { version = "1.12.0", default-features = false, features = ["std"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+gix-testtools = { path = "../tests/tools" }
+gix-odb = { version = "^0.78.0", path = "../gix-odb" }
+gix-packetline = { version = "^0.21.2", path = "../gix-packetline", features = [
+  "blocking-io",
+] }
+gix-transport = { version = "^0.55.1", path = "../gix-transport", features = [
+  "blocking-server",
+] }
+gix-serve = { path = ".", features = ["blocking-server"] }
+
+[package.metadata.docs.rs]
+all-features = true
