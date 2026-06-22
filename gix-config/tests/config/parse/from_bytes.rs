@@ -15,6 +15,23 @@ fn fuzz() {
     );
 }
 
+fn reject_drop_values(event: EventRef<'_>) -> bool {
+    !matches!(event, EventRef::Value(value) if value == b"drop".as_slice())
+}
+
+#[test]
+fn filters_receive_event_refs_for_content_access() {
+    let events = Events::from_bytes(b"[core]\nkeep = keep\ndrop = drop\n", Some(reject_drop_values))
+        .expect("content-based filters can inspect event bytes through views");
+
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, EventRef::Value(value) if value == b"drop".as_slice())),
+        "the filter can reject events by inspecting their value bytes"
+    );
+}
+
 #[test]
 #[rustfmt::skip]
 fn complex() {
@@ -38,11 +55,9 @@ fn complex() {
 [init]
         defaultBranch = master"#;
 
+    let events = Events::from_str(config).unwrap();
     assert_eq!(
-        Events::from_str(config)
-            .unwrap()
-            .into_iter()
-            .collect::<Vec<_>>(),
+        events.iter().collect::<Vec<_>>(),
         vec![
             section::header_event("user", None),
             newline(),
@@ -165,11 +180,19 @@ fn skips_bom() {
 ";
 
     assert_eq!(
-        Events::from_bytes(bytes, None),
-        Events::from_bytes(bytes_with_gb18030_bom.as_bytes(), None)
+        Events::from_bytes(bytes, None).map(|events| render_events(&events)),
+        Events::from_bytes(bytes_with_gb18030_bom.as_bytes(), None).map(|events| render_events(&events))
     );
     assert_eq!(
-        Events::from_bytes_owned(bytes, None),
-        Events::from_bytes_owned(bytes_with_gb18030_bom.as_bytes(), None)
+        Events::from_bytes_owned(bytes, None).map(|events| render_events(&events)),
+        Events::from_bytes_owned(bytes_with_gb18030_bom.as_bytes(), None).map(|events| render_events(&events))
     );
+}
+
+fn render_events(events: &Events) -> Vec<u8> {
+    let mut out = Vec::new();
+    for event in events.iter() {
+        event.write_to(&mut out).expect("in-memory writes cannot fail");
+    }
+    out
 }

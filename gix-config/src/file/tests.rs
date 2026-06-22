@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use crate::{
-    file::{self, Section, SectionId},
+    file::{self, SectionId},
     parse::section,
 };
 
 mod try_from {
-    use std::{borrow::Cow, collections::HashMap};
+    use std::collections::HashMap;
 
     use super::{bodies, headers};
     use crate::{
@@ -35,12 +35,12 @@ mod try_from {
             map.insert(SectionId(0), section_header("core", None));
             map
         };
-        assert_eq!(headers(&config.sections), expected_separators);
+        assert_eq!(headers(&config), expected_separators);
         assert_eq!(config.section_id_counter, 1);
         let expected_lookup_tree = {
             let mut tree = HashMap::new();
             tree.insert(
-                section::Name(Cow::Borrowed("core".into())),
+                section::Name("core".into()),
                 vec![SectionBodyIdsLut::Terminal(vec![SectionId(0)])],
             );
             tree
@@ -63,7 +63,7 @@ mod try_from {
             );
             sections
         };
-        assert_eq!(bodies(&config.sections), expected_sections);
+        assert_eq!(bodies(&config), expected_sections);
         assert_eq!(config.section_order.make_contiguous(), &[SectionId(0)]);
     }
 
@@ -75,14 +75,14 @@ mod try_from {
             map.insert(SectionId(0), section_header("core", (".", "sub")));
             map
         };
-        assert_eq!(headers(&config.sections), expected_separators);
+        assert_eq!(headers(&config), expected_separators);
         assert_eq!(config.section_id_counter, 1);
         let expected_lookup_tree = {
             let mut tree = HashMap::new();
             let mut inner_tree = HashMap::new();
-            inner_tree.insert(Cow::Borrowed("sub".into()), vec![SectionId(0)]);
+            inner_tree.insert("sub".into(), vec![SectionId(0)]);
             tree.insert(
-                section::Name(Cow::Borrowed("core".into())),
+                section::Name("core".into()),
                 vec![SectionBodyIdsLut::NonTerminal(inner_tree)],
             );
             tree
@@ -105,7 +105,7 @@ mod try_from {
             );
             sections
         };
-        assert_eq!(bodies(&config.sections), expected_sections);
+        assert_eq!(bodies(&config), expected_sections);
         assert_eq!(config.section_order.make_contiguous(), &[SectionId(0)]);
     }
 
@@ -118,16 +118,16 @@ mod try_from {
             map.insert(SectionId(1), section_header("other", None));
             map
         };
-        assert_eq!(headers(&config.sections), expected_separators);
+        assert_eq!(headers(&config), expected_separators);
         assert_eq!(config.section_id_counter, 2);
         let expected_lookup_tree = {
             let mut tree = HashMap::new();
             tree.insert(
-                section::Name(Cow::Borrowed("core".into())),
+                section::Name("core".into()),
                 vec![SectionBodyIdsLut::Terminal(vec![SectionId(0)])],
             );
             tree.insert(
-                section::Name(Cow::Borrowed("other".into())),
+                section::Name("other".into()),
                 vec![SectionBodyIdsLut::Terminal(vec![SectionId(1)])],
             );
             tree
@@ -155,7 +155,7 @@ mod try_from {
             );
             sections
         };
-        assert_eq!(bodies(&config.sections), expected_sections);
+        assert_eq!(bodies(&config), expected_sections);
         assert_eq!(config.section_order.make_contiguous(), &[SectionId(0), SectionId(1)]);
     }
 
@@ -168,12 +168,12 @@ mod try_from {
             map.insert(SectionId(1), section_header("core", None));
             map
         };
-        assert_eq!(headers(&config.sections), expected_separators);
+        assert_eq!(headers(&config), expected_separators);
         assert_eq!(config.section_id_counter, 2);
         let expected_lookup_tree = {
             let mut tree = HashMap::new();
             tree.insert(
-                section::Name(Cow::Borrowed("core".into())),
+                section::Name("core".into()),
                 vec![SectionBodyIdsLut::Terminal(vec![SectionId(0), SectionId(1)])],
             );
             tree
@@ -201,15 +201,23 @@ mod try_from {
             );
             sections
         };
-        assert_eq!(bodies(&config.sections), expected_sections);
+        assert_eq!(bodies(&config), expected_sections);
         assert_eq!(config.section_order.make_contiguous(), &[SectionId(0), SectionId(1)]);
     }
 }
 
-fn headers<'a>(sections: &HashMap<SectionId, Section<'a>>) -> HashMap<SectionId, section::Header<'a>> {
-    sections.iter().map(|(k, v)| (*k, v.header.clone())).collect()
+fn headers(config: &crate::File) -> HashMap<SectionId, section::Header> {
+    config
+        .sections
+        .iter()
+        .map(|(k, v)| (*k, v.header.to_owned_in(&config.event_backing)))
+        .collect()
 }
 
-fn bodies<'a>(sections: &HashMap<SectionId, Section<'a>>) -> HashMap<SectionId, file::section::Body<'a>> {
-    sections.iter().map(|(k, v)| (*k, v.body.clone())).collect()
+fn bodies(config: &crate::File) -> HashMap<SectionId, file::section::Body> {
+    config
+        .sections
+        .iter()
+        .map(|(k, v)| (*k, v.body.to_owned_in(&config.event_backing)))
+        .collect()
 }

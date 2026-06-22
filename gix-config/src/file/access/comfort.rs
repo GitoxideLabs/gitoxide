@@ -1,13 +1,11 @@
-use std::borrow::Cow;
-
-use bstr::BStr;
+use bstr::{BStr, BString};
 
 use crate::{AsKey, File, file::Metadata, value};
 
 /// Comfortable API for accessing values
-impl File<'_> {
+impl File {
     /// Like [`string_by()`](File::string_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn string(&self, key: impl AsKey) -> Option<Cow<'_, BStr>> {
+    pub fn string(&self, key: impl AsKey) -> Option<BString> {
         self.string_filter(key, |_| true)
     }
 
@@ -19,12 +17,12 @@ impl File<'_> {
         section_name: impl AsRef<str>,
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
-    ) -> Option<Cow<'_, BStr>> {
+    ) -> Option<BString> {
         self.string_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), |_| true)
     }
 
     /// Like [`string_filter_by()`](File::string_filter_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn string_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<Cow<'_, BStr>> {
+    pub fn string_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<BString> {
         let key = key.try_as_key()?;
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
             .ok()
@@ -37,13 +35,13 @@ impl File<'_> {
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Option<Cow<'_, BStr>> {
+    ) -> Option<BString> {
         self.raw_value_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
             .ok()
     }
 
     /// Like [`path_by()`](File::path_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn path(&self, key: impl AsKey) -> Option<crate::Path<'_>> {
+    pub fn path(&self, key: impl AsKey) -> Option<crate::Path> {
         self.path_filter(key, |_| true)
     }
 
@@ -58,12 +56,12 @@ impl File<'_> {
         section_name: impl AsRef<str>,
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
-    ) -> Option<crate::Path<'_>> {
+    ) -> Option<crate::Path> {
         self.path_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), |_| true)
     }
 
     /// Like [`path_filter_by()`](File::path_filter_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn path_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<crate::Path<'_>> {
+    pub fn path_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<crate::Path> {
         let key = key.try_as_key()?;
         self.path_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -80,7 +78,7 @@ impl File<'_> {
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Option<crate::Path<'_>> {
+    ) -> Option<crate::Path> {
         self.raw_value_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
             .ok()
             .map(crate::Path::from)
@@ -129,7 +127,7 @@ impl File<'_> {
             if !filter(section.meta()) {
                 continue;
             }
-            match section.value_implicit(key) {
+            match section.body.value_implicit_in(&self.event_backing, key) {
                 Some(Some(v)) => return Some(crate::Boolean::try_from(v).map(Into::into)),
                 Some(None) => return Some(Ok(true)),
                 None => continue,
@@ -174,14 +172,14 @@ impl File<'_> {
         let int = self
             .raw_value_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
             .ok()?;
-        Some(crate::Integer::try_from(int.as_ref()).and_then(|b| {
-            b.to_decimal()
-                .ok_or_else(|| value::Error::new("Integer overflow", int.into_owned()))
-        }))
+        Some(
+            crate::Integer::try_from(int.as_ref())
+                .and_then(|b| b.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", int))),
+        )
     }
 
     /// Like [`strings_by()`](File::strings_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn strings(&self, key: impl AsKey) -> Option<Vec<Cow<'_, BStr>>> {
+    pub fn strings(&self, key: impl AsKey) -> Option<Vec<BString>> {
         let key = key.try_as_key()?;
         self.strings_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -192,13 +190,13 @@ impl File<'_> {
         section_name: impl AsRef<str>,
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
-    ) -> Option<Vec<Cow<'_, BStr>>> {
+    ) -> Option<Vec<BString>> {
         self.raw_values_by(section_name.as_ref(), subsection_name, value_name.as_ref())
             .ok()
     }
 
     /// Like [`strings_filter_by()`](File::strings_filter_by()), but suitable for statically known `key`s like `remote.origin.url`.
-    pub fn strings_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<Vec<Cow<'_, BStr>>> {
+    pub fn strings_filter(&self, key: impl AsKey, filter: impl FnMut(&Metadata) -> bool) -> Option<Vec<BString>> {
         let key = key.try_as_key()?;
         self.strings_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -210,7 +208,7 @@ impl File<'_> {
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Option<Vec<Cow<'_, BStr>>> {
+    ) -> Option<Vec<BString>> {
         self.raw_values_filter_by(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
             .ok()
     }
@@ -256,10 +254,8 @@ impl File<'_> {
                 values
                     .into_iter()
                     .map(|v| {
-                        crate::Integer::try_from(v.as_ref()).and_then(|int| {
-                            int.to_decimal()
-                                .ok_or_else(|| value::Error::new("Integer overflow", v.into_owned()))
-                        })
+                        crate::Integer::try_from(v.as_ref())
+                            .and_then(|int| int.to_decimal().ok_or_else(|| value::Error::new("Integer overflow", v)))
                     })
                     .collect()
             })

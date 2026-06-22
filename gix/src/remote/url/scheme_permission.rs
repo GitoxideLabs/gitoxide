@@ -28,16 +28,24 @@ impl Allow {
     }
 }
 
-impl<'a> TryFrom<Cow<'a, BStr>> for Allow {
+impl TryFrom<&BStr> for Allow {
     type Error = BString;
 
-    fn try_from(v: Cow<'a, BStr>) -> Result<Self, Self::Error> {
-        Ok(match v.as_ref().as_bytes() {
+    fn try_from(v: &BStr) -> Result<Self, Self::Error> {
+        Ok(match v.as_bytes() {
             b"never" => Allow::Never,
             b"always" => Allow::Always,
             b"user" => Allow::User,
             unknown => return Err(unknown.into()),
         })
+    }
+}
+
+impl<'a> TryFrom<Cow<'a, BStr>> for Allow {
+    type Error = BString;
+
+    fn try_from(v: Cow<'a, BStr>) -> Result<Self, Self::Error> {
+        Allow::try_from(v.as_ref())
     }
 }
 
@@ -55,7 +63,7 @@ pub(crate) struct SchemePermission {
 impl SchemePermission {
     /// NOTE: _intentionally without leniency_
     pub fn from_config(
-        config: &gix_config::File<'static>,
+        config: &gix_config::File,
         mut filter: fn(&gix_config::file::Metadata) -> bool,
     ) -> Result<Self, config::protocol::allow::Error> {
         let allow: Option<Allow> = config
@@ -92,7 +100,7 @@ impl SchemePermission {
         let user_allowed = saw_user.then(|| {
             config
                 .string_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter)
-                .is_none_or(|val| val.as_ref() == "1")
+                .is_none_or(|val| val == "1")
         });
         Ok(SchemePermission {
             allow,

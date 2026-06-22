@@ -15,29 +15,27 @@ pub type Variant = keys::Any<validate::Variant>;
 
 #[cfg(feature = "blocking-network-client")]
 mod variant {
-    use std::borrow::Cow;
-
-    use crate::{bstr::BStr, config, config::tree::ssh::Variant};
+    use crate::{bstr::ByteSlice, config, config::tree::ssh::Variant};
 
     impl Variant {
         pub fn try_into_variant(
             &'static self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
         ) -> Result<
             Option<gix_protocol::transport::client::blocking_io::ssh::ProgramKind>,
             config::key::GenericErrorWithValue,
         > {
             use gix_protocol::transport::client::blocking_io::ssh::ProgramKind;
 
-            use crate::bstr::ByteSlice;
-            Ok(Some(match value.as_ref().as_bytes() {
+            let value = value.into_bstring();
+            Ok(Some(match value.as_bstr().as_bytes() {
                 b"auto" => return Ok(None),
                 b"ssh" => ProgramKind::Ssh,
                 b"plink" => ProgramKind::Plink,
                 b"putty" => ProgramKind::Putty,
                 b"tortoiseplink" => ProgramKind::TortoisePlink,
                 b"simple" => ProgramKind::Simple,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into_owned())),
+                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value)),
             }))
         }
     }
@@ -60,7 +58,7 @@ mod validate {
     impl keys::Validate for Variant {
         fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
             #[cfg(feature = "blocking-network-client")]
-            super::Ssh::VARIANT.try_into_variant(_value.into())?;
+            super::Ssh::VARIANT.try_into_variant(_value)?;
             Ok(())
         }
     }

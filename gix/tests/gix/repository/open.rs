@@ -691,15 +691,15 @@ mod worktree {
             );
 
             assert_eq!(
-                base_config.string("worktree.setting").expect("exists").as_ref(),
+                base_config.string("worktree.setting").expect("exists"),
                 "set in the main worktree"
             );
             assert_eq!(
-                base_config.string("shared.setting").expect("exists").as_ref(),
+                base_config.string("shared.setting").expect("exists"),
                 "set in the shared config"
             );
             assert_eq!(
-                base_config.string("override.setting").expect("exists").as_ref(),
+                base_config.string("override.setting").expect("exists"),
                 "set in the shared config"
             );
         }
@@ -723,16 +723,13 @@ mod worktree {
                 "the common dir is the `git-dir` of the repository with the main worktree"
             );
 
+            assert_eq!(wt1_config.string("worktree.setting").expect("exists"), "set in wt-1");
             assert_eq!(
-                wt1_config.string("worktree.setting").expect("exists").as_ref(),
-                "set in wt-1"
-            );
-            assert_eq!(
-                wt1_config.string("shared.setting").expect("exists").as_ref(),
+                wt1_config.string("shared.setting").expect("exists"),
                 "set in the shared config"
             );
             assert_eq!(
-                wt1_config.string("override.setting").expect("exists").as_ref(),
+                wt1_config.string("override.setting").expect("exists"),
                 "set in the shared config"
             );
         }
@@ -748,16 +745,13 @@ mod worktree {
             assert_eq!(wt2.git_dir(), worktree_base.join("wt-2"));
             assert_eq!(wt2.common_dir(), worktree_base.join("wt-2/../.."));
 
+            assert_eq!(wt2_config.string("worktree.setting").expect("exists"), "set in wt-2");
             assert_eq!(
-                wt2_config.string("worktree.setting").expect("exists").as_ref(),
-                "set in wt-2"
-            );
-            assert_eq!(
-                wt2_config.string("shared.setting").expect("exists").as_ref(),
+                wt2_config.string("shared.setting").expect("exists"),
                 "set in the shared config"
             );
             assert_eq!(
-                wt2_config.string("override.setting").expect("exists").as_ref(),
+                wt2_config.string("override.setting").expect("exists"),
                 "override in wt-2"
             );
         }

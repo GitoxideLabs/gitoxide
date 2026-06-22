@@ -1,5 +1,49 @@
 use super::*;
 
+trait ToOwnedIn {
+    fn to_owned_in(self, backing: &[u8]) -> Self;
+}
+
+impl ToOwnedIn for Span {
+    fn to_owned_in(self, backing: &[u8]) -> Self {
+        self.to_bstring_in(backing).into()
+    }
+}
+
+impl ToOwnedIn for Event {
+    fn to_owned_in(self, backing: &[u8]) -> Self {
+        Event::to_owned_in(&self, backing)
+    }
+}
+
+impl ToOwnedIn for Comment {
+    fn to_owned_in(self, backing: &[u8]) -> Self {
+        Comment {
+            tag: self.tag,
+            text: self.text.to_owned_in(backing),
+        }
+    }
+}
+
+impl ToOwnedIn for crate::parse::section::Header {
+    fn to_owned_in(self, backing: &[u8]) -> Self {
+        crate::parse::section::Header::to_owned_in(&self, backing)
+    }
+}
+
+impl ToOwnedIn for crate::parse::SectionData {
+    fn to_owned_in(self, backing: &[u8]) -> Self {
+        crate::parse::SectionData {
+            header: self.header.to_owned_in(backing),
+            events: self
+                .events
+                .into_iter()
+                .map(|event| event.to_owned_in(backing))
+                .collect(),
+        }
+    }
+}
+
 trait ParsePeekExt<'a, T> {
     fn parse_peek(self, input: &'a [u8]) -> Result<(&'a [u8], T), ()>;
     fn parse(self, input: &'a [u8]) -> Result<T, ()>;
@@ -20,6 +64,24 @@ where
     }
 }
 
+trait ParsePeekWithBufferExt<'a, T> {
+    fn parse_peek(self, input: &'a [u8]) -> Result<(&'a [u8], T), ()>;
+}
+
+impl<'a, T, F> ParsePeekWithBufferExt<'a, T> for F
+where
+    F: for<'buffer, 'input> FnOnce(&'buffer [u8], &'input mut &'buffer [u8]) -> Result<T, ()>,
+    T: ToOwnedIn,
+{
+    fn parse_peek(self, input: &'a [u8]) -> Result<(&'a [u8], T), ()> {
+        let buffer = input.to_vec();
+        let mut current = &buffer[..];
+        let value = self(&buffer, &mut current)?;
+        let consumed = input.len() - current.len();
+        Ok((&input[consumed..], value.to_owned_in(&buffer)))
+    }
+}
+
 mod config {
     use super::from_bytes;
     use crate::parse::Event;
@@ -28,7 +90,8 @@ mod config {
     #[test]
     fn key_value_before_first_section_is_accepted() {
         let mut events = Vec::new();
-        from_bytes(b"a = b\n", &mut |event| events.push(event)).unwrap();
+        let backing = from_bytes(b"a = b\n", &mut |event| events.push(event)).unwrap();
+        let events: Vec<_> = events.into_iter().map(|event| event.to_owned_in(&backing)).collect();
         assert_eq!(
             events,
             vec![
@@ -45,9 +108,7 @@ mod config {
 }
 
 mod section_headers {
-    use std::borrow::Cow;
-
-    use super::{ParsePeekExt, section_header};
+    use super::{ParsePeekWithBufferExt, section_header};
     use crate::parse::{
         section,
         tests::util::{fully_consumed, section_header as parsed_section_header},
@@ -79,9 +140,9 @@ mod section_headers {
         assert_eq!(
             section_header.parse_peek(br#"[ "core"]"#).unwrap(),
             fully_consumed(section::Header {
-                name: section::Name(Cow::Borrowed("".into())),
-                separator: Some(Cow::Borrowed(" ".into())),
-                subsection_name: Some(Cow::Borrowed("core".into())),
+                name: section::Name("".into()),
+                separator: Some(" ".into()),
+                subsection_name: Some("core".into()),
             }),
             "Git accepts this as an empty section name with `core` as subsection, yielding keys like `.core.bare`; gix does this too for compatibility"
         );
@@ -206,22 +267,18 @@ mod section_headers {
 }
 
 mod sub_section {
-    use std::borrow::Cow;
-
-    use super::{ParsePeekExt, quoted_sub_section};
+    use super::{ParsePeekWithBufferExt, quoted_sub_section};
 
     #[test]
-    fn zero_copy_simple() {
+    fn simple() {
         let actual = quoted_sub_section.parse_peek(br#"name""#).unwrap().1;
-        assert_eq!(actual.as_ref(), "name");
-        assert!(matches!(actual, Cow::Borrowed(_)));
+        assert_eq!(actual.as_bstr(), "name");
     }
 
     #[test]
-    fn escapes_need_allocation() {
+    fn escapes_are_unescaped() {
         let actual = quoted_sub_section.parse_peek(br#"\x\t\n\0\\\"""#).unwrap().1;
-        assert_eq!(actual.as_ref(), r#"xtn0\""#);
-        assert!(matches!(actual, Cow::Owned(_)));
+        assert_eq!(actual.as_bstr(), r#"xtn0\""#);
     }
 }
 
@@ -254,7 +311,7 @@ mod config_name {
 
 mod section {
     use crate::parse::{
-        Event, Section,
+        Event, SectionData,
         error::ParseNode,
         tests::util::{
             comment_event, fully_consumed, name_event, newline_custom_event, newline_event,
@@ -263,24 +320,27 @@ mod section {
         },
     };
 
-    fn section<'a>(mut i: &'a [u8], node: &mut ParseNode) -> Result<(&'a [u8], Section<'a>), ()> {
+    fn section<'a>(input: &'a [u8], node: &mut ParseNode) -> Result<(&'a [u8], SectionData), ()> {
+        let buffer = input.to_vec();
+        let mut current = &buffer[..];
         let mut header = None;
         let mut events = Vec::new();
-        super::section(&mut i, node, &mut |e| match &header {
+        super::section(&buffer, &mut current, node, &mut |e, _backing| match &header {
             None => {
                 header = Some(e);
             }
             Some(_) => events.push(e),
         })
         .map(|_| {
+            let consumed = input.len() - current.len();
             (
-                i,
-                Section {
+                &input[consumed..],
+                SectionData {
                     header: match header.expect("header set") {
-                        Event::SectionHeader(header) => header,
+                        Event::SectionHeader(header) => header.to_owned_in(&buffer),
                         _ => unreachable!("unexpected"),
                     },
-                    events,
+                    events: events.into_iter().map(|event| event.to_owned_in(&buffer)).collect(),
                 },
             )
         })
@@ -291,7 +351,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[a] k = \r\n", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("a", None),
                 events: vec![
                     whitespace_event(" "),
@@ -311,7 +371,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[a] k = v\r\n", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("a", None),
                 events: vec![
                     whitespace_event(" "),
@@ -326,7 +386,7 @@ mod section {
         );
         assert_eq!(
             section(b"[a] k = \r\n", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("a", None),
                 events: vec![
                     whitespace_event(" "),
@@ -346,7 +406,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[test]", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("test", None),
                 events: Default::default()
             }),
@@ -362,7 +422,7 @@ mod section {
             d = "lol""#;
         assert_eq!(
             section(section_data, &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("hello", None),
                 events: vec![
                     newline_event(),
@@ -394,7 +454,7 @@ mod section {
         let section_data = b"[a] k=";
         assert_eq!(
             section(section_data, &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("a", None),
                 events: vec![
                     whitespace_event(" "),
@@ -408,7 +468,7 @@ mod section {
         let section_data = b"[a] k=\n";
         assert_eq!(
             section(section_data, &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("a", None),
                 events: vec![
                     whitespace_event(" "),
@@ -430,7 +490,7 @@ mod section {
             d = "lol""#;
         assert_eq!(
             section(section_data, &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("hello", None),
                 events: vec![
                     newline_event(),
@@ -462,7 +522,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[hello] c", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("hello", None),
                 events: vec![whitespace_event(" "), name_event("c"), value_event("")]
             })
@@ -470,7 +530,7 @@ mod section {
 
         assert_eq!(
             section(b"[hello] c\nd", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("hello", None),
                 events: vec![
                     whitespace_event(" "),
@@ -494,7 +554,7 @@ mod section {
             c = d"#;
         assert_eq!(
             section(section_data, &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("hello", None),
                 events: vec![
                     whitespace_event(" "),
@@ -532,7 +592,7 @@ mod section {
         // This test is absolute hell. Good luck if this fails.
         assert_eq!(
             section(b"[section] a = 1    \"\\\"\\\na ; e \"\\\"\\\nd # \"b\t ; c", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("section", None),
                 events: vec![
                     whitespace_event(" "),
@@ -557,7 +617,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[section \"a\"] b =\"\\\n;\";a", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("section", (" ", "a")),
                 events: vec![
                     whitespace_event(" "),
@@ -578,7 +638,7 @@ mod section {
         let mut node = ParseNode::SectionHeader;
         assert_eq!(
             section(b"[s]hello             #world", &mut node).unwrap(),
-            fully_consumed(Section {
+            fully_consumed(SectionData {
                 header: parsed_section_header("s", None),
                 events: vec![
                     name_event("hello"),
@@ -599,8 +659,16 @@ mod value_continuation {
         tests::util::{newline_custom_event, newline_event, value_done_event, value_not_done_event},
     };
 
-    pub fn value<'a>(mut i: &'a [u8], events: &mut Vec<Event<'a>>) -> Result<(&'a [u8], ()), ()> {
-        super::value(&mut i, &mut |e| events.push(e)).map(|_| (i, ()))
+    pub fn value<'a>(input: &'a [u8], events: &mut Vec<Event>) -> Result<(&'a [u8], ()), ()> {
+        let buffer = input.to_vec();
+        let mut current = &buffer[..];
+        super::value(&buffer, &mut current, &mut |e, _backing| events.push(e)).map(|_| {
+            let consumed = input.len() - current.len();
+            for event in events {
+                *event = event.to_owned_in(&buffer);
+            }
+            (&input[consumed..], ())
+        })
     }
 
     #[test]
@@ -870,8 +938,16 @@ mod key_value_pair {
         tests::util::{name_event, value_event, whitespace_event},
     };
 
-    fn key_value<'a>(mut i: &'a [u8], node: &mut ParseNode, events: &mut Vec<Event<'a>>) -> Result<(&'a [u8], ()), ()> {
-        super::key_value_pair(&mut i, node, &mut |e| events.push(e)).map(|_| (i, ()))
+    fn key_value<'a>(input: &'a [u8], node: &mut ParseNode, events: &mut Vec<Event>) -> Result<(&'a [u8], ()), ()> {
+        let buffer = input.to_vec();
+        let mut current = &buffer[..];
+        super::key_value_pair(&buffer, &mut current, node, &mut |e, _backing| events.push(e)).map(|_| {
+            let consumed = input.len() - current.len();
+            for event in events {
+                *event = event.to_owned_in(&buffer);
+            }
+            (&input[consumed..], ())
+        })
     }
 
     #[test]
@@ -935,10 +1011,14 @@ mod value {
         tests::util::{newline_custom_event, newline_event, value_done_event, value_event, value_not_done_event},
     };
 
-    fn parse(mut input: &[u8]) -> Result<(&[u8], Vec<Event<'_>>), ()> {
+    fn parse(input: &[u8]) -> Result<(&[u8], Vec<Event>), ()> {
+        let buffer = input.to_vec();
+        let mut current = &buffer[..];
         let mut events = Vec::new();
-        value(&mut input, &mut |event| events.push(event))?;
-        Ok((input, events))
+        value(&buffer, &mut current, &mut |event, _backing| events.push(event))?;
+        let consumed = input.len() - current.len();
+        let events = events.into_iter().map(|event| event.to_owned_in(&buffer)).collect();
+        Ok((&input[consumed..], events))
     }
 
     #[test]
@@ -1067,7 +1147,7 @@ mod value {
 }
 
 mod comment {
-    use super::{ParsePeekExt, comment};
+    use super::{ParsePeekWithBufferExt, comment};
     use crate::parse::tests::util::{comment as parsed_comment, fully_consumed};
 
     #[test]

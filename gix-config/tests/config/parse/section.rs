@@ -1,32 +1,31 @@
-use std::borrow::Cow;
+use gix_config::parse::EventRef;
 
-use gix_config::parse::{Event, section};
-
-pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static str>>) -> Event<'static> {
-    Event::SectionHeader(section::Header::new(name, subsection.into().map(|s| Cow::Borrowed(s.into()))).unwrap())
+pub fn header_event(name: &'static str, subsection: impl Into<Option<&'static str>>) -> EventRef<'static> {
+    let subsection_name = subsection.into();
+    EventRef::SectionHeader {
+        name: name.into(),
+        separator: subsection_name.map(|_| " ".into()),
+        subsection_name: subsection_name.map(Into::into),
+    }
 }
 
 mod header {
-    use std::borrow::Cow;
-
-    use bstr::BStr;
-
-    fn cow_section(name: &str) -> Option<Cow<'_, BStr>> {
-        Some(Cow::Borrowed(name.into()))
+    fn subsection(name: &str) -> Option<bstr::BString> {
+        Some(name.into())
     }
     mod write_to {
         use gix_config::parse::section;
 
-        use crate::parse::section::header::cow_section;
+        use crate::parse::section::header::subsection;
 
         #[test]
         fn subsection_backslashes_and_quotes_are_escaped() -> crate::Result {
             assert_eq!(
-                section::Header::new("core", cow_section(r"a\b"))?.to_bstring(),
+                section::Header::new("core", subsection(r"a\b"))?.to_bstring(),
                 r#"[core "a\\b"]"#
             );
             assert_eq!(
-                section::Header::new("core", cow_section(r#"a:"b""#))?.to_bstring(),
+                section::Header::new("core", subsection(r#"a:"b""#))?.to_bstring(),
                 r#"[core "a:\"b\""]"#
             );
             Ok(())
@@ -35,7 +34,7 @@ mod header {
         #[test]
         fn everything_is_allowed() -> crate::Result {
             assert_eq!(
-                section::Header::new("core", cow_section("a/b \t\t a\\b"))?.to_bstring(),
+                section::Header::new("core", subsection("a/b \t\t a\\b"))?.to_bstring(),
                 "[core \"a/b \t\t a\\\\b\"]"
             );
             Ok(())
@@ -44,7 +43,7 @@ mod header {
     mod new {
         use gix_config::parse::section;
 
-        use crate::parse::section::header::cow_section;
+        use crate::parse::section::header::subsection;
 
         #[test]
         fn names_must_be_mostly_ascii() {
@@ -59,11 +58,11 @@ mod header {
         #[test]
         fn subsections_with_newlines_and_null_bytes_are_rejected() {
             assert_eq!(
-                section::Header::new("a", cow_section("a\nb")),
+                section::Header::new("a", subsection("a\nb")),
                 Err(section::header::Error::InvalidSubSection)
             );
             assert_eq!(
-                section::Header::new("a", cow_section("a\0b")),
+                section::Header::new("a", subsection("a\0b")),
                 Err(section::header::Error::InvalidSubSection)
             );
         }
@@ -92,8 +91,8 @@ mod key {
 
     use gix_config::parse::section::ValueName;
 
-    fn key(k: &str) -> ValueName<'_> {
-        ValueName::try_from(k).unwrap()
+    fn key(k: &str) -> ValueName {
+        ValueName::try_from(k).expect("valid test key")
     }
 
     #[test]

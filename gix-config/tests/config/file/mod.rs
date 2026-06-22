@@ -1,11 +1,11 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
 
-use bstr::{BStr, ByteSlice};
+use bstr::BString;
 use gix_config::File;
 use gix_testtools::fixture_path;
 
-pub fn cow_str(s: &str) -> Cow<'_, BStr> {
-    Cow::Borrowed(s.as_bytes().as_bstr())
+pub fn cow_str(s: &str) -> BString {
+    s.into()
 }
 
 fn fuzz_artifact_paths(target: &str) -> Vec<PathBuf> {
@@ -27,7 +27,7 @@ fn fuzz_artifact_paths(target: &str) -> Vec<PathBuf> {
 
 #[test]
 fn size_in_memory() {
-    let actual = std::mem::size_of::<gix_config::File<'_>>();
+    let actual = std::mem::size_of::<gix_config::File>();
     assert!(
         actual <= 1040,
         "{actual} <= 1040: This shouldn't change without us noticing"

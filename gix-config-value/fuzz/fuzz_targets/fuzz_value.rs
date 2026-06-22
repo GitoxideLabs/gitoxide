@@ -11,7 +11,7 @@ use gix_config_value::{
     Boolean, Color, Integer, Path,
 };
 use libfuzzer_sys::fuzz_target;
-use std::{borrow::Cow, fmt::Write, hint::black_box, str::FromStr};
+use std::{fmt::Write, hint::black_box, str::FromStr};
 
 #[derive(Debug, Arbitrary)]
 struct Ctx<'a> {
@@ -39,7 +39,7 @@ fn fuzz(ctx: Ctx) -> Result<()> {
     let i = Integer::try_from(BStr::new(ctx.integer_str))?;
     _ = black_box(i.to_decimal());
 
-    let p = Path::from(Cow::Borrowed(BStr::new(ctx.path_str)));
+    let p = Path::from(BStr::new(ctx.path_str));
     _ = black_box(p.interpolate(Context::default()));
 
     Ok(())

@@ -1,7 +1,5 @@
-use std::borrow::Cow;
-
 use crate::{
-    bstr::BStr,
+    bstr::{BStr, BString, ByteSlice},
     config::tree::{Remote, Section},
     remote,
 };
@@ -22,14 +20,14 @@ impl crate::Repository {
     /// assert_eq!(remote_names, vec!["myself".to_owned(), "origin".to_owned()]);
     /// # Ok(()) }
     /// ```
-    pub fn remote_names(&self) -> remote::Names<'_> {
+    pub fn remote_names(&self) -> remote::Names {
         self.config
             .resolved
             .sections_by_name(Remote.name())
             .map(|it| {
                 let filter = self.filter_config_section();
                 it.filter(move |s| filter(s.meta()))
-                    .filter_map(|section| section.header().subsection_name().map(Cow::Borrowed))
+                    .filter_map(|section| section.header().subsection_name().map(ToOwned::to_owned))
                     .collect()
             })
             .unwrap_or_default()
@@ -48,23 +46,24 @@ impl crate::Repository {
     ///
     /// ```
     /// # fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// # use gix::bstr::ByteSlice;
     /// # mod doctest { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/doctest.rs")); }
     /// # let repo = doctest::open_repo(doctest::remote_repo_dir("clone")?)?;
     /// assert_eq!(
     ///     repo.remote_default_name(gix::remote::Direction::Fetch)
     ///         .expect("configured")
-    ///         .as_ref(),
+    ///         .as_bstr(),
     ///     "origin"
     /// );
     /// assert_eq!(
     ///     repo.remote_default_name(gix::remote::Direction::Push)
     ///         .expect("configured")
-    ///         .as_ref(),
+    ///         .as_bstr(),
     ///     "origin"
     /// );
     /// # Ok(()) }
     /// ```
-    pub fn remote_default_name(&self, direction: remote::Direction) -> Option<Cow<'_, BStr>> {
+    pub fn remote_default_name(&self, direction: remote::Direction) -> Option<BString> {
         let name = (direction == remote::Direction::Push)
             .then(|| {
                 self.config
@@ -78,8 +77,11 @@ impl crate::Repository {
                 0 => None,
                 1 => names.into_iter().next(),
                 _more_than_one => {
-                    let origin = Cow::Borrowed("origin".into());
-                    names.contains(&origin).then_some(origin)
+                    let origin: &BStr = "origin".into();
+                    names
+                        .iter()
+                        .any(|name| name.as_bstr() == origin)
+                        .then(|| origin.to_owned())
                 }
             }
         })

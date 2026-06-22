@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashSet, path::Path};
 
-use bstr::BStr;
+use bstr::{BStr, ByteSlice};
 
 use crate::{
     File, IsActivePlatform, config,
@@ -16,7 +16,7 @@ impl File {
     ///
     /// Note that it might have been merged with values from another configuration file and may
     /// thus not be accurately reflecting that state of a `.gitmodules` file anymore.
-    pub fn config(&self) -> &gix_config::File<'static> {
+    pub fn config(&self) -> &gix_config::File {
         &self.config
     }
 
@@ -45,7 +45,7 @@ impl File {
     /// Similar to [Self::is_active_platform()], but automatically applies it to each name to learn if a submodule is active or not.
     pub fn names_and_active_state<'a>(
         &'a self,
-        config: &'a gix_config::File<'static>,
+        config: &'a gix_config::File,
         defaults: gix_pathspec::Defaults,
         attributes: &'a mut (
                     dyn FnMut(
@@ -75,7 +75,7 @@ impl File {
     /// The full algorithm is described as [hierarchy of rules](https://git-scm.com/docs/gitsubmodules#_active_submodules).
     pub fn is_active_platform(
         &self,
-        config: &gix_config::File<'_>,
+        config: &gix_config::File,
         defaults: gix_pathspec::Defaults,
     ) -> Result<IsActivePlatform, crate::is_active_platform::Error> {
         let search = config
@@ -129,20 +129,20 @@ impl File {
                 submodule: name.to_owned(),
             });
         }
-        let path = gix_path::from_bstr(path_bstr.as_ref());
+        let path = gix_path::from_bstr(path_bstr.as_bstr());
         if path.is_absolute() {
             return Err(config::path::Error::Absolute {
                 submodule: name.to_owned(),
-                actual: path_bstr.into_owned(),
+                actual: path_bstr,
             });
         }
         if gix_path::normalize(path, "".as_ref()).is_none() {
             return Err(config::path::Error::OutsideOfWorktree {
                 submodule: name.to_owned(),
-                actual: path_bstr.into_owned(),
+                actual: path_bstr,
             });
         }
-        Ok(path_bstr)
+        Ok(path_bstr.into())
     }
 
     /// Retrieve the `url` field of the submodule named `name`. It's an error if it doesn't exist or is empty.
@@ -173,9 +173,9 @@ impl File {
             value_is_from_modules_file = Some(std::ptr::eq(meta, our_meta));
             true
         }) {
-            Some(v) => v.as_ref().try_into().map_err(|()| config::update::Error::Invalid {
+            Some(v) => v.as_bstr().try_into().map_err(|()| config::update::Error::Invalid {
                 submodule: name.to_owned(),
-                actual: v.into_owned(),
+                actual: v,
             })?,
             None => return Ok(None),
         };
@@ -204,7 +204,7 @@ impl File {
             .map(Some)
             .map_err(|err| config::branch::Error {
                 submodule: name.to_owned(),
-                actual: branch.into_owned(),
+                actual: branch,
                 source: err,
             })
     }
@@ -232,7 +232,7 @@ impl File {
                 Ignore::try_from(value.as_ref()).map_err(|()| config::Error {
                     field: "ignore",
                     submodule: name.to_owned(),
-                    actual: value.into_owned(),
+                    actual: value,
                 })
             })
             .transpose()

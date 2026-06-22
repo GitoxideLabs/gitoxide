@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use std::{borrow::Cow, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
 use gix_lock::acquire::Fail;
@@ -27,10 +27,7 @@ impl Cache {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
-                let name = self
-                    .resolved
-                    .string(Diff::ALGORITHM)
-                    .unwrap_or_else(|| Cow::Borrowed("myers".into()));
+                let name = self.resolved.string(Diff::ALGORITHM).unwrap_or_else(|| "myers".into());
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
                     .or_else(|err| match err {
@@ -79,10 +76,10 @@ impl Cache {
                     })?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
-                driver.command = command.into_owned().into();
+                driver.command = command.into();
             }
             if let Some(textconv) = section.value(config::tree::Diff::DRIVER_TEXTCONV.name) {
-                driver.binary_to_text_command = textconv.into_owned().into();
+                driver.binary_to_text_command = textconv.into();
             }
             if let Some(algorithm) = section.value("algorithm") {
                 driver.algorithm = config::tree::Diff::DRIVER_ALGORITHM
@@ -132,10 +129,10 @@ impl Cache {
             };
 
             if let Some(command) = section.value(config::tree::Merge::DRIVER_COMMAND.name) {
-                driver.command = command.into_owned();
+                driver.command = command;
             }
             if let Some(recursive_name) = section.value(config::tree::Merge::DRIVER_RECURSIVE.name) {
-                driver.recursive = Some(recursive_name.into_owned());
+                driver.recursive = Some(recursive_name);
             }
         }
         Ok(out)
@@ -179,7 +176,7 @@ impl Cache {
 
     /// Returns a user agent for use with servers.
     #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
-    pub(crate) fn user_agent_tuple(&self) -> (&'static str, Option<Cow<'static, str>>) {
+    pub(crate) fn user_agent_tuple(&self) -> (&'static str, Option<std::borrow::Cow<'static, str>>) {
         use config::tree::Gitoxide;
         let agent = self
             .user_agent
@@ -250,9 +247,7 @@ impl Cache {
     /// The path to the user-level excludes file to ignore certain files in the worktree.
     #[cfg(feature = "excludes")]
     pub(crate) fn excludes_file(&self) -> Option<Result<PathBuf, gix_config::path::interpolate::Error>> {
-        self.trusted_file_path(Core::EXCLUDES_FILE)?
-            .map(std::borrow::Cow::into_owned)
-            .into()
+        self.trusted_file_path(Core::EXCLUDES_FILE)
     }
 
     /// A helper to obtain a file from trusted configuration at `section_name`, `subsection_name`, and `key`, which is interpolated
@@ -260,7 +255,7 @@ impl Cache {
     pub(crate) fn trusted_file_path(
         &self,
         key: impl gix_config::AsKey,
-    ) -> Option<Result<Cow<'_, std::path::Path>, gix_config::path::interpolate::Error>> {
+    ) -> Option<Result<PathBuf, gix_config::path::interpolate::Error>> {
         trusted_file_path(
             &self.resolved,
             key,
@@ -434,7 +429,7 @@ impl Cache {
             Some(attributes) => Some(attributes),
             None => {
                 if attributes.git {
-                    self.xdg_config_path("attributes").ok().flatten().map(Cow::Owned)
+                    self.xdg_config_path("attributes").ok().flatten()
                 } else {
                     None
                 }
@@ -448,6 +443,7 @@ impl Cache {
                 Source::Git | Source::Local => unreachable!("we don't offer turning this off right now"),
             })
             .filter_map(|source| source.storage_location(&mut Self::make_source_env(self.environment)))
+            .map(std::borrow::Cow::into_owned)
             .chain(configured_or_user_attributes);
         let info_attributes_path = git_dir.join("info").join("attributes");
         let mut buf = Vec::new();
@@ -525,13 +521,13 @@ impl Cache {
     }
 }
 
-pub(crate) fn trusted_file_path<'config>(
-    config: &'config gix_config::File<'_>,
+pub(crate) fn trusted_file_path(
+    config: &gix_config::File,
     key: impl gix_config::AsKey,
     filter: impl FnMut(&Metadata) -> bool,
     lenient_config: bool,
     environment: crate::open::permissions::Environment,
-) -> Option<Result<Cow<'config, std::path::Path>, gix_config::path::interpolate::Error>> {
+) -> Option<Result<PathBuf, gix_config::path::interpolate::Error>> {
     let path = config.path_filter(key, filter)?;
 
     if lenient_config && path.is_empty() {

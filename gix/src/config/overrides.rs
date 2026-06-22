@@ -18,7 +18,7 @@ pub enum Error {
 }
 
 pub(crate) fn append(
-    config: &mut gix_config::File<'static>,
+    config: &mut gix_config::File,
     values: impl IntoIterator<Item = impl AsRef<BStr>>,
     source: gix_config::Source,
     mut make_comment: impl FnMut(&BStr) -> Option<BString>,

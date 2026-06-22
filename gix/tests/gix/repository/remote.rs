@@ -174,7 +174,7 @@ mod find_remote {
         ];
         for (name, (url, refspec)) in repo.remote_names().into_iter().zip(expected) {
             count += 1;
-            let remote = repo.find_remote(name.as_ref())?;
+            let remote = repo.find_remote(gix_object::bstr::ByteSlice::as_bstr(name.as_slice()))?;
             assert_eq!(remote.name().expect("set").as_bstr(), name);
 
             assert_eq!(

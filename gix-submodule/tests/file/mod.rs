@@ -24,7 +24,7 @@ mod is_active_platform {
 
     fn assume_valid_active_state<'a>(
         module: &'a gix_submodule::File,
-        config: &'a gix_config::File<'static>,
+        config: &'a gix_config::File,
         defaults: gix_pathspec::Defaults,
     ) -> crate::Result<Vec<(&'a str, bool)>> {
         assume_valid_active_state_with_attrs(module, config, defaults, |_, _, _, _| {
@@ -34,7 +34,7 @@ mod is_active_platform {
 
     fn assume_valid_active_state_with_attrs<'a>(
         module: &'a gix_submodule::File,
-        config: &'a gix_config::File<'static>,
+        config: &'a gix_config::File,
         defaults: gix_pathspec::Defaults,
         mut attributes: impl FnMut(
             &BStr,

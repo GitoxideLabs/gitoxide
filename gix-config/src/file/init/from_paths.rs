@@ -19,7 +19,7 @@ pub enum Error {
 }
 
 /// Instantiation from one or more paths
-impl File<'static> {
+impl File {
     /// Load the single file at `path` with `source` without following include directives.
     ///
     /// Note that the path will be checked for ownership to derive trust.

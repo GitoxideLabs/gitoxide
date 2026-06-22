@@ -8,10 +8,70 @@ use std::{
 use gix_config::KeyRef;
 
 use crate::{
-    bstr::BStr,
+    bstr::{BStr, BString, ByteSlice},
     config,
     config::tree::{Key, Link, Note, Section, SubSectionRequirement},
 };
+
+/// Convert a configuration value into owned bytes for validation and interpretation.
+pub trait IntoBString {
+    /// Consume or copy this value into an owned byte string.
+    fn into_bstring(self) -> BString;
+}
+
+impl IntoBString for BString {
+    fn into_bstring(self) -> BString {
+        self
+    }
+}
+
+impl IntoBString for &BString {
+    fn into_bstring(self) -> BString {
+        self.clone()
+    }
+}
+
+impl IntoBString for &BStr {
+    fn into_bstring(self) -> BString {
+        self.to_owned()
+    }
+}
+
+impl IntoBString for Cow<'_, BStr> {
+    fn into_bstring(self) -> BString {
+        self.into_owned()
+    }
+}
+
+impl IntoBString for &[u8] {
+    fn into_bstring(self) -> BString {
+        self.into()
+    }
+}
+
+impl<const N: usize> IntoBString for &[u8; N] {
+    fn into_bstring(self) -> BString {
+        self.as_slice().into()
+    }
+}
+
+impl IntoBString for Vec<u8> {
+    fn into_bstring(self) -> BString {
+        self.into()
+    }
+}
+
+impl IntoBString for &str {
+    fn into_bstring(self) -> BString {
+        self.into()
+    }
+}
+
+impl IntoBString for std::string::String {
+    fn into_bstring(self) -> BString {
+        self.into()
+    }
+}
 
 /// Implements a value without any constraints, i.e. a any value.
 #[derive(Copy, Clone)]
@@ -93,18 +153,22 @@ impl<T: Validate> Any<T> {
     /// Try to convert `value` into a refspec suitable for the `op` operation.
     pub fn try_into_refspec(
         &'static self,
-        value: std::borrow::Cow<'_, BStr>,
+        value: impl IntoBString,
         op: gix_refspec::parse::Operation,
     ) -> Result<gix_refspec::RefSpec, config::refspec::Error> {
-        gix_refspec::parse(value.as_ref(), op)
+        let value = value.into_bstring();
+        gix_refspec::parse(value.as_bstr(), op)
             .map(|spec| spec.to_owned())
-            .map_err(|err| config::refspec::Error::from_value(self, value.into_owned()).with_source(err))
+            .map_err(|err| config::refspec::Error::from_value(self, value).with_source(err))
     }
 
     /// Try to interpret `value` as UTF-8 encoded string.
-    pub fn try_into_string(&'static self, value: Cow<'_, BStr>) -> Result<std::string::String, config::string::Error> {
+    pub fn try_into_string(
+        &'static self,
+        value: impl IntoBString,
+    ) -> Result<std::string::String, config::string::Error> {
         use crate::bstr::ByteVec;
-        Vec::from(value.into_owned()).into_string().map_err(|err| {
+        Vec::from(value.into_bstring()).into_string().map_err(|err| {
             let utf8_err = err.utf8_error().clone();
             config::string::Error::from_value(self, err.into_vec().into()).with_source(utf8_err)
         })
@@ -303,10 +367,8 @@ mod refspecs {
 }
 
 mod url {
-    use std::borrow::Cow;
-
     use crate::{
-        bstr::BStr,
+        bstr::ByteSlice,
         config,
         config::tree::{
             Section,
@@ -321,9 +383,12 @@ mod url {
         }
 
         /// Try to parse `value` as URL.
-        pub fn try_into_url(&'static self, value: Cow<'_, BStr>) -> Result<gix_url::Url, config::url::Error> {
-            gix_url::parse(value.as_ref())
-                .map_err(|err| config::url::Error::from_value(self, value.into_owned()).with_source(err))
+        pub fn try_into_url(
+            &'static self,
+            value: impl crate::config::tree::keys::IntoBString,
+        ) -> Result<gix_url::Url, config::url::Error> {
+            let value = value.into_bstring();
+            gix_url::parse(value.as_bstr()).map_err(|err| config::url::Error::from_value(self, value).with_source(err))
         }
     }
 }
@@ -411,14 +476,13 @@ mod workers {
 
 mod time {
     use crate::{
-        bstr::{BStr, ByteSlice},
+        bstr::ByteSlice,
         config::tree::{
             Section,
             keys::{Time, validate},
         },
     };
     use gix_error::Exn;
-    use std::borrow::Cow;
 
     impl Time {
         /// Create a new instance.
@@ -429,13 +493,15 @@ mod time {
         /// Convert the `value` into a date if possible, with `now` as reference time for relative dates.
         pub fn try_into_time(
             &self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
             now: Option<std::time::SystemTime>,
         ) -> Result<gix_date::Time, Exn<gix_date::Error>> {
+            let value = value.into_bstring();
             gix_date::parse(
-                value.as_ref().to_str().map_err(|_| {
-                    gix_date::Error::new_with_input("UTF8 conversion failed", value.clone().into_owned())
-                })?,
+                value
+                    .as_bstr()
+                    .to_str()
+                    .map_err(|_| gix_date::Error::new_with_input("UTF8 conversion failed", value.clone()))?,
                 now,
             )
         }
@@ -470,10 +536,8 @@ mod boolean {
 }
 
 mod remote_name {
-    use std::borrow::Cow;
-
     use crate::{
-        bstr::{BStr, BString},
+        bstr::BString,
         config,
         config::tree::{Section, keys::RemoteName},
     };
@@ -488,9 +552,9 @@ mod remote_name {
         #[allow(clippy::result_large_err)]
         pub fn try_into_symbolic_name(
             &'static self,
-            name: Cow<'_, BStr>,
+            name: impl crate::config::tree::keys::IntoBString,
         ) -> Result<BString, config::remote::symbolic_name::Error> {
-            crate::remote::name::validated(name.into_owned())
+            crate::remote::name::validated(name.into_bstring())
                 .map_err(|err| config::remote::symbolic_name::Error::from(self).with_source(err))
         }
     }

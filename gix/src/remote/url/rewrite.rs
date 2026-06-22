@@ -20,10 +20,7 @@ pub(crate) struct Rewrite {
 
 /// Init
 impl Rewrite {
-    pub fn from_config(
-        config: &gix_config::File<'static>,
-        mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Rewrite {
+    pub fn from_config(config: &gix_config::File, mut filter: fn(&gix_config::file::Metadata) -> bool) -> Rewrite {
         config
             .sections_by_name_and_filter("url", &mut filter)
             .map(|sections| {
@@ -38,13 +35,13 @@ impl Rewrite {
                     for instead_of in section.values(config::tree::Url::INSTEAD_OF.name) {
                         url_rewrite.push(Replace {
                             with: OwnShared::clone(&replace),
-                            find: instead_of.into_owned(),
+                            find: instead_of,
                         });
                     }
                     for instead_of in section.values(config::tree::Url::PUSH_INSTEAD_OF.name) {
                         push_url_rewrite.push(Replace {
                             with: OwnShared::clone(&replace),
-                            find: instead_of.into_owned(),
+                            find: instead_of,
                         });
                     }
                 }

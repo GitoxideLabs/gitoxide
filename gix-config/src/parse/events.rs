@@ -2,15 +2,52 @@ use smallvec::SmallVec;
 
 use crate::{
     parse,
-    parse::{Event, Section},
+    parse::{Event, EventRef, SectionData},
 };
 
 /// A type store without allocation all events that are typically preceding the first section.
-pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
+pub(crate) type FrontMatterEvents = SmallVec<[Event; 8]>;
 
-/// A zero-copy `git-config` file parser.
+/// A borrowed view of a parsed section.
+#[derive(Copy, Clone, Debug)]
+pub struct Section<'a> {
+    header: &'a parse::section::Header,
+    events: &'a [Event],
+    backing: &'a [u8],
+}
+
+impl<'a> Section<'a> {
+    /// Return the section header as an event view.
+    pub fn header(&self) -> EventRef<'a> {
+        EventRef::SectionHeader {
+            name: self.header.name.0.as_bstr_in(self.backing),
+            separator: self
+                .header
+                .separator
+                .as_ref()
+                .map(|separator| separator.as_bstr_in(self.backing)),
+            subsection_name: self
+                .header
+                .subsection_name
+                .as_ref()
+                .map(|subsection_name| subsection_name.as_bstr_in(self.backing)),
+        }
+    }
+
+    /// Return the events contained in this section body.
+    pub fn body(self) -> impl Iterator<Item = EventRef<'a>> + 'a {
+        self.events.iter().map(move |event| event.as_ref_in(self.backing))
+    }
+
+    /// Return the complete event stream for this section, including its header.
+    pub fn iter(self) -> impl Iterator<Item = EventRef<'a>> + 'a {
+        std::iter::once(self.header()).chain(self.body())
+    }
+}
+
+/// A span-backed `git-config` file parser.
 ///
-/// This is parser exposes low-level syntactic events from a `git-config` file.
+/// This parser exposes low-level syntactic events from a `git-config` file.
 /// Generally speaking, you'll want to use [`File`] as it wraps
 /// around the parser to provide a higher-level abstraction to a `git-config`
 /// file, including querying, modifying, and updating values.
@@ -51,8 +88,8 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 ///
 /// Note that things such as case-sensitivity or duplicate sections are
 /// _not_ handled. This parser is a low level _syntactic_ interpreter
-/// and higher level wrappers around this parser, which may
-/// or may not be zero-copy, should handle _semantic_ values. This also means
+/// and higher level wrappers around this parser should handle _semantic_ values.
+/// This also means
 /// that string-like values are not interpreted. For example, `hello"world"`
 /// would be read at a high level as `helloworld` but this parser will return
 /// the former instead, with the extra quotes. This is because it is not the
@@ -83,22 +120,14 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 /// non-significant events that occur in addition to the ones you may expect:
 ///
 /// ```
-/// # use gix_config::parse::{Event, Events, section};
-/// # use std::borrow::Cow;
-/// # use std::convert::TryFrom;
-/// # let section_header = section::Header::new("core", None).unwrap();
+/// # use gix_config::parse::Events;
 /// # let section_data = "[core]\n  autocrlf = input";
-/// # assert_eq!(Events::from_str(section_data).unwrap().into_vec(), vec![
-/// Event::SectionHeader(section_header),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::Whitespace(Cow::Borrowed("  ".into())),
-/// Event::SectionValueName(section::ValueName::try_from("autocrlf")?),
-/// Event::Whitespace(Cow::Borrowed(" ".into())),
-/// Event::KeyValueSeparator,
-/// Event::Whitespace(Cow::Borrowed(" ".into())),
-/// Event::Value(Cow::Borrowed("input".into())),
-/// # ]);
-/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// # let events = Events::from_str(section_data)?;
+/// # assert_eq!(
+/// #     events.iter().map(|event| event.to_string()).collect::<Vec<_>>(),
+/// #     vec!["[core]", "\n", "  ", "autocrlf", " ", "=", " ", "input"]
+/// # );
+/// # Ok::<_, gix_config::parse::Error>(())
 /// ```
 ///
 /// Note the two whitespace events between the key and value pair! Those two
@@ -120,19 +149,14 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 /// which means that the corresponding event won't appear either:
 ///
 /// ```
-/// # use gix_config::parse::{Event, Events, section};
-/// # use std::borrow::Cow;
-/// # use std::convert::TryFrom;
-/// # let section_header = section::Header::new("core", None).unwrap();
+/// # use gix_config::parse::Events;
 /// # let section_data = "[core]\n  autocrlf";
-/// # assert_eq!(Events::from_str(section_data).unwrap().into_vec(), vec![
-/// Event::SectionHeader(section_header),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::Whitespace(Cow::Borrowed("  ".into())),
-/// Event::SectionValueName(section::ValueName::try_from("autocrlf")?),
-/// Event::Value(Cow::Borrowed("".into())),
-/// # ]);
-/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// # let events = Events::from_str(section_data)?;
+/// # assert_eq!(
+/// #     events.iter().map(|event| event.to_string()).collect::<Vec<_>>(),
+/// #     vec!["[core]", "\n", "  ", "autocrlf", ""]
+/// # );
+/// # Ok::<_, gix_config::parse::Error>(())
 /// ```
 ///
 /// ## Quoted values are not unquoted
@@ -146,29 +170,20 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 /// ```
 ///
 /// Both these events, when fully processed, should normally be `true` and
-/// `false`. However, because this parser is zero-copy, we cannot process
+/// `false`. However, because this parser preserves the original event stream, we cannot process
 /// partially quoted values, such as the `false` example. As a result, to
 /// maintain consistency, the parser will just take all values as literals. The
 /// relevant event stream emitted is thus emitted as:
 ///
 /// ```
-/// # use gix_config::parse::{Event, Events, section};
-/// # use std::borrow::Cow;
-/// # use std::convert::TryFrom;
-/// # let section_header = section::Header::new("core", None).unwrap();
+/// # use gix_config::parse::Events;
 /// # let section_data = "[core]\nautocrlf=true\"\"\nfilemode=fa\"lse\"";
-/// # assert_eq!(Events::from_str(section_data).unwrap().into_vec(), vec![
-/// Event::SectionHeader(section_header),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::SectionValueName(section::ValueName::try_from("autocrlf")?),
-/// Event::KeyValueSeparator,
-/// Event::Value(Cow::Borrowed(r#"true"""#.into())),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::SectionValueName(section::ValueName::try_from("filemode")?),
-/// Event::KeyValueSeparator,
-/// Event::Value(Cow::Borrowed(r#"fa"lse""#.into())),
-/// # ]);
-/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// # let events = Events::from_str(section_data)?;
+/// # assert_eq!(
+/// #     events.iter().map(|event| event.to_string()).collect::<Vec<_>>(),
+/// #     vec!["[core]", "\n", "autocrlf", "=", r#"true"""#, "\n", "filemode", "=", r#"fa"lse""#]
+/// # );
+/// # Ok::<_, gix_config::parse::Error>(())
 /// ```
 ///
 /// ## Whitespace after line continuations are part of the value
@@ -187,21 +202,14 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 /// split value accordingly:
 ///
 /// ```
-/// # use gix_config::parse::{Event, Events, section};
-/// # use std::borrow::Cow;
-/// # use std::convert::TryFrom;
-/// # let section_header = section::Header::new("some-section", None).unwrap();
+/// # use gix_config::parse::Events;
 /// # let section_data = "[some-section]\nfile=a\\\n    c";
-/// # assert_eq!(Events::from_str(section_data).unwrap().into_vec(), vec![
-/// Event::SectionHeader(section_header),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::SectionValueName(section::ValueName::try_from("file")?),
-/// Event::KeyValueSeparator,
-/// Event::ValueNotDone(Cow::Borrowed("a".into())),
-/// Event::Newline(Cow::Borrowed("\n".into())),
-/// Event::ValueDone(Cow::Borrowed("    c".into())),
-/// # ]);
-/// # Ok::<_, Box<dyn std::error::Error>>(())
+/// # let events = Events::from_str(section_data)?;
+/// # assert_eq!(
+/// #     events.iter().map(|event| event.to_string()).collect::<Vec<_>>(),
+/// #     vec!["[some-section]", "\n", "file", "=", "a\\", "\n", "    c"]
+/// # );
+/// # Ok::<_, gix_config::parse::Error>(())
 /// ```
 ///
 /// [`File`]: crate::File
@@ -210,111 +218,105 @@ pub type FrontMatterEvents<'a> = SmallVec<[Event<'a>; 8]>;
 /// [`FromStr`]: std::str::FromStr
 /// [`From<&'_ str>`]: std::convert::From
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Default)]
-pub struct Events<'a> {
+pub struct Events {
+    pub(crate) backing: Vec<u8>,
     /// Events seen before the first section.
-    pub frontmatter: FrontMatterEvents<'a>,
+    pub(crate) frontmatter: FrontMatterEvents,
     /// All parsed sections.
-    pub sections: Vec<Section<'a>>,
+    pub(crate) sections: Vec<SectionData>,
 }
 
-impl Events<'static> {
-    /// Parses the provided bytes, returning an [`Events`] that contains allocated
-    /// and owned events. This is similar to [`Events::from_bytes()`], but performance
-    /// is degraded as it requires allocation for every event.
+impl Events {
+    /// Parses the provided bytes, returning [`Events`].
+    ///
+    /// This remains as a compatibility alias for [`Events::from_bytes()`].
     ///
     /// Use `filter` to only include those events for which it returns true.
-    pub fn from_bytes_owned<'a>(
-        input: &'a [u8],
-        filter: Option<fn(&Event<'a>) -> bool>,
-    ) -> Result<Events<'static>, parse::Error> {
-        from_bytes(input, &|e| e.to_owned(), filter)
+    pub fn from_bytes_owned(input: &[u8], filter: Option<fn(EventRef<'_>) -> bool>) -> Result<Events, parse::Error> {
+        Self::from_bytes(input, filter)
     }
 }
 
-impl<'a> Events<'a> {
-    /// Attempt to zero-copy parse the provided bytes. On success, returns a
-    /// [`Events`] that provides methods to accessing leading comments and sections
-    /// of a `git-config` file and can be converted into an iterator of [`Event`]
-    /// for higher level processing.
+impl Events {
+    /// Attempt to parse the provided bytes.
     ///
     /// Use `filter` to only include those events for which it returns true.
-    pub fn from_bytes(input: &'a [u8], filter: Option<fn(&Event<'a>) -> bool>) -> Result<Events<'a>, parse::Error> {
-        from_bytes(input, &std::convert::identity, filter)
+    pub fn from_bytes(input: &[u8], filter: Option<fn(EventRef<'_>) -> bool>) -> Result<Events, parse::Error> {
+        from_bytes(input, filter)
     }
 
-    /// Attempt to zero-copy parse the provided `input` string.
+    /// Attempt to parse the provided `input` string.
     ///
     /// Prefer the [`from_bytes()`][Self::from_bytes()] method if UTF8 encoding
     /// isn't guaranteed.
     #[allow(clippy::should_implement_trait)]
-    pub fn from_str(input: &'a str) -> Result<Events<'a>, parse::Error> {
+    pub fn from_str(input: &str) -> Result<Events, parse::Error> {
         Self::from_bytes(input.as_bytes(), None)
     }
 
-    /// Consumes the parser to produce an iterator of all contained events.
-    #[must_use = "iterators are lazy and do nothing unless consumed"]
-    #[allow(clippy::should_implement_trait)]
-    pub fn into_iter(self) -> impl std::iter::FusedIterator<Item = parse::Event<'a>> {
-        self.frontmatter.into_iter().chain(
-            self.sections
-                .into_iter()
-                .flat_map(|section| std::iter::once(parse::Event::SectionHeader(section.header)).chain(section.events)),
-        )
+    /// Return all contained events as borrowed views.
+    pub fn iter(&self) -> impl Iterator<Item = EventRef<'_>> + '_ {
+        self.frontmatter().chain(self.sections().flat_map(Section::iter))
     }
 
-    /// Place all contained events into a single `Vec`.
-    pub fn into_vec(self) -> Vec<parse::Event<'a>> {
-        self.into_iter().collect()
+    /// Return all events before the first section as borrowed views.
+    pub fn frontmatter(&self) -> impl Iterator<Item = EventRef<'_>> + '_ {
+        self.frontmatter.iter().map(move |event| event.as_ref_in(&self.backing))
+    }
+
+    /// Return all parsed sections as borrowed views.
+    pub fn sections(&self) -> impl Iterator<Item = Section<'_>> + '_ {
+        self.sections.iter().map(move |section| Section {
+            header: &section.header,
+            events: &section.events,
+            backing: &self.backing,
+        })
     }
 }
 
-impl<'a> TryFrom<&'a str> for Events<'a> {
+impl TryFrom<&str> for Events {
     type Error = parse::Error;
 
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::from_str(value)
     }
 }
 
-impl<'a> TryFrom<&'a [u8]> for Events<'a> {
+impl TryFrom<&[u8]> for Events {
     type Error = parse::Error;
 
-    fn try_from(value: &'a [u8]) -> Result<Self, Self::Error> {
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         Events::from_bytes(value, None)
     }
 }
 
-fn from_bytes<'a, 'b>(
-    input: &'a [u8],
-    convert: &dyn Fn(Event<'a>) -> Event<'b>,
-    filter: Option<fn(&Event<'a>) -> bool>,
-) -> Result<Events<'b>, parse::Error> {
+fn from_bytes(input: &[u8], filter: Option<fn(EventRef<'_>) -> bool>) -> Result<Events, parse::Error> {
     let mut header = None;
     let mut events = Vec::with_capacity(256);
     let mut frontmatter = FrontMatterEvents::default();
     let mut sections = Vec::new();
-    parse::from_bytes(input, &mut |e: Event<'_>| match e {
+    let mut backing = parse::from_bytes::from_bytes_with_backing(input, &mut |e: Event, backing| match e {
         Event::SectionHeader(next_header) => {
             match header.take() {
                 None => {
                     frontmatter = std::mem::take(&mut events).into_iter().collect();
                 }
                 Some(prev_header) => {
-                    sections.push(parse::Section {
+                    sections.push(parse::SectionData {
                         header: prev_header,
                         events: std::mem::take(&mut events),
                     });
                 }
             }
-            header = match convert(Event::SectionHeader(next_header)) {
+            header = match Event::SectionHeader(next_header) {
                 Event::SectionHeader(h) => h,
-                _ => unreachable!("BUG: convert must not change the event type, just the lifetime"),
+                _ => unreachable!("BUG: event type changed"),
             }
             .into();
         }
         event => {
-            if filter.is_none_or(|f| f(&event)) {
-                events.push(convert(event));
+            if filter.is_none_or(|f| f(event.as_ref_in(backing))) {
+                events.push(event);
             }
         }
     })?;
@@ -324,11 +326,24 @@ fn from_bytes<'a, 'b>(
             frontmatter = events.into_iter().collect();
         }
         Some(prev_header) => {
-            sections.push(parse::Section {
+            sections.push(parse::SectionData {
                 header: prev_header,
                 events: std::mem::take(&mut events),
             });
         }
     }
-    Ok(Events { frontmatter, sections })
+    for event in &mut frontmatter {
+        event.intern(&mut backing);
+    }
+    for section in &mut sections {
+        section.header.intern(&mut backing);
+        for event in &mut section.events {
+            event.intern(&mut backing);
+        }
+    }
+    Ok(Events {
+        backing,
+        frontmatter,
+        sections,
+    })
 }

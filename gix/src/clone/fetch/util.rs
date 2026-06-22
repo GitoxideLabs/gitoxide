@@ -1,4 +1,4 @@
-use std::{borrow::Cow, io::Write};
+use std::io::Write;
 
 use gix_ref::{
     Category, FullNameRef, PartialName,
@@ -20,7 +20,7 @@ enum WriteMode {
 pub fn append_remote_to_local_config_file(
     remote: &mut crate::Remote<'_>,
     remote_name: BString,
-) -> Result<gix_config::File<'static>, Error> {
+) -> Result<gix_config::File, Error> {
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
     remote.save_as_to(remote_name, &mut config)?;
 
@@ -95,7 +95,7 @@ fn local_config_meta(repo: &Repository) -> gix_config::file::Metadata {
     meta
 }
 
-fn write_to_local_config(config: &gix_config::File<'static>, mode: WriteMode) -> std::io::Result<()> {
+fn write_to_local_config(config: &gix_config::File, mode: WriteMode) -> std::io::Result<()> {
     assert_eq!(
         config.meta().source,
         gix_config::Source::Local,
@@ -115,7 +115,7 @@ fn write_to_local_config(config: &gix_config::File<'static>, mode: WriteMode) ->
 /// This is used after writing clone-specific local configuration to `.git/config`,
 /// as the `repo` handle was opened before that write and won't observe it until
 /// it is either updated in memory or reopened.
-pub fn append_config_to_repo_config(repo: &mut Repository, config: gix_config::File<'static>) {
+pub fn append_config_to_repo_config(repo: &mut Repository, config: gix_config::File) {
     let repo_config = gix_features::threading::OwnShared::make_mut(&mut repo.config.resolved);
     repo_config.append(config);
 }
@@ -342,7 +342,7 @@ fn setup_branch_config(
     if !res.mappings.is_empty() {
         let mut config = repo.config_snapshot_mut();
         let mut section = config
-            .new_section("branch", Some(Cow::Owned(short_name.into())))
+            .new_section("branch", BString::from(short_name))
             .expect("section header name is always valid per naming rules, our input branch name is valid");
         section.push("remote".try_into().expect("valid at compile time"), Some(remote_name));
         section.push(

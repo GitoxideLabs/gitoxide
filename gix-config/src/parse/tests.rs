@@ -1,25 +1,20 @@
 mod section {
-    use std::borrow::Cow;
-
-    use bstr::BStr;
-
     use crate::parse::{Comment, Event, Events, Section, section, section::Header};
 
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn size_of_events() {
         assert_eq!(
-            std::mem::size_of::<Section<'_>>(),
-            96,
+            std::mem::size_of::<Section>(),
+            40,
             "this value should only ever decrease"
         );
-        assert_eq!(std::mem::size_of::<Events<'_>>(), 616);
-        assert_eq!(std::mem::size_of::<Event<'_>>(), 72);
-        assert_eq!(std::mem::size_of::<Header<'_>>(), 72);
-        assert_eq!(std::mem::size_of::<Comment<'_>>(), 32);
-        assert_eq!(std::mem::size_of::<Option<Cow<'_, BStr>>>(), 24);
-        assert_eq!(std::mem::size_of::<section::Name<'_>>(), 24);
-        assert_eq!(std::mem::size_of::<section::ValueName<'_>>(), 24);
+        assert_eq!(std::mem::size_of::<Events>(), 640);
+        assert_eq!(std::mem::size_of::<Event>(), 72);
+        assert_eq!(std::mem::size_of::<Header>(), 72);
+        assert_eq!(std::mem::size_of::<Comment>(), 32);
+        assert_eq!(std::mem::size_of::<section::Name>(), 24);
+        assert_eq!(std::mem::size_of::<section::ValueName>(), 24);
     }
 
     mod header {
@@ -61,17 +56,15 @@ mod section {
         }
 
         mod write_to {
-            use std::borrow::Cow;
-
             use crate::parse::section;
 
-            fn header(name: &str, subsection: impl Into<Option<(&'static str, &'static str)>>) -> section::Header<'_> {
-                let name = section::Name(Cow::Borrowed(name.into()));
+            fn header(name: &str, subsection: impl Into<Option<(&'static str, &'static str)>>) -> section::Header {
+                let name = section::Name(name.into());
                 if let Some((separator, subsection_name)) = subsection.into() {
                     section::Header {
                         name,
-                        separator: Some(Cow::Borrowed(separator.into())),
-                        subsection_name: Some(Cow::Borrowed(subsection_name.into())),
+                        separator: Some(separator.into()),
+                        subsection_name: Some(subsection_name.into()),
                     }
                 } else {
                     section::Header {
@@ -136,9 +129,9 @@ mod event {
         use crate::parse::Events;
 
         fn write_events(input: &str) -> Vec<u8> {
-            let events = Events::from_str(input).unwrap().into_vec();
+            let events = Events::from_str(input).unwrap();
             let mut out = Vec::new();
-            for event in &events {
+            for event in events.iter() {
                 event.write_to(&mut out).unwrap();
             }
             out
@@ -170,20 +163,15 @@ pub(crate) mod util {
     //! This module is only included for tests, and contains common unit test helper
     //! functions.
 
-    use std::borrow::Cow;
-
     use crate::parse::{Comment, Event, section};
 
-    pub fn section_header(
-        name: &str,
-        subsection: impl Into<Option<(&'static str, &'static str)>>,
-    ) -> section::Header<'_> {
+    pub fn section_header(name: &str, subsection: impl Into<Option<(&'static str, &'static str)>>) -> section::Header {
         let name = section::Name::try_from(name).unwrap();
         if let Some((separator, subsection_name)) = subsection.into() {
             section::Header {
                 name,
-                separator: Some(Cow::Borrowed(separator.into())),
-                subsection_name: Some(Cow::Borrowed(subsection_name.into())),
+                separator: Some(separator.into()),
+                subsection_name: Some(subsection_name.into()),
             }
         } else {
             section::Header {
@@ -194,42 +182,42 @@ pub(crate) mod util {
         }
     }
 
-    pub(crate) fn name_event(name: &'static str) -> Event<'static> {
-        Event::SectionValueName(section::ValueName(Cow::Borrowed(name.into())))
+    pub(crate) fn name_event(name: &'static str) -> Event {
+        Event::SectionValueName(section::ValueName(name.into()))
     }
 
-    pub(crate) fn value_event(value: &'static str) -> Event<'static> {
-        Event::Value(Cow::Borrowed(value.into()))
+    pub(crate) fn value_event(value: &'static str) -> Event {
+        Event::Value(value.into())
     }
 
-    pub(crate) fn value_not_done_event(value: &'static str) -> Event<'static> {
-        Event::ValueNotDone(Cow::Borrowed(value.into()))
+    pub(crate) fn value_not_done_event(value: &'static str) -> Event {
+        Event::ValueNotDone(value.into())
     }
 
-    pub(crate) fn value_done_event(value: &'static str) -> Event<'static> {
-        Event::ValueDone(Cow::Borrowed(value.into()))
+    pub(crate) fn value_done_event(value: &'static str) -> Event {
+        Event::ValueDone(value.into())
     }
 
-    pub(crate) fn newline_event() -> Event<'static> {
+    pub(crate) fn newline_event() -> Event {
         newline_custom_event("\n")
     }
 
-    pub(crate) fn newline_custom_event(value: &'static str) -> Event<'static> {
-        Event::Newline(Cow::Borrowed(value.into()))
+    pub(crate) fn newline_custom_event(value: &'static str) -> Event {
+        Event::Newline(value.into())
     }
 
-    pub(crate) fn whitespace_event(value: &'static str) -> Event<'static> {
-        Event::Whitespace(Cow::Borrowed(value.into()))
+    pub(crate) fn whitespace_event(value: &'static str) -> Event {
+        Event::Whitespace(value.into())
     }
 
-    pub(crate) fn comment_event(tag: char, msg: &'static str) -> Event<'static> {
+    pub(crate) fn comment_event(tag: char, msg: &'static str) -> Event {
         Event::Comment(comment(tag, msg))
     }
 
-    pub(crate) fn comment(comment_tag: char, comment: &'static str) -> Comment<'static> {
+    pub(crate) fn comment(comment_tag: char, comment: &'static str) -> Comment {
         Comment {
             tag: comment_tag as u8,
-            text: Cow::Borrowed(comment.into()),
+            text: comment.into(),
         }
     }
 

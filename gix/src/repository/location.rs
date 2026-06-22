@@ -1,8 +1,7 @@
 use gix_path::realpath::MAX_SYMLINKS;
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
-use crate::bstr::BStr;
+use crate::bstr::{BStr, ByteSlice};
 
 impl crate::Repository {
     /// Return the path to the repository itself, containing objects, references, configuration, and more.
@@ -142,9 +141,9 @@ impl crate::Repository {
             .config
             .resolved
             .string(crate::config::tree::Init::DEFAULT_BRANCH)
-            .unwrap_or(Cow::Borrowed("master".into()));
+            .unwrap_or_else(|| "master".into());
         let default_branch_ref_name = gix_ref::Category::LocalBranch
-            .to_full_name(name.as_ref())
+            .to_full_name(name.as_bstr())
             .unwrap_or_else(|_| gix_ref::FullName::try_from("refs/heads/master").expect("known to be valid"));
         self.refs.is_pristine(default_branch_ref_name.as_ref())
     }

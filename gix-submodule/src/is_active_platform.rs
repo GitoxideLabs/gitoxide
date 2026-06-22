@@ -25,7 +25,7 @@ impl IsActivePlatform {
     /// * it's active if it has any `url` set in `config`
     pub fn is_active(
         &mut self,
-        config: &gix_config::File<'static>,
+        config: &gix_config::File,
         name: &BStr,
         attributes: &mut dyn FnMut(
             &BStr,

@@ -30,7 +30,7 @@ mod from_path_no_includes {
 
         let config = gix_config::File::from_path_no_includes(config_path, gix_config::Source::Local).unwrap();
 
-        assert_eq!(config.raw_value("core.boolean").unwrap().as_ref(), "true");
+        assert_eq!(config.raw_value("core.boolean").unwrap(), "true");
         assert_eq!(config.num_values(), 1);
     }
 }
@@ -110,7 +110,7 @@ fn frontmatter_is_maintained_in_multiple_files() -> crate::Result {
         config
             .frontmatter()
             .expect("present")
-            .map(ToString::to_string)
+            .map(|event| event.to_string())
             .collect::<Vec<_>>()
             .join(""),
         ";before a\n"

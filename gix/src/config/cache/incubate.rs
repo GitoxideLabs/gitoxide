@@ -9,7 +9,7 @@ use crate::config::{
 /// A utility to deal with the cyclic dependency between the ref store and the configuration. The ref-store needs the
 /// object hash kind, and the configuration needs the current branch name to resolve conditional includes with `onbranch`.
 pub(crate) struct StageOne {
-    pub git_dir_config: gix_config::File<'static>,
+    pub git_dir_config: gix_config::File,
     pub buf: Vec<u8>,
 
     pub is_bare: Option<bool>,
@@ -125,7 +125,7 @@ fn load_config(
     git_dir_trust: gix_sec::Trust,
     lossy: bool,
     lenient: bool,
-) -> Result<gix_config::File<'static>, Error> {
+) -> Result<gix_config::File, Error> {
     let metadata = gix_config::file::Metadata::from(source)
         .at(&config_path)
         .with(git_dir_trust);

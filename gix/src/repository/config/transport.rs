@@ -54,6 +54,7 @@ impl crate::Repository {
                     };
 
                     use crate::{
+                        bstr::BString,
                         config,
                         config::{
                             cache::util::ApplyLeniency,
@@ -63,10 +64,10 @@ impl crate::Repository {
                     fn try_cow_to_string(
                         v: Cow<'_, BStr>,
                         lenient: bool,
-                        key_str: impl Into<Cow<'static, BStr>>,
+                        key_str: impl Into<BString>,
                         key: &'static config::tree::keys::String,
                     ) -> Result<Option<String>, config::transport::Error> {
-                        key.try_into_string(v)
+                        key.try_into_string(v.into_owned())
                             .map_err(|err| config::transport::Error::IllformedUtf8 {
                                 source: err,
                                 key: key_str.into(),
@@ -75,20 +76,16 @@ impl crate::Repository {
                             .with_leniency(lenient)
                     }
 
-                    fn cow_bstr(v: &str) -> Cow<'_, BStr> {
-                        Cow::Borrowed(v.into())
+                    fn bstring(v: &str) -> BString {
+                        v.into()
                     }
 
                     fn proxy_auth_method(
-                        value_and_key: Option<(
-                            Cow<'_, BStr>,
-                            Cow<'static, BStr>,
-                            &'static config::tree::http::ProxyAuthMethod,
-                        )>,
+                        value_and_key: Option<(Cow<'_, BStr>, BString, &'static config::tree::http::ProxyAuthMethod)>,
                     ) -> Result<ProxyAuthMethod, config::transport::Error> {
                         let value = value_and_key
                             .map(|(method, key, key_type)| {
-                                key_type.try_into_proxy_auth_method(method).map_err(|err| {
+                                key_type.try_into_proxy_auth_method(method.into_owned()).map_err(|err| {
                                     config::transport::http::Error::InvalidProxyAuthMethod { source: err, key }
                                 })
                             })
@@ -98,7 +95,7 @@ impl crate::Repository {
                     }
 
                     fn ssl_version(
-                        config: &gix_config::File<'static>,
+                        config: &gix_config::File,
                         key_str: &'static str,
                         key: &'static config::tree::http::SslVersion,
                         mut filter: fn(&gix_config::file::Metadata) -> bool,
@@ -122,7 +119,7 @@ impl crate::Repository {
                     }
 
                     fn proxy(
-                        value: Option<(Cow<'_, BStr>, Cow<'static, BStr>, &'static config::tree::keys::String)>,
+                        value: Option<(Cow<'_, BStr>, BString, &'static config::tree::keys::String)>,
                         lenient: bool,
                     ) -> Result<Option<String>, config::transport::Error> {
                         Ok(value
@@ -151,7 +148,7 @@ impl crate::Repository {
                             .transpose()
                             .map_err(|err| config::transport::Error::IllformedUtf8 {
                                 source: err,
-                                key: Cow::Borrowed(key.into()),
+                                key: key.into(),
                             })?
                             .unwrap_or_default()
                     };
@@ -194,20 +191,20 @@ impl crate::Repository {
                                         &format!("remote.{}.{}", name, Remote::PROXY.name),
                                         &mut trusted_only,
                                     )
-                                    .map(|v| (v, Cow::Owned(format!("remote.{name}.proxy").into()), &Remote::PROXY))
+                                    .map(|v| (v.into(), format!("remote.{name}.proxy").into(), &Remote::PROXY))
                             })
                             .or_else(|| {
                                 let key = "http.proxy";
                                 debug_assert_eq!(key, config::tree::Http::PROXY.logical_name());
                                 let http_proxy = config
                                     .string_filter(key, &mut trusted_only)
-                                    .map(|v| (v, cow_bstr(key), &config::tree::Http::PROXY))
+                                    .map(|v| (v.into(), bstring(key), &config::tree::Http::PROXY))
                                     .or_else(|| {
                                         let key = "gitoxide.http.proxy";
                                         debug_assert_eq!(key, gitoxide::Http::PROXY.logical_name());
                                         config
                                             .string_filter(key, &mut trusted_only)
-                                            .map(|v| (v, cow_bstr(key), &gitoxide::Http::PROXY))
+                                            .map(|v| (v.into(), bstring(key), &gitoxide::Http::PROXY))
                                     });
                                 if url.scheme == Https {
                                     http_proxy.or_else(|| {
@@ -215,7 +212,7 @@ impl crate::Repository {
                                         debug_assert_eq!(key, gitoxide::Https::PROXY.logical_name());
                                         config
                                             .string_filter(key, &mut trusted_only)
-                                            .map(|v| (v, cow_bstr(key), &gitoxide::Https::PROXY))
+                                            .map(|v| (v.into(), bstring(key), &gitoxide::Https::PROXY))
                                     })
                                 } else {
                                     http_proxy
@@ -226,7 +223,7 @@ impl crate::Repository {
                                 debug_assert_eq!(key, gitoxide::Http::ALL_PROXY.logical_name());
                                 config
                                     .string_filter(key, &mut trusted_only)
-                                    .map(|v| (v, cow_bstr(key), &gitoxide::Http::ALL_PROXY))
+                                    .map(|v| (v.into(), bstring(key), &gitoxide::Http::ALL_PROXY))
                             }),
                         lenient,
                     )?;
@@ -236,8 +233,7 @@ impl crate::Repository {
                         opts.no_proxy = config
                             .string_filter(key, &mut trusted_only)
                             .and_then(|v| {
-                                try_cow_to_string(v, lenient, Cow::Borrowed(key.into()), &gitoxide::Http::NO_PROXY)
-                                    .transpose()
+                                try_cow_to_string(v.into(), lenient, key, &gitoxide::Http::NO_PROXY).transpose()
                             })
                             .transpose()?;
                     }
@@ -246,7 +242,7 @@ impl crate::Repository {
                         debug_assert_eq!(key, gitoxide::Http::PROXY_AUTH_METHOD.logical_name());
                         config
                             .string_filter(key, &mut trusted_only)
-                            .map(|v| (v, Cow::Borrowed(key.into()), &gitoxide::Http::PROXY_AUTH_METHOD))
+                            .map(|v| (v.into(), bstring(key), &gitoxide::Http::PROXY_AUTH_METHOD))
                             .or_else(|| {
                                 remote_name
                                     .and_then(|name| {
@@ -254,8 +250,8 @@ impl crate::Repository {
                                             .string_filter(&format!("remote.{name}.proxyAuthMethod"), &mut trusted_only)
                                             .map(|v| {
                                                 (
-                                                    v,
-                                                    Cow::Owned(format!("remote.{name}.proxyAuthMethod").into()),
+                                                    v.into(),
+                                                    format!("remote.{name}.proxyAuthMethod").into(),
                                                     &Remote::PROXY_AUTH_METHOD,
                                                 )
                                             })
@@ -263,9 +259,9 @@ impl crate::Repository {
                                     .or_else(|| {
                                         let key = "http.proxyAuthMethod";
                                         debug_assert_eq!(key, config::tree::Http::PROXY_AUTH_METHOD.logical_name());
-                                        config.string_filter(key, &mut trusted_only).map(|v| {
-                                            (v, Cow::Borrowed(key.into()), &config::tree::Http::PROXY_AUTH_METHOD)
-                                        })
+                                        config
+                                            .string_filter(key, &mut trusted_only)
+                                            .map(|v| (v.into(), bstring(key), &config::tree::Http::PROXY_AUTH_METHOD))
                                     })
                             })
                     })?;
@@ -304,13 +300,7 @@ impl crate::Repository {
                         opts.user_agent = config
                             .string_filter(key, &mut trusted_only)
                             .and_then(|v| {
-                                try_cow_to_string(
-                                    v,
-                                    lenient,
-                                    Cow::Borrowed(key.into()),
-                                    &config::tree::Http::USER_AGENT,
-                                )
-                                .transpose()
+                                try_cow_to_string(v.into(), lenient, key, &config::tree::Http::USER_AGENT).transpose()
                             })
                             .transpose()?
                             .or_else(|| Some(crate::env::agent().into()));
@@ -357,7 +347,6 @@ impl crate::Repository {
                                     self.install_dir().ok().as_deref(),
                                     self.config.home_dir().as_deref(),
                                 ))
-                                .map(std::borrow::Cow::into_owned)
                             })
                             .transpose()
                             .with_leniency(lenient)

@@ -86,10 +86,9 @@ pub enum Source {
 /// even though the section will have matched the `name` and `subsection_name` respectively.
 ///
 /// ```
-/// # use std::borrow::Cow;
 /// # use std::convert::TryFrom;
 /// # let git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
-/// assert_eq!(git_config.raw_value("core.a").unwrap().as_ref(), "d");
+/// assert_eq!(git_config.raw_value("core.a").unwrap(), "d");
 /// ```
 ///
 /// Consider the `multi` variants of the methods instead, if you want to work
@@ -102,20 +101,22 @@ pub enum Source {
 ///
 /// [`raw_value()`]: Self::raw_value
 #[derive(Eq, Clone, Debug, Default)]
-pub struct File<'event> {
+pub struct File {
+    /// Append-only storage for parsed and generated event payload bytes.
+    pub(crate) event_backing: Vec<u8>,
     /// The list of events that occur before any section.
     ///
     /// Git accepts global properties before the first section, so this may also
     /// contain key/value events.
-    pub(crate) frontmatter_events: crate::parse::FrontMatterEvents<'event>,
+    pub(crate) frontmatter_events: crate::parse::FrontMatterEvents,
     /// Frontmatter events to be placed after the given section.
-    pub(crate) frontmatter_post_section: HashMap<SectionId, crate::parse::FrontMatterEvents<'event>>,
+    pub(crate) frontmatter_post_section: HashMap<SectionId, crate::parse::FrontMatterEvents>,
     /// Section name to section id lookup tree, with section bodies for subsections being in a non-terminal
     /// variant of `SectionBodyIds`.
-    pub(crate) section_lookup_tree: HashMap<section::Name<'event>, Vec<SectionBodyIdsLut<'event>>>,
+    pub(crate) section_lookup_tree: HashMap<section::Name, Vec<SectionBodyIdsLut>>,
     /// This indirection with the SectionId as the key is critical to flexibly
     /// supporting `git-config` sections, as duplicated keys are permitted.
-    pub(crate) sections: HashMap<SectionId, file::Section<'event>>,
+    pub(crate) sections: HashMap<SectionId, file::SectionData>,
     /// Internal monotonically increasing counter for section ids.
     pub(crate) section_id_counter: usize,
     /// Section order for output ordering.

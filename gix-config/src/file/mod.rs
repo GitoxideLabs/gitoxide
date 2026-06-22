@@ -1,12 +1,11 @@
 //! A high level wrapper around a single or multiple `git-config` file, for reading and mutation.
 use std::{
-    borrow::Cow,
     collections::HashMap,
     ops::{Add, AddAssign},
     path::PathBuf,
 };
 
-use bstr::BStr;
+use bstr::BString;
 use gix_features::threading::OwnShared;
 
 mod mutable;
@@ -16,6 +15,7 @@ pub use mutable::{multi_value::MultiValueMut, section::SectionMut, value::ValueM
 pub mod init;
 
 mod access;
+pub use access::IntoSubsection;
 mod impls;
 ///
 pub mod includes;
@@ -66,13 +66,21 @@ pub struct Metadata {
     pub trust: gix_sec::Trust,
 }
 
-/// A section in a git-config file, like `[core]` or `[remote "origin"]`, along with all of its keys.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+pub(crate) struct SectionData {
+    pub(crate) header: crate::parse::section::Header,
+    pub(crate) body: section::Body,
+    pub(crate) meta: OwnShared<Metadata>,
+    pub(crate) id: SectionId,
+}
+
+/// A section in a git-config file, like `[core]` or `[remote "origin"]`, along with all of its keys.
+///
+/// This is a view into data owned by its [`File`][crate::File].
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct Section<'a> {
-    header: crate::parse::section::Header<'a>,
-    body: section::Body<'a>,
-    meta: OwnShared<Metadata>,
-    id: SectionId,
+    data: &'a SectionData,
+    backing: &'a [u8],
 }
 
 /// A strongly typed index into some range.
@@ -122,11 +130,11 @@ impl Default for SectionId {
 /// of section ids with the matched section and name, and is used for precedence
 /// management.
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub(crate) enum SectionBodyIdsLut<'a> {
+pub(crate) enum SectionBodyIdsLut {
     /// The list of section ids to use for obtaining the section body.
     Terminal(Vec<SectionId>),
     /// A hashmap from sub-section names to section ids.
-    NonTerminal(HashMap<Cow<'a, BStr>, Vec<SectionId>>),
+    NonTerminal(HashMap<BString, Vec<SectionId>>),
 }
 #[cfg(test)]
 mod tests;

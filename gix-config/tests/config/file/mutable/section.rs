@@ -53,7 +53,7 @@ mod remove {
         for (key, expected_prev_value) in ('a'..='e').zip(prev_values) {
             let prev_value = section.remove(&key.to_string());
             num_values -= 1;
-            assert_eq!(prev_value.expect("present").as_ref(), expected_prev_value);
+            assert_eq!(prev_value.expect("present"), expected_prev_value);
             assert_eq!(section.num_values(), num_values);
         }
 
@@ -103,7 +103,7 @@ mod set {
         for (key, (new_value, expected_prev_value)) in (b'a'..=b'e').zip(values.into_iter().zip(prev_values)) {
             let key = std::str::from_utf8(std::slice::from_ref(&key))?.to_owned();
             let prev_value = section.set(key.try_into()?, new_value.as_ref());
-            assert_eq!(prev_value.as_deref().expect("prev value set"), expected_prev_value);
+            assert_eq!(prev_value.expect("prev value set"), expected_prev_value);
         }
 
         assert_eq!(
@@ -229,8 +229,6 @@ mod push_with_comment {
 }
 
 mod set_leading_whitespace {
-    use std::borrow::Cow;
-
     use bstr::BString;
     use gix_config::parse::section::ValueName;
 
@@ -242,7 +240,7 @@ mod set_leading_whitespace {
         let mut section = config.new_section("core", None)?;
 
         let nl = section.newline().to_owned();
-        section.set_leading_whitespace(Some(Cow::Owned(BString::from(format!("{nl}\t")))));
+        section.set_leading_whitespace(Some(BString::from(format!("{nl}\t"))));
         section.push(ValueName::try_from("a")?, Some("v".into()));
 
         assert_eq!(config.to_string(), format!("[core]{nl}{nl}\ta = v{nl}"));
@@ -258,7 +256,7 @@ mod set_leading_whitespace {
     }
 }
 
-fn multi_value_section() -> gix_config::File<'static> {
+fn multi_value_section() -> gix_config::File {
     r"
         [a]
             a = v

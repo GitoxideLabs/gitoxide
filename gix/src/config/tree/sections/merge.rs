@@ -64,26 +64,25 @@ pub type ConflictStyle = keys::Any<validate::ConflictStyle>;
 
 #[cfg(feature = "merge")]
 mod conflict_style {
-    use std::borrow::Cow;
-
     use gix_merge::blob::builtin_driver::text;
 
-    use crate::{bstr::BStr, config, config::tree::sections::merge::ConflictStyle};
+    use crate::{bstr::ByteSlice, config, config::tree::sections::merge::ConflictStyle};
 
     impl ConflictStyle {
         /// Derive the diff algorithm identified by `name`, case-insensitively.
         pub fn try_into_conflict_style(
             &'static self,
-            name: Cow<'_, BStr>,
+            name: impl crate::config::tree::keys::IntoBString,
         ) -> Result<text::ConflictStyle, config::key::GenericErrorWithValue> {
-            let style = if name.as_ref() == "merge" {
+            let name = name.into_bstring();
+            let style = if name.as_bstr() == "merge" {
                 text::ConflictStyle::Merge
-            } else if name.as_ref() == "diff3" {
+            } else if name.as_bstr() == "diff3" {
                 text::ConflictStyle::Diff3
-            } else if name.as_ref() == "zdiff3" {
+            } else if name.as_bstr() == "zdiff3" {
                 text::ConflictStyle::ZealousDiff3
             } else {
-                return Err(config::key::GenericErrorWithValue::from_value(self, name.into_owned()));
+                return Err(config::key::GenericErrorWithValue::from_value(self, name));
             };
             Ok(style)
         }
@@ -101,7 +100,7 @@ mod validate {
     pub struct ConflictStyle;
     impl keys::Validate for ConflictStyle {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            Merge::CONFLICT_STYLE.try_into_conflict_style(value.into())?;
+            Merge::CONFLICT_STYLE.try_into_conflict_style(value)?;
             Ok(())
         }
     }

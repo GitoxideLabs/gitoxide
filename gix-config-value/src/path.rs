@@ -1,6 +1,6 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
 
-use bstr::BStr;
+use bstr::{BStr, BString, ByteSlice};
 
 use crate::Path;
 
@@ -86,44 +86,35 @@ pub mod interpolate {
     }
 }
 
-impl std::ops::Deref for Path<'_> {
+impl std::ops::Deref for Path {
     type Target = BStr;
 
     fn deref(&self) -> &Self::Target {
-        self.value.as_ref()
+        self.value.as_bstr()
     }
 }
 
-impl AsRef<[u8]> for Path<'_> {
+impl AsRef<[u8]> for Path {
     fn as_ref(&self) -> &[u8] {
         self.value.as_ref()
     }
 }
 
-impl AsRef<BStr> for Path<'_> {
+impl AsRef<BStr> for Path {
     fn as_ref(&self) -> &BStr {
-        self.value.as_ref()
+        self.value.as_bstr()
     }
 }
 
-impl<'a> From<Cow<'a, BStr>> for Path<'a> {
-    fn from(value: Cow<'a, BStr>) -> Self {
+impl From<BString> for Path {
+    fn from(mut value: BString) -> Self {
         /// The prefix used to mark a path as optional in Git configuration files.
         const OPTIONAL_PREFIX: &[u8] = b":(optional)";
 
         if value.starts_with(OPTIONAL_PREFIX) {
-            // Strip the prefix while preserving the Cow variant for efficiency:
-            // - Borrowed data remains borrowed (no allocation)
-            // - Owned data is modified in-place using drain (no extra allocation)
-            let stripped = match value {
-                Cow::Borrowed(b) => Cow::Borrowed(&b[OPTIONAL_PREFIX.len()..]),
-                Cow::Owned(mut b) => {
-                    b.drain(..OPTIONAL_PREFIX.len());
-                    Cow::Owned(b)
-                }
-            };
+            value.drain(..OPTIONAL_PREFIX.len());
             Path {
-                value: stripped,
+                value,
                 is_optional: true,
             }
         } else {
@@ -135,7 +126,19 @@ impl<'a> From<Cow<'a, BStr>> for Path<'a> {
     }
 }
 
-impl<'a> Path<'a> {
+impl From<&BStr> for Path {
+    fn from(value: &BStr) -> Self {
+        Path::from(value.to_owned())
+    }
+}
+
+impl From<&str> for Path {
+    fn from(value: &str) -> Self {
+        Path::from(BString::from(value))
+    }
+}
+
+impl Path {
     /// Interpolates this path into a path usable on the file system.
     ///
     /// If this path starts with `~/` or `~user/` or `%(prefix)/`
@@ -157,7 +160,7 @@ impl<'a> Path<'a> {
             home_dir,
             home_for_user,
         }: interpolate::Context<'_>,
-    ) -> Result<Cow<'a, std::path::Path>, interpolate::Error> {
+    ) -> Result<PathBuf, interpolate::Error> {
         if self.is_empty() {
             return Err(interpolate::Error::Missing { what: "path" });
         }
@@ -176,7 +179,7 @@ impl<'a> Path<'a> {
                         err,
                     }
                 })?;
-            Ok(git_install_dir.join(path_without_trailing_slash).into())
+            Ok(git_install_dir.join(path_without_trailing_slash))
         } else if self.starts_with(USER_HOME) {
             let home_path = home_dir.ok_or(interpolate::Error::Missing { what: "home dir" })?;
             let (_prefix, val) = self.split_at(USER_HOME.len());
@@ -184,29 +187,23 @@ impl<'a> Path<'a> {
                 what: "path past ~/",
                 err,
             })?;
-            Ok(home_path.join(val).into())
+            Ok(home_path.join(val))
         } else if self.starts_with(b"~") && self.contains(&b'/') {
             self.interpolate_user(home_for_user.ok_or(interpolate::Error::Missing {
                 what: "home for user lookup",
             })?)
         } else {
-            Ok(gix_path::from_bstr(self.value))
+            Ok(gix_path::from_bstr(self.value.as_bstr()).into_owned())
         }
     }
 
     #[cfg(any(target_os = "windows", target_os = "android"))]
-    fn interpolate_user(
-        self,
-        _home_for_user: fn(&str) -> Option<PathBuf>,
-    ) -> Result<Cow<'a, std::path::Path>, interpolate::Error> {
+    fn interpolate_user(self, _home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
         Err(interpolate::Error::UserInterpolationUnsupported)
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "android")))]
-    fn interpolate_user(
-        self,
-        home_for_user: fn(&str) -> Option<PathBuf>,
-    ) -> Result<Cow<'a, std::path::Path>, interpolate::Error> {
+    fn interpolate_user(self, home_for_user: fn(&str) -> Option<PathBuf>) -> Result<PathBuf, interpolate::Error> {
         let (_prefix, val) = self.split_at("/".len());
         let i = val
             .iter()
@@ -222,6 +219,6 @@ impl<'a> Path<'a> {
                     err,
                 }
             })?;
-        Ok(home.join(path_past_user_prefix).into())
+        Ok(home.join(path_past_user_prefix))
     }
 }

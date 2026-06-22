@@ -5,11 +5,7 @@ mod get {
 
     fn config_get(input: &str) -> BString {
         let mut file: gix_config::File = input.parse().unwrap();
-        file.raw_value_mut_by("a", None, "k")
-            .unwrap()
-            .get()
-            .unwrap()
-            .into_owned()
+        file.raw_value_mut_by("a", None, "k").unwrap().get().unwrap()
     }
 
     #[test]
@@ -37,7 +33,7 @@ mod get {
         let mut config = init_config();
 
         let value = config.raw_value_mut_by("core", None, "a")?;
-        assert_eq!(&*value.get()?, "b100");
+        assert_eq!(value.get()?, "b100");
         Ok(())
     }
 }
@@ -60,18 +56,14 @@ mod set_string {
             let mut v = file.raw_value_mut_by("a", None, "k").unwrap();
             v.set_string(expected);
 
-            assert_eq!(v.get().unwrap().as_ref(), expected);
+            assert_eq!(v.get().unwrap(), expected);
 
             let file_string = file.to_string();
             let file: gix_config::File = match file_string.parse() {
                 Ok(f) => f,
                 Err(err) => panic!("{file_string:?} failed with: {err}"),
             };
-            assert_eq!(
-                file.raw_value("a.k").expect("present").as_ref(),
-                expected,
-                "{file_string:?}"
-            );
+            assert_eq!(file.raw_value("a.k").expect("present"), expected, "{file_string:?}");
         }
     }
 
@@ -233,7 +225,7 @@ b
             e=f"#
             .parse()?;
         let mut value = config.raw_value_mut_by("core", None, "a")?;
-        assert_eq!(&*value.get()?, "b100cb");
+        assert_eq!(value.get()?, "b100cb");
         value.delete();
         assert_eq!(
             config.to_string(),
@@ -243,7 +235,7 @@ b
     }
 }
 
-fn init_config() -> gix_config::File<'static> {
+fn init_config() -> gix_config::File {
     gix_config::File::try_from(
         r#"[core]
             a=b"100"

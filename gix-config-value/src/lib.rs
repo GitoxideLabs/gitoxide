@@ -3,8 +3,6 @@
 //! ## Examples
 //!
 //! ```
-//! use std::borrow::Cow;
-//!
 //! use bstr::ByteSlice;
 //! use gix_config_value::{Boolean, Integer, Path};
 //!
@@ -14,9 +12,9 @@
 //! let packed_limit = Integer::try_from("10m".as_bytes().as_bstr()).unwrap();
 //! assert_eq!(packed_limit.to_decimal(), Some(10 * 1024 * 1024));
 //!
-//! let ignore_revs = Path::from(Cow::Borrowed(b":(optional)~/.git-blame-ignore-revs".as_bstr()));
+//! let ignore_revs = Path::from(b":(optional)~/.git-blame-ignore-revs".as_bstr());
 //! assert!(ignore_revs.is_optional);
-//! assert_eq!(ignore_revs.value.as_ref(), b"~/.git-blame-ignore-revs".as_bstr());
+//! assert_eq!(ignore_revs.value.as_bstr(), b"~/.git-blame-ignore-revs".as_bstr());
 //! ```
 //!
 //! ## Feature Flags

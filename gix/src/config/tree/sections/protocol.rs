@@ -21,18 +21,17 @@ pub type Version = keys::Any<validate::Version>;
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 mod allow {
-    use std::borrow::Cow;
-
-    use crate::{bstr::BStr, config, config::tree::protocol::Allow, remote::url::scheme_permission};
+    use crate::{bstr::ByteSlice, config, config::tree::protocol::Allow, remote::url::scheme_permission};
 
     impl Allow {
         /// Convert `value` into its respective `Allow` variant, possibly informing about the `scheme` we are looking at in the error.
         pub fn try_into_allow(
             &'static self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
             scheme: Option<&str>,
         ) -> Result<scheme_permission::Allow, config::protocol::allow::Error> {
-            scheme_permission::Allow::try_from(value).map_err(|value| config::protocol::allow::Error {
+            let value = value.into_bstring();
+            scheme_permission::Allow::try_from(value.as_bstr()).map_err(|value| config::protocol::allow::Error {
                 value,
                 scheme: scheme.map(ToOwned::to_owned),
             })
@@ -116,7 +115,7 @@ mod validate {
     impl keys::Validate for Allow {
         fn validate(&self, _value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
             #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-            super::Protocol::ALLOW.try_into_allow(std::borrow::Cow::Borrowed(_value), None)?;
+            super::Protocol::ALLOW.try_into_allow(_value, None)?;
             Ok(())
         }
     }

@@ -40,7 +40,7 @@ pub struct Boolean(pub bool);
 
 /// Any value that can be interpreted as a path to a resource on disk.
 ///
-/// Git represents file paths as byte arrays, modeled here as owned or borrowed byte sequences.
+/// Git represents file paths as byte arrays, modeled here as an owned byte sequence.
 ///
 /// ## Optional Paths
 ///
@@ -49,23 +49,22 @@ pub struct Boolean(pub bool);
 /// configuration values like `blame.ignoreRevsFile` that may only exist in some repositories.
 ///
 /// ```
-/// use std::borrow::Cow;
 /// use gix_config_value::Path;
 /// use bstr::ByteSlice;
 ///
 /// // Regular path - file is expected to exist
-/// let path = Path::from(Cow::Borrowed(b"/etc/gitconfig".as_bstr()));
+/// let path = Path::from(b"/etc/gitconfig".as_bstr());
 /// assert!(!path.is_optional);
 ///
 /// // Optional path - it's okay if the file doesn't exist
-/// let path = Path::from(Cow::Borrowed(b":(optional)~/.gitignore".as_bstr()));
+/// let path = Path::from(b":(optional)~/.gitignore".as_bstr());
 /// assert!(path.is_optional);
-/// assert_eq!(path.value.as_ref(), b"~/.gitignore"); // prefix is stripped
+/// assert_eq!(path.value.as_bstr(), b"~/.gitignore"); // prefix is stripped
 /// ```
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub struct Path<'a> {
+pub struct Path {
     /// The path string, un-interpolated
-    pub value: std::borrow::Cow<'a, bstr::BStr>,
+    pub value: bstr::BString,
     /// Whether this path was prefixed with `:(optional)`, indicating it's acceptable if the file doesn't exist.
     ///
     /// Optional paths indicate that it's acceptable if the file doesn't exist.

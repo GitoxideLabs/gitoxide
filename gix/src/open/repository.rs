@@ -291,7 +291,7 @@ impl ThreadSafeRepository {
                 let wt_path = wt
                     .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
                     .map_err(|err| config::Error::PathInterpolation {
-                        path: wt_clone.value.into_owned(),
+                        path: wt_clone.value,
                         source: err,
                     })?;
                 let wt_path = match key_source {
@@ -299,11 +299,9 @@ impl ThreadSafeRepository {
                     | gix_config::Source::Cli
                     | gix_config::Source::Api
                     | gix_config::Source::EnvOverride => wt_path,
-                    _ => git_dir_resolving_symlinks_for_worktree_base(&git_dir, current_dir)
-                        .join(wt_path)
-                        .into(),
+                    _ => git_dir_resolving_symlinks_for_worktree_base(&git_dir, current_dir).join(wt_path),
                 };
-                worktree_dir = gix_path::normalize(wt_path, current_dir).map(Cow::into_owned);
+                worktree_dir = gix_path::normalize(wt_path.into(), current_dir).map(Cow::into_owned);
                 #[allow(unused_variables)]
                 if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
                     gix_trace::warn!(
@@ -363,7 +361,6 @@ impl ThreadSafeRepository {
                 .strings_filter(Safe::DIRECTORY, &mut Safe::directory_filter)
                 .unwrap_or_default()
                 .into_iter()
-                .map(Cow::into_owned)
                 .collect();
             let test_dir = worktree_dir.as_deref().unwrap_or(git_dir.as_path());
             let res = check_safe_directories(
@@ -538,7 +535,7 @@ fn git_dir_resolving_symlinks_for_worktree_base<'a>(git_dir: &'a Path, current_d
 
 // TODO: tests
 fn replacement_objects_refs_prefix(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<BString>, Error> {
@@ -555,9 +552,8 @@ fn replacement_objects_refs_prefix(
         debug_assert_eq!(gitoxide::Objects::REPLACE_REF_BASE.logical_name(), key);
         config
             .string_filter(key, &mut filter_config_section)
-            .unwrap_or_else(|| Cow::Borrowed("refs/replace/".into()))
-    }
-    .into_owned();
+            .unwrap_or_else(|| "refs/replace/".into())
+    };
     Ok(Some(ref_base))
 }
 
@@ -584,12 +580,11 @@ fn check_safe_directories(
             continue;
         }
         if !is_safe {
-            let safe_dir = match gix_config::Path::from(Cow::Borrowed(safe_dir))
-                .interpolate(interpolate_context(git_install_dir, home))
-            {
-                Ok(path) => path,
-                Err(_) => gix_path::from_bstr(safe_dir),
-            };
+            let safe_dir =
+                match gix_config::Path::from(safe_dir).interpolate(interpolate_context(git_install_dir, home)) {
+                    Ok(path) => path,
+                    Err(_) => gix_path::from_bstr(safe_dir).into_owned(),
+                };
             if !safe_dir.is_absolute() {
                 gix_trace::warn!(
                     "safe.directory '{safe_dir}' not absolute",

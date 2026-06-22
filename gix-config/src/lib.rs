@@ -27,12 +27,12 @@
 //!
 //! const SAMPLE: &str = "[core]\neditor = vim\nbare = false\n[remote \"origin\"]\nurl = https://example.com/gitoxide.git\n";
 //! let mut config = gix_config::File::from_str(SAMPLE).unwrap();
-//! assert_eq!(config.string_by("core", None, "editor").unwrap().as_ref(), "vim");
+//! assert_eq!(config.string_by("core", None, "editor").unwrap(), "vim");
 //! assert_eq!(config.boolean_by("core", None, "bare").unwrap().unwrap(), false);
 //!
 //! let previous = config.set_raw_value(&"core.editor", "nvim").unwrap().unwrap();
-//! assert_eq!(previous.as_ref(), "vim");
-//! assert_eq!(config.raw_value("core.editor").unwrap().as_ref(), "nvim");
+//! assert_eq!(previous, "vim");
+//! assert_eq!(config.raw_value("core.editor").unwrap(), "nvim");
 //! assert!(config.to_bstring().find(b"nvim").is_some());
 //! ```
 //!

@@ -43,19 +43,17 @@ mod algorithm {
         /// Derive the negotiation algorithm identified by `name`, case-sensitively.
         pub fn try_into_negotiation_algorithm(
             &'static self,
-            name: std::borrow::Cow<'_, crate::bstr::BStr>,
+            name: impl crate::config::tree::keys::IntoBString,
         ) -> Result<crate::remote::fetch::negotiate::Algorithm, crate::config::key::GenericErrorWithValue> {
             use crate::{bstr::ByteSlice, remote::fetch::negotiate::Algorithm};
 
-            Ok(match name.as_ref().as_bytes() {
+            let name = name.into_bstring();
+            Ok(match name.as_bstr().as_bytes() {
                 b"noop" => Algorithm::Noop,
                 b"consecutive" | b"default" => Algorithm::Consecutive,
                 b"skipping" => Algorithm::Skipping,
                 _ => {
-                    return Err(crate::config::key::GenericErrorWithValue::from_value(
-                        self,
-                        name.into_owned(),
-                    ));
+                    return Err(crate::config::key::GenericErrorWithValue::from_value(self, name));
                 }
             })
         }
@@ -83,7 +81,7 @@ mod validate {
         #[cfg_attr(not(feature = "credentials"), allow(unused_variables))]
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
             #[cfg(feature = "credentials")]
-            crate::config::tree::Fetch::NEGOTIATION_ALGORITHM.try_into_negotiation_algorithm(value.into())?;
+            crate::config::tree::Fetch::NEGOTIATION_ALGORITHM.try_into_negotiation_algorithm(value)?;
             Ok(())
         }
     }

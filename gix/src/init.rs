@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use std::{borrow::Cow, path::Path};
+use std::path::Path;
 
 use gix_ref::{
     Category, FullName, Target,
@@ -79,9 +79,9 @@ impl ThreadSafeRepository {
             .config
             .resolved
             .string(Init::DEFAULT_BRANCH)
-            .unwrap_or_else(|| Cow::Borrowed(DEFAULT_BRANCH_NAME.into()));
-        if branch_name.as_ref() != DEFAULT_BRANCH_NAME {
-            let configured_branch_name = branch_name.into_owned();
+            .unwrap_or_else(|| DEFAULT_BRANCH_NAME.into());
+        if branch_name.as_bstr() != DEFAULT_BRANCH_NAME {
+            let configured_branch_name = branch_name;
             let sym_ref: FullName = Category::LocalBranch
                 .to_full_name(configured_branch_name.as_bstr())
                 .map_err(|err| Error::InvalidBranchName {

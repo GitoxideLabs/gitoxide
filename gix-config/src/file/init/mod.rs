@@ -15,10 +15,11 @@ pub mod from_env;
 ///
 pub mod from_paths;
 
-impl<'a> File<'a> {
+impl File {
     /// Return an empty `File` with the given `meta`-data to be attached to all new sections.
     pub fn new(meta: impl Into<OwnShared<Metadata>>) -> Self {
         Self {
+            event_backing: Default::default(),
             frontmatter_events: Default::default(),
             frontmatter_post_section: Default::default(),
             section_lookup_tree: Default::default(),
@@ -32,13 +33,13 @@ impl<'a> File<'a> {
     /// Instantiate a new `File` from given `input`, associating each section and their values with
     /// `meta`-data, while respecting `options`.
     pub fn from_bytes_no_includes(
-        input: &'a [u8],
+        input: &[u8],
         meta: impl Into<OwnShared<Metadata>>,
         options: Options<'_>,
     ) -> Result<Self, Error> {
         let meta = meta.into();
         Ok(Self::from_parse_events_no_includes(
-            parse::Events::from_bytes(input, options.to_event_filter())?,
+            parse::Events::from_bytes_owned(input, options.to_event_filter())?,
             meta,
         ))
     }
@@ -46,18 +47,23 @@ impl<'a> File<'a> {
     /// Instantiate a new `File` from given `events`, associating each section and their values with
     /// `meta`-data.
     pub fn from_parse_events_no_includes(
-        parse::Events { frontmatter, sections }: parse::Events<'a>,
+        parse::Events {
+            backing,
+            frontmatter,
+            sections,
+        }: parse::Events,
         meta: impl Into<OwnShared<Metadata>>,
     ) -> Self {
         let meta = meta.into();
         let mut this = File::new(OwnShared::clone(&meta));
 
+        this.event_backing = backing;
         this.frontmatter_events = frontmatter;
 
         this.sections.reserve(sections.len());
         this.section_order.reserve(sections.len());
         for section in sections {
-            this.push_section_internal(crate::file::Section {
+            this.push_section_internal(crate::file::SectionData {
                 header: section.header,
                 body: section::Body(section.events),
                 meta: OwnShared::clone(&meta),
@@ -68,7 +74,7 @@ impl<'a> File<'a> {
     }
 }
 
-impl File<'static> {
+impl File {
     /// Instantiate a new fully-owned `File` from given `input` (later reused as buffer when resolving includes),
     /// associating each section and their values with `meta`-data, while respecting `options`, and
     /// following includes as configured there.
