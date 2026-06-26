@@ -64,6 +64,7 @@ check:
         2>&1 >/dev/null | grep '^warning: nothing to print\>'
     ! cargo tree -p gix --no-default-features -i gix-credentials 2>/dev/null
     cargo check --no-default-features --features lean
+    cargo check --no-default-features --features local
     cargo check --no-default-features --features lean-async
     cargo check --no-default-features --features max
     cargo check -p gitoxide-core --features gix/sha1,blocking-client
