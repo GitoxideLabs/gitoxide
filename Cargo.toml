@@ -82,6 +82,18 @@ small = ["hashes", "pretty-cli", "prodash-render-line", "is-terminal"]
 ## It uses, however, a fully asynchronous networking implementation which can serve a real-world example on how to implement custom async transports.
 lean-async = ["hashes", "fast", "tracing", "pretty-cli", "gitoxide-core-tools", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-async-client", "prodash-render-line"]
 
+## A fast, pure-Rust build for local-only repository operations.
+##
+## Keeps local operations and the local `ein` tools with parallelism, but omits the HTTP/SSH client
+## stack, so there is no `clone`, `fetch` or `push`. Unlike `lean`/`max` it pulls in none of the
+## curl/reqwest/TLS backends, and unlike the analytics tools it needs no bundled SQLite -- so the
+## dependency graph stays pure Rust with no C toolchain required. A good fit for packaging in
+## constrained, audited, embedded or minimal-toolchain environments, and where a smaller all-Rust
+## graph reduces the chance an unrelated transitive crate forces a version bump.
+##
+## The pure-Rust transport abstraction crates remain in the graph, but no networked command is exposed.
+local = ["hashes", "fast", "tracing", "pretty-cli", "gitoxide-core-tools", "prodash-render-line"]
+
 #! ### Package Maintainers
 #! `*-control` features leave it to you to configure C libraries, involving choices for HTTP transport implementation.
 #!
