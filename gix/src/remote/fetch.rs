@@ -33,4 +33,8 @@ pub(crate) enum WritePackedRefs {
 
 #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use gix_protocol::fetch::{RefMap, refmap};
-pub use gix_protocol::fetch::{Shallow, Tags};
+/// The way tags are handled during a fetch, available without the network stack as part of the
+/// always-present remote configuration API.
+pub use gix_refspec::Tags;
+/// How shallow clones are handled during a fetch, available without the network stack.
+pub use gix_shallow::Shallow;

@@ -61,3 +61,31 @@ pub use match_group::types::MatchGroup;
 
 mod types;
 pub use types::Instruction;
+
+/// Describe how to handle tags when fetching.
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Tags {
+    /// Fetch all tags from the remote, even if these are not reachable from objects referred to by our refspecs.
+    All,
+    /// Fetch only the tags that point to the objects being sent.
+    /// That way, annotated tags that point to an object we receive are automatically transmitted and their refs are created.
+    /// The same goes for lightweight tags.
+    #[default]
+    Included,
+    /// Do not fetch any tags.
+    None,
+}
+
+impl Tags {
+    /// Obtain a refspec that determines whether or not to fetch all tags, depending on this variant.
+    ///
+    /// The returned refspec is the default refspec for tags, but won't overwrite local tags ever.
+    pub fn to_refspec(&self) -> Option<RefSpecRef<'static>> {
+        match self {
+            Tags::All | Tags::Included => Some(
+                parse("refs/tags/*:refs/tags/*".into(), parse::Operation::Fetch).expect("valid"),
+            ),
+            Tags::None => None,
+        }
+    }
+}

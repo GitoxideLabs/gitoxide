@@ -146,6 +146,7 @@ pub use gix_object::bstr;
 pub use gix_odb as odb;
 #[cfg(feature = "credentials")]
 pub use gix_prompt as prompt;
+#[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
 pub use gix_protocol as protocol;
 pub use gix_ref as refs;
 pub use gix_refspec as refspec;

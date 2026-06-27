@@ -49,7 +49,6 @@ fetch = [
     "dep:gix-object",
     "dep:gix-revwalk",
     "dep:gix-lock",
-    "dep:gix-refspec",
     "dep:gix-trace",
 ]
 
@@ -87,7 +86,7 @@ gix-negotiate = { version = "^0.33.0", path = "../gix-negotiate", optional = tru
 gix-object = { version = "^0.62.0", path = "../gix-object", optional = true }
 gix-revwalk = { version = "^0.33.0", path = "../gix-revwalk", optional = true }
 gix-credentials = { version = "^0.38.1", path = "../gix-credentials", optional = true }
-gix-refspec = { version = "^0.43.0", path = "../gix-refspec", optional = true }
+gix-refspec = { version = "^0.43.0", path = "../gix-refspec" }
 gix-lock = { version = "^23.0.0", path = "../gix-lock", optional = true }
 
 thiserror = "2.0.18"

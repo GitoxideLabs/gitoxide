@@ -174,78 +174,16 @@ mod with_fetch {
 #[cfg(feature = "fetch")]
 pub use with_fetch::*;
 
-/// Describe how shallow clones are handled when fetching, with variants defining how the *shallow boundary* is handled.
+/// Describe how shallow clones are handled when fetching.
 ///
-/// The *shallow boundary* is a set of commits whose parents are not present in the repository.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub enum Shallow {
-    /// Fetch all changes from the remote without affecting the shallow boundary at all.
-    ///
-    /// This also means that repositories that aren't shallow will remain like that.
-    #[default]
-    NoChange,
-    /// Receive update to `depth` commits in the history of the refs to fetch (from the viewpoint of the remote),
-    /// with the value of `1` meaning to receive only the commit a ref is pointing to.
-    ///
-    /// This may update the shallow boundary to increase or decrease the amount of available history.
-    DepthAtRemote(std::num::NonZeroU32),
-    /// Increase the number of commits and thus expand the shallow boundary by `depth` commits as seen from our local
-    /// shallow boundary, with a value of `0` having no effect.
-    Deepen(u32),
-    /// Set the shallow boundary at the `cutoff` time, meaning that there will be no commits beyond that time.
-    Since {
-        /// The date beyond which there will be no history.
-        cutoff: gix_date::Time,
-    },
-    /// Receive all history excluding all commits reachable from `remote_refs`. These can be long or short
-    /// ref names or tag names.
-    Exclude {
-        /// The ref names to exclude, short or long. Note that ambiguous short names will cause the remote to abort
-        /// without an error message being transferred (because the protocol does not support it)
-        remote_refs: Vec<gix_ref::PartialName>,
-        /// If some, this field has the same meaning as [`Shallow::Since`] which can be used in combination
-        /// with excluded references.
-        since_cutoff: Option<gix_date::Time>,
-    },
-}
+/// Re-exported from `gix-shallow`, where this type lives so it remains available without the network/protocol stack.
+pub use gix_shallow::Shallow;
 
-impl Shallow {
-    /// Produce a variant that causes the repository to loose its shallow boundary, effectively by extending it
-    /// beyond all limits.
-    pub fn undo() -> Self {
-        Shallow::DepthAtRemote((i32::MAX as u32).try_into().expect("valid at compile time"))
-    }
-}
+/// Describe how to handle tags when fetching.
+///
+/// Re-exported from `gix-refspec`, where this type lives so it remains available without the network/protocol stack.
+pub use gix_refspec::Tags;
 
-/// Describe how to handle tags when fetching
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Tags {
-    /// Fetch all tags from the remote, even if these are not reachable from objects referred to by our refspecs.
-    All,
-    /// Fetch only the tags that point to the objects being sent.
-    /// That way, annotated tags that point to an object we receive are automatically transmitted and their refs are created.
-    /// The same goes for lightweight tags.
-    #[default]
-    Included,
-    /// Do not fetch any tags.
-    None,
-}
-
-impl Tags {
-    /// Obtain a refspec that determines whether or not to fetch all tags, depending on this variant.
-    ///
-    /// The returned refspec is the default refspec for tags, but won't overwrite local tags ever.
-    #[cfg(feature = "fetch")]
-    pub fn to_refspec(&self) -> Option<gix_refspec::RefSpecRef<'static>> {
-        match self {
-            Tags::All | Tags::Included => Some(
-                gix_refspec::parse("refs/tags/*:refs/tags/*".into(), gix_refspec::parse::Operation::Fetch)
-                    .expect("valid"),
-            ),
-            Tags::None => None,
-        }
-    }
-}
 
 /// A representation of a complete fetch response
 #[derive(Debug, Clone)]

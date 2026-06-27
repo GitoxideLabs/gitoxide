@@ -312,7 +312,7 @@ serde = [
     "dep:serde",
     "gix-pack/serde",
     "gix-object/serde",
-    "gix-protocol/serde",
+    "gix-protocol?/serde",
     "gix-transport?/serde",
     "gix-ref/serde",
     "gix-odb/serde",
@@ -396,7 +396,7 @@ gix-archive = { version = "^0.34.0", path = "../gix-archive", default-features =
 gix-blame = { version = "^0.15.0", path = "../gix-blame", optional = true }
 
 # For communication with remotes
-gix-protocol = { version = "^0.63.0", path = "../gix-protocol" }
+gix-protocol = { version = "^0.63.0", path = "../gix-protocol", optional = true }
 gix-transport = { version = "^0.57.2", path = "../gix-transport", optional = true }
 
 # Just to get the progress-tree feature
