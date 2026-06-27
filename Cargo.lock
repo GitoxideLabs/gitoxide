@@ -2414,8 +2414,10 @@ name = "gix-shallow"
 version = "0.12.1"
 dependencies = [
  "bstr",
+ "gix-date",
  "gix-hash",
  "gix-lock",
+ "gix-ref",
  "nonempty",
  "serde",
  "tempfile",
