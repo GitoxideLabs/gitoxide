@@ -82,9 +82,9 @@ impl Tags {
     /// The returned refspec is the default refspec for tags, but won't overwrite local tags ever.
     pub fn to_refspec(&self) -> Option<RefSpecRef<'static>> {
         match self {
-            Tags::All | Tags::Included => Some(
-                parse("refs/tags/*:refs/tags/*".into(), parse::Operation::Fetch).expect("valid"),
-            ),
+            Tags::All | Tags::Included => {
+                Some(parse("refs/tags/*:refs/tags/*".into(), parse::Operation::Fetch).expect("valid"))
+            }
             Tags::None => None,
         }
     }

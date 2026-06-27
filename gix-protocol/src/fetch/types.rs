@@ -184,7 +184,6 @@ pub use gix_shallow::Shallow;
 /// Re-exported from `gix-refspec`, where this type lives so it remains available without the network/protocol stack.
 pub use gix_refspec::Tags;
 
-
 /// A representation of a complete fetch response
 #[derive(Debug, Clone)]
 pub struct Response {
