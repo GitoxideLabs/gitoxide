@@ -11,7 +11,7 @@ pub use receive::receive;
 pub mod create;
 pub use create::create;
 
-#[cfg(feature = "experimental-delta-create")]
+#[cfg(feature = "experimental")]
 pub mod delta_create;
-#[cfg(feature = "experimental-delta-create")]
+#[cfg(feature = "experimental")]
 pub use delta_create::delta_create;

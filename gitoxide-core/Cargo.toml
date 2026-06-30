@@ -15,7 +15,7 @@ doctest = false
 test = true
 
 [features]
-default = []
+default = ["experimental"]
 
 #! ### Tools
 ## Discover all git repositories within a directory. Particularly useful with [skim](https://github.com/lotabout/skim).
@@ -47,8 +47,13 @@ async-client = ["gix/async-network-client-async-std", "gix-transport-configurati
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["gix/serde", "dep:serde_json", "dep:serde", "bytesize/serde"]
 
-## The experimental ability to create a pack with delta compression.
-experimental-delta-create = ["gix-features", "dep:parking_lot"]
+## Enable experimental functionality.
+##
+## Experimental features have no more than basic functional testing. They may be fully AI-generated
+## and lack the deep refackiew - refactor and review - applied to the rest of the codebase.
+## Experimental features are temporary: they will either be removed, or migrate into plumbing once
+## they receive the same diligence as the rest of the codebase.
+experimental = ["gix-features", "dep:parking_lot"]
 
 [dependencies]
 # deselect everything else (like "performance") as this should be controllable by the parent application.

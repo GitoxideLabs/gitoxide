@@ -231,7 +231,6 @@ title "gix commit-graph"
 (with "gix free"
   snapshot="$snapshot/no-repo"
   title "gix free pack"
-  (if test "$kind" != "delta-create"; then
   (when "running 'pack'"
     snapshot="$snapshot/pack"
 
@@ -756,10 +755,9 @@ title "gix commit-graph"
       )
     )
   )
-  fi)
 
   title "gix free pack delta-create"
-  (if test "$kind" = "delta-create"; then
+  (if test "$kind" = "max"; then
   (with "the 'delta-create' sub-command"
     snapshot="$snapshot/delta-create"
     (pack-repo-in-sandbox

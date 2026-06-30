@@ -219,7 +219,7 @@ pub mod pack {
             /// Otherwise the expansion mode is 'tree-traversal' by default.
             tips: Vec<OsString>,
         },
-        #[cfg(feature = "gitoxide-core-tools-delta-create")]
+        #[cfg(feature = "experimental")]
         /// Create a new pack with customized delta topological relationships. NOTE: This is an experimental feature and may change in the future.
         DeltaCreate {
             #[clap(long, short = 'r')]

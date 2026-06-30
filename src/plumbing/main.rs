@@ -993,7 +993,7 @@ pub fn main() -> Result<()> {
                         },
                     )
                 }
-                #[cfg(feature = "gitoxide-core-tools-delta-create")]
+                #[cfg(feature = "experimental")]
                 free::pack::Subcommands::DeltaCreate {
                     repository,
                     statistics,

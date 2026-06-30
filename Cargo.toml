@@ -30,7 +30,7 @@ test = false
 doctest = false
 
 [features]
-default = ["max"]
+default = ["max", "experimental"]
 
 #! ### Build Configuration
 #! These combine common choices of building blocks to represent typical builds.
@@ -127,6 +127,14 @@ prodash-render-line = ["prodash/render-line", "prodash-render-line-crossterm", "
 ## Use this as a way to understand if bigger caches actually produce greater yields.
 cache-efficiency-debug = ["gix-features/cache-efficiency-debug"]
 
+## Enable experimental functionality.
+##
+## Experimental features have no more than basic functional testing. They may be fully AI-generated
+## and lack the deep refackiew - refactor and review - applied to the rest of the codebase.
+## Experimental features are temporary: they will either be removed, or migrate into plumbing once
+## they receive the same diligence as the rest of the codebase.
+experimental = ["gitoxide-core/experimental"]
+
 ##  A way to enable most `gitoxide-core` tools found in `ein tools`, namely `organize` and `estimate hours`.
 gitoxide-core-tools = ["gitoxide-core/organize", "gitoxide-core/estimate-hours", "gitoxide-core-tools-archive", "gitoxide-core-tools-clean"]
 
@@ -141,10 +149,6 @@ gitoxide-core-tools-archive = ["gitoxide-core/archive"]
 
 ## A sub-command to clean the worktree from untracked and ignored files.
 gitoxide-core-tools-clean = ["gitoxide-core/clean"]
-
-## A sub-command to create a pack with delta compression.
-## NOTE: This is an experimental feature and may change in the future.
-gitoxide-core-tools-delta-create = ["gitoxide-core/experimental-delta-create"]
 
 #! ### Building Blocks for mutually exclusive networking
 #! Blocking and async features are mutually exclusive and cause a compile-time error. This also means that `cargo … --all-features` will fail.
@@ -172,7 +176,7 @@ gitoxide-core-async-client = ["gitoxide-core/async-client", "futures-lite"]
 [dependencies]
 anyhow = "1.0.98"
 
-gitoxide-core = { version = "^0.59.0", path = "gitoxide-core" }
+gitoxide-core = { version = "^0.59.0", path = "gitoxide-core", default-features = false }
 gix-features = { version = "^0.48.1", path = "gix-features" }
 gix = { version = "^0.85.0", path = "gix", default-features = false }
 
