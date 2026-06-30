@@ -463,7 +463,7 @@ mod iter_from_counts {
                             else if let Some((target, _)) = db_find_cached(&oid, buf_t)? {
                                 if let Some((source, _)) = db_find_cached(source_oid, buf_s)? {
                                     let delta_data = delta_diff::diff(source.data, target.data)
-                                        .expect("delta diff algorithm should valid");
+                                        .map_err(|err| Error::NewEntry(std::io::Error::other(err).into()))?;
                                     let mut deflate = gix_features::zlib::stream::deflate::Write::new(Vec::new());
                                     std::io::copy(&mut delta_data.as_slice(), &mut deflate)
                                         .map_err(|e| Error::NewEntry(e.into()))?;
@@ -541,14 +541,15 @@ mod iter_from_counts {
             }
         }
 
-        let mut stack: Vec<CountIndex> = idx_to_child_count
-            .iter()
-            .filter_map(|(&c, count)| (*count == 0).then_some(c)) // Collect leaf vertex
+        let mut stack: Vec<CountIndex> = (0..n)
+            .filter(|idx| idx_to_child_count.get(idx) == Some(&0)) // Collect leaf vertices in count order.
             .collect();
         let mut sorted = Vec::with_capacity(n);
         while let Some(curr) = stack.pop() {
             if let Some(parent) = to_parent.get(&counts[curr].id) {
-                let parent = oid_to_idx.get(parent).unwrap();
+                let parent = oid_to_idx
+                    .get(parent)
+                    .expect("parent ObjectId in to_parent should exist in counts");
                 if let Some(count) = idx_to_child_count.get_mut(parent) {
                     *count -= 1;
                     if *count == 0 {
@@ -592,8 +593,7 @@ mod iter_from_counts {
         }
 
         let pack_offset_must_be_zero = 0;
-        let pack_entry =
-            pack::data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.as_slice().len()).ok()?;
+        let pack_entry = pack::data::Entry::from_bytes(&entry.data, pack_offset_must_be_zero, count.id.kind()).ok()?;
 
         use pack::data::entry::Header::*;
         let source_matches = match pack_entry.header {
@@ -616,6 +616,36 @@ mod iter_from_counts {
 
         let compressed = entry.data[pack_entry.data_offset as usize..].to_vec();
         Some((compressed, pack_entry.decompressed_size as usize))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn topo_sort_keeps_unrelated_objects_in_count_order() {
+            let ids = [
+                "1111111111111111111111111111111111111111",
+                "2222222222222222222222222222222222222222",
+                "3333333333333333333333333333333333333333",
+            ]
+            .map(|hex| ObjectId::from_hex(hex.as_bytes()).expect("valid hex object id"));
+            let mut counts = ids
+                .iter()
+                .map(|id| output::Count {
+                    id: *id,
+                    entry_pack_location: output::count::PackLocation::NotLookedUp,
+                })
+                .collect::<Vec<_>>();
+
+            topo_sort(&mut counts, &HashMap::new()).expect("no cycle without parent relationships");
+
+            assert_eq!(
+                counts.iter().map(|count| count.id).collect::<Vec<_>>(),
+                ids,
+                "unrelated objects retain the input count order"
+            );
+        }
     }
 
     /// NOTE: except `apply_permutation`, copied from gix-pack/src/data/output/entry/iter_from_counts.rs
@@ -831,11 +861,13 @@ mod iter_from_counts {
                     break;
                 }
             }
-            if common_prefix_len > 0 {
-                insts.push(Instruction::Copy {
-                    offset: 0,
-                    size: common_prefix_len,
-                });
+            let mut remaining_prefix_len = common_prefix_len;
+            let mut offset = 0;
+            while remaining_prefix_len > 0 {
+                let size = remaining_prefix_len.min(0x00ff_ffff);
+                insts.push(Instruction::Copy { offset, size });
+                remaining_prefix_len -= size;
+                offset += size;
             }
 
             for chunk in target[common_prefix_len..].chunks(127) {
@@ -854,6 +886,39 @@ mod iter_from_counts {
                 inst.encode(&mut delta_data)?;
             }
             Ok(delta_data)
+        }
+
+        #[cfg(test)]
+        mod tests {
+            use super::*;
+
+            #[test]
+            fn common_prefix_larger_than_copy_limit_is_split() {
+                let source = vec![b'a'; 0x0100_0001];
+                let mut target = source.clone();
+                target.extend_from_slice(b"tail");
+
+                let instructions = compute_delta(&source, &target);
+
+                assert!(
+                    matches!(
+                        instructions.as_slice(),
+                        [
+                            Instruction::Copy {
+                                offset: 0,
+                                size: 0x00ff_ffff,
+                            },
+                            Instruction::Copy {
+                                offset: 0x00ff_ffff,
+                                size: 2,
+                            },
+                            Instruction::Add { data: b"tail" },
+                        ]
+                    ),
+                    "large common prefixes are represented as multiple valid copy instructions"
+                );
+                diff(&source, &target).expect("split copy instructions stay within the delta encoding limits");
+            }
         }
     }
 }
