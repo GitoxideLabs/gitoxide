@@ -768,24 +768,46 @@ pub fn main() -> Result<()> {
                 }
             }
         }
-        Subcommands::Config(config::Platform { filter }) => prepare_and_run(
-            "config-list",
-            trace,
-            verbose,
-            progress,
-            progress_keep_open,
-            None,
-            move |_progress, out, _err| {
-                core::repository::config::list(
-                    repository(Mode::LenientWithGitInstallConfig)?,
-                    filter,
-                    config,
-                    format,
-                    out,
-                )
-            },
-        )
-        .map(|_| ()),
+        Subcommands::Config(config::Platform { filter, cmd }) => match cmd {
+            Some(config::Subcommands::Fmt {
+                in_place,
+                in_file,
+                out_file,
+            }) => prepare_and_run(
+                "config-fmt",
+                trace,
+                verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| {
+                    let repo = in_file
+                        .is_none()
+                        .then(|| repository(Mode::LenientWithGitInstallConfig))
+                        .transpose()?;
+                    core::repository::config::fmt(repo, in_file, out_file, in_place, out)
+                },
+            )
+            .map(|_| ()),
+            None => prepare_and_run(
+                "config-list",
+                trace,
+                verbose,
+                progress,
+                progress_keep_open,
+                None,
+                move |_progress, out, _err| {
+                    core::repository::config::list(
+                        repository(Mode::LenientWithGitInstallConfig)?,
+                        filter,
+                        config,
+                        format,
+                        out,
+                    )
+                },
+            )
+            .map(|_| ()),
+        },
         Subcommands::Free(subcommands) => match subcommands {
             free::Subcommands::Discover => prepare_and_run(
                 "discover",

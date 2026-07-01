@@ -51,7 +51,7 @@ pub fn list(
 /// Format the git configuration file at `in_file`, or the repository-local configuration if `in_file`
 /// is `None`, writing the result back in place, to `out_file`, or to `out` (stdout) respectively.
 pub fn fmt(
-    repo: gix::Repository,
+    repo: Option<gix::Repository>,
     in_file: Option<std::path::PathBuf>,
     out_file: Option<std::path::PathBuf>,
     in_place: bool,
@@ -60,9 +60,15 @@ pub fn fmt(
     if in_place && out_file.is_some() {
         bail!("Cannot combine --in-place with an explicit output file");
     }
-    let source = in_file.unwrap_or_else(|| repo.common_dir().join("config"));
-    let input =
-        std::fs::read(&source).with_context(|| format!("Could not read configuration file at '{}'", source.display()))?;
+    let source = match in_file {
+        Some(path) => path,
+        None => repo
+            .context("Formatting the repository-local configuration requires being in a repository")?
+            .common_dir()
+            .join("config"),
+    };
+    let input = std::fs::read(&source)
+        .with_context(|| format!("Could not read configuration file at '{}'", source.display()))?;
     let formatted = gix::config::parse::format::normalize(&input, &Default::default())?;
     let destination = if in_place { Some(source) } else { out_file };
     match destination {
