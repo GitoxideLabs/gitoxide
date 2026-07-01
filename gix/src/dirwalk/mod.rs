@@ -71,6 +71,16 @@ pub struct Outcome<'repo> {
     pub dirwalk: gix_dir::walk::Outcome,
 }
 
+/// Control whether the untracked cache should be consulted during directory walks.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub enum UntrackedCache {
+    /// Consult the untracked cache when it is present and otherwise applicable.
+    #[default]
+    Use,
+    /// Ignore the untracked cache even if it is present.
+    Ignore,
+}
+
 /// Options for use in the [`Repository::dirwalk()`](crate::Repository::dirwalk()) function.
 ///
 /// Note that all values start out disabled.
@@ -89,5 +99,6 @@ pub struct Options {
     classify_untracked_bare_repositories: bool,
     emit_collapsed: Option<CollapsedEntriesEmissionMode>,
     symlinks_to_directories_are_ignored_like_directories: bool,
+    untracked_cache: UntrackedCache,
     pub(crate) empty_patterns_match_prefix: bool,
 }

@@ -20,6 +20,8 @@ test = false
 sha1 = ["gix-index/sha1"]
 ## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
 sha256 = ["gix-index/sha256"]
+## Enable support for handling attributes, forwarding the feature to dependencies.
+attributes = ["gix-worktree/attributes"]
 
 [dependencies]
 gix-trace = { version = "^0.1.20", path = "../gix-trace" }
@@ -35,6 +37,10 @@ gix-utils = { version = "^0.3.3", path = "../gix-utils", features = ["bstr"] }
 
 bstr = { version = "1.12.0", default-features = false }
 thiserror = "2.0.18"
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2.182" }
+rustix = { version = "1.1.2", default-features = false, features = ["std", "system"] }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
