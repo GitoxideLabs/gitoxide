@@ -14,6 +14,11 @@ pub mod describe;
 #[cfg(feature = "describe")]
 pub use describe::function::describe;
 ///
+#[cfg(feature = "name_rev")]
+pub mod name_rev;
+#[cfg(feature = "name_rev")]
+pub use name_rev::function::name_rev;
+///
 #[allow(clippy::empty_docs)]
 #[cfg(feature = "merge_base")]
 pub mod merge_base;

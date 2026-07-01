@@ -211,6 +211,20 @@ impl<'repo> Commit<'repo> {
         }
     }
 
+    /// Create a platform to further configure a `git name-rev` operation to find a name for this commit by looking
+    /// at all references by default.
+    #[cfg(feature = "revision")]
+    pub fn name_rev(&self) -> crate::commit::name_rev::Platform<'repo> {
+        crate::commit::name_rev::Platform {
+            id: self.id,
+            repo: self.repo,
+            select: crate::commit::name_rev::SelectRef::AllRefs,
+            include_refs: Vec::new(),
+            exclude_refs: Vec::new(),
+            id_as_fallback: false,
+        }
+    }
+
     /// Extracts the PGP signature and the data that was used to create the signature, or `None` if it wasn't signed.
     // TODO: make it possible to verify the signature, probably by wrapping `SignedData`. It's quite some work to do it properly.
     pub fn signature(

@@ -153,7 +153,7 @@ attributes = [
 mailmap = ["dep:gix-mailmap", "revision"]
 
 ## Make revspec parsing possible, as well describing revision.
-revision = ["gix-revision/describe", "gix-revision/merge_base", "index"]
+revision = ["gix-revision/describe", "gix-revision/merge_base", "gix-revision/name_rev", "index"]
 
 ## If enabled, revspecs now support the regex syntax like `@^{/^.*x}`. Otherwise, only substring search is supported.
 ## This feature does increase compile time for niche-benefit, but is required for fully git-compatible revspec parsing.

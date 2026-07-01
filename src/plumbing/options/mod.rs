@@ -993,6 +993,35 @@ pub mod commit {
             /// A specification of the revision to use, or the current `HEAD` if unset.
             rev_spec: Option<String>,
         },
+        /// Find a symbolic name for the current commit or the given one.
+        NameRev {
+            /// Only use tags to name commits.
+            #[clap(long)]
+            tags: bool,
+
+            /// Only use refs matching the given pattern. Can be passed multiple times.
+            #[clap(long = "refs")]
+            refs: Vec<String>,
+
+            /// Ignore refs matching the given pattern. Can be passed multiple times.
+            #[clap(long)]
+            exclude: Vec<String>,
+
+            /// Show an abbreviated commit object as fallback.
+            #[clap(long)]
+            always: bool,
+
+            /// Fail if no name can be found.
+            #[clap(long = "no-undefined")]
+            no_undefined: bool,
+
+            /// Print only the ref-based name.
+            #[clap(long)]
+            name_only: bool,
+
+            /// A specification of the revision to use, or the current `HEAD` if unset.
+            rev_spec: Option<String>,
+        },
     }
 }
 
