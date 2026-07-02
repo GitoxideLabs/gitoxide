@@ -930,6 +930,123 @@ fn add_only() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn rename_tracking_is_order_independent() -> crate::Result {
+    // #1832: exactly one of several identical-content additions can be matched as the rename of a
+    // deletion. Which one is chosen must not depend on the order in which items are pushed - but
+    // the parallel dirwalk and index-traversal threads deliver them in a nondeterministic order,
+    // which is what makes the corresponding `gix-status` test intermittently fail on CI.
+    let renames_by_identity = Rewrites {
+        copies: None,
+        percentage: None,
+        limit: 0,
+        track_empty: false,
+    };
+    let changes = vec![
+        (Change::deletion(), "src", "identical\n"),
+        (Change::addition(), "a-dest", "identical\n"),
+        (Change::addition(), "b-dest", "identical\n"),
+    ];
+
+    let mut reference: Option<Vec<(String, Option<String>)>> = None;
+    for order in permutations(changes.clone()) {
+        let mut track = util::new_tracker(renames_by_identity);
+        util::add_retained_blobs(&mut track, order.iter().copied())?;
+        let mut pairs = Vec::new();
+        util::assert_emit(&mut track, |dst, src| {
+            pairs.push((dst.location.to_string(), src.map(|src| src.location.to_string())));
+            std::ops::ControlFlow::Continue(())
+        });
+        pairs.sort();
+        match &reference {
+            None => reference = Some(pairs),
+            Some(reference) => assert_eq!(
+                &pairs, reference,
+                "rename tracking must produce the same result regardless of the input order"
+            ),
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn copy_source_selection_is_order_independent() -> crate::Result {
+    // #1832, exhaustive-copy variant: with copies searched against all sources - including the whole
+    // source tree that is pushed in during `emit` - the source chosen for an identical-content
+    // destination must not depend on the order items were pushed. This also exercises the second
+    // sort (after `push_source_tree`) that the rename test above never reaches.
+    let rewrites = Rewrites {
+        copies: Some(Copies {
+            source: CopySource::FromSetOfModifiedFilesAndAllSources,
+            percentage: None,
+        }),
+        percentage: None,
+        limit: 0,
+        track_empty: false,
+    };
+    // The blob id of "a"; all destinations and sources share it, so the copy source is ambiguous and
+    // would otherwise be picked based on push order.
+    let content_id = hex_to_id(
+        "2e65efe2a145dda7ee51d1741299f848e5bf752e",
+        "eb337bcee2061c5313c9a1392116b6c76039e9e30d71467ae359b36277e17dc7",
+    );
+
+    let mut reference: Option<Vec<(String, Option<String>)>> = None;
+    for dests in permutations(vec!["a-cpy-1", "a-cpy-2"]) {
+        for sources in permutations(vec!["a-src-1", "a-src-2"]) {
+            let mut track = util::new_tracker(rewrites);
+            let odb = util::add_retained_blobs(
+                &mut track,
+                dests.iter().map(|location| (Change::addition(), *location, "a")),
+            )?;
+            let mut pairs = Vec::new();
+            util::assert_emit_with_objects_and_sources(
+                &mut track,
+                |dst, src| {
+                    pairs.push((dst.location.to_string(), src.map(|src| src.location.to_string())));
+                    std::ops::ControlFlow::Continue(())
+                },
+                odb,
+                sources.iter().map(|location| {
+                    (
+                        Change {
+                            id: content_id,
+                            ..Change::modification()
+                        },
+                        *location,
+                    )
+                }),
+            );
+            pairs.sort();
+            match &reference {
+                None => reference = Some(pairs),
+                Some(reference) => assert_eq!(
+                    &pairs, reference,
+                    "copy source selection must be independent of the input order"
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Return every ordering of `items`, used to prove order-independence.
+fn permutations<T: Clone>(items: Vec<T>) -> Vec<Vec<T>> {
+    if items.len() <= 1 {
+        return vec![items];
+    }
+    let mut out = Vec::new();
+    for idx in 0..items.len() {
+        let mut rest = items.clone();
+        let head = rest.remove(idx);
+        for mut perm in permutations(rest) {
+            perm.insert(0, head.clone());
+            out.push(perm);
+        }
+    }
+    out
+}
+
 mod util {
     use gix_diff::{
         Rewrites, rewrites,

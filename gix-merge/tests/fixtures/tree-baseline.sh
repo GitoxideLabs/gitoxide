@@ -652,33 +652,14 @@ git init rename-within-rename-2
 
   git checkout expected
   write_lines 1 2 3 4 5 6 >a/x.f
-#  write_lines 1 2 3 4 5 6 >a/sub/y.f
-  echo -ne "1\n2\n3\n4\n5\n<<<<<<< A\n=======\n6\n>>>>>>> B\n" >a/sub/y.f
+  write_lines 1 2 3 4 5 6 >a/sub/y.f
   git mv a/sub a/sub-renamed
   git mv a a-renamed
   git commit -am "tracked both renames, applied all modifications by merge"
-
-  # In reverse, it finds a rewrite/rewrite case which gives a base to the merge, hence it passes.
-  # It should of course be reversible… .
-  git checkout -b expected-reversed B
-  write_lines 1 2 3 4 5 6 >a/x.f
-  write_lines 1 2 3 4 5 6 >a/sub-renamed/y.f
-  git mv a a-renamed
-  git commit -am "need to hack this unfortunately"
+  # Both merge directions yield this tree, so `expected` serves the reversed case as well.
 
 
-  rm .git/index
-  git update-index --index-info <<EOF
-100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 2	a-renamed/sub-renamed/y.f
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub-renamed/y.f
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/sub-renamed/z
-100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
-EOF
-  make_conflict_index rename-within-rename-2-A-B-deviates
-
- # The reverse index is showing the right thing, albeit it also shows the reversal yields
- # different results.
+  # Both directions produce the same cleanly merged state, and the index is the same as well.
   rm .git/index
   git update-index --index-info <<EOF
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/sub-renamed/y.f
@@ -686,6 +667,7 @@ EOF
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/w
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/x.f
 EOF
+  make_conflict_index rename-within-rename-2-A-B-deviates
   make_conflict_index rename-within-rename-2-A-B-deviates-reversed
 )
 
@@ -828,39 +810,39 @@ git init conflicting-rename-complex
   rm .git/index
   rm -Rf ./a
   mkdir -p a-renamed/sub
-  write_lines 1 2 3 4 5 >a-renamed/sub/y.f
-  write_lines 1 2 3 4 5 6 >a-renamed/x.f
+  write_lines 1 2 3 4 5 6 >a-renamed/sub/y.f
+  write_lines 1 2 3 4 5 >a-renamed/x.f
   write_lines 1 2 3 4 5 6 >a-renamed/y.f
   touch a-renamed/z a-renamed/w a-renamed/sub/z
   git add .
-  git commit -m "Close to what Git has, but different due to rename tracking. This is why content ends up in a different place, which is the only difference."
+  git commit -m "Close to what Git has, but different due to rename tracking. Contents follow their true renames thanks to filename-aware matching, while Git also keeps rename/rename destinations that we compose."
 
 
   # Since the whole state is very different, the expected index is as well, but at least it should make sense for what it is.
-  # The main issue here is that it finds a rename of a/w to a-renamed/z which completely erases `a/z`, and this happens because it has no basename based matching
-  # like Git during rename tracking.
+  # Files pair up by matching filename like in Git, so `y.f` and `z` follow their true renames,
+  # while `a/x.f` and `a/w` which `B` deleted conflict with `A`'s directory rename and keep our side.
   rm .git/index
   git update-index --index-info <<EOF
-100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 2	a-renamed/sub/y.f
+100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/sub/y.f
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/sub/z
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/y.f
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a-renamed/x.f
+100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 2	a-renamed/x.f
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 2	a-renamed/w
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/z
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/x.f
+100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a/y.f
 EOF
   make_conflict_index conflicting-rename-complex-A-B
 
   rm .git/index
   git update-index --index-info <<EOF
-100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 3	a-renamed/sub/y.f
+100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/sub/y.f
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/sub/z
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 0	a-renamed/y.f
-100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 3	a-renamed/x.f
+100644 $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52) 3	a-renamed/x.f
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 3	a-renamed/w
 100644 $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) 0	a-renamed/z
-100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/x.f
+100644 $(oid 44065282f89b9bd6439ed2e4674721383fd987eb) 1	a/sub/y.f
 100644 $(oid b414108e81e5091fe0974a1858b4d0d22b107f70) 2	a/y.f
 EOF
   make_conflict_index conflicting-rename-complex-A-B-reversed
@@ -1282,7 +1264,7 @@ baseline super-2 A-B A B
 baseline super-2 A-B-diff3 A B
 
 baseline rename-within-rename A-B-deviates A B "Git doesn't detect the rename-nesting, we do neither"
-baseline rename-within-rename-2 A-B-deviates A B "The tree matches, but the index we produce is different. As a rename is involved, it's strange anyway, the index can't represent it properly as only one side has a base at all"
+baseline rename-within-rename-2 A-B-deviates A B "Git keeps the doubly-renamed file in both rename destinations as it doesn't compose nested directory renames - we do, and merge contents cleanly in one place, in both merge directions"
 baseline conflicting-rename A-B A B
 baseline conflicting-rename-2 A-B A B
 baseline conflicting-rename-complex A-B A B "Git has different rename tracking - overall result it's still close enough"
@@ -1637,12 +1619,13 @@ EOF
   make_resolve_tree ancestor B A
 
   rm .git/index
-  # This is some of the rename tracking from `B` making it into the non-clashing portions of 'A".
-  # Due to different rename tracking, the non-forced version is also a bit of a mess, and that carries on here.
+  # 'Ours' keeps its own version of the files 'B' deleted along with its own rename destinations,
+  # where the cleanly mergeable 'y.f' content is still used. Of 'theirs', only the unconflicting
+  # composed rename destination 'a-renamed/z' remains.
   git update-index --index-info <<EOF
-  100644 blob $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52)	a-renamed/sub/y.f
+  100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a-renamed/sub/y.f
   100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/sub/z
-  100644 blob $(oid b414108e81e5091fe0974a1858b4d0d22b107f70)	a-renamed/x.f
+  100644 blob $(oid 8a1218a1024a212bb3db30becd860315f9f3ac52)	a-renamed/x.f
   100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/z
   100644 blob $(oid e69de29bb2d1d6434b8b29ae775ad8c2e48c5391)	a-renamed/w
 EOF
