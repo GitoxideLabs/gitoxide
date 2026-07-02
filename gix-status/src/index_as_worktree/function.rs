@@ -12,6 +12,8 @@ use gix_filter::pipeline::convert::ToGitOutcome;
 use gix_object::FindExt;
 
 use crate::index_as_worktree::types::ConflictIndexEntry;
+#[cfg(windows)]
+use crate::worktree_stats::{FileMetadata, WorktreeStats};
 use crate::{
     AtomicU64, SymlinkCheck,
     index_as_worktree::{
@@ -63,6 +65,8 @@ pub fn index_as_worktree<'index, T, U, Find, E>(
         stack,
         filter,
         should_interrupt,
+        #[cfg(windows)]
+        worktree_stats,
     }: Context<'_>,
     options: Options,
 ) -> Result<Outcome, Error>
@@ -122,6 +126,8 @@ where
                     path_backing,
                     filter,
                     options,
+                    #[cfg(windows)]
+                    worktree_stats,
 
                     skipped_by_pathspec,
                     skipped_by_entry_flags,
@@ -236,6 +242,10 @@ struct State<'a, 'b> {
     filter: gix_filter::Pipeline,
     path_backing: &'b gix_index::PathStorageRef,
     options: &'a Options,
+    /// Optional precomputed worktree stats for faster status checks on Windows.
+    /// Lookups happen before falling back to per-file syscalls.
+    #[cfg(windows)]
+    worktree_stats: Option<&'a WorktreeStats>,
 
     skipped_by_pathspec: &'a AtomicUsize,
     skipped_by_entry_flags: &'a AtomicUsize,
@@ -382,53 +392,80 @@ impl<'index> State<'_, 'index> {
             }
             Err(err) => return Err(Error::Io(err.into())),
         };
-        self.symlink_metadata_calls.fetch_add(1, Ordering::Relaxed);
-        let metadata = match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
-            Ok(metadata) if metadata.is_dir() => {
-                // index entries are normally only for files/symlinks
-                // if a file turned into a directory it was removed
-                // the only exception here are submodules which are
-                // part of the index despite being directories
-                if entry.mode.is_submodule() {
-                    let status = submodule
-                        .status(entry, rela_path)
-                        .map_err(|err| Error::SubmoduleStatus {
-                            rela_path: rela_path.into(),
-                            source: Box::new(err),
-                        })?;
-                    return Ok(status.map(|status| Change::SubmoduleModification(status).into()));
-                } else {
+
+        // Acquire metadata. On Windows we consult the precomputed stats first and
+        // only fall back to a syscall on miss; on other platforms per-file
+        // `lstat` is already fast, so we just do the syscall directly.
+        #[cfg(windows)]
+        let metadata = if let Some(cached) = self.worktree_stats.and_then(|c| c.get(rela_path)) {
+            FileMetadata::Cached(cached)
+        } else {
+            self.symlink_metadata_calls.fetch_add(1, Ordering::Relaxed);
+            match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
+                Ok(m) => FileMetadata::Live(m),
+                Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
                     return Ok(Some(Change::Removed.into()));
                 }
-            }
-            Ok(metadata) => metadata,
-            Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
-                return Ok(Some(Change::Removed.into()));
-            }
-            Err(err) => {
-                return Err(Error::Io(err.into()));
+                Err(err) => return Err(Error::Io(err.into())),
             }
         };
+        #[cfg(not(windows))]
+        let metadata = {
+            self.symlink_metadata_calls.fetch_add(1, Ordering::Relaxed);
+            match gix_index::fs::Metadata::from_path_no_follow(worktree_path) {
+                Ok(m) => m,
+                Err(err) if gix_fs::io_err::is_not_found(err.kind(), err.raw_os_error()) => {
+                    return Ok(Some(Change::Removed.into()));
+                }
+                Err(err) => return Err(Error::Io(err.into())),
+            }
+        };
+
+        // Handle directory: index entries are normally only for files/symlinks.
+        // If a file turned into a directory it was removed.
+        // The only exception here are submodules which are part of the index despite being directories.
+        if metadata.is_dir() {
+            if entry.mode.is_submodule() {
+                let status = submodule
+                    .status(entry, rela_path)
+                    .map_err(|err| Error::SubmoduleStatus {
+                        rela_path: rela_path.into(),
+                        source: Box::new(err),
+                    })?;
+                return Ok(status.map(|status| Change::SubmoduleModification(status).into()));
+            } else {
+                return Ok(Some(Change::Removed.into()));
+            }
+        }
+
         if entry.flags.contains(gix_index::entry::Flags::INTENT_TO_ADD) {
             return Ok(Some(EntryStatus::IntentToAdd));
         }
+
+        #[cfg(windows)]
+        let new_stat = metadata.to_stat()?;
+        #[cfg(not(windows))]
         let new_stat = gix_index::entry::Stat::from_fs(&metadata)?;
-        let executable_bit_changed =
-            match entry
+
+        #[cfg(windows)]
+        let mode_change = metadata.mode_change(entry.mode, self.options.fs.symlink, self.options.fs.executable_bit);
+        #[cfg(not(windows))]
+        let mode_change =
+            entry
                 .mode
-                .change_to_match_fs(&metadata, self.options.fs.symlink, self.options.fs.executable_bit)
-            {
-                Some(gix_index::entry::mode::Change::Type { new_mode }) => {
-                    return Ok(Some(
-                        Change::Type {
-                            worktree_mode: new_mode,
-                        }
-                        .into(),
-                    ));
-                }
-                Some(gix_index::entry::mode::Change::ExecutableBit) => true,
-                None => false,
-            };
+                .change_to_match_fs(&metadata, self.options.fs.symlink, self.options.fs.executable_bit);
+        let executable_bit_changed = match mode_change {
+            Some(gix_index::entry::mode::Change::Type { new_mode }) => {
+                return Ok(Some(
+                    Change::Type {
+                        worktree_mode: new_mode,
+                    }
+                    .into(),
+                ));
+            }
+            Some(gix_index::entry::mode::Change::ExecutableBit) => true,
+            None => false,
+        };
 
         // We implement racy-git. See racy-git.txt in the git documentation for detailed documentation.
         //
