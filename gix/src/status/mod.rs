@@ -15,6 +15,12 @@ where
     index_worktree_options: index_worktree::Options,
     tree_index_renames: tree_index::TrackRenames,
     should_interrupt: Option<OwnedOrStaticAtomicBool>,
+    /// Windows-only: when `true` (default), run a single batched parallel
+    /// directory walk before status to precompute worktree stats so that the
+    /// per-entry pipeline can skip per-file `lstat`. Ignored on non-Windows.
+    /// See [`crate::status::Platform::index_worktree_stats_preprocessing`].
+    #[cfg(windows)]
+    precompute_worktree_stats: bool,
 }
 
 /// How to obtain a submodule's status.
@@ -114,6 +120,8 @@ impl Repository {
                 rewrites: None,
                 thread_limit: None,
             },
+            #[cfg(windows)]
+            precompute_worktree_stats: true,
         };
 
         let untracked = self
@@ -229,6 +237,113 @@ pub mod into_iter {
         Pathspec(#[from] crate::pathspec::init::Error),
         #[error(transparent)]
         HeadTreeDiff(#[from] crate::status::tree_index::Error),
+    }
+}
+
+/// Run the gitignore-aware Windows worktree stats preprocessing pass.
+/// One internal helper, called from the iterator on Windows unless
+/// preprocessing is disabled. Returns `None` when the repo lacks a workdir,
+/// no index entry falls under the pathspec's `common_prefix` (then there is
+/// nothing to accelerate), or the walk fails — callers fall through to live
+/// `lstat` either way, so surfacing the failure as a hard error would be
+/// unhelpful.
+///
+/// The walk is seeded at the deepest directory `common_prefix` pins down, so
+/// a status restricted to a subtree only enumerates that subtree. When in
+/// doubt — the prefix tail may be a partial file name — it walks the parent
+/// instead: enumerating too much costs a few milliseconds, while every miss
+/// is a per-file syscall.
+#[cfg(windows)]
+pub(crate) fn precomputed_worktree_stats(
+    repo: &Repository,
+    index: &gix_index::State,
+    common_prefix: &crate::bstr::BStr,
+    thread_limit: Option<usize>,
+    should_interrupt: &std::sync::atomic::AtomicBool,
+) -> Option<gix_status::worktree_stats::WorktreeStats> {
+    let workdir = repo.workdir()?;
+    let range = index.prefixed_entries_range(common_prefix)?;
+    if range.is_empty() {
+        return None;
+    }
+    let start_dir = {
+        let prefix = common_prefix.strip_suffix(b"/").unwrap_or(common_prefix);
+        // Walk `prefix` itself only if every entry to check lives beneath it as a
+        // directory; entries are sorted, so its first and last suffice as witnesses.
+        let entries = &index.entries()[range];
+        let lives_below_prefix = |entry: &gix_index::Entry| {
+            let path = entry.path_in(index.path_backing());
+            path.starts_with(prefix) && path.get(prefix.len()) == Some(&b'/')
+        };
+        if !prefix.is_empty() && lives_below_prefix(&entries[0]) && lives_below_prefix(&entries[entries.len() - 1]) {
+            prefix
+        } else {
+            &prefix[..prefix.iter().rposition(|&b| b == b'/').unwrap_or(0)]
+        }
+    };
+    // Without the `parallel` feature, repository internals are `Rc`-based and the
+    // per-thread excludes factory can't be `Sync` — build a single predicate on this
+    // thread and walk single-threaded instead.
+    #[cfg(feature = "parallel")]
+    {
+        let sync_repo = repo.clone().into_sync();
+
+        let make_excludes = || -> Box<dyn FnMut(&crate::bstr::BStr) -> bool> {
+            let thread_repo = sync_repo.to_thread_local();
+            let Ok(stack) = thread_repo.excludes(
+                index,
+                None,
+                gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            ) else {
+                return Box::new(|_| false);
+            };
+            let mut stack = stack.detach();
+            let objects = thread_repo.objects.clone();
+            Box::new(move |path: &crate::bstr::BStr| -> bool {
+                stack
+                    .at_entry(path, Some(gix_index::entry::Mode::DIR), &objects)
+                    .map(|p| p.is_excluded())
+                    .unwrap_or(false)
+            })
+        };
+
+        gix_status::worktree_stats::prepare(
+            workdir,
+            crate::bstr::BStr::new(start_dir),
+            thread_limit,
+            should_interrupt,
+            make_excludes,
+        )
+        .ok()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        let _ = thread_limit;
+        let is_excluded: Box<dyn FnMut(&crate::bstr::BStr) -> bool> = match repo.excludes(
+            index,
+            None,
+            gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+        ) {
+            Ok(stack) => {
+                let mut stack = stack.detach();
+                let objects = repo.objects.clone();
+                Box::new(move |path: &crate::bstr::BStr| -> bool {
+                    stack
+                        .at_entry(path, Some(gix_index::entry::Mode::DIR), &objects)
+                        .map(|p| p.is_excluded())
+                        .unwrap_or(false)
+                })
+            }
+            Err(_) => Box::new(|_| false),
+        };
+
+        gix_status::worktree_stats::prepare_single_threaded(
+            workdir,
+            crate::bstr::BStr::new(start_dir),
+            should_interrupt,
+            is_excluded,
+        )
+        .ok()
     }
 }
 

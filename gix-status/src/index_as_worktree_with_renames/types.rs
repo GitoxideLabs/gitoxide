@@ -342,6 +342,11 @@ pub struct Context<'a> {
     pub should_interrupt: &'a AtomicBool,
     /// The context for the directory walk.
     pub dirwalk: DirwalkContext<'a>,
+    /// Optional precomputed worktree stats for faster status checks on Windows.
+    ///
+    /// See [`crate::index_as_worktree::Context::worktree_stats`] for details.
+    #[cfg(windows)]
+    pub worktree_stats: Option<&'a crate::worktree_stats::WorktreeStats>,
 }
 
 /// All information that is required to perform a [dirwalk](gix_dir::walk()).

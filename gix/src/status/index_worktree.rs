@@ -82,6 +82,11 @@ impl Repository {
     ///     - A flag to stop the whole operation.
     /// * `options`
     ///     - Additional configuration for all parts of the operation.
+    /// * `worktree_stats` *(Windows only)*
+    ///     - Optional precomputed worktree metadata from
+    ///       gix_status::worktree_stats::prepare When `Some`, modification
+    ///       checks consult it instead of calling `lstat` per file. Misses
+    ///       fall through to a live syscall, so empty/partial maps are safe.
     ///
     /// ### Note
     ///
@@ -101,6 +106,7 @@ impl Repository {
         progress: &mut dyn gix_features::progress::Progress,
         should_interrupt: &AtomicBool,
         options: Options,
+        #[cfg(windows)] worktree_stats: Option<&gix_status::worktree_stats::WorktreeStats>,
     ) -> Result<gix_status::index_as_worktree_with_renames::Outcome, Error>
     where
         T: Send + Clone,
@@ -149,6 +155,8 @@ impl Repository {
                     current_dir: cwd,
                     ignore_case_index_lookup: accelerate_lookup.as_ref(),
                 },
+                #[cfg(windows)]
+                worktree_stats,
             },
             gix_status::index_as_worktree_with_renames::Options {
                 sorting: options.sorting,
