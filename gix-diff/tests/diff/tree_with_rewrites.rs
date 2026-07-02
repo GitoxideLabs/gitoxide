@@ -1630,26 +1630,6 @@ fn realistic_renames_2() -> crate::Result {
             copy: false,
         },
         Rewrite {
-            source_location: "git-sec/tests/sec.rs",
-            source_entry_mode: EntryMode(0o100644),
-            source_relation: Some(
-                ChildOfParent(
-                    1,
-                ),
-            ),
-            source_id: Oid(2),
-            diff: None,
-            entry_mode: EntryMode(0o100644),
-            id: Oid(2),
-            location: "gix-sec/tests/sec.rs",
-            relation: Some(
-                ChildOfParent(
-                    2,
-                ),
-            ),
-            copy: false,
-        },
-        Rewrite {
             source_location: "git-sec/tests/identity/mod.rs",
             source_entry_mode: EntryMode(0o100644),
             source_relation: Some(
@@ -1662,6 +1642,26 @@ fn realistic_renames_2() -> crate::Result {
             entry_mode: EntryMode(0o100644),
             id: Oid(2),
             location: "gix-sec/tests/identity/mod.rs",
+            relation: Some(
+                ChildOfParent(
+                    2,
+                ),
+            ),
+            copy: false,
+        },
+        Rewrite {
+            source_location: "git-sec/tests/sec.rs",
+            source_entry_mode: EntryMode(0o100644),
+            source_relation: Some(
+                ChildOfParent(
+                    1,
+                ),
+            ),
+            source_id: Oid(2),
+            diff: None,
+            entry_mode: EntryMode(0o100644),
+            id: Oid(2),
+            location: "gix-sec/tests/sec.rs",
             relation: Some(
                 ChildOfParent(
                     2,

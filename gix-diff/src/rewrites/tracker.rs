@@ -230,15 +230,6 @@ impl<T: Change> Tracker<T> {
         }
         diff_cache.options.skip_internal_diff_if_external_is_configured = false;
 
-        // The point of this is to optimize for identity-based lookups, which should be easy to find
-        // by partitioning.
-        fn by_id_and_location<T: Change>(a: &Item<T>, b: &Item<T>) -> std::cmp::Ordering {
-            a.change
-                .id()
-                .cmp(b.change.id())
-                .then_with(|| a.path.start.cmp(&b.path.start).then(a.path.end.cmp(&b.path.end)))
-        }
-
         // Early abort: if there is no pair, don't do anything.
         let has_work = {
             let (mut num_deletions, mut num_additions, mut num_modifications) = (0, 0, 0);
@@ -269,7 +260,7 @@ impl<T: Change> Tracker<T> {
             ..Default::default()
         };
         if has_work {
-            self.items.sort_by(by_id_and_location);
+            self.sort_items_by_id_and_location();
 
             // Rewrites by directory (without local changes) can be pruned out quickly,
             // by finding only parents, their counterpart, and then all children can be matched by
@@ -317,7 +308,7 @@ impl<T: Change> Tracker<T> {
                             }
                         })
                         .map_err(|err| emit::Error::GetItemsForExhaustiveCopyDetection(Box::new(err)))?;
-                        self.items.sort_by(by_id_and_location);
+                        self.sort_items_by_id_and_location();
 
                         self.match_pairs_of_kind(
                             visit::SourceKind::Copy,
@@ -353,6 +344,25 @@ impl<T: Change> Tracker<T> {
 }
 
 impl<T: Change> Tracker<T> {
+    /// Sort `items` primarily by their id, so identity-based lookups can be found quickly by
+    /// partitioning (see `find_match`). Same-id items are then ordered by location, change-kind,
+    /// relation and entry-mode - a total order over each item's observable identity - so that
+    /// matching is deterministic and independent of the order in which changes were pushed, which
+    /// the parallel dirwalk and index-traversal threads leave nondeterministic
+    /// (see <https://github.com/GitoxideLabs/gitoxide/issues/1832>). Any items that still compare
+    /// equal are identical in every observable field and are thus interchangeable for matching.
+    fn sort_items_by_id_and_location(&mut self) {
+        self.items.sort_by(|a, b| {
+            a.change
+                .id()
+                .cmp(b.change.id())
+                .then_with(|| a.location(&self.path_backing).cmp(b.location(&self.path_backing)))
+                .then_with(|| a.change.kind().cmp(&b.change.kind()))
+                .then_with(|| a.change.relation().cmp(&b.change.relation()))
+                .then_with(|| a.change.entry_mode().cmp(&b.change.entry_mode()))
+        });
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn match_pairs_of_kind(
         &mut self,
