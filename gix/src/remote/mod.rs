@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::BTreeSet};
 
-use crate::bstr::BStr;
+use crate::bstr::{BStr, BString};
 
 /// The direction of an operation carried out (or to be carried out) through a remote.
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
@@ -33,7 +33,7 @@ pub enum Name<'repo> {
 }
 
 /// A type-definition for a sorted list of unvalidated remote names - they have been read straight from the configuration.
-pub type Names<'a> = BTreeSet<Cow<'a, BStr>>;
+pub type Names = BTreeSet<BString>;
 
 ///
 pub mod name;

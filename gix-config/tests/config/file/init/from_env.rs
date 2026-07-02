@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fs};
+use std::fs;
 
 use gix_config::{
     File,
@@ -41,7 +41,7 @@ fn single_key_value_pair() -> crate::Result {
         .set("GIT_CONFIG_VALUE_0", "value");
 
     let config = File::from_env(Default::default())?.unwrap();
-    assert_eq!(config.raw_value("core.key")?, Cow::<[u8]>::Borrowed(b"value"));
+    assert_eq!(config.raw_value("core.key")?, "value");
     assert_eq!(
         config.section_by_key("core".into())?.meta(),
         &gix_config::file::Metadata::from(gix_config::Source::Env),
@@ -65,9 +65,9 @@ fn multiple_key_value_pairs() {
 
     let config = File::from_env(Default::default()).unwrap().unwrap();
 
-    assert_eq!(config.raw_value("core.a").unwrap(), Cow::<[u8]>::Borrowed(b"a"));
-    assert_eq!(config.raw_value("core.b").unwrap(), Cow::<[u8]>::Borrowed(b"b"));
-    assert_eq!(config.raw_value("core.c").unwrap(), Cow::<[u8]>::Borrowed(b"c"));
+    assert_eq!(config.raw_value("core.a").unwrap(), "a");
+    assert_eq!(config.raw_value("core.b").unwrap(), "b");
+    assert_eq!(config.raw_value("core.c").unwrap(), "c");
     assert_eq!(config.num_values(), 3);
 }
 
@@ -123,6 +123,6 @@ fn follow_include_paths() {
     .unwrap()
     .unwrap();
 
-    assert_eq!(config.raw_value("core.key").unwrap(), Cow::<[u8]>::Borrowed(b"changed"));
+    assert_eq!(config.raw_value("core.key").unwrap(), "changed");
     assert_eq!(config.num_values(), 5);
 }

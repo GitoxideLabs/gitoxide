@@ -26,7 +26,7 @@ pub(crate) fn base_options(lossy: bool, lenient: bool) -> gix_config::file::init
 
 /// Also sets the default if it's not set!
 pub(crate) fn config_bool(
-    config: &gix_config::File<'_>,
+    config: &gix_config::File,
     key: &'static config::tree::keys::Boolean,
     key_str: &str,
     default: bool,
@@ -46,7 +46,7 @@ pub(crate) fn config_bool(
 }
 
 pub(crate) fn config_bool_opt(
-    config: &gix_config::File<'_>,
+    config: &gix_config::File,
     key: &'static config::tree::keys::Boolean,
     key_str: &str,
     lenient: bool,
@@ -64,7 +64,7 @@ pub(crate) fn config_bool_opt(
 }
 
 pub(crate) fn query_refupdates(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     lenient_config: bool,
 ) -> Result<Option<gix_ref::store::WriteReflog>, Error> {
     let key = "core.logAllRefUpdates";
@@ -75,7 +75,7 @@ pub(crate) fn query_refupdates(
 }
 
 pub(crate) fn query_refs_namespace(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     lenient_config: bool,
 ) -> Result<Option<gix_ref::Namespace>, config::refs_namespace::Error> {
     let key = "gitoxide.core.refsNamespace";
@@ -101,7 +101,7 @@ pub(crate) type ObjectCaches = (Option<usize>, Option<usize>, usize, Option<usiz
 
 /// Return `(static_pack_cache_limit, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes)` as parsed from gix-config.
 pub(crate) fn parse_object_caches(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     lenient: bool,
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<ObjectCaches, Error> {
@@ -135,7 +135,7 @@ pub(crate) fn parse_object_caches(
 }
 
 pub(crate) fn parse_core_abbrev(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     object_hash: gix_hash::Kind,
 ) -> Result<Option<usize>, Error> {
     Ok(config
@@ -147,7 +147,7 @@ pub(crate) fn parse_core_abbrev(
 
 #[cfg(feature = "revision")]
 pub(crate) fn disambiguate_hint(
-    config: &gix_config::File<'static>,
+    config: &gix_config::File,
     lenient_config: bool,
 ) -> Result<Option<crate::revision::spec::parse::ObjectKindHint>, config::key::GenericErrorWithValue> {
     match config.string("core.disambiguate") {

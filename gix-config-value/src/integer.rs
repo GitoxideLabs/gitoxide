@@ -92,6 +92,14 @@ impl TryFrom<Cow<'_, BStr>> for Integer {
     }
 }
 
+impl TryFrom<BString> for Integer {
+    type Error = Error;
+
+    fn try_from(value: BString) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_ref())
+    }
+}
+
 /// Integer suffixes that are supported by `git-config`.
 ///
 /// These values are base-2 unit of measurements, not the base-10 variants.

@@ -1,5 +1,10 @@
 #![allow(clippy::result_large_err)]
-use crate::{Remote, bstr::BStr, config, remote, remote::find};
+use crate::{
+    Remote,
+    bstr::{BStr, ByteSlice},
+    config, remote,
+    remote::find,
+};
 
 impl crate::Repository {
     /// Create a new remote available at the given `url`.
@@ -93,7 +98,7 @@ impl crate::Repository {
         direction: remote::Direction,
     ) -> Option<Result<Remote<'_>, find::existing::Error>> {
         self.remote_default_name(direction)
-            .map(|name| self.find_remote(name.as_ref()))
+            .map(|name| self.find_remote(name.as_bstr()))
     }
 
     /// Find the configured remote with the given `name_or_url` or return `None` if it doesn't exist,
@@ -169,7 +174,7 @@ impl crate::Repository {
         rewrite_urls: bool,
     ) -> Option<Result<Remote<'_>, find::Error>> {
         fn config_spec<T: config::tree::keys::Validate>(
-            specs: Vec<std::borrow::Cow<'_, BStr>>,
+            specs: Vec<crate::bstr::BString>,
             name_or_url: &BStr,
             key: &'static config::tree::keys::Any<T>,
             op: gix_refspec::parse::Operation,

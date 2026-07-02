@@ -99,9 +99,9 @@ pub(crate) struct Personas {
 }
 
 impl Personas {
-    pub fn from_config_and_env(config: &gix_config::File<'_>) -> Self {
+    pub fn from_config_and_env(config: &gix_config::File) -> Self {
         fn entity_in_section(
-            config: &gix_config::File<'_>,
+            config: &gix_config::File,
             name_key: &keys::Any,
             email_key: &keys::Any,
             fallback: Option<(&keys::Any, &keys::Any)>,
@@ -116,12 +116,10 @@ impl Personas {
             (
                 config
                     .string(name_key)
-                    .or_else(|| fallback.as_ref().and_then(|(s, name_key, _)| s.value(name_key.name)))
-                    .map(std::borrow::Cow::into_owned),
+                    .or_else(|| fallback.as_ref().and_then(|(s, name_key, _)| s.value(name_key.name))),
                 config
                     .string(email_key)
-                    .or_else(|| fallback.as_ref().and_then(|(s, _, email_key)| s.value(email_key.name)))
-                    .map(std::borrow::Cow::into_owned),
+                    .or_else(|| fallback.as_ref().and_then(|(s, _, email_key)| s.value(email_key.name))),
             )
         }
         let parse_date = |key: &str, date: &keys::Any| -> Option<String> {
@@ -132,7 +130,6 @@ impl Personas {
             );
             config
                 .string(key)
-                .map(std::borrow::Cow::into_owned)
                 .and_then(|config_date| {
                     config_date
                         .to_str()
@@ -156,11 +153,7 @@ impl Personas {
         let committer_date = parse_date("gitoxide.commit.committerDate", &gitoxide::Commit::COMMITTER_DATE);
         let author_date = parse_date("gitoxide.commit.authorDate", &gitoxide::Commit::AUTHOR_DATE);
 
-        user_email = user_email.or_else(|| {
-            config
-                .string(gitoxide::User::EMAIL_FALLBACK)
-                .map(std::borrow::Cow::into_owned)
-        });
+        user_email = user_email.or_else(|| config.string(gitoxide::User::EMAIL_FALLBACK));
         Personas {
             user: Entity {
                 name: user_name,

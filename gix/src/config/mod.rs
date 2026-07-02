@@ -34,7 +34,7 @@ pub struct Snapshot<'repo> {
 pub struct SnapshotMut<'repo> {
     /// The owning repository.
     pub repo: Option<&'repo mut Repository>,
-    pub(crate) config: gix_config::File<'static>,
+    pub(crate) config: gix_config::File,
 }
 
 /// A utility structure created by [`SnapshotMut::commit_auto_rollback()`] that restores the previous configuration on drop.
@@ -517,9 +517,7 @@ pub mod ssl_version {
 
 ///
 pub mod transport {
-    use std::borrow::Cow;
-
-    use crate::bstr::BStr;
+    use crate::bstr::BString;
 
     /// The error produced when configuring a transport for a particular protocol.
     #[derive(Debug, thiserror::Error)]
@@ -545,7 +543,7 @@ pub mod transport {
         },
         #[error("Could not decode value at key {key:?} as UTF-8 string")]
         IllformedUtf8 {
-            key: Cow<'static, BStr>,
+            key: BString,
             source: crate::config::string::Error,
         },
         #[error("Invalid URL passed for configuration")]
@@ -556,9 +554,7 @@ pub mod transport {
 
     ///
     pub mod http {
-        use std::borrow::Cow;
-
-        use crate::bstr::BStr;
+        use crate::bstr::BString;
 
         /// The error produced when configuring a HTTP transport.
         #[derive(Debug, thiserror::Error)]
@@ -573,7 +569,7 @@ pub mod transport {
             #[error("The proxy authentication at key `{key}` is invalid")]
             InvalidProxyAuthMethod {
                 source: crate::config::key::GenericErrorWithValue,
-                key: Cow<'static, BStr>,
+                key: BString,
             },
             #[error("Could not configure the credential helpers for the authenticated proxy url")]
             #[cfg(feature = "credentials")]
@@ -655,7 +651,7 @@ pub(crate) mod shared {
     };
 
     pub fn is_replace_refs_enabled(
-        config: &gix_config::File<'static>,
+        config: &gix_config::File,
         lenient: bool,
         mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
     ) -> Result<Option<bool>, config::boolean::Error> {

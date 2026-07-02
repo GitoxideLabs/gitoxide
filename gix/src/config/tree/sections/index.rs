@@ -16,10 +16,8 @@ impl Index {
 pub type IndexThreads = keys::Any<validate::IndexThreads>;
 
 mod index_threads {
-    use std::borrow::Cow;
-
     use crate::{
-        bstr::BStr,
+        bstr::ByteSlice,
         config,
         config::{key::GenericErrorWithValue, tree::index::IndexThreads},
     };
@@ -29,17 +27,18 @@ mod index_threads {
         /// to select the amount of threads, with any other number being the specific amount of threads to use.
         pub fn try_into_index_threads(
             &'static self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
         ) -> Result<usize, config::key::GenericErrorWithValue> {
-            gix_config::Integer::try_from(value.as_ref())
+            let value = value.into_bstring();
+            gix_config::Integer::try_from(value.as_bstr())
                 .ok()
                 .and_then(|i| i.to_decimal().and_then(|i| i.try_into().ok()))
                 .or_else(|| {
-                    gix_config::Boolean::try_from(value.as_ref())
+                    gix_config::Boolean::try_from(value.as_bstr())
                         .ok()
                         .map(|b| if b.0 { 0 } else { 1 })
                 })
-                .ok_or_else(|| GenericErrorWithValue::from_value(self, value.into_owned()))
+                .ok_or_else(|| GenericErrorWithValue::from_value(self, value))
         }
     }
 }
@@ -61,7 +60,7 @@ mod validate {
     pub struct IndexThreads;
     impl keys::Validate for IndexThreads {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Index::THREADS.try_into_index_threads(value.into())?;
+            super::Index::THREADS.try_into_index_threads(value)?;
             Ok(())
         }
     }

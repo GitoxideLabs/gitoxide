@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use bstr::{BStr, ByteSlice};
+use bstr::{BStr, BString, ByteSlice};
 use gix_features::threading::OwnShared;
 use smallvec::SmallVec;
 
@@ -11,13 +9,13 @@ use crate::{
         write::{extract_newline, platform_newline},
     },
     lookup,
-    parse::Event,
+    parse::EventRef,
 };
 
 /// Read-only low-level access methods, as it requires generics for converting into
 /// custom values defined in this crate like [`Integer`](crate::Integer) and
 /// [`Color`](crate::Color).
-impl<'event> File<'event> {
+impl File {
     /// Returns an interpreted value given a `key`.
     ///
     /// It's recommended to use one of the value types provide dby this crate
@@ -33,7 +31,6 @@ impl<'event> File<'event> {
     /// ```
     /// # use gix_config::File;
     /// # use gix_config::{Integer, Boolean};
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
     /// let config = r#"
     ///     [core]
@@ -47,7 +44,7 @@ impl<'event> File<'event> {
     /// let c_value: Boolean = git_config.value("core.c")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn value<'a, T: TryFrom<Cow<'a, BStr>>>(&'a self, key: impl AsKey) -> Result<T, lookup::Error<T::Error>> {
+    pub fn value<T: TryFrom<BString>>(&self, key: impl AsKey) -> Result<T, lookup::Error<T::Error>> {
         let key = key.as_key();
         self.value_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -68,7 +65,6 @@ impl<'event> File<'event> {
     /// ```
     /// # use gix_config::File;
     /// # use gix_config::{Integer, Boolean};
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
     /// let config = r#"
     ///     [core]
@@ -82,8 +78,8 @@ impl<'event> File<'event> {
     /// let c_value: Boolean = git_config.value_by("core", None, "c")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn value_by<'a, T: TryFrom<Cow<'a, BStr>>>(
-        &'a self,
+    pub fn value_by<T: TryFrom<BString>>(
+        &self,
         section_name: &str,
         subsection_name: Option<&BStr>,
         value_name: &str,
@@ -93,14 +89,14 @@ impl<'event> File<'event> {
     }
 
     /// Like [`value()`](File::value()), but returning an `None` if the value wasn't found at `section[.subsection].value_name`
-    pub fn try_value<'a, T: TryFrom<Cow<'a, BStr>>>(&'a self, key: impl AsKey) -> Option<Result<T, T::Error>> {
+    pub fn try_value<T: TryFrom<BString>>(&self, key: impl AsKey) -> Option<Result<T, T::Error>> {
         let key = key.as_key();
         self.try_value_by(key.section_name, key.subsection_name, key.value_name)
     }
 
     /// Like [`value_by()`](File::value_by()), but returning an `None` if the value wasn't found at `section[.subsection].value_name`
-    pub fn try_value_by<'a, T: TryFrom<Cow<'a, BStr>>>(
-        &'a self,
+    pub fn try_value_by<T: TryFrom<BString>>(
+        &self,
         section_name: &str,
         subsection_name: Option<&BStr>,
         value_name: &str,
@@ -127,7 +123,6 @@ impl<'event> File<'event> {
     /// ```
     /// # use gix_config::File;
     /// # use gix_config::{Integer, Boolean};
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
     /// # use bstr::ByteSlice;
     /// let config = r#"
@@ -157,7 +152,7 @@ impl<'event> File<'event> {
     ///
     /// [`value`]: crate::value
     /// [`TryFrom`]: std::convert::TryFrom
-    pub fn values<'a, T: TryFrom<Cow<'a, BStr>>>(&'a self, key: impl AsKey) -> Result<Vec<T>, lookup::Error<T::Error>> {
+    pub fn values<T: TryFrom<BString>>(&self, key: impl AsKey) -> Result<Vec<T>, lookup::Error<T::Error>> {
         self.raw_values(key)?
             .into_iter()
             .map(T::try_from)
@@ -182,7 +177,6 @@ impl<'event> File<'event> {
     /// ```
     /// # use gix_config::File;
     /// # use gix_config::{Integer, Boolean};
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
     /// # use bstr::ByteSlice;
     /// let config = r#"
@@ -212,8 +206,8 @@ impl<'event> File<'event> {
     ///
     /// [`value`]: crate::value
     /// [`TryFrom`]: std::convert::TryFrom
-    pub fn values_by<'a, T: TryFrom<Cow<'a, BStr>>>(
-        &'a self,
+    pub fn values_by<T: TryFrom<BString>>(
+        &self,
         section_name: &str,
         subsection_name: Option<&BStr>,
         value_name: &str,
@@ -230,14 +224,14 @@ impl<'event> File<'event> {
         &self,
         name: &str,
         subsection_name: Option<&BStr>,
-    ) -> Result<&file::Section<'event>, lookup::existing::Error> {
+    ) -> Result<file::Section<'_>, lookup::existing::Error> {
         self.section_filter(name, subsection_name, |_| true)?
             .ok_or(lookup::existing::Error::SectionMissing)
     }
 
     /// Returns the last found immutable section with a given `section_key`, identifying the name and subsection name like `core`
     /// or `remote.origin`.
-    pub fn section_by_key(&self, section_key: &BStr) -> Result<&file::Section<'event>, lookup::existing::Error> {
+    pub fn section_by_key(&self, section_key: &BStr) -> Result<file::Section<'_>, lookup::existing::Error> {
         let key =
             crate::parse::section::unvalidated::Key::parse(section_key).ok_or(lookup::existing::Error::KeyMissing)?;
         self.section(key.section_name, key.subsection_name)
@@ -252,7 +246,7 @@ impl<'event> File<'event> {
         name: &str,
         subsection_name: Option<&BStr>,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<&'a file::Section<'event>>, lookup::existing::Error> {
+    ) -> Result<Option<file::Section<'a>>, lookup::existing::Error> {
         Ok(self
             .section_ids_by_name_and_subname(name.as_ref(), subsection_name)?
             .rev()
@@ -260,7 +254,7 @@ impl<'event> File<'event> {
                 let sections = &self.sections;
                 move |id| {
                     let s = &sections[&id];
-                    filter(s.meta()).then_some(s)
+                    filter(&s.meta).then_some(file::Section::from_data(s, &self.event_backing))
                 }
             }))
     }
@@ -270,7 +264,7 @@ impl<'event> File<'event> {
         &'a self,
         section_key: &BStr,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<&'a file::Section<'event>>, lookup::existing::Error> {
+    ) -> Result<Option<file::Section<'a>>, lookup::existing::Error> {
         let key =
             crate::parse::section::unvalidated::Key::parse(section_key).ok_or(lookup::existing::Error::KeyMissing)?;
         self.section_filter(key.section_name, key.subsection_name, filter)
@@ -296,7 +290,6 @@ impl<'event> File<'event> {
     /// ```
     /// # use gix_config::File;
     /// # use gix_config::{Integer, Boolean};
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
     /// let config = r#"
     ///     [core]
@@ -311,15 +304,15 @@ impl<'event> File<'event> {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     #[must_use]
-    pub fn sections_by_name<'a>(
-        &'a self,
-        name: &'a str,
-    ) -> Option<impl Iterator<Item = &'a file::Section<'event>> + 'a> {
+    pub fn sections_by_name<'a>(&'a self, name: &'a str) -> Option<impl Iterator<Item = file::Section<'a>> + 'a> {
         self.section_ids_by_name(name).ok().map(move |ids| {
             ids.map(move |id| {
-                self.sections
-                    .get(&id)
-                    .expect("section doesn't have id from from lookup")
+                file::Section::from_data(
+                    self.sections
+                        .get(&id)
+                        .expect("section doesn't have id from from lookup"),
+                    &self.event_backing,
+                )
             })
         })
     }
@@ -330,13 +323,16 @@ impl<'event> File<'event> {
     pub fn sections_and_ids_by_name<'a>(
         &'a self,
         name: &'a str,
-    ) -> Option<impl Iterator<Item = (&'a file::Section<'event>, SectionId)> + 'a> {
+    ) -> Option<impl Iterator<Item = (file::Section<'a>, SectionId)> + 'a> {
         self.section_ids_by_name(name).ok().map(move |ids| {
             ids.map(move |id| {
                 (
-                    self.sections
-                        .get(&id)
-                        .expect("section doesn't have id from from lookup"),
+                    file::Section::from_data(
+                        self.sections
+                            .get(&id)
+                            .expect("section doesn't have id from from lookup"),
+                        &self.event_backing,
+                    ),
                     id,
                 )
             })
@@ -349,14 +345,14 @@ impl<'event> File<'event> {
         &'a self,
         name: &'a str,
         mut filter: impl FnMut(&Metadata) -> bool + 'a,
-    ) -> Option<impl Iterator<Item = &'a file::Section<'event>> + 'a> {
+    ) -> Option<impl Iterator<Item = file::Section<'a>> + 'a> {
         self.section_ids_by_name(name).ok().map(move |ids| {
             ids.filter_map(move |id| {
                 let s = self
                     .sections
                     .get(&id)
                     .expect("section doesn't have id from from lookup");
-                filter(s.meta()).then_some(s)
+                filter(&s.meta).then_some(file::Section::from_data(s, &self.event_backing))
             })
         })
     }
@@ -367,7 +363,7 @@ impl<'event> File<'event> {
     /// This ignores any comments.
     #[must_use]
     pub fn num_values(&self) -> usize {
-        self.sections.values().map(|section| section.num_values()).sum()
+        self.sections.values().map(|section| section.body.num_values()).sum()
     }
 
     /// Returns if there are no entries in the config. This will return true
@@ -400,13 +396,17 @@ impl<'event> File<'event> {
     }
 
     /// Return an iterator over all sections, in order of occurrence in the file itself.
-    pub fn sections(&self) -> impl Iterator<Item = &file::Section<'event>> + '_ {
-        self.section_order.iter().map(move |id| &self.sections[id])
+    pub fn sections(&self) -> impl Iterator<Item = file::Section<'_>> + '_ {
+        self.section_order
+            .iter()
+            .map(move |id| file::Section::from_data(&self.sections[id], &self.event_backing))
     }
 
     /// Return an iterator over all sections and their ids, in order of occurrence in the file itself.
-    pub fn sections_and_ids(&self) -> impl Iterator<Item = (&file::Section<'event>, SectionId)> + '_ {
-        self.section_order.iter().map(move |id| (&self.sections[id], *id))
+    pub fn sections_and_ids(&self) -> impl Iterator<Item = (file::Section<'_>, SectionId)> + '_ {
+        self.section_order
+            .iter()
+            .map(move |id| (file::Section::from_data(&self.sections[id], &self.event_backing), *id))
     }
 
     /// Return an iterator over all section ids, in order of occurrence in the file itself.
@@ -419,21 +419,30 @@ impl<'event> File<'event> {
     ///
     /// This allows to reproduce the look of sections perfectly when serializing them with
     /// [`write_to()`](file::Section::write_to()).
-    pub fn sections_and_postmatter(&self) -> impl Iterator<Item = (&file::Section<'event>, Vec<&Event<'event>>)> {
+    pub fn sections_and_postmatter(&self) -> impl Iterator<Item = (file::Section<'_>, Vec<EventRef<'_>>)> {
         self.section_order.iter().map(move |id| {
-            let s = &self.sections[id];
+            let s = file::Section::from_data(&self.sections[id], &self.event_backing);
             let pm: Vec<_> = self
                 .frontmatter_post_section
                 .get(id)
-                .map(|events| events.iter().collect())
+                .map(|events| {
+                    events
+                        .iter()
+                        .map(|event| event.as_ref_in(&self.event_backing))
+                        .collect()
+                })
                 .unwrap_or_default();
             (s, pm)
         })
     }
 
     /// Return all events which are in front of the first of our sections, or `None` if there are none.
-    pub fn frontmatter(&self) -> Option<impl Iterator<Item = &Event<'event>>> {
-        (!self.frontmatter_events.is_empty()).then(|| self.frontmatter_events.iter())
+    pub fn frontmatter(&self) -> Option<impl Iterator<Item = EventRef<'_>> + '_> {
+        (!self.frontmatter_events.is_empty()).then(|| {
+            self.frontmatter_events
+                .iter()
+                .map(move |event| event.as_ref_in(&self.event_backing))
+        })
     }
 
     /// Return the newline characters that have been detected in this config file or the default ones
@@ -443,10 +452,14 @@ impl<'event> File<'event> {
     pub fn detect_newline_style(&self) -> &BStr {
         self.frontmatter_events
             .iter()
-            .find_map(extract_newline)
+            .find_map(|event| extract_newline(event, &self.event_backing))
             .or_else(|| {
-                self.sections()
-                    .find_map(|s| s.body.as_ref().iter().find_map(extract_newline))
+                self.sections().find_map(|s| {
+                    s.body_data()
+                        .as_ref()
+                        .iter()
+                        .find_map(|event| extract_newline(event, &self.event_backing))
+                })
             })
             .unwrap_or_else(|| platform_newline())
     }

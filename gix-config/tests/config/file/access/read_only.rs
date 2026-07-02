@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use bstr::BStr;
+use bstr::BString;
 use gix_config::{
     Boolean, Color, File, Integer, color,
     file::{Metadata, init},
@@ -8,6 +6,19 @@ use gix_config::{
 };
 
 use crate::file::cow_str;
+
+#[test]
+fn parsed_section_header_legacy_check_uses_backing_buffer() -> crate::Result {
+    let config = File::try_from(
+        "[remote.origin]\n\turl = https://example.com\n[remote \"upstream\"]\n\turl = https://example.com\n",
+    )?;
+    let sections = config.sections().collect::<Vec<_>>();
+
+    assert!(sections[0].header().is_legacy());
+    assert!(!sections[1].header().is_legacy());
+
+    Ok(())
+}
 
 /// Asserts we can cast into all variants of our type
 #[test]
@@ -125,12 +136,8 @@ fn get_value_for_all_provided_values() -> crate::Result {
         );
 
         {
-            let string = config.value::<Cow<'_, BStr>>("core.other")?;
+            let string = config.value::<BString>("core.other")?;
             assert_eq!(string, cow_str("hello world"));
-            assert!(
-                matches!(string, Cow::Borrowed(_)),
-                "no copy is made, we reference the `file` itself"
-            );
         }
 
         assert_eq!(config.string("core.other-quoted").unwrap(), cow_str("hello world"));
@@ -138,19 +145,13 @@ fn get_value_for_all_provided_values() -> crate::Result {
         {
             let strings = config.strings("core.other-quoted").unwrap();
             assert_eq!(strings, vec![cow_str("hello"), cow_str("hello world")]);
-            assert!(matches!(strings[0], Cow::Borrowed(_)));
-            assert!(matches!(strings[1], Cow::Borrowed(_)));
         }
 
         {
             let cow = config.string("core.other").expect("present");
-            assert_eq!(cow.as_ref(), "hello world");
-            assert!(matches!(cow, Cow::Borrowed(_)));
+            assert_eq!(cow, "hello world");
         }
-        assert_eq!(
-            config.string("core.other-quoted").expect("present").as_ref(),
-            "hello world"
-        );
+        assert_eq!(config.string("core.other-quoted").expect("present"), "hello world");
 
         {
             let actual = config.value::<gix_config::Path>("core.location")?;
@@ -158,7 +159,6 @@ fn get_value_for_all_provided_values() -> crate::Result {
 
             let home = std::env::current_dir()?;
             let expected = home.join("tmp");
-            assert!(matches!(actual.value, Cow::Borrowed(_)));
             assert_eq!(
                 actual
                     .interpolate(path::interpolate::Context {
@@ -303,7 +303,7 @@ fn unknown_section() -> crate::Result {
     assert!(config.section("new", Some("subsection".into())).is_ok());
 
     for id in config.sections_and_ids().map(|(_, id)| id).collect::<Vec<_>>() {
-        assert!(config.remove_section_by_id(id).is_some());
+        assert!(config.remove_section_by_id(id));
     }
     assert!(matches!(
         config.section("present", None).unwrap_err(),
@@ -328,8 +328,8 @@ fn multi_line_value_plain() {
     let config = File::try_from(config).unwrap();
 
     let expected = r#"!git status         && git add -A         && git commit -m "$1"         && git push -f         && git log -1         && :"#;
-    assert_eq!(config.raw_value("alias.save").unwrap().as_ref(), expected);
-    assert_eq!(config.string("alias.save").unwrap().as_ref(), expected);
+    assert_eq!(config.raw_value("alias.save").unwrap(), expected);
+    assert_eq!(config.string("alias.save").unwrap(), expected);
 }
 
 #[test]
@@ -341,12 +341,12 @@ fn complex_quoted_values() {
     let config = File::try_from(config).unwrap();
     let expected = "hi\nho\n\ttheri\\\" \"";
     assert_eq!(
-        config.raw_value("core.escape-sequence").unwrap().as_ref(),
+        config.raw_value("core.escape-sequence").unwrap(),
         expected,
         "raw_value is normalized…"
     );
     assert_eq!(
-        config.string("core.escape-sequence").unwrap().as_ref(),
+        config.string("core.escape-sequence").unwrap(),
         expected,
         "…and so is the comfort API"
     );
@@ -368,7 +368,7 @@ fn multi_line_value_outer_quotes_unescaped_inner_quotes() {
 "#;
     let config = File::try_from(config).unwrap();
     let expected = r#"!f() {            git status;            git add -A;            git commit -m $1;            git push -f;            git log -1;          };         f;          unset f"#;
-    assert_eq!(config.raw_value("alias.save").unwrap().as_ref(), expected);
+    assert_eq!(config.raw_value("alias.save").unwrap(), expected);
 }
 
 #[test]
@@ -387,7 +387,7 @@ fn multi_line_value_outer_quotes_escaped_inner_quotes() {
 "#;
     let config = File::try_from(config).unwrap();
     let expected = r#"!f() {            git status;            git add -A;            git commit -m "$1";            git push -f;            git log -1;          };         f;          unset f"#;
-    assert_eq!(config.raw_value("alias.save").unwrap().as_ref(), expected);
+    assert_eq!(config.raw_value("alias.save").unwrap(), expected);
 }
 
 #[test]

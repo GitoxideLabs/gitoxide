@@ -15,10 +15,8 @@ pub fn named_subrepo_opts(
 }
 
 mod with_overrides {
-    use std::borrow::Cow;
-
     use crate::named_subrepo_opts;
-    use gix_object::bstr::BStr;
+    use gix_object::bstr::BString;
     use gix_sec::Permission;
     use gix_testtools::Env;
     use serial_test::serial;
@@ -259,10 +257,7 @@ mod with_overrides {
             ("gitoxide.core.externalCommandStderr", "filter-stderr"),
         ] {
             assert_eq!(
-                config
-                    .string(key)
-                    .unwrap_or_else(|| panic!("no value for {key}"))
-                    .as_ref(),
+                config.string(key).unwrap_or_else(|| panic!("no value for {key}")),
                 expected,
                 "{key} == {expected}"
             );
@@ -270,8 +265,8 @@ mod with_overrides {
         Ok(())
     }
 
-    fn cow_bstr(s: &str) -> Cow<'_, BStr> {
-        Cow::Borrowed(s.into())
+    fn cow_bstr(s: &str) -> BString {
+        s.into()
     }
 }
 

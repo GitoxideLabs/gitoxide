@@ -1,10 +1,10 @@
-use std::{borrow::Cow, collections::HashMap, ops::DerefMut};
+use std::{collections::HashMap, ops::DerefMut};
 
-use bstr::{BStr, BString, ByteVec};
+use bstr::{BStr, BString, ByteSlice, ByteVec};
 
 use crate::{
     file::{
-        self, Section, SectionId,
+        self, SectionData, SectionId,
         mutable::{Whitespace, escape_value},
     },
     lookup,
@@ -21,9 +21,10 @@ pub(crate) struct EntryData {
 
 /// An intermediate representation of a mutable multivar obtained from a [`File`][crate::File].
 #[derive(PartialEq, Eq, Debug)]
-pub struct MultiValueMut<'borrow, 'lookup, 'event> {
-    pub(crate) section: &'borrow mut HashMap<SectionId, Section<'event>>,
-    pub(crate) key: section::ValueName<'lookup>,
+pub struct MultiValueMut<'borrow> {
+    pub(crate) section: &'borrow mut HashMap<SectionId, SectionData>,
+    pub(crate) backing: &'borrow mut Vec<u8>,
+    pub(crate) key: section::ValueName,
     /// Each entry data struct provides sufficient information to index into
     /// [`Self::offsets`]. This layer of indirection is used for users to index
     /// into the offsets rather than leaking the internal data structures.
@@ -34,9 +35,9 @@ pub struct MultiValueMut<'borrow, 'lookup, 'event> {
     pub(crate) offsets: HashMap<SectionId, Vec<usize>>,
 }
 
-impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
+impl MultiValueMut<'_> {
     /// Returns the actual values.
-    pub fn get(&self) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    pub fn get(&self) -> Result<Vec<BString>, lookup::existing::Error> {
         let mut expect_value = false;
         let mut values = Vec::new();
         let mut concatenated_value = BString::default();
@@ -49,15 +50,19 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
             let (offset, size) = MultiValueMut::index_and_size(&self.offsets, *section_id, *offset_index);
             for event in &self.section.get(section_id).expect("known section id").as_ref()[offset..offset + size] {
                 match event {
-                    Event::SectionValueName(section_key) if *section_key == self.key => expect_value = true,
+                    Event::SectionValueName(section_key)
+                        if section_key.eq_ignore_ascii_case_in(self.backing, &self.key) =>
+                    {
+                        expect_value = true;
+                    }
                     Event::Value(v) if expect_value => {
                         expect_value = false;
-                        values.push(normalize_bstr(v.as_ref()));
+                        values.push(normalize_bstr(v.as_slice_in(self.backing).as_bstr()));
                     }
-                    Event::ValueNotDone(v) if expect_value => concatenated_value.push_str(v.as_ref()),
+                    Event::ValueNotDone(v) if expect_value => concatenated_value.push_str(v.as_slice_in(self.backing)),
                     Event::ValueDone(v) if expect_value => {
                         expect_value = false;
-                        concatenated_value.push_str(v.as_ref());
+                        concatenated_value.push_str(v.as_slice_in(self.backing));
                         values.push(normalize_bstring(std::mem::take(&mut concatenated_value)));
                     }
                     _ => (),
@@ -108,6 +113,7 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
             &self.key,
             &mut self.offsets,
             &mut self.section.get_mut(&section_id).expect("known section id").body,
+            self.backing,
             section_id,
             offset_index,
             value.into(),
@@ -138,6 +144,7 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
                 &self.key,
                 &mut self.offsets,
                 &mut self.section.get_mut(section_id).expect("known section id").body,
+                self.backing,
                 *section_id,
                 *offset_index,
                 value.into(),
@@ -158,6 +165,7 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
                 &self.key,
                 &mut self.offsets,
                 &mut self.section.get_mut(section_id).expect("known section id").body,
+                self.backing,
                 *section_id,
                 *offset_index,
                 input,
@@ -165,26 +173,32 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
         }
     }
 
-    fn set_value_inner<'a: 'event>(
-        value_name: &section::ValueName<'lookup>,
+    fn set_value_inner(
+        value_name: &section::ValueName,
         offsets: &mut HashMap<SectionId, Vec<usize>>,
-        section: &mut file::section::Body<'event>,
+        section: &mut file::section::Body,
+        backing: &mut Vec<u8>,
         section_id: SectionId,
         offset_index: usize,
         value: &BStr,
     ) {
         let (offset, size) = MultiValueMut::index_and_size(offsets, section_id, offset_index);
-        let whitespace = Whitespace::from_body(section);
+        let whitespace = Whitespace::from_body(section, backing);
         let section = section.as_mut();
         section.drain(offset..offset + size);
 
-        let key_sep_events = whitespace.key_value_separators();
+        let key_sep_events = whitespace.key_value_separators(backing);
         MultiValueMut::set_offset(offsets, section_id, offset_index, 2 + key_sep_events.len());
-        section.insert(offset, Event::Value(escape_value(value).into()));
+        section.insert(
+            offset,
+            Event::Value(crate::parse::Span::append(backing, &escape_value(value))),
+        );
         section
             .splice(offset..offset, key_sep_events.into_iter().rev())
             .for_each(|_| {});
-        section.insert(offset, Event::SectionValueName(value_name.to_owned()));
+        let mut value_name = value_name.to_owned();
+        value_name.0.intern(backing);
+        section.insert(offset, Event::SectionValueName(value_name));
     }
 
     /// Removes the value at the given index. Does nothing when called multiple
@@ -237,7 +251,7 @@ impl<'lookup, 'event> MultiValueMut<'_, 'lookup, 'event> {
     }
 
     fn index_and_size(
-        offsets: &'lookup HashMap<SectionId, Vec<usize>>,
+        offsets: &HashMap<SectionId, Vec<usize>>,
         section_id: SectionId,
         offset_index: usize,
     ) -> (usize, usize) {

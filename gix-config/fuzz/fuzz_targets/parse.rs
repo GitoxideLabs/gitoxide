@@ -1,7 +1,7 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use gix_config::{parse::Events, File};
+use gix_config::{File, parse::Events};
 use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 
@@ -13,7 +13,7 @@ struct Ctx<'a> {
 }
 
 fuzz_target!(|ctx: Ctx| {
-    _ = black_box(gix_config::parse::from_bytes(ctx.parse_from_bytes, &mut |_e| ()));
+    _ = black_box(Events::from_bytes(ctx.parse_from_bytes, None));
     _ = black_box(File::try_from(ctx.parse_file));
     _ = black_box(Events::try_from(ctx.parse_events));
 });

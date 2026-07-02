@@ -29,21 +29,16 @@ impl Section for Branch {
 pub type Merge = keys::Any<validate::FullNameRef>;
 
 mod merge {
-    use std::borrow::Cow;
+    use gix_ref::FullName;
 
-    use gix_ref::FullNameRef;
-
-    use crate::{bstr::BStr, config::tree::branch::Merge};
+    use crate::config::tree::branch::Merge;
 
     impl Merge {
         /// Return the validated full ref name from `value` if it is valid.
         pub fn try_into_fullrefname(
-            value: Cow<'_, BStr>,
-        ) -> Result<Cow<'_, FullNameRef>, gix_validate::reference::name::Error> {
-            match value {
-                Cow::Borrowed(v) => v.try_into().map(Cow::Borrowed),
-                Cow::Owned(v) => v.try_into().map(Cow::Owned),
-            }
+            value: impl crate::config::tree::keys::IntoBString,
+        ) -> Result<FullName, gix_validate::reference::name::Error> {
+            value.into_bstring().try_into()
         }
     }
 }
@@ -58,7 +53,7 @@ pub mod validate {
     pub struct FullNameRef;
     impl keys::Validate for FullNameRef {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            Merge::try_into_fullrefname(value.into())?;
+            Merge::try_into_fullrefname(value)?;
             Ok(())
         }
     }

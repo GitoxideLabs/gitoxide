@@ -69,9 +69,12 @@ impl Section for Gitoxide {
 }
 
 mod subsections {
-    use crate::config::{
-        Tree,
-        tree::{Gitoxide, Key, Section, http, keys},
+    use crate::{
+        bstr::ByteSlice,
+        config::{
+            Tree,
+            tree::{Gitoxide, Key, Section, http, keys},
+        },
     };
 
     /// The `Core` sub-section.
@@ -85,10 +88,11 @@ mod subsections {
         /// Derive the negotiation algorithm identified by `name`, case-sensitively.
         pub fn try_into_refs_namespace(
             &'static self,
-            name: std::borrow::Cow<'_, crate::bstr::BStr>,
+            name: impl crate::config::tree::keys::IntoBString,
         ) -> Result<gix_ref::Namespace, crate::config::refs_namespace::Error> {
-            gix_ref::namespace::expand(name.as_ref())
-                .map_err(|err| crate::config::key::Error::from_value(self, name.into_owned()).with_source(err))
+            let name = name.into_bstring();
+            gix_ref::namespace::expand(name.as_bstr())
+                .map_err(|err| crate::config::key::Error::from_value(self, name).with_source(err))
         }
     }
 
@@ -583,7 +587,7 @@ pub mod validate {
     pub struct RefsNamespace;
     impl Validate for RefsNamespace {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value.into())?;
+            super::Core::REFS_NAMESPACE.try_into_refs_namespace(value)?;
             Ok(())
         }
     }

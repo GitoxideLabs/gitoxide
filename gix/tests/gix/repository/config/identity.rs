@@ -79,28 +79,13 @@ fn author_and_committer_and_fallback() -> crate::Result {
         assert_eq!(config.integer("a.int-overflowing"), None);
         assert!(config.try_integer("a.int-overflowing").expect("present").is_err());
 
-        assert_eq!(
-            config.string("a.single-string").expect("present").as_ref(),
-            "hello world"
-        );
+        assert_eq!(config.string("a.single-string").expect("present"), "hello world");
 
-        assert_eq!(
-            config.string("a.local-override").expect("present").as_ref(),
-            "from-a.config"
-        );
-        assert_eq!(
-            config.string("a.system").expect("present").as_ref(),
-            "from-system.config"
-        );
-        assert_eq!(
-            config.string("a.system-override").expect("present").as_ref(),
-            "from-b.config"
-        );
+        assert_eq!(config.string("a.local-override").expect("present"), "from-a.config");
+        assert_eq!(config.string("a.system").expect("present"), "from-system.config");
+        assert_eq!(config.string("a.system-override").expect("present"), "from-b.config");
 
-        assert_eq!(
-            config.string("a.env-override").expect("present").as_ref(),
-            "from-c.config"
-        );
+        assert_eq!(config.string("a.env-override").expect("present"), "from-c.config");
 
         assert_eq!(config.boolean("core.missing"), None);
         assert_eq!(config.try_boolean("core.missing"), None);

@@ -176,14 +176,14 @@ pub(crate) mod utils {
     /// Note that missing values will be defaulted similar to what git does.
     #[allow(clippy::result_large_err)]
     pub fn new_rewrites(
-        config: &gix_config::File<'static>,
+        config: &gix_config::File,
         lenient: bool,
     ) -> Result<(Option<Rewrites>, bool), new_rewrites::Error> {
         new_rewrites_inner(config, lenient, &Diff::RENAMES, &Diff::RENAME_LIMIT)
     }
 
     pub(crate) fn new_rewrites_inner(
-        config: &gix_config::File<'static>,
+        config: &gix_config::File,
         lenient: bool,
         renames: &'static crate::config::tree::diff::Renames,
         rename_limit: &'static crate::config::tree::keys::UnsignedInteger,

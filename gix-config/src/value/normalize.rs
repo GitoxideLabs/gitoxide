@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use bstr::{BStr, BString, ByteSlice};
 
 /// Removes quotes, if any, from the provided inputs, and transforms
@@ -27,53 +25,37 @@ use bstr::{BStr, BString, ByteSlice};
 ///
 /// # Examples
 ///
-/// Values don't need modification are returned borrowed, without allocation.
-///
-/// ```
-/// # use std::borrow::Cow;
-/// # use bstr::ByteSlice;
-/// # use gix_config::value::normalize_bstr;
-/// assert!(matches!(normalize_bstr("hello world"), Cow::Borrowed(_)));
-/// ```
-///
 /// Internally quoted values are turned into owned variant with quotes removed.
 ///
 /// ```
-/// # use std::borrow::Cow;
 /// # use bstr::{BStr, BString};
 /// # use gix_config::value::{normalize_bstr};
-/// assert_eq!(normalize_bstr("hello \"world\""), Cow::<BStr>::Owned(BString::from("hello world")));
+/// assert_eq!(normalize_bstr("hello \"world\""), BString::from("hello world"));
 /// ```
 ///
 /// Escaped quotes are unescaped.
 ///
 /// ```
-/// # use std::borrow::Cow;
 /// # use bstr::{BStr, BString};
 /// # use gix_config::value::normalize_bstr;
-/// assert_eq!(normalize_bstr(r#"hello "world\"""#), Cow::<BStr>::Owned(BString::from(r#"hello world""#)));
+/// assert_eq!(normalize_bstr(r#"hello "world\"""#), BString::from(r#"hello world""#));
 /// ```
 #[must_use]
-pub fn normalize(mut input: Cow<'_, BStr>) -> Cow<'_, BStr> {
-    if input.as_ref() == "\"\"" {
-        return Cow::Borrowed("".into());
+pub fn normalize(input: &BStr) -> BString {
+    let mut input = input;
+    if input == "\"\"" {
+        return BString::default();
     }
     // An optimization to strip enclosing quotes without producing a new value/copy it.
     while input.len() >= 3 && input[0] == b'"' && input[input.len() - 1] == b'"' && input[input.len() - 2] != b'\\' {
-        match &mut input {
-            Cow::Borrowed(input) => *input = &input[1..input.len() - 1],
-            Cow::Owned(input) => {
-                input.pop();
-                input.remove(0);
-            }
-        }
-        if input.as_ref() == "\"\"" {
-            return Cow::Borrowed("".into());
+        input = input[1..input.len() - 1].as_ref();
+        if input == "\"\"" {
+            return BString::default();
         }
     }
 
     if input.find_byteset(br#"\""#).is_none() {
-        return input;
+        return input.into();
     }
     let mut out: BString = Vec::with_capacity(input.len()).into();
     let mut bytes = input.iter().copied();
@@ -94,17 +76,17 @@ pub fn normalize(mut input: Cow<'_, BStr>) -> Cow<'_, BStr> {
             _ => out.push(c),
         }
     }
-    Cow::Owned(out)
+    out
 }
 
 /// `&[u8]` variant of [`normalize`].
 #[must_use]
-pub fn normalize_bstr<'a>(input: impl Into<&'a BStr>) -> Cow<'a, BStr> {
-    normalize(Cow::Borrowed(input.into()))
+pub fn normalize_bstr<'a>(input: impl Into<&'a BStr>) -> BString {
+    normalize(input.into())
 }
 
 /// `Vec[u8]` variant of [`normalize`].
 #[must_use]
-pub fn normalize_bstring(input: impl Into<BString>) -> Cow<'static, BStr> {
-    normalize(Cow::Owned(input.into()))
+pub fn normalize_bstring(input: impl Into<BString>) -> BString {
+    normalize(input.into().as_ref())
 }

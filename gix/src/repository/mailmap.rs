@@ -1,4 +1,4 @@
-use crate::{Id, config::tree::Mailmap};
+use crate::{Id, bstr::ByteSlice, config::tree::Mailmap};
 
 impl crate::Repository {
     /// Similar to [`open_mailmap_into()`][crate::Repository::open_mailmap_into()], but ignores all errors and returns at worst
@@ -25,7 +25,7 @@ impl crate::Repository {
         let mut err = None::<crate::mailmap::load::Error>;
         let mut buf = Vec::new();
         let mut blob_id = self.config.resolved.string(Mailmap::BLOB).and_then(|spec| {
-            self.rev_parse_single(spec.as_ref())
+            self.rev_parse_single(spec.as_bstr())
                 .map_err(|e| err.get_or_insert(e.into()))
                 .map(Id::detach)
                 .ok()

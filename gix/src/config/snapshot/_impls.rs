@@ -40,7 +40,7 @@ impl Drop for CommitAutoRollback<'_> {
 }
 
 impl Deref for SnapshotMut<'_> {
-    type Target = gix_config::File<'static>;
+    type Target = gix_config::File;
 
     fn deref(&self) -> &Self::Target {
         &self.config
@@ -48,7 +48,7 @@ impl Deref for SnapshotMut<'_> {
 }
 
 impl Deref for Snapshot<'_> {
-    type Target = gix_config::File<'static>;
+    type Target = gix_config::File;
 
     fn deref(&self) -> &Self::Target {
         self.plumbing()

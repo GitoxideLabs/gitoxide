@@ -65,6 +65,13 @@ impl TryFrom<Cow<'_, BStr>> for Boolean {
     }
 }
 
+impl TryFrom<BString> for Boolean {
+    type Error = Error;
+    fn try_from(value: BString) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_ref())
+    }
+}
+
 impl Display for Boolean {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

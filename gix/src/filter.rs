@@ -1,6 +1,4 @@
 //! lower-level access to filters which are applied to create working tree checkouts or to 'clean' working tree contents for storage in git.
-use std::borrow::Cow;
-
 pub use gix_filter as plumbing;
 use gix_object::Find;
 
@@ -300,9 +298,9 @@ fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, pipelin
             s.header().subsection_name().map(|name| {
                 Ok(gix_filter::Driver {
                     name: name.to_owned(),
-                    clean: s.value("clean").map(Cow::into_owned),
-                    smudge: s.value("smudge").map(Cow::into_owned),
-                    process: s.value("process").map(Cow::into_owned),
+                    clean: s.value("clean"),
+                    smudge: s.value("smudge"),
+                    process: s.value("process"),
                     required: s
                         .value("required")
                         .map(|value| gix_config::Boolean::try_from(value.as_ref()))

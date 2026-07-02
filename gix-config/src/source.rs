@@ -1,8 +1,4 @@
-use std::{
-    borrow::Cow,
-    ffi::OsString,
-    path::{Path, PathBuf},
-};
+use std::{ffi::OsString, path::PathBuf};
 
 use crate::Source;
 
@@ -62,7 +58,7 @@ impl Source {
     ///
     /// With `env_var` it becomes possible to prevent accessing environment variables entirely to comply with `gix-sec`
     /// permissions for example.
-    pub fn storage_location(self, env_var: &mut dyn FnMut(&str) -> Option<OsString>) -> Option<Cow<'static, Path>> {
+    pub fn storage_location(self, env_var: &mut dyn FnMut(&str) -> Option<OsString>) -> Option<PathBuf> {
         use Source::*;
         match self {
             GitInstallation => {
@@ -89,35 +85,33 @@ impl Source {
                     None
                 } else {
                     env_var("GIT_CONFIG_SYSTEM")
-                        .map(|p| Cow::Owned(p.into()))
-                        .or_else(|| gix_path::env::system_prefix().map(|p| p.join("etc/gitconfig").into()))
+                        .map(Into::into)
+                        .or_else(|| gix_path::env::system_prefix().map(|p| p.join("etc/gitconfig")))
                 }
             }
             Git => match env_var("GIT_CONFIG_GLOBAL") {
-                Some(global_override) => Some(PathBuf::from(global_override).into()),
-                None => gix_path::env::xdg_config("config", env_var).map(Cow::Owned),
+                Some(global_override) => Some(PathBuf::from(global_override)),
+                None => gix_path::env::xdg_config("config", env_var),
             },
-            User => env_var("GIT_CONFIG_GLOBAL")
-                .map(|global_override| PathBuf::from(global_override).into())
-                .or_else(|| {
-                    env_var("HOME")
-                        .map(PathBuf::from)
-                        .or_else(|| {
-                            if cfg!(windows) {
-                                // On Windows, HOME is rarely set, and we generally need something more.
-                                std::env::home_dir()
-                            } else {
-                                // Git also only tries the env var on unix, and so do we
-                                None
-                            }
-                        })
-                        .map(|mut p| {
-                            p.push(".gitconfig");
-                            p.into()
-                        })
-                }),
-            Local => Some(Path::new("config").into()),
-            Worktree => Some(Path::new("config.worktree").into()),
+            User => env_var("GIT_CONFIG_GLOBAL").map(PathBuf::from).or_else(|| {
+                env_var("HOME")
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        if cfg!(windows) {
+                            // On Windows, HOME is rarely set, and we generally need something more.
+                            std::env::home_dir()
+                        } else {
+                            // Git also only tries the env var on unix, and so do we
+                            None
+                        }
+                    })
+                    .map(|mut p| {
+                        p.push(".gitconfig");
+                        p
+                    })
+            }),
+            Local => Some("config".into()),
+            Worktree => Some("config.worktree".into()),
             Env | Cli | Api | EnvOverride => None,
         }
     }

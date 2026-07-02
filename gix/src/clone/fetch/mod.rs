@@ -250,10 +250,12 @@ impl PrepareFetch {
         // The remote section just written to `.git/config`, kept around so we can
         // mirror it into the repository's in-memory config once we know which
         // repo handle survives.
-        let mut config = Some(util::append_remote_to_local_config_file(
+        let config = Some(util::append_remote_to_local_config_file(
             &mut remote,
             remote_name.clone(),
         )?);
+        #[cfg(feature = "sha256")]
+        let mut config = config;
 
         // Now we are free to apply remote configuration we don't want to be written to disk.
         if let Some(fetch_tags) = clone_fetch_tags {

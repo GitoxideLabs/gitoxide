@@ -6,7 +6,7 @@ mod get {
         let mut config = init_config();
 
         let value = config.raw_values_mut_by("core", None, "a")?;
-        assert_eq!(&*value.get()?, vec![cow_str("b100"), cow_str("d"), cow_str("f"),]);
+        assert_eq!(value.get()?, vec![cow_str("b100"), cow_str("d"), cow_str("f"),]);
         Ok(())
     }
 
@@ -151,7 +151,7 @@ mod delete {
     }
 }
 
-fn init_config() -> gix_config::File<'static> {
+fn init_config() -> gix_config::File {
     r#"[core]
     a = b"100"
     [core]

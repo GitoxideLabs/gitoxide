@@ -16,7 +16,7 @@ fn missing_includes_are_ignored_by_default() -> crate::Result {
             path = no-git-dir.config
     "#;
 
-    let mut config: gix_config::File<'_> = input.parse()?;
+    let mut config: gix_config::File = input.parse()?;
 
     let mut follow_options = file::includes::Options::follow(Default::default(), Default::default());
     follow_options.err_on_missing_config_path = false;

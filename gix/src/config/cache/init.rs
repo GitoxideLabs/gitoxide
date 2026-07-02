@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use std::{borrow::Cow, ffi::OsString};
+use std::ffi::OsString;
 
 use gix_sec::Permission;
 
@@ -91,7 +91,7 @@ impl Cache {
                 }
                 source
                     .storage_location(&mut Self::make_source_env(environment))
-                    .map(|p| (source, p.into_owned()))
+                    .map(|p| (source, p))
             })
             .map(|(source, path)| gix_config::file::Metadata {
                 path: Some(path),
@@ -311,7 +311,7 @@ impl crate::Repository {
 }
 
 fn apply_environment_overrides(
-    config: &mut gix_config::File<'static>,
+    config: &mut gix_config::File,
     git_prefix: Permission,
     http_transport: Permission,
     identity: Permission,
@@ -372,7 +372,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("https".into())),
+            Some(BString::from("https")),
             http_transport,
             &[
                 ("HTTPS_PROXY", gitoxide::Https::PROXY.name),
@@ -381,7 +381,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("http".into())),
+            Some(BString::from("http")),
             http_transport,
             &[
                 ("ALL_PROXY", "allProxy"),
@@ -410,7 +410,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("http".into())),
+            Some(BString::from("http")),
             git_prefix,
             &[{
                 let key = &gitoxide::Http::SSL_NO_VERIFY;
@@ -419,7 +419,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("credentials".into())),
+            Some(BString::from("credentials")),
             git_prefix,
             &[
                 {
@@ -434,7 +434,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("committer".into())),
+            Some(BString::from("committer")),
             identity,
             &[
                 {
@@ -449,7 +449,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("core".into())),
+            Some(BString::from("core")),
             git_prefix,
             &[
                 {
@@ -468,7 +468,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("author".into())),
+            Some(BString::from("author")),
             identity,
             &[
                 {
@@ -483,7 +483,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("commit".into())),
+            Some(BString::from("commit")),
             git_prefix,
             &[
                 {
@@ -498,13 +498,13 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("allow".into())),
+            Some(BString::from("allow")),
             http_transport,
             &[("GIT_PROTOCOL_FROM_USER", "protocolFromUser")],
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("user".into())),
+            Some(BString::from("user")),
             identity,
             &[{
                 let key = &gitoxide::User::EMAIL_FALLBACK;
@@ -513,7 +513,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("objects".into())),
+            Some(BString::from("objects")),
             objects,
             &[
                 {
@@ -532,7 +532,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("ssh".into())),
+            Some(BString::from("ssh")),
             git_prefix,
             &[{
                 let key = &gitoxide::Ssh::COMMAND_WITHOUT_SHELL_FALLBACK;
@@ -541,7 +541,7 @@ fn apply_environment_overrides(
         ),
         (
             "gitoxide",
-            Some(Cow::Borrowed("pathspec".into())),
+            Some(BString::from("pathspec")),
             git_prefix,
             &[
                 {

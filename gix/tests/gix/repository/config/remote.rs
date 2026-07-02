@@ -1,15 +1,13 @@
-use std::borrow::Cow;
-
-use gix::bstr::BStr;
+use gix::bstr::BString;
 
 use crate::remote;
 
-fn remote_names<'a>(it: impl IntoIterator<Item = &'a str>) -> Vec<Cow<'a, BStr>> {
-    it.into_iter().map(|n| Cow::Borrowed(n.into())).collect()
+fn remote_names<'a>(it: impl IntoIterator<Item = &'a str>) -> Vec<BString> {
+    it.into_iter().map(Into::into).collect()
 }
 
-fn remote_name(name: &str) -> Cow<'_, BStr> {
-    Cow::Borrowed(name.into())
+fn remote_name(name: &str) -> BString {
+    name.into()
 }
 
 #[test]

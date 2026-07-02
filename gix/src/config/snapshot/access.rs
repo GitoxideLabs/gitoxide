@@ -1,5 +1,5 @@
 #![allow(clippy::result_large_err)]
-use std::{borrow::Cow, ffi::OsStr};
+use std::ffi::OsString;
 
 use gix_features::threading::OwnShared;
 
@@ -13,7 +13,7 @@ use crate::{
 ///
 /// Note that single-value methods always return the last value found, which is the one set most recently in the
 /// hierarchy of configuration files, aka 'last one wins'.
-impl<'repo> Snapshot<'repo> {
+impl Snapshot<'_> {
     /// Return the boolean at `key`, or `None` if there is no such value or if the value can't be interpreted as
     /// boolean.
     ///
@@ -47,7 +47,7 @@ impl<'repo> Snapshot<'repo> {
     /// Return the string at `key`, or `None` if there is no such value.
     ///
     /// Note that this method takes the most recent value at `key` even if it is from a file with reduced trust.
-    pub fn string(&self, key: impl gix_config::AsKey) -> Option<Cow<'repo, BStr>> {
+    pub fn string(&self, key: impl gix_config::AsKey) -> Option<BString> {
         self.repo.config.resolved.string(key)
     }
 
@@ -63,22 +63,19 @@ impl<'repo> Snapshot<'repo> {
     pub fn trusted_path(
         &self,
         key: impl gix_config::AsKey,
-    ) -> Option<Result<Cow<'repo, std::path::Path>, gix_config::path::interpolate::Error>> {
+    ) -> Option<Result<std::path::PathBuf, gix_config::path::interpolate::Error>> {
         self.repo.config.trusted_file_path(key)
     }
 
     /// Return the trusted string at `key` for launching using [command::prepare()](gix_command::prepare()),
     /// or `None` if there is no such value or if no value was found in a trusted file.
-    pub fn trusted_program(&self, key: impl gix_config::AsKey) -> Option<Cow<'repo, OsStr>> {
+    pub fn trusted_program(&self, key: impl gix_config::AsKey) -> Option<OsString> {
         let value = self
             .repo
             .config
             .resolved
             .string_filter(key, &mut self.repo.config.filter_config_section.clone())?;
-        Some(match gix_path::from_bstr(value) {
-            Cow::Borrowed(v) => Cow::Borrowed(v.as_os_str()),
-            Cow::Owned(v) => Cow::Owned(v.into_os_string()),
-        })
+        Some(gix_path::from_bstr(value).into_owned().into_os_string())
     }
 }
 
@@ -87,7 +84,7 @@ impl Snapshot<'_> {
     /// Returns the underlying configuration implementation for a complete API, despite being a little less convenient.
     ///
     /// It's expected that more functionality will move up depending on demand.
-    pub fn plumbing(&self) -> &gix_config::File<'static> {
+    pub fn plumbing(&self) -> &gix_config::File {
         &self.repo.config.resolved
     }
 }
@@ -136,7 +133,7 @@ impl<'repo> SnapshotMut<'repo> {
             }
             None => self.config.set_raw_value_by(section.name(), None, key.name(), value)?,
         };
-        Ok(current.map(std::borrow::Cow::into_owned))
+        Ok(current)
     }
 
     /// Set the value at `key` to `new_value` in the given `subsection`, possibly creating the section and sub-section if it doesn't exist yet,
@@ -161,7 +158,7 @@ impl<'repo> SnapshotMut<'repo> {
         let current =
             self.config
                 .set_raw_value_by(key.section_name, key.subsection_name, key.value_name.to_owned(), value)?;
-        Ok(current.map(std::borrow::Cow::into_owned))
+        Ok(current)
     }
 
     pub(crate) fn commit_inner(
@@ -184,7 +181,7 @@ impl<'repo> SnapshotMut<'repo> {
     }
 
     /// Don't apply any of the changes after consuming this instance, effectively forgetting them, returning the changed configuration.
-    pub fn forget(mut self) -> gix_config::File<'static> {
+    pub fn forget(mut self) -> gix_config::File {
         self.repo.take();
         std::mem::take(&mut self.config)
     }

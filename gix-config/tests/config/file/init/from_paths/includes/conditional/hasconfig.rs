@@ -45,14 +45,13 @@ fn no_cycle() -> crate::Result {
     Ok(())
 }
 
-fn compare_baseline(config: &gix_config::File<'static>, key: impl AsRef<str>, expected: impl AsRef<Path>) {
+fn compare_baseline(config: &gix_config::File, key: impl AsRef<str>, expected: impl AsRef<Path>) {
     let expected = expected.as_ref();
     let key = key.as_ref();
     assert_eq!(
         config
             .string(key)
-            .unwrap_or_else(|| panic!("key '{key} should be included"))
-            .as_ref(),
+            .unwrap_or_else(|| panic!("key '{key} should be included")),
         std::fs::read_to_string(expected)
             .unwrap_or_else(|err| panic!("Couldn't find '{expected:?}' for reading: {err}"))
             .trim(),
@@ -60,7 +59,7 @@ fn compare_baseline(config: &gix_config::File<'static>, key: impl AsRef<str>, ex
     );
 }
 
-fn config_with_includes(name: &str) -> crate::Result<(gix_config::File<'static>, PathBuf)> {
+fn config_with_includes(name: &str) -> crate::Result<(gix_config::File, PathBuf)> {
     let root = crate::scripted_fixture_read_only("hasconfig.sh")?.join(name);
     let options = init::Options {
         includes: includes::Options::follow(Default::default(), Default::default()),

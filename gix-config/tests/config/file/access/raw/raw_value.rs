@@ -3,8 +3,8 @@ use gix_config::{File, lookup};
 #[test]
 fn single_section() -> crate::Result {
     let config = File::try_from("[core]\na=b\nc=d")?;
-    assert_eq!(config.raw_value("core.a")?.as_ref(), "b");
-    assert_eq!(config.raw_value_by("core", None, "c")?.as_ref(), "d");
+    assert_eq!(config.raw_value("core.a")?, "b");
+    assert_eq!(config.raw_value_by("core", None, "c")?, "d");
     Ok(())
 }
 
@@ -22,14 +22,14 @@ fn global_property_uses_empty_section_name() -> crate::Result {
 #[test]
 fn last_one_wins_respected_in_section() -> crate::Result {
     let config = File::try_from("[core]\na=b\na=d")?;
-    assert_eq!(config.raw_value("core.a")?.as_ref(), "d");
+    assert_eq!(config.raw_value("core.a")?, "d");
     Ok(())
 }
 
 #[test]
 fn last_one_wins_respected_across_section() -> crate::Result {
     let config = File::try_from("[core]\na=b\n[core]\na=d")?;
-    assert_eq!(config.raw_value("core.a")?.as_ref(), "d");
+    assert_eq!(config.raw_value("core.a")?, "d");
     Ok(())
 }
 
@@ -66,7 +66,7 @@ fn key_not_found() -> crate::Result {
 #[test]
 fn subsection_must_be_respected() -> crate::Result {
     let config = File::try_from("[core]a=b\n[core.a]a=c")?;
-    assert_eq!(config.raw_value("core.a")?.as_ref(), "b");
-    assert_eq!(config.raw_value("core.a.a")?.as_ref(), "c");
+    assert_eq!(config.raw_value("core.a")?, "b");
+    assert_eq!(config.raw_value("core.a.a")?, "c");
     Ok(())
 }

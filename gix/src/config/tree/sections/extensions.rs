@@ -17,26 +17,25 @@ impl Extensions {
 pub type ObjectFormat = keys::Any<validate::ObjectFormat>;
 
 mod object_format {
-    use std::borrow::Cow;
-
-    use crate::{bstr::BStr, config, config::tree::sections::extensions::ObjectFormat};
+    use crate::{bstr::ByteSlice, config, config::tree::sections::extensions::ObjectFormat};
 
     impl ObjectFormat {
         pub fn try_into_object_format(
             &'static self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
         ) -> Result<gix_hash::Kind, config::key::GenericErrorWithValue> {
+            let value = value.into_bstring();
             #[cfg(feature = "sha1")]
-            if value.as_ref().eq_ignore_ascii_case(b"sha1") {
+            if value.as_bstr().eq_ignore_ascii_case(b"sha1") {
                 return Ok(gix_hash::Kind::Sha1);
             }
 
             #[cfg(feature = "sha256")]
-            if value.as_ref().eq_ignore_ascii_case(b"sha256") {
+            if value.as_bstr().eq_ignore_ascii_case(b"sha256") {
                 return Ok(gix_hash::Kind::Sha256);
             }
 
-            Err(config::key::GenericErrorWithValue::from_value(self, value.into_owned()))
+            Err(config::key::GenericErrorWithValue::from_value(self, value))
         }
     }
 }
@@ -59,7 +58,7 @@ mod validate {
 
     impl keys::Validate for ObjectFormat {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
-            super::Extensions::OBJECT_FORMAT.try_into_object_format(value.into())?;
+            super::Extensions::OBJECT_FORMAT.try_into_object_format(value)?;
             Ok(())
         }
     }

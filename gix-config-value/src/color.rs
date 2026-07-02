@@ -97,6 +97,14 @@ impl TryFrom<Cow<'_, BStr>> for Color {
     }
 }
 
+impl TryFrom<BString> for Color {
+    type Error = Error;
+
+    fn try_from(value: BString) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_ref())
+    }
+}
+
 /// Discriminating enum for names of [`Color`] values.
 ///
 /// `git-config` supports the eight standard colors, their bright variants, an

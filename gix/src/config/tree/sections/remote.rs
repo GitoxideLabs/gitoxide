@@ -56,14 +56,7 @@ impl Section for Remote {
 pub type TagOpt = keys::Any<validate::TagOpt>;
 
 mod tag_opts {
-    use std::borrow::Cow;
-
-    use crate::{
-        bstr::{BStr, ByteSlice},
-        config,
-        config::tree::remote::TagOpt,
-        remote,
-    };
+    use crate::{bstr::ByteSlice, config, config::tree::remote::TagOpt, remote};
 
     impl TagOpt {
         /// Try to interpret `value` as tag option.
@@ -75,26 +68,27 @@ mod tag_opts {
         /// about passing them to a sub-process.
         pub fn try_into_tag_opt(
             &'static self,
-            value: Cow<'_, BStr>,
+            value: impl crate::config::tree::keys::IntoBString,
         ) -> Result<remote::fetch::Tags, config::key::GenericErrorWithValue> {
-            Ok(match value.as_ref().as_bytes() {
+            let value = value.into_bstring();
+            Ok(match value.as_bstr().as_bytes() {
                 b"--tags" => remote::fetch::Tags::All,
                 b"--no-tags" => remote::fetch::Tags::None,
-                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value.into_owned())),
+                _ => return Err(config::key::GenericErrorWithValue::from_value(self, value)),
             })
         }
     }
 }
 
 pub mod validate {
-    use std::{borrow::Cow, error::Error};
+    use std::error::Error;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
 
     pub struct TagOpt;
     impl Validate for TagOpt {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            super::Remote::TAG_OPT.try_into_tag_opt(Cow::Borrowed(value))?;
+            super::Remote::TAG_OPT.try_into_tag_opt(value)?;
             Ok(())
         }
     }

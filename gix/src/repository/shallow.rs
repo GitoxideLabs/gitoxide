@@ -1,4 +1,4 @@
-use std::{borrow::Cow, path::PathBuf};
+use std::path::PathBuf;
 
 use crate::{Repository, config::tree::gitoxide};
 
@@ -32,7 +32,7 @@ impl Repository {
             .config
             .resolved
             .string_filter(gitoxide::Core::SHALLOW_FILE, &mut self.filter_config_section())
-            .unwrap_or_else(|| Cow::Borrowed("shallow".into()));
+            .unwrap_or_else(|| "shallow".into());
         self.common_dir().join(gix_path::from_bstr(shallow_name))
     }
 }

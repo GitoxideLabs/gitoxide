@@ -24,7 +24,7 @@ pub fn list(
     let mut last_meta = None;
     let mut it = config.sections_and_postmatter().peekable();
     while let Some((section, matter)) = it.next() {
-        if !filters.is_empty() && !filters.iter().any(|filter| filter.matches_section(section)) {
+        if !filters.is_empty() && !filters.iter().any(|filter| filter.matches_section(&section)) {
             continue;
         }
 

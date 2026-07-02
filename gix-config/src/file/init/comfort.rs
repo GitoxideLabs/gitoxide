@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use crate::{
     File, Source,
     file::{Metadata, init},
@@ -15,7 +13,7 @@ use crate::{
 ///
 /// Also note that relevant information to interpolate paths will be obtained from the environment or other
 /// source on unix.
-impl File<'static> {
+impl File {
     /// Open all global configuration files which involves the following sources:
     ///
     /// * [git-installation](source::Kind::GitInstallation)
@@ -25,7 +23,7 @@ impl File<'static> {
     /// which excludes repository local configuration, as well as override-configuration from environment variables.
     ///
     /// Note that the file might [be empty][File::is_void()] in case no configuration file was found.
-    pub fn from_globals() -> Result<File<'static>, init::from_paths::Error> {
+    pub fn from_globals() -> Result<File, init::from_paths::Error> {
         let metas = [
             source::Kind::GitInstallation,
             source::Kind::System,
@@ -36,8 +34,7 @@ impl File<'static> {
         .filter_map(|source| {
             let path = source
                 .storage_location(&mut gix_path::env::var)
-                .and_then(|p| p.is_file().then_some(p))
-                .map(Cow::into_owned);
+                .and_then(|p| p.is_file().then_some(p));
 
             Metadata {
                 path,
@@ -63,7 +60,7 @@ impl File<'static> {
     /// See [`git-config`'s documentation] for more information on the environment variables in question.
     ///
     /// [`git-config`'s documentation]: https://git-scm.com/docs/git-config#Documentation/git-config.txt-GITCONFIGCOUNT
-    pub fn from_environment_overrides() -> Result<File<'static>, init::from_env::Error> {
+    pub fn from_environment_overrides() -> Result<File, init::from_env::Error> {
         let home = gix_path::env::home_dir();
         let options = init::Options {
             includes: init::includes::Options::follow_without_conditional(home.as_deref()),
@@ -75,7 +72,7 @@ impl File<'static> {
 }
 
 /// An easy way to provide complete configuration for a repository.
-impl File<'static> {
+impl File {
     /// This configuration type includes the following sources, in order of precedence:
     ///
     /// - globals
@@ -87,7 +84,7 @@ impl File<'static> {
     ///
     /// Includes will be resolved within limits as some information like the git installation directory is missing to interpolate
     /// paths with as well as git repository information like the branch name.
-    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File<'static>, from_git_dir::Error> {
+    pub fn from_git_dir(dir: std::path::PathBuf) -> Result<File, from_git_dir::Error> {
         let (mut local, git_dir) = {
             let source = Source::Local;
             let mut path = dir;

@@ -183,7 +183,7 @@ pub type OdbHandle = gix_odb::memory::Proxy<gix_odb::Handle>;
 pub type OdbHandleArc = gix_odb::memory::Proxy<gix_odb::HandleArc>;
 
 /// A way to access git configuration
-pub(crate) type Config = OwnShared<gix_config::File<'static>>;
+pub(crate) type Config = OwnShared<gix_config::File>;
 
 mod types;
 #[cfg(any(feature = "excludes", feature = "attributes"))]

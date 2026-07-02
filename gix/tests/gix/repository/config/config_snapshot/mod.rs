@@ -49,8 +49,8 @@ mod trusted_path {
             .transpose()?
             .expect("is set");
         assert_eq!(
-            actual.as_ref(),
-            "does-not-exist",
+            actual,
+            std::path::PathBuf::from("does-not-exist"),
             "the path isn't evaluated by default, and may not exist"
         );
 
@@ -103,8 +103,10 @@ fn values_are_set_in_memory_only() {
         "value was set and applied"
     );
     assert_eq!(
-        repo.config_snapshot().string(key_subsection).as_deref(),
-        Some("refs/heads/foo".into())
+        repo.config_snapshot()
+            .string(key_subsection)
+            .expect("value was just set"),
+        "refs/heads/foo"
     );
 
     assert_eq!(
@@ -126,8 +128,7 @@ fn set_value_in_subsection() {
         assert_eq!(
             config
                 .string(&*gitoxide::Credentials::TERMINAL_PROMPT.logical_name())
-                .expect("just set")
-                .as_ref(),
+                .expect("just set"),
             "yes"
         );
     }
@@ -147,15 +148,15 @@ fn apply_cli_overrides() -> crate::Result {
     )?;
 
     let config = repo.config_snapshot();
-    assert_eq!(config.string("a.b").expect("present").as_ref(), "c");
-    assert_eq!(config.string("remote.origin.url").expect("present").as_ref(), "url");
+    assert_eq!(config.string("a.b").expect("present"), "c");
+    assert_eq!(config.string("remote.origin.url").expect("present"), "url");
     assert_eq!(
         config.string("implicit.bool-true"),
         None,
         "no keysep is interpreted as 'not present' as we don't make up values"
     );
     assert_eq!(
-        config.string("implicit.bool-false").expect("present").as_ref(),
+        config.string("implicit.bool-false").expect("present"),
         "",
         "empty values are fine"
     );

@@ -1,6 +1,6 @@
-use std::{borrow::Cow, collections::HashMap};
+use std::collections::HashMap;
 
-use bstr::BStr;
+use bstr::{BStr, BString};
 use smallvec::ToSmallVec;
 
 use crate::{
@@ -13,12 +13,12 @@ use crate::{
 /// # Raw value API
 ///
 /// These functions are the raw value API, returning normalized byte strings.
-impl<'event> File<'event> {
+impl File {
     /// Returns an uninterpreted value given a `key`.
     ///
     /// Consider [`Self::raw_values()`] if you want to get all values of
     /// a multivar instead.
-    pub fn raw_value(&self, key: impl AsKey) -> Result<Cow<'_, BStr>, lookup::existing::Error> {
+    pub fn raw_value(&self, key: impl AsKey) -> Result<BString, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, |_| true)
     }
@@ -33,7 +33,7 @@ impl<'event> File<'event> {
         section_name: impl AsRef<str>,
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
-    ) -> Result<Cow<'_, BStr>, lookup::existing::Error> {
+    ) -> Result<BString, lookup::existing::Error> {
         self.raw_value_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -45,7 +45,7 @@ impl<'event> File<'event> {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Cow<'_, BStr>, lookup::existing::Error> {
+    ) -> Result<BString, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_value_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -61,7 +61,7 @@ impl<'event> File<'event> {
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Cow<'_, BStr>, lookup::existing::Error> {
+    ) -> Result<BString, lookup::existing::Error> {
         self.raw_value_filter_inner(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
     }
 
@@ -71,14 +71,18 @@ impl<'event> File<'event> {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Cow<'_, BStr>, lookup::existing::Error> {
+    ) -> Result<BString, lookup::existing::Error> {
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
         for section_id in section_ids.rev() {
             let section = self.sections.get(&section_id).expect("known section id");
             if !filter(section.meta()) {
                 continue;
             }
-            if let Some(v) = section.value(value_name) {
+            if let Some(v) = section
+                .body
+                .value_implicit_in(&self.event_backing, value_name)
+                .flatten()
+            {
                 return Ok(v);
             }
         }
@@ -91,10 +95,7 @@ impl<'event> File<'event> {
     ///
     /// Consider [`Self::raw_values_mut`] if you want to get mutable
     /// references to all values of a multivar instead.
-    pub fn raw_value_mut<'lookup>(
-        &mut self,
-        key: &'lookup impl AsKey,
-    ) -> Result<ValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    pub fn raw_value_mut(&mut self, key: &impl AsKey) -> Result<ValueMut<'_>, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_value_mut_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -104,12 +105,12 @@ impl<'event> File<'event> {
     ///
     /// Consider [`Self::raw_values_mut_by`] if you want to get mutable
     /// references to all values of a multivar instead.
-    pub fn raw_value_mut_by<'lookup>(
+    pub fn raw_value_mut_by(
         &mut self,
         section_name: impl AsRef<str>,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
-    ) -> Result<ValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+        subsection_name: Option<&BStr>,
+        value_name: &str,
+    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
         self.raw_value_mut_filter(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -118,27 +119,27 @@ impl<'event> File<'event> {
     ///
     /// Consider [`Self::raw_values_mut_by`] if you want to get mutable
     /// references to all values of a multivar instead.
-    pub fn raw_value_mut_filter<'lookup>(
+    pub fn raw_value_mut_filter(
         &mut self,
         section_name: impl AsRef<str>,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
+        subsection_name: Option<&BStr>,
+        value_name: &str,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<ValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
         self.raw_value_mut_filter_inner(section_name.as_ref(), subsection_name, value_name, filter)
     }
 
-    fn raw_value_mut_filter_inner<'lookup>(
+    fn raw_value_mut_filter_inner(
         &mut self,
         section_name: &str,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
+        subsection_name: Option<&BStr>,
+        value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<ValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    ) -> Result<ValueMut<'_>, lookup::existing::Error> {
         let mut section_ids = self
             .section_ids_by_name_and_subname(section_name, subsection_name)?
             .rev();
-        let key = section::ValueName(Cow::<BStr>::Borrowed(value_name.into()));
+        let key = section::ValueName::try_from(value_name).expect("value names from AsKey are validated");
 
         while let Some(section_id) = section_ids.next() {
             let mut index = 0;
@@ -150,7 +151,9 @@ impl<'event> File<'event> {
             }
             for (i, event) in section.as_ref().iter().enumerate() {
                 match event {
-                    Event::SectionValueName(event_key) if *event_key == key => {
+                    Event::SectionValueName(event_key)
+                        if event_key.eq_ignore_ascii_case_in(&self.event_backing, &key) =>
+                    {
                         found_key = true;
                         index = i;
                         size = 1;
@@ -176,7 +179,7 @@ impl<'event> File<'event> {
             drop(section_ids);
             let nl = self.detect_newline_style().to_smallvec();
             return Ok(ValueMut {
-                section: self.sections.get_mut(&section_id).expect("known section-id").to_mut(nl),
+                section: self.section_mut_from_id(section_id, nl).expect("known section-id"),
                 key,
                 index: Index(index),
                 size: Size(size),
@@ -207,23 +210,21 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
     ///     git_config.raw_values("core.a").unwrap(),
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("d".into()),
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("d"),
     ///     ],
     /// );
     /// ```
     ///
     /// Consider [`Self::raw_value`] if you want to get the resolved single
     /// value for a given key, if your value does not support multi-valued values.
-    pub fn raw_values(&self, key: impl AsKey) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    pub fn raw_values(&self, key: impl AsKey) -> Result<Vec<BString>, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_values_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -250,16 +251,14 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
     ///     git_config.raw_values_by("core", None, "a").unwrap(),
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("d".into()),
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("d"),
     ///     ],
     /// );
     /// ```
@@ -271,7 +270,7 @@ impl<'event> File<'event> {
         section_name: impl AsRef<str>,
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
-    ) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, lookup::existing::Error> {
         self.raw_values_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
@@ -283,7 +282,7 @@ impl<'event> File<'event> {
         &self,
         key: impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_values_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
@@ -299,7 +298,7 @@ impl<'event> File<'event> {
         subsection_name: Option<&BStr>,
         value_name: impl AsRef<str>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, lookup::existing::Error> {
         self.raw_values_filter_inner(section_name.as_ref(), subsection_name, value_name.as_ref(), filter)
     }
 
@@ -309,7 +308,7 @@ impl<'event> File<'event> {
         subsection_name: Option<&BStr>,
         value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Vec<Cow<'_, BStr>>, lookup::existing::Error> {
+    ) -> Result<Vec<BString>, lookup::existing::Error> {
         let mut values = Vec::new();
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
         for section_id in section_ids {
@@ -317,7 +316,7 @@ impl<'event> File<'event> {
             if !filter(section.meta()) {
                 continue;
             }
-            values.extend(section.values(value_name));
+            values.extend(section.body.values_in(&self.event_backing, value_name));
         }
 
         if values.is_empty() {
@@ -345,16 +344,14 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("d".into())
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("d")
     ///     ]
     /// );
     ///
@@ -363,9 +360,9 @@ impl<'event> File<'event> {
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("g".into()),
-    ///         Cow::<BStr>::Borrowed("g".into()),
-    ///         Cow::<BStr>::Borrowed("g".into())
+    ///         bstr::BString::from("g"),
+    ///         bstr::BString::from("g"),
+    ///         bstr::BString::from("g")
     ///     ],
     /// );
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
@@ -376,10 +373,7 @@ impl<'event> File<'event> {
     ///
     /// Note that this operation is relatively expensive, requiring a full
     /// traversal of the config.
-    pub fn raw_values_mut<'lookup>(
-        &mut self,
-        key: &'lookup impl AsKey,
-    ) -> Result<MultiValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    pub fn raw_values_mut(&mut self, key: &impl AsKey) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_values_mut_by(key.section_name, key.subsection_name, key.value_name)
     }
@@ -403,16 +397,14 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("d".into())
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("d")
     ///     ]
     /// );
     ///
@@ -421,9 +413,9 @@ impl<'event> File<'event> {
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("g".into()),
-    ///         Cow::<BStr>::Borrowed("g".into()),
-    ///         Cow::<BStr>::Borrowed("g".into())
+    ///         bstr::BString::from("g"),
+    ///         bstr::BString::from("g"),
+    ///         bstr::BString::from("g")
     ///     ],
     /// );
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
@@ -434,47 +426,47 @@ impl<'event> File<'event> {
     ///
     /// Note that this operation is relatively expensive, requiring a full
     /// traversal of the config.
-    pub fn raw_values_mut_by<'lookup>(
+    pub fn raw_values_mut_by(
         &mut self,
         section_name: impl AsRef<str>,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
-    ) -> Result<MultiValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+        subsection_name: Option<&BStr>,
+        value_name: &str,
+    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
         self.raw_values_mut_filter_by(section_name, subsection_name, value_name, |_| true)
     }
 
     /// Returns mutable references to all uninterpreted values given a `key`,
     /// if their sections pass `filter`.
-    pub fn raw_values_mut_filter<'lookup>(
+    pub fn raw_values_mut_filter(
         &mut self,
-        key: &'lookup impl AsKey,
+        key: &impl AsKey,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
         let key = key.as_key();
         self.raw_values_mut_filter_by(key.section_name, key.subsection_name, key.value_name, filter)
     }
 
     /// Returns mutable references to all uninterpreted values given a section,
     /// an optional subsection and value name, if their sections pass `filter`.
-    pub fn raw_values_mut_filter_by<'lookup>(
+    pub fn raw_values_mut_filter_by(
         &mut self,
         section_name: impl AsRef<str>,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
+        subsection_name: Option<&BStr>,
+        value_name: &str,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
         self.raw_values_mut_filter_inner(section_name.as_ref(), subsection_name, value_name, filter)
     }
 
-    fn raw_values_mut_filter_inner<'lookup>(
+    fn raw_values_mut_filter_inner(
         &mut self,
         section_name: &str,
-        subsection_name: Option<&'lookup BStr>,
-        value_name: &'lookup str,
+        subsection_name: Option<&BStr>,
+        value_name: &str,
         mut filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<MultiValueMut<'_, 'lookup, 'event>, lookup::existing::Error> {
+    ) -> Result<MultiValueMut<'_>, lookup::existing::Error> {
         let section_ids = self.section_ids_by_name_and_subname(section_name, subsection_name)?;
-        let key = section::ValueName(Cow::<BStr>::Borrowed(value_name.into()));
+        let key = section::ValueName::try_from(value_name).expect("value names from AsKey are validated");
 
         let mut offsets = HashMap::new();
         let mut entries = Vec::new();
@@ -489,7 +481,9 @@ impl<'event> File<'event> {
             }
             for (i, event) in section.as_ref().iter().enumerate() {
                 match event {
-                    Event::SectionValueName(event_key) if *event_key == key => {
+                    Event::SectionValueName(event_key)
+                        if event_key.eq_ignore_ascii_case_in(&self.event_backing, &key) =>
+                    {
                         expect_value = true;
                         offset_list.push(i - last_boundary);
                         offset_index += 1;
@@ -518,6 +512,7 @@ impl<'event> File<'event> {
         } else {
             Ok(MultiValueMut {
                 section: &mut self.sections,
+                backing: &mut self.event_backing,
                 key,
                 indices_and_sizes: entries,
                 offsets,
@@ -545,18 +540,16 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
-    /// # use bstr::BStr;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// git_config.set_existing_raw_value(&"core.a", "e")?;
-    /// assert_eq!(git_config.raw_value("core.a")?, Cow::<BStr>::Borrowed("e".into()));
+    /// assert_eq!(git_config.raw_value("core.a")?, "e");
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("e".into())
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("e")
     ///     ],
     /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -591,18 +584,16 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
-    /// # use bstr::BStr;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// git_config.set_existing_raw_value_by("core", None, "a", "e")?;
-    /// assert_eq!(git_config.raw_value("core.a")?, Cow::<BStr>::Borrowed("e".into()));
+    /// assert_eq!(git_config.raw_value("core.a")?, "e");
     /// assert_eq!(
     ///     git_config.raw_values("core.a")?,
     ///     vec![
-    ///         Cow::<BStr>::Borrowed("b".into()),
-    ///         Cow::<BStr>::Borrowed("c".into()),
-    ///         Cow::<BStr>::Borrowed("e".into())
+    ///         bstr::BString::from("b"),
+    ///         bstr::BString::from("c"),
+    ///         bstr::BString::from("e")
     ///     ],
     /// );
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -634,22 +625,20 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
-    /// # use bstr::BStr;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b").unwrap();
     /// let prev = git_config.set_raw_value(&"core.a", "e")?;
     /// git_config.set_raw_value(&"core.b", "f")?;
-    /// assert_eq!(prev.expect("present").as_ref(), "b");
-    /// assert_eq!(git_config.raw_value("core.a")?, Cow::<BStr>::Borrowed("e".into()));
-    /// assert_eq!(git_config.raw_value("core.b")?, Cow::<BStr>::Borrowed("f".into()));
+    /// assert_eq!(prev.expect("present"), "b");
+    /// assert_eq!(git_config.raw_value("core.a")?, "e");
+    /// assert_eq!(git_config.raw_value("core.b")?, "f");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_raw_value<'b>(
         &mut self,
         key: impl AsKey,
         new_value: impl Into<&'b BStr>,
-    ) -> Result<Option<Cow<'event, BStr>>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
         let key = key.as_key();
         self.set_raw_value_by(
             key.section_name,
@@ -675,15 +664,13 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
-    /// # use bstr::BStr;
     /// # use std::convert::TryFrom;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b").unwrap();
     /// let prev = git_config.set_raw_value_by("core", None, "a", "e")?;
     /// git_config.set_raw_value_by("core", None, "b", "f")?;
-    /// assert_eq!(prev.expect("present").as_ref(), "b");
-    /// assert_eq!(git_config.raw_value("core.a")?, Cow::<BStr>::Borrowed("e".into()));
-    /// assert_eq!(git_config.raw_value("core.b")?, Cow::<BStr>::Borrowed("f".into()));
+    /// assert_eq!(prev.expect("present"), "b");
+    /// assert_eq!(git_config.raw_value("core.a")?, "e");
+    /// assert_eq!(git_config.raw_value("core.b")?, "f");
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn set_raw_value_by<'b, Key, E>(
@@ -692,9 +679,9 @@ impl<'event> File<'event> {
         subsection_name: Option<&BStr>,
         value_name: Key,
         new_value: impl Into<&'b BStr>,
-    ) -> Result<Option<Cow<'event, BStr>>, crate::file::set_raw_value::Error>
+    ) -> Result<Option<BString>, crate::file::set_raw_value::Error>
     where
-        Key: TryInto<section::ValueName<'event>, Error = E>,
+        Key: TryInto<section::ValueName, Error = E>,
         section::value_name::Error: From<E>,
     {
         self.set_raw_value_filter_by(section_name, subsection_name, value_name, new_value, |_| true)
@@ -707,7 +694,7 @@ impl<'event> File<'event> {
         key: impl AsKey,
         new_value: impl Into<&'b BStr>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Cow<'event, BStr>>, crate::file::set_raw_value::Error> {
+    ) -> Result<Option<BString>, crate::file::set_raw_value::Error> {
         let key = key.as_key();
         self.set_raw_value_filter_by(
             key.section_name,
@@ -727,9 +714,9 @@ impl<'event> File<'event> {
         key: Key,
         new_value: impl Into<&'b BStr>,
         filter: impl FnMut(&Metadata) -> bool,
-    ) -> Result<Option<Cow<'event, BStr>>, crate::file::set_raw_value::Error>
+    ) -> Result<Option<BString>, crate::file::set_raw_value::Error>
     where
-        Key: TryInto<section::ValueName<'event>, Error = E>,
+        Key: TryInto<section::ValueName, Error = E>,
         section::value_name::Error: From<E>,
     {
         let mut section = self.section_mut_or_create_new_filter(section_name, subsection_name, filter)?;
@@ -769,9 +756,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -780,9 +765,9 @@ impl<'event> File<'event> {
     /// ];
     /// git_config.set_existing_raw_multi_value(&"core.a", new_values.into_iter())?;
     /// let fetched_config = git_config.raw_values("core.a")?;
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("x".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("y".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("z".into())));
+    /// assert!(fetched_config.iter().any(|v| v == "x"));
+    /// assert!(fetched_config.iter().any(|v| v == "y"));
+    /// assert!(fetched_config.iter().any(|v| v == "z"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     ///
@@ -790,9 +775,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -800,8 +783,8 @@ impl<'event> File<'event> {
     /// ];
     /// git_config.set_existing_raw_multi_value(&"core.a", new_values.into_iter())?;
     /// let fetched_config = git_config.raw_values("core.a")?;
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("x".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("y".into())));
+    /// assert!(fetched_config.iter().any(|v| v == "x"));
+    /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     ///
@@ -809,9 +792,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -820,7 +801,7 @@ impl<'event> File<'event> {
     ///     "discarded",
     /// ];
     /// git_config.set_existing_raw_multi_value(&"core.a", new_values)?;
-    /// assert!(!git_config.raw_values("core.a")?.contains(&Cow::<BStr>::Borrowed("discarded".into())));
+    /// assert!(!git_config.raw_values("core.a")?.iter().any(|v| v == "discarded"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     pub fn set_existing_raw_multi_value<'a, Iter, Item>(
@@ -866,9 +847,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -877,9 +856,9 @@ impl<'event> File<'event> {
     /// ];
     /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter())?;
     /// let fetched_config = git_config.raw_values("core.a")?;
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("x".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("y".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("z".into())));
+    /// assert!(fetched_config.iter().any(|v| v == "x"));
+    /// assert!(fetched_config.iter().any(|v| v == "y"));
+    /// assert!(fetched_config.iter().any(|v| v == "z"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     ///
@@ -887,9 +866,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -897,8 +874,8 @@ impl<'event> File<'event> {
     /// ];
     /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values.into_iter())?;
     /// let fetched_config = git_config.raw_values("core.a")?;
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("x".into())));
-    /// assert!(fetched_config.contains(&Cow::<BStr>::Borrowed("y".into())));
+    /// assert!(fetched_config.iter().any(|v| v == "x"));
+    /// assert!(fetched_config.iter().any(|v| v == "y"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     ///
@@ -906,9 +883,7 @@ impl<'event> File<'event> {
     ///
     /// ```
     /// # use gix_config::File;
-    /// # use std::borrow::Cow;
     /// # use std::convert::TryFrom;
-    /// # use bstr::BStr;
     /// # let mut git_config = gix_config::File::try_from("[core]a=b\n[core]\na=c\na=d").unwrap();
     /// let new_values = vec![
     ///     "x",
@@ -917,7 +892,7 @@ impl<'event> File<'event> {
     ///     "discarded",
     /// ];
     /// git_config.set_existing_raw_multi_value_by("core", None, "a", new_values)?;
-    /// assert!(!git_config.raw_values("core.a")?.contains(&Cow::<BStr>::Borrowed("discarded".into())));
+    /// assert!(!git_config.raw_values("core.a")?.iter().any(|v| v == "discarded"));
     /// # Ok::<(), gix_config::lookup::existing::Error>(())
     /// ```
     pub fn set_existing_raw_multi_value_by<'a, Iter, Item>(

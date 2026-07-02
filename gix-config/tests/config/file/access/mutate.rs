@@ -29,17 +29,13 @@ mod remove_section {
         let mut file = gix_config::File::try_from("[core] \na = b\nb=c\n\n[core \"name\"]\nd = 1\ne = 2").unwrap();
         assert_eq!(file.sections().count(), 2);
 
-        let removed = file.remove_section("core", None).expect("removed correct section");
-        assert_eq!(removed.header().name(), "core");
-        assert_eq!(removed.header().subsection_name(), None);
+        assert!(file.remove_section("core", None), "removed correct section");
         assert_eq!(file.sections().count(), 1);
-        assert_eq!(file.remove_section("core", None), None, "it's OK to try again");
+        assert!(!file.remove_section("core", None), "it's OK to try again");
 
-        let removed = file.remove_section("core", Some("name".into())).expect("found");
-        assert_eq!(removed.header().name(), "core");
-        assert_eq!(removed.header().subsection_name().expect("present"), "name");
+        assert!(file.remove_section("core", Some("name".into())), "found");
         assert_eq!(file.sections().count(), 0);
-        assert_eq!(file.remove_section("core", Some("name".into())), None);
+        assert!(!file.remove_section("core", Some("name".into())));
 
         file.section_mut_or_create_new("core", None).expect("creation succeeds");
         file.section_mut_or_create_new("core", Some("name".into()))
@@ -52,25 +48,22 @@ mod remove_section_filter {
         let mut file = gix_config::File::try_from("[core] \na = b\nb=c\n\n[core \"name\"]\nd = 1\ne = 2").unwrap();
         assert_eq!(file.sections().count(), 2);
 
-        let removed = file
-            .remove_section_filter("core", None, |_| true)
-            .expect("removed correct section");
-        assert_eq!(removed.header().name(), "core");
-        assert_eq!(removed.header().subsection_name(), None);
+        assert!(
+            file.remove_section_filter("core", None, |_| true),
+            "removed correct section"
+        );
         assert_eq!(file.sections().count(), 1);
-        let removed = file
-            .remove_section_filter("core", Some("name".into()), |_| true)
-            .expect("found");
-        assert_eq!(removed.header().name(), "core");
-        assert_eq!(removed.header().subsection_name().expect("present"), "name");
+        assert!(
+            file.remove_section_filter("core", Some("name".into()), |_| true),
+            "found"
+        );
         assert_eq!(file.sections().count(), 0);
 
-        assert_eq!(
-            file.remove_section_filter("core", None, |_| true),
-            None,
+        assert!(
+            !file.remove_section_filter("core", None, |_| true),
             "it's OK to try again"
         );
-        assert_eq!(file.remove_section_filter("core", Some("name".into()), |_| true), None);
+        assert!(!file.remove_section_filter("core", Some("name".into()), |_| true));
 
         file.section_mut_or_create_new("core", None).expect("creation succeeds");
         file.section_mut_or_create_new("core", Some("name".into()))
@@ -79,8 +72,6 @@ mod remove_section_filter {
 }
 
 mod rename_section {
-    use std::borrow::Cow;
-
     use gix_config::{file::rename_section, parse::section};
 
     #[test]
@@ -92,7 +83,7 @@ mod rename_section {
         ));
 
         assert!(matches!(
-            file.rename_section("core", None, "new-core", Some(Cow::Borrowed("a\nb".into()))),
+            file.rename_section("core", None, "new-core", Some("a\nb".into())),
             Err(rename_section::Error::Section(
                 section::header::Error::InvalidSubSection
             ))

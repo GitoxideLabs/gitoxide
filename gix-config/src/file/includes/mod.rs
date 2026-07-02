@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_features::threading::OwnShared;
@@ -13,7 +10,7 @@ use crate::{
     path,
 };
 
-impl File<'static> {
+impl File {
     /// Traverse all `include` and `includeIf` directives found in this instance and follow them, loading the
     /// referenced files from their location and adding their content right past the value that included them.
     ///
@@ -42,13 +39,13 @@ impl File<'static> {
     }
 }
 
-pub(crate) fn resolve(config: &mut File<'static>, buf: &mut Vec<u8>, options: init::Options<'_>) -> Result<(), Error> {
+pub(crate) fn resolve(config: &mut File, buf: &mut Vec<u8>, options: init::Options<'_>) -> Result<(), Error> {
     resolve_includes_recursive(None, config, 0, buf, options)
 }
 
 fn resolve_includes_recursive(
-    search_config: Option<&File<'static>>,
-    target_config: &mut File<'static>,
+    search_config: Option<&File>,
+    target_config: &mut File,
     depth: u8,
     buf: &mut Vec<u8>,
     options: init::Options<'_>,
@@ -66,20 +63,21 @@ fn resolve_includes_recursive(
     for id in target_config.section_order.clone().into_iter() {
         let section = &target_config.sections[&id];
         let header = &section.header;
-        let header_name = header.name.as_ref();
+        let backing = &target_config.event_backing;
+        let header_name = header.name.0.as_bstr_in(backing);
         let mut paths = None;
         if header_name == "include" && header.subsection_name.is_none() {
-            paths = Some(gather_paths(section, id));
+            paths = Some(gather_paths(section, id, backing));
         } else if header_name == "includeIf" {
             if let Some(condition) = &header.subsection_name {
                 let target_config_path = section.meta.path.as_deref();
                 if include_condition_match(
-                    condition.as_ref(),
+                    condition.as_bstr_in(backing),
                     target_config_path,
                     search_config.unwrap_or(target_config),
                     options.includes,
                 )? {
-                    paths = Some(gather_paths(section, id));
+                    paths = Some(gather_paths(section, id, backing));
                 }
             }
         }
@@ -91,8 +89,8 @@ fn resolve_includes_recursive(
 }
 
 fn insert_includes_recursively(
-    section_ids_and_include_paths: Vec<(SectionId, crate::Path<'_>)>,
-    target_config: &mut File<'static>,
+    section_ids_and_include_paths: Vec<(SectionId, crate::Path)>,
+    target_config: &mut File,
     depth: u8,
     options: init::Options<'_>,
     buf: &mut Vec<u8>,
@@ -141,19 +139,19 @@ fn insert_includes_recursively(
     Ok(())
 }
 
-fn gather_paths(section: &file::Section<'_>, id: SectionId) -> Vec<(SectionId, crate::Path<'static>)> {
+fn gather_paths(section: &file::SectionData, id: SectionId, backing: &[u8]) -> Vec<(SectionId, crate::Path)> {
     section
         .body
-        .values("path")
+        .values_in(backing, "path")
         .into_iter()
-        .map(|path| (id, crate::Path::from(Cow::Owned(path.into_owned()))))
+        .map(|path| (id, crate::Path::from(path)))
         .collect()
 }
 
 fn include_condition_match(
     condition: &BStr,
     target_config_path: Option<&Path>,
-    search_config: &File<'static>,
+    search_config: &File,
     options: Options<'_>,
 ) -> Result<bool, Error> {
     let mut tokens = condition.splitn(2, |b| *b == b':');
@@ -215,16 +213,16 @@ fn onbranch_matches(
         .category_and_short_name()
         .filter(|(cat, _)| *cat == Category::LocalBranch)?;
 
-    let condition = if condition.ends_with(b"/") {
+    let condition: BString = if condition.ends_with(b"/") {
         let mut condition: BString = condition.into();
         condition.push_str("**");
-        Cow::Owned(condition)
+        condition
     } else {
         condition.into()
     };
 
     gix_glob::wildmatch(
-        condition.as_ref(),
+        condition.as_bstr(),
         branch_name,
         gix_glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
     )
@@ -248,19 +246,19 @@ fn gitdir_matches(
     }
     let git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_dir.ok_or(Error::MissingGitDir)?));
 
-    let mut pattern_path: Cow<'_, _> = {
+    let mut pattern_path: BString = {
         let path = match check_interpolation_result(
             err_on_interpolation_failure,
-            crate::Path::from(Cow::Borrowed(condition_path)).interpolate(context),
+            crate::Path::from(condition_path.to_owned()).interpolate(context),
         )? {
             Some(p) => p,
             None => return Ok(false),
         };
-        gix_path::into_bstr(path).into_owned().into()
+        gix_path::into_bstr(path).into_owned()
     };
     // NOTE: yes, only if we do path interpolation will the slashes be forced to unix separators on windows
     if pattern_path != condition_path {
-        pattern_path = gix_path::to_unix_separators_on_windows(pattern_path);
+        pattern_path = gix_path::to_unix_separators_on_windows(pattern_path).into_owned();
     }
 
     if let Some(relative_pattern_path) = pattern_path.strip_prefix(b"./") {
@@ -274,21 +272,17 @@ fn gitdir_matches(
         let mut joined_path = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(parent_dir)).into_owned();
         joined_path.push(b'/');
         joined_path.extend_from_slice(relative_pattern_path);
-        pattern_path = joined_path.into();
+        pattern_path = joined_path;
     }
 
     // NOTE: this special handling of leading backslash is needed to do it like git does
     if pattern_path.iter().next() != Some(&(std::path::MAIN_SEPARATOR as u8))
         && !gix_path::from_bstr(pattern_path.clone()).is_absolute()
     {
-        let mut prefixed = pattern_path.into_owned();
-        prefixed.insert_str(0, "**/");
-        pattern_path = prefixed.into();
+        pattern_path.insert_str(0, "**/");
     }
     if pattern_path.ends_with(b"/") {
-        let mut suffixed = pattern_path.into_owned();
-        suffixed.push_str("**");
-        pattern_path = suffixed.into();
+        pattern_path.push_str("**");
     }
 
     let match_mode = gix_glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL | wildmatch_mode;
@@ -307,13 +301,13 @@ fn gitdir_matches(
 
 fn check_interpolation_result(
     disable: bool,
-    res: Result<Cow<'_, std::path::Path>, path::interpolate::Error>,
-) -> Result<Option<Cow<'_, std::path::Path>>, path::interpolate::Error> {
+    res: Result<impl Into<PathBuf>, path::interpolate::Error>,
+) -> Result<Option<PathBuf>, path::interpolate::Error> {
     if disable {
-        return res.map(Some);
+        return res.map(|path| Some(path.into()));
     }
     match res {
-        Ok(good) => Ok(good.into()),
+        Ok(good) => Ok(Some(good.into())),
         Err(err) => match err {
             path::interpolate::Error::Missing { .. } | path::interpolate::Error::UserInterpolationUnsupported => {
                 Ok(None)
@@ -326,7 +320,7 @@ fn check_interpolation_result(
 }
 
 fn resolve_path(
-    path: crate::Path<'_>,
+    path: crate::Path,
     target_config_path: Option<&Path>,
     includes::Options {
         interpolate: context,
@@ -349,7 +343,7 @@ fn resolve_path(
             .expect("path is a config file which naturally lives in a directory")
             .join(path)
     } else {
-        path.into()
+        path
     };
     Ok(Some(path))
 }

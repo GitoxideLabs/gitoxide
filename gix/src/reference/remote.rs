@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use gix_ref::{Category, FullNameRef};
+use gix_ref::{Category, FullName};
 
 use crate::{
     Reference,
@@ -59,7 +57,7 @@ impl<'repo> Reference<'repo> {
     pub fn remote_ref_name(
         &self,
         direction: remote::Direction,
-    ) -> Option<Result<Cow<'_, FullNameRef>, branch_remote_ref_name::Error>> {
+    ) -> Option<Result<FullName, branch_remote_ref_name::Error>> {
         self.repo.branch_remote_ref_name(self.name(), direction)
     }
 
@@ -70,7 +68,7 @@ impl<'repo> Reference<'repo> {
     pub fn remote_tracking_ref_name(
         &self,
         direction: remote::Direction,
-    ) -> Option<Result<Cow<'_, FullNameRef>, branch_remote_tracking_ref_name::Error>> {
+    ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
         self.repo.branch_remote_tracking_ref_name(self.name(), direction)
     }
 }

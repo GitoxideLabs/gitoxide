@@ -32,8 +32,8 @@ impl Remote<'_> {
     /// and the last `remote "<name>"` section will be containing all relevant values so that reloading the remote
     /// from `config` would yield the same in-memory state.
     #[allow(clippy::result_large_err)]
-    pub fn save_to(&self, config: &mut gix_config::File<'static>) -> Result<(), Error> {
-        fn as_key(name: &str) -> gix_config::parse::section::ValueName<'_> {
+    pub fn save_to(&self, config: &mut gix_config::File) -> Result<(), Error> {
+        fn as_key(name: &str) -> gix_config::parse::section::ValueName {
             name.try_into().expect("valid")
         }
         let name = self.name().ok_or_else(|| Error::NameMissing {
@@ -116,11 +116,7 @@ impl Remote<'_> {
     /// If this name is different from the current one, the git configuration will still contain the previous name,
     /// and the caller should account for that.
     #[allow(clippy::result_large_err)]
-    pub fn save_as_to(
-        &mut self,
-        name: impl Into<BString>,
-        config: &mut gix_config::File<'static>,
-    ) -> Result<(), AsError> {
+    pub fn save_as_to(&mut self, name: impl Into<BString>, config: &mut gix_config::File) -> Result<(), AsError> {
         let name = crate::remote::name::validated(name)?;
         let prev_name = self.name.take();
         self.name = Some(name.into());
