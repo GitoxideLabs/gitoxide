@@ -132,15 +132,13 @@ pub(crate) fn attributes_cache(
     repo: &gix::Repository,
 ) -> anyhow::Result<(gix::AttributeStack<'_>, IndexPersistedOrInMemory)> {
     let index = repo.index_or_load_from_head()?;
-    let cache = repo.attributes(
+    let cache = repo.attributes_only(
         &index,
         if repo.is_bare() {
             gix::worktree::stack::state::attributes::Source::IdMapping
         } else {
             gix::worktree::stack::state::attributes::Source::WorktreeThenIdMapping
         },
-        gix::worktree::stack::state::ignore::Source::IdMapping,
-        None,
     )?;
     Ok((cache, index))
 }
