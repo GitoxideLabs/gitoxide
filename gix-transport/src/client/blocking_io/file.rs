@@ -128,6 +128,37 @@ impl SpawnProcessOnDemand {
         cmd.args.push(repo_path);
         Ok((cmd, ssh_kind, cmd_name))
     }
+
+    /// Prepare an invocation for when the program of `service`, e.g. `git-upload-pack`, isn't present in `PATH`,
+    /// which can happen on Windows in particular, where `git` may be installed without its subcommands
+    /// being directly available (#2313).
+    ///
+    /// Prefer the same program from git's own `--exec-path`, which is where `git` itself finds it, and
+    /// otherwise let the `git` we can always find run it as subcommand.
+    /// This is only used for local repositories - remote shells keep the standard invocation.
+    fn prepare_fallback_command(&self, service: Service) -> (gix_command::Prepare, OsString) {
+        let (mut cmd, cmd_name) = match gix_path::env::core_dir_program(service.as_str()) {
+            Some(program) => {
+                let cmd_name: OsString = program.clone().into();
+                (gix_command::prepare(program).stderr(Stdio::null()), cmd_name)
+            }
+            None => {
+                let subcommand = service
+                    .as_str()
+                    .strip_prefix("git-")
+                    .expect("all services are 'git-*' subcommands");
+                let git = gix_path::env::exe_invocation();
+                let mut cmd_name: OsString = git.into();
+                cmd_name.push(" ");
+                cmd_name.push(subcommand);
+                let mut cmd = gix_command::prepare(git).stderr(Stdio::null());
+                cmd.args.push(subcommand.into());
+                (cmd, cmd_name)
+            }
+        };
+        cmd.args.push(self.path.to_os_str_lossy().into_owned());
+        (cmd, cmd_name)
+    }
 }
 
 impl client::TransportWithoutIO for SpawnProcessOnDemand {
@@ -241,21 +272,42 @@ impl client::blocking_io::Transport for SpawnProcessOnDemand {
         service: Service,
         extra_parameters: &'a [(&'a str, Option<&'a str>)],
     ) -> Result<SetServiceResponse<'_>, client::Error> {
-        let (mut cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
-        cmd.stdin = Stdio::piped();
-        cmd.stdout = Stdio::piped();
+        let (cmd, ssh_kind, cmd_name) = self.prepare_command(service)?;
+        let envs = std::mem::take(&mut self.envs);
+        let into_std_command = |mut cmd: gix_command::Prepare| {
+            cmd.stdin = Stdio::piped();
+            cmd.stdout = Stdio::piped();
 
-        let mut cmd = std::process::Command::from(cmd);
-        for env_to_remove in ENV_VARS_TO_REMOVE {
-            cmd.env_remove(env_to_remove);
-        }
-        cmd.envs(std::mem::take(&mut self.envs));
+            let mut cmd = std::process::Command::from(cmd);
+            for env_to_remove in ENV_VARS_TO_REMOVE {
+                cmd.env_remove(env_to_remove);
+            }
+            cmd.envs(envs.iter().map(|(k, v)| (k, v)));
+            cmd
+        };
 
+        let mut cmd = into_std_command(cmd);
         gix_features::trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand");
-        let mut child = cmd.spawn().map_err(|err| client::Error::InvokeProgram {
-            source: err,
-            command: cmd_name,
-        })?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(err) if ssh_kind.is_none() && err.kind() == std::io::ErrorKind::NotFound => {
+                // The service program wasn't found in `PATH`, but as `git` itself can be found,
+                // the service can still be run through it (#2313).
+                let (cmd, cmd_name) = self.prepare_fallback_command(service);
+                let mut cmd = into_std_command(cmd);
+                gix_features::trace::debug!(command = ?cmd, "gix_transport::SpawnProcessOnDemand (fallback)");
+                cmd.spawn().map_err(|err| client::Error::InvokeProgram {
+                    source: err,
+                    command: cmd_name,
+                })?
+            }
+            Err(err) => {
+                return Err(client::Error::InvokeProgram {
+                    source: err,
+                    command: cmd_name,
+                });
+            }
+        };
         let stdout: Box<dyn std::io::Read + Send> = match ssh_kind {
             Some(ssh_kind) => Box::new(supervise_stderr(
                 ssh_kind,
@@ -305,6 +357,51 @@ pub fn connect(
 
 #[cfg(test)]
 mod tests {
+    mod local {
+        use crate::{Protocol, Service, client::blocking_io::file::SpawnProcessOnDemand};
+
+        #[test]
+        fn fallback_command_prefers_the_core_dir_program_and_can_always_run_git_itself() {
+            let transport = SpawnProcessOnDemand::new_local("/repo/path".into(), Protocol::V2, false);
+            let (cmd, name) = transport.prepare_fallback_command(Service::UploadPack);
+
+            assert!(!cmd.use_shell, "a shell is never used to run the local service program");
+            assert_eq!(
+                cmd.args.last().map(std::path::Path::new),
+                Some(std::path::Path::new("/repo/path")),
+                "the repository path is the final argument"
+            );
+            match gix_path::env::core_dir_program(Service::UploadPack.as_str()) {
+                Some(program) => {
+                    assert_eq!(
+                        std::path::Path::new(&cmd.command),
+                        program,
+                        "the program shipped with Git in its `--exec-path` is used directly"
+                    );
+                    assert!(
+                        std::path::Path::new(&cmd.command).is_absolute(),
+                        "which also means it's an absolute path"
+                    );
+                    assert_eq!(cmd.args.len(), 1, "there is no sub-command, just the repo path");
+                    assert_eq!(name, program.into_os_string());
+                }
+                None => {
+                    assert_eq!(
+                        std::path::Path::new(&cmd.command),
+                        gix_path::env::exe_invocation(),
+                        "without it, `git` itself runs the service as subcommand"
+                    );
+                    assert_eq!(
+                        cmd.args.first().and_then(|arg| arg.to_str()),
+                        Some("upload-pack"),
+                        "the sub-command is passed as separate argument, without the 'git-' prefix"
+                    );
+                    assert_eq!(cmd.args.len(), 2, "sub-command and repo path");
+                }
+            }
+        }
+    }
+
     mod ssh {
         mod connect {
             use crate::{Protocol, client::blocking_io::ssh};

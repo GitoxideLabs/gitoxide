@@ -56,6 +56,22 @@ fn core_dir() {
 }
 
 #[test]
+fn core_dir_program() {
+    let path = gix_path::env::core_dir_program("git-upload-pack")
+        .expect("git-upload-pack is present in the exec-path of any complete Git installation");
+    assert!(path.is_file(), "the returned path refers to an existing file");
+    assert!(
+        path.is_absolute(),
+        "the path is absolute as it is based on `git --exec-path`"
+    );
+    assert_eq!(
+        gix_path::env::core_dir_program("git-program-that-does-not-exist"),
+        None,
+        "programs that don't exist in the core directory are not found"
+    );
+}
+
+#[test]
 fn system_prefix() {
     assert_ne!(
         gix_path::env::system_prefix(),

@@ -2536,6 +2536,7 @@ dependencies = [
  "gix-hash",
  "gix-pack",
  "gix-packetline",
+ "gix-path",
  "gix-quote",
  "gix-sec",
  "gix-transport",
