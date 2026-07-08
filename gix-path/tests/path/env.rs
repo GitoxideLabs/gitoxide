@@ -57,13 +57,27 @@ fn core_dir() {
 
 #[test]
 fn core_dir_program() {
-    let path = gix_path::env::core_dir_program("git-upload-pack")
-        .expect("git-upload-pack is present in the exec-path of any complete Git installation");
-    assert!(path.is_file(), "the returned path refers to an existing file");
-    assert!(
-        path.is_absolute(),
-        "the path is absolute as it is based on `git --exec-path`"
-    );
+    let core_dir = gix_path::env::core_dir().expect("Git is always in PATH when we run tests");
+    let program = std::fs::read_dir(core_dir)
+        .expect("the core directory can be listed")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+        .find_map(|entry| {
+            let name = entry.file_name();
+            let stem = name.to_str()?.strip_suffix(std::env::consts::EXE_SUFFIX)?;
+            stem.starts_with("git-").then(|| stem.to_owned())
+        });
+    // Which programs are present as separate executables depends on how Git was built -
+    // Git for Windows, for instance, may not provide programs for builtin subcommands.
+    if let Some(stem) = program {
+        let path =
+            gix_path::env::core_dir_program(&stem).expect("a program listed in the core directory is found there");
+        assert!(path.is_file(), "the returned path refers to an existing file");
+        assert!(
+            path.is_absolute(),
+            "the path is absolute as it is based on `git --exec-path`"
+        );
+    }
     assert_eq!(
         gix_path::env::core_dir_program("git-program-that-does-not-exist"),
         None,
