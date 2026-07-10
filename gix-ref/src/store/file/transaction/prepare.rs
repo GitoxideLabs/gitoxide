@@ -488,12 +488,17 @@ impl Transaction<'_, '_> {
         // there are enough edits to amortize the walk: a small transaction against a store with
         // many loose refs would otherwise trade O(edits) probes for an O(all loose refs) scan.
         // Below the threshold every edit takes the plain loose-first lookup, exactly as before.
+        //
+        // A name missing from the snapshot is treated as packed-only, so any error while
+        // enumerating (an unreadable file or directory) must disable the snapshot entirely:
+        // every edit then takes the per-edit lookup, which surfaces the I/O error for the refs
+        // it actually touches instead of matching a possibly stale packed value.
         const MIN_EDITS_FOR_LOOSE_NAME_SNAPSHOT: usize = 256;
         let packed_buffer = self.packed_transaction.as_ref().and_then(packed::Transaction::buffer);
         let loose_names: Option<std::collections::HashSet<FullName>> = packed_buffer
             .filter(|_| updates.len() >= MIN_EDITS_FOR_LOOSE_NAME_SNAPSHOT)
             .and(store.loose_iter().ok())
-            .map(|iter| iter.filter_map(Result::ok).map(|r| r.name).collect());
+            .and_then(|iter| iter.map(|res| res.map(|r| r.name)).collect::<Result<_, _>>().ok());
         let mut find_time = std::time::Duration::ZERO;
         let resolve_span = gix_features::trace::detail!("ref tx resolve", edits = updates.len(), find_ms = 0u64);
         for (cid, held_lock) in held_locks.into_iter().enumerate() {

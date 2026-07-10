@@ -962,50 +962,96 @@ fn resolving_existing_values_in_large_transactions_sees_pseudo_refs_like_head() 
     Ok(())
 }
 
+/// A loose ref whose enumeration fails (here: it cannot be read due to file permissions) must
+/// not be treated as packed-only by the loose-name snapshot — its CAS check would pass against
+/// the stale packed value and overwrite the loose ref. Instead, any enumeration error disables
+/// the snapshot, and the per-edit lookup surfaces the I/O error, just like a small transaction.
+#[test]
+#[cfg(unix)]
+fn resolving_existing_values_in_large_transactions_surfaces_unreadable_loose_refs() -> crate::Result {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return Ok(()); // root bypasses file permissions, the unreadable ref cannot be provoked
+    }
+    let (_keep, store) = store_writable("make_packed_ref_repository_for_overlay.sh")?;
+    let packed = store.open_packed_buffer()?.expect("packed-refs present");
+    let stale_packed_value = Target::Object(packed.find("newer-as-loose")?.target());
+    std::fs::set_permissions(
+        store.common_dir_resolved().join("refs/heads/newer-as-loose"),
+        std::fs::Permissions::from_mode(0o000),
+    )?;
+
+    match store.transaction().prepare(
+        with_filler_edits(RefEdit {
+            change: Change::Update {
+                log: LogChange::default(),
+                new: Target::Object(crate::fixture_hash_kind().null()),
+                expected: PreviousValue::MustExistAndMatch(stale_packed_value),
+            },
+            name: "refs/heads/newer-as-loose".try_into()?,
+            deref: false,
+        }),
+        Fail::Immediately,
+        Fail::Immediately,
+    ) {
+        Err(transaction::prepare::Error::Io(err)) => {
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+        Err(other) => unreachable!("expected the loose read error, got: {other:?}"),
+        Ok(_) => unreachable!("an unreadable loose ref must fail the transaction, not match its stale packed value"),
+    }
+    Ok(())
+}
+
 /// A transaction locks every edit before resolving any current value, but each lock's file
 /// descriptor is closed right after its content is written: preparing must need O(1) open
 /// files, not O(edits), or a fetch updating thousands of refs exhausts the default
 /// `ulimit -n 1024` (EMFILE at the ~1000th lock, observed on a real fetch).
 ///
-/// Lowering `RLIMIT_NOFILE` affects the whole process. Under `cargo nextest` (process per
-/// test — what CI runs) that is fully isolated; under plain `cargo test` the lowered limit
-/// briefly applies to sibling threads, hence the tight window and the RAII guard restoring
-/// the original limit on all exit paths.
+/// Lowering `RLIMIT_NOFILE` affects the whole process, and under plain `cargo test` sibling
+/// tests run on other threads of that process and could spuriously hit `EMFILE`. So the test
+/// re-executes itself as a child process (marked by an environment variable), and only the
+/// disposable child lowers the limit.
 #[test]
 #[cfg(unix)]
 fn large_transactions_hold_a_constant_number_of_file_descriptors() -> crate::Result {
-    struct SoftLimitGuard(libc::rlimit);
-    impl SoftLimitGuard {
-        fn lower_to(soft: libc::rlim_t) -> std::io::Result<Self> {
-            let mut original = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut original) } != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let lowered = libc::rlimit {
-                rlim_cur: soft.min(original.rlim_max),
-                rlim_max: original.rlim_max,
-            };
-            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lowered) } != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(Self(original))
-        }
-    }
-    impl Drop for SoftLimitGuard {
-        fn drop(&mut self) {
-            unsafe {
-                libc::setrlimit(libc::RLIMIT_NOFILE, &self.0);
-            }
-        }
+    const WORKER_MARK: &str = "GIX_REF_TEST_INTERNAL_LOWER_FD_LIMIT";
+    if std::env::var_os(WORKER_MARK).is_none() {
+        let test_name = format!(
+            "{}::large_transactions_hold_a_constant_number_of_file_descriptors",
+            module_path!()
+                .split_once("::")
+                .expect("this module is nested, so there is a crate-name segment to strip")
+                .1
+        );
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", &test_name])
+            .env(WORKER_MARK, "1")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child process must have run this very test and passed:\n{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
     }
 
     let (_dir, store) = empty_store()?;
     let edits: Vec<RefEdit> = (0..300).map(|i| create_at(&format!("refs/heads/fd-{i:03}"))).collect();
 
-    let _guard = SoftLimitGuard::lower_to(96)?;
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    limit.rlim_cur = limit.rlim_max.min(96);
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
     let applied = store
         .transaction()
         .prepare(edits, Fail::Immediately, Fail::Immediately)?
