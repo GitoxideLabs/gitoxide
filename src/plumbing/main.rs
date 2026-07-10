@@ -1604,6 +1604,7 @@ pub fn main() -> Result<()> {
                 patterns,
                 pathspec,
                 show_ignore_patterns,
+                no_index,
             } => prepare_and_run(
                 "exclude-query",
                 trace,
@@ -1630,6 +1631,7 @@ pub fn main() -> Result<()> {
                             show_ignore_patterns,
                             overrides: patterns,
                             statistics,
+                            no_index,
                         },
                     )
                 },

@@ -15,6 +15,9 @@ pub mod query {
         pub overrides: Vec<OsString>,
         pub show_ignore_patterns: bool,
         pub statistics: bool,
+        /// If set, do not consult the index, reporting matches purely from the
+        /// ignore stack (like `git check-ignore --no-index`).
+        pub no_index: bool,
     }
 }
 
@@ -28,6 +31,7 @@ pub fn query(
         format,
         show_ignore_patterns,
         statistics,
+        no_index,
     }: query::Options,
 ) -> anyhow::Result<()> {
     if format != OutputFormat::Human {
@@ -55,7 +59,7 @@ pub fn query(
                 let match_ = entry
                     .matching_exclude_pattern()
                     .and_then(|m| (show_ignore_patterns || !m.pattern.is_negative()).then_some(m));
-                print_match(match_, path.as_ref(), &mut out)?;
+                print_match(match_, path.as_ref(), &index, no_index, &mut out)?;
             }
         }
         PathsOrPatterns::Patterns(patterns) => {
@@ -75,7 +79,7 @@ pub fn query(
                     let match_ = entry
                         .matching_exclude_pattern()
                         .and_then(|m| (show_ignore_patterns || !m.pattern.is_negative()).then_some(m));
-                    print_match(match_, path, &mut out)?;
+                    print_match(match_, path, &index, no_index, &mut out)?;
                 }
             }
 
@@ -103,7 +107,7 @@ pub fn query(
                     let match_ = entry
                         .matching_exclude_pattern()
                         .and_then(|m| (show_ignore_patterns || !m.pattern.is_negative()).then_some(m));
-                    print_match(match_, path, &mut out)?;
+                    print_match(match_, path, &index, no_index, &mut out)?;
                 }
             }
         }
@@ -119,8 +123,16 @@ pub fn query(
 fn print_match(
     m: Option<gix::ignore::search::Match<'_>>,
     path: &BStr,
+    index: &gix::worktree::Index,
+    no_index: bool,
     mut out: impl std::io::Write,
 ) -> std::io::Result<()> {
+    // Like `git check-ignore` (without `--no-index`): a path that is tracked in
+    // the index - a file entry, or a directory that contains index entries - is
+    // never reported as excluded, even if an ignore rule matches it.
+    let m = m.filter(|_| {
+        no_index || !(index.entry_by_path(path).is_some() || index.path_is_directory(path))
+    });
     match m {
         Some(m) => writeln!(
             out,

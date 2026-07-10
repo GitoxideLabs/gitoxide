@@ -1186,6 +1186,12 @@ pub mod exclude {
             /// That way one can understand why an entry might not be excluded.
             #[clap(long, short = 'i')]
             show_ignore_patterns: bool,
+            /// Do not consult the index, reporting matches purely from the ignore stack.
+            ///
+            /// Like `git check-ignore --no-index`. By default, tracked paths are not
+            /// reported as excluded, matching `git check-ignore`.
+            #[clap(long)]
+            no_index: bool,
             /// Additional patterns to use for exclusions. They have the highest priority.
             ///
             /// Useful for undoing previous patterns using the '!' prefix.
