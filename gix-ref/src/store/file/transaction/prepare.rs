@@ -85,11 +85,18 @@ impl Transaction<'_, '_> {
     /// writer must hold the same lock to change a ref, so once every lock is held, neither the
     /// loose-name snapshot taken afterwards nor any value read in [`apply_change`](Self::apply_change)
     /// can go stale for an edited ref.
+    ///
+    /// For updates, the edit's *new* target is known before any resolution, so it is written into
+    /// the lock file right here and the file handle closed again. That way a transaction holds
+    /// O(1) file descriptors while it prepares, not O(edits) — locking thousands of refs at once
+    /// (a fetch on a large mirror) must not exhaust the process fd limit. Only the lock *file*
+    /// remains on disk to keep the race protection above intact.
     fn acquire_ref_lock(
         store: &file::Store,
         lock_fail_mode: gix_lock::acquire::Fail,
         change: &Edit,
     ) -> Result<HeldLock, Error> {
+        use std::io::Write;
         assert!(
             change.lock.is_none(),
             "locks can only be acquired once and it's all or nothing"
@@ -109,15 +116,23 @@ impl Transaction<'_, '_> {
                     .map(HeldLock::Delete)
                     .map_err(|err| Self::lock_acquire_error(err, "borrowcheck won't allow change.name()"))
             }
-            Change::Update { .. } => {
-                gix_lock::File::acquire_to_update_resource(resource, lock_fail_mode, Some(base.clone().into_owned()))
-                    .map(HeldLock::Update)
-                    .map_err(|err| {
-                        Self::lock_acquire_error(
-                            err,
-                            "borrowcheck won't allow change.name() and this will be corrected by caller",
-                        )
-                    })
+            Change::Update { ref new, .. } => {
+                let mut lock = gix_lock::File::acquire_to_update_resource(
+                    resource,
+                    lock_fail_mode,
+                    Some(base.clone().into_owned()),
+                )
+                .map_err(|err| {
+                    Self::lock_acquire_error(
+                        err,
+                        "borrowcheck won't allow change.name() and this will be corrected by caller",
+                    )
+                })?;
+                lock.with_mut(|file| match new {
+                    Target::Object(oid) => writeln!(file, "{oid}"),
+                    Target::Symbolic(name) => writeln!(file, "ref: {}", name.0),
+                })?;
+                Ok(HeldLock::Update(lock.close()?))
             }
         }
     }
@@ -133,8 +148,6 @@ impl Transaction<'_, '_> {
         loose_names: Option<&std::collections::HashSet<FullName>>,
         find_time: &mut std::time::Duration,
     ) -> Result<(), Error> {
-        use std::io::Write;
-
         let resolve_start = std::time::Instant::now();
         let existing_ref = Self::read_existing_ref(store, change.update.name.as_ref(), packed, loose_names)?;
         *find_time += resolve_start.elapsed();
@@ -175,7 +188,7 @@ impl Transaction<'_, '_> {
 
                 Some(lock)
             }
-            (Change::Update { expected, new, .. }, HeldLock::Update(mut lock)) => {
+            (Change::Update { expected, new, .. }, HeldLock::Update(lock)) => {
                 match (&expected, &existing_ref) {
                     (PreviousValue::Any, _)
                     | (PreviousValue::MustExist, Some(_))
@@ -235,15 +248,15 @@ impl Transaction<'_, '_> {
                     (true, matches!(new, Target::Symbolic(_)))
                 };
 
+                // The lock file already contains the new target, written when it was acquired.
+                // Keep the marker if commit needs it — either to persist it as the loose ref, or
+                // merely to delete the loose source of a ref moving into packed-refs (the eagerly
+                // written content is never persisted then). Otherwise drop it, which removes the
+                // lock file along with its unused content.
                 let keep_lock_for_loose_source_delete = direct_to_packed_refs && matches!(new, Target::Object(_));
-                if (is_effective && !direct_to_packed_refs) || is_symbolic {
-                    lock.with_mut(|file| match new {
-                        Target::Object(oid) => writeln!(file, "{oid}"),
-                        Target::Symbolic(name) => writeln!(file, "ref: {}", name.0),
-                    })?;
-                    Some(lock.close()?)
-                } else if keep_lock_for_loose_source_delete {
-                    Some(lock.close()?)
+                let needs_loose_ref_write = (is_effective && !direct_to_packed_refs) || is_symbolic;
+                if needs_loose_ref_write || keep_lock_for_loose_source_delete {
+                    Some(lock)
                 } else {
                     None
                 }
@@ -257,11 +270,18 @@ impl Transaction<'_, '_> {
 
 /// A lock held for a single ref edit, acquired for all edits of a transaction before any of
 /// their current values are read.
+///
+/// Both variants hold a [`Marker`](gix_lock::Marker): the lock *file* stays on disk for the
+/// whole preparation (that's what makes the pre-resolution locking race-free), but its file
+/// descriptor is closed as soon as the new content is written in
+/// [`acquire_ref_lock`](Transaction::acquire_ref_lock), so a transaction never holds more than
+/// a constant number of open files no matter how many edits it contains.
 enum HeldLock {
     /// Holds the resource of a reference that is to be deleted.
     Delete(gix_lock::Marker),
-    /// A writable lock for a reference that is to be created or updated.
-    Update(gix_lock::File),
+    /// The closed lock of a reference that is to be created or updated,
+    /// its content already written.
+    Update(gix_lock::Marker),
 }
 
 impl Transaction<'_, '_> {

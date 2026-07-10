@@ -53,5 +53,8 @@ gix-discover = { path = "../gix-discover" }
 gix-odb = { path = "../gix-odb" }
 insta = "1.46.3"
 
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2.186"
+
 [package.metadata.docs.rs]
 features = ["sha1", "document-features", "serde"]

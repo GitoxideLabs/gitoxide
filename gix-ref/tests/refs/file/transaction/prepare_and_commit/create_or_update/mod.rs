@@ -962,6 +962,59 @@ fn resolving_existing_values_in_large_transactions_sees_pseudo_refs_like_head() 
     Ok(())
 }
 
+/// A transaction locks every edit before resolving any current value, but each lock's file
+/// descriptor is closed right after its content is written: preparing must need O(1) open
+/// files, not O(edits), or a fetch updating thousands of refs exhausts the default
+/// `ulimit -n 1024` (EMFILE at the ~1000th lock, observed on a real fetch).
+///
+/// Lowering `RLIMIT_NOFILE` affects the whole process. Under `cargo nextest` (process per
+/// test — what CI runs) that is fully isolated; under plain `cargo test` the lowered limit
+/// briefly applies to sibling threads, hence the tight window and the RAII guard restoring
+/// the original limit on all exit paths.
+#[test]
+#[cfg(unix)]
+fn large_transactions_hold_a_constant_number_of_file_descriptors() -> crate::Result {
+    struct SoftLimitGuard(libc::rlimit);
+    impl SoftLimitGuard {
+        fn lower_to(soft: libc::rlim_t) -> std::io::Result<Self> {
+            let mut original = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut original) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let lowered = libc::rlimit {
+                rlim_cur: soft.min(original.rlim_max),
+                rlim_max: original.rlim_max,
+            };
+            if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lowered) } != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self(original))
+        }
+    }
+    impl Drop for SoftLimitGuard {
+        fn drop(&mut self) {
+            unsafe {
+                libc::setrlimit(libc::RLIMIT_NOFILE, &self.0);
+            }
+        }
+    }
+
+    let (_dir, store) = empty_store()?;
+    let edits: Vec<RefEdit> = (0..300).map(|i| create_at(&format!("refs/heads/fd-{i:03}"))).collect();
+
+    let _guard = SoftLimitGuard::lower_to(96)?;
+    let applied = store
+        .transaction()
+        .prepare(edits, Fail::Immediately, Fail::Immediately)?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+
+    assert_eq!(applied.len(), 300, "all refs were created despite the low fd limit");
+    Ok(())
+}
+
 #[test]
 fn packed_refs_creation_with_tag_loop_are_not_handled_and_cannot_exist_due_to_object_hashes() {
     // Tag loops cannot exist as you cannot create them thanks to hashing.

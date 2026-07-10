@@ -2336,6 +2336,7 @@ dependencies = [
  "gix-utils",
  "gix-validate",
  "insta",
+ "libc",
  "memmap2",
  "serde",
  "thiserror 2.0.18",
