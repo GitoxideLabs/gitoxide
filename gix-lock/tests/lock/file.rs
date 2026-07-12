@@ -11,7 +11,7 @@ mod close {
         std::fs::write(&resource, b"old state")?;
         let resource_lock = resource.with_extension("ext.lock");
         let mut file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         assert!(resource_lock.is_file());
         file.with_mut(|out| out.write_all(b"hello world"))?;
         let mark = file.close()?;
@@ -37,7 +37,7 @@ mod commit {
         let resource = dir.path().join("resource-existing.ext");
         std::fs::create_dir(&resource)?;
         let mark = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         let lock_path = mark.lock_path().to_owned();
         assert!(lock_path.is_file(), "the lock is placed");
 
@@ -60,7 +60,7 @@ mod commit {
         let resource = dir.path().join("resource-existing.ext");
         std::fs::create_dir(&resource)?;
         let file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         let lock_path = file.lock_path().to_owned();
         assert!(lock_path.is_file(), "the lock is placed");
 
@@ -105,7 +105,7 @@ mod acquire {
         let resource_lock = resource.with_extension("lock");
         let mut file =
             gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), Some(dir.path().into()))
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_lock::acquire::Error::into_error)?;
         assert_eq!(file.lock_path(), resource_lock);
         assert_eq!(file.resource_path(), resource);
         assert!(resource_lock.is_file());
@@ -136,7 +136,7 @@ mod acquire {
         let resource = dir.path().join("resource-nonexisting.ext");
         {
             let mut file = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_lock::acquire::Error::into_error)?;
             file.with_mut(|out| out.write_all(b"probably we will be interrupted"))?;
         }
         assert!(!resource.is_file(), "the file wasn't created");

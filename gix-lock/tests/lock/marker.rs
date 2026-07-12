@@ -8,7 +8,7 @@ mod acquire {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         assert!(guard.lock_path().ends_with("the-resource.lock"));
         assert!(guard.resource_path().ends_with("the-resource"));
         let err_str = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
@@ -25,7 +25,7 @@ mod acquire {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         let start = Instant::now();
         let time_to_wait = Duration::from_millis(50);
         let err_str =
@@ -73,7 +73,7 @@ mod commit {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
         let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_lock::acquire::Error::into_error)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
