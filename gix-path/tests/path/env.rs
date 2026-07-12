@@ -83,6 +83,21 @@ fn core_dir_program() {
         None,
         "programs that don't exist in the core directory are not found"
     );
+
+    for name in ["", ".", "..", "../git", "git/program", "/git"] {
+        assert_eq!(
+            gix_path::env::core_dir_program(name),
+            None,
+            "program names with path components are rejected"
+        );
+    }
+
+    #[cfg(windows)]
+    assert_eq!(
+        gix_path::env::core_dir_program(r"git\program"),
+        None,
+        "Windows path separators in program names are rejected"
+    );
 }
 
 #[test]
