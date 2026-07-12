@@ -2041,10 +2041,10 @@ version = "0.0.0"
 name = "gix-lock"
 version = "23.0.1"
 dependencies = [
+ "gix-error",
  "gix-tempfile",
  "gix-utils",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
