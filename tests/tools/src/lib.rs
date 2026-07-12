@@ -1165,7 +1165,8 @@ fn marker_if_needed(
                 None,
             )
         })
-        .transpose()?)
+        .transpose()
+        .map_err(|err| err.into_error())?)
 }
 
 fn force_and_dir(

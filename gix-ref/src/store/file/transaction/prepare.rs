@@ -52,8 +52,8 @@ impl Transaction<'_, '_> {
     /// burying them in [`Error::LockAcquire`], which is reserved for actual contention.
     // This happens for path collisions where `a` is a ref file, and `a/b` is the lock to be created.
     fn lock_acquire_error(err: gix_lock::acquire::Error, full_name: &str) -> Error {
-        match err {
-            gix_lock::acquire::Error::Io(err) => Error::Io(err),
+        match err.into_inner() {
+            gix_lock::acquire::Failure::Io(err) => Error::Io(err),
             source => Error::LockAcquire {
                 source,
                 full_name: full_name.into(),
@@ -360,7 +360,7 @@ impl Transaction<'_, '_> {
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
                                 )
-                                .map_err(Error::PackedTransactionAcquire)
+                                .map_err(|err| Error::PackedTransactionAcquire(err.into_inner()))
                             })
                             .transpose()?
                     };
@@ -480,7 +480,7 @@ mod error {
         #[error("The packed ref buffer could not be loaded")]
         Packed(#[from] packed::buffer::open::Error),
         #[error("The lock for the packed-ref file could not be obtained")]
-        PackedTransactionAcquire(#[source] gix_lock::acquire::Error),
+        PackedTransactionAcquire(#[source] gix_lock::acquire::Failure),
         #[error("The packed transaction could not be prepared")]
         PackedTransactionPrepare(#[from] packed::transaction::prepare::Error),
         #[error("The packed ref file could not be parsed")]
@@ -489,7 +489,7 @@ mod error {
         PreprocessingFailed(#[source] std::io::Error),
         #[error("A lock could not be obtained for reference {full_name:?}")]
         LockAcquire {
-            source: gix_lock::acquire::Error,
+            source: gix_lock::acquire::Failure,
             full_name: BString,
         },
         #[error("An IO error occurred while applying an edit")]
