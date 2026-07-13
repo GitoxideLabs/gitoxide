@@ -190,6 +190,31 @@ pub struct BlamePathEntry {
     pub parent_index: usize,
 }
 
+/// The starting point for [`file()`](crate::file()).
+#[derive(Debug)]
+pub enum Start<'a> {
+    /// Start from a specific commit.
+    Commit(ObjectId),
+
+    /// Start from `contents`, then continue from `first_suspect`.
+    ///
+    /// Lines that only exist in `contents` are attributed to the null id,
+    /// i.e. "not committed yet".
+    ///
+    /// It is assumed that the data in `contents` is ready to be used for diffing, in particular
+    /// that it has been run through the configured worktree filters.
+    ///
+    /// See [Pipeline::convert_to_diffable()](gix_diff::blob::Pipeline::convert_to_diffable) for
+    /// how to obtain the contents of a worktree file by running them through the configured
+    /// worktree filters.
+    Contents {
+        /// The commit to start from after it has been compared to `contents`.
+        first_suspect: ObjectId,
+        /// The contents to start the blame from.
+        contents: std::borrow::Cow<'a, [u8]>,
+    },
+}
+
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {

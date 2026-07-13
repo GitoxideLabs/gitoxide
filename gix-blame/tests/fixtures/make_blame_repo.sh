@@ -259,6 +259,15 @@ git commit -q -m c15.2
 
 git merge branch-that-has-earlier-commit || true
 
+seq 1 4 > untracked-lines.txt
+git add untracked-lines.txt
+git commit -q -m c16
+
+seq 5 7 >> untracked-lines.txt
+
+seq 1 4 >> untracked-file.txt
+git add --intent-to-add untracked-file.txt
+
 git blame --porcelain simple.txt > .git/simple.baseline
 git blame --porcelain -L 1,2 simple.txt > .git/simple-lines-1-2.baseline
 git blame --porcelain -L 1,2 -L 4 simple.txt > .git/simple-lines-multiple-1-2-and-4.baseline
@@ -274,6 +283,9 @@ git blame --porcelain switched-lines.txt > .git/switched-lines.baseline
 git blame --porcelain added-line-before-changed-line.txt > .git/added-line-before-changed-line.baseline
 git blame --porcelain same-line-changed-twice.txt > .git/same-line-changed-twice.baseline
 git blame --porcelain coalesce-adjacent-hunks.txt > .git/coalesce-adjacent-hunks.baseline
+git blame --porcelain untracked-lines.txt > .git/untracked-lines.baseline
+git blame --porcelain -L 3,7 untracked-lines.txt > .git/untracked-lines-ranges.baseline
+git blame --porcelain untracked-file.txt > .git/untracked-file.baseline
 
 mkdir .git/sub-directory
 git blame --porcelain sub-directory/sub-directory.txt > .git/sub-directory/sub-directory.baseline
