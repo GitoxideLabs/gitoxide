@@ -27,6 +27,13 @@ mod invalid {
     }
 
     mktest!(empty, b"", Empty);
+    mktest!(starts_with_slash, b"/etc/cron.d/x", Absolute);
+    mktest!(starts_with_backslash, br"\Windows\Temp\x", Absolute);
+    mktest!(unc_path, br"\\host\share\x", Absolute);
+    mktest!(double_slash_root, b"//host/share/x", Absolute);
+    mktest!(windows_drive_backslash, br"C:\Windows\Temp\x", Absolute);
+    mktest!(windows_drive_slash, b"C:/Windows/Temp/x", Absolute);
+    mktest!(windows_drive_relative, b"C:x", Absolute);
     mktest!(starts_with_parent_component, b"../", ParentComponent);
     mktest!(parent_component_in_middle, b"hi/../ho", ParentComponent);
     mktest!(ends_with_parent_component, b"hi/ho/..", ParentComponent);
