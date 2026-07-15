@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 
-use gix::{bstr::BStr, config::tree};
+use gix::{blame::Start, bstr::BStr, config::tree};
 
 pub fn blame_file(
     mut repo: gix::Repository,
@@ -26,7 +26,7 @@ pub fn blame_file(
     let mut resource_cache = repo.diff_resource_cache_for_tree_diff()?;
     let outcome = gix::blame::file(
         &repo.objects,
-        suspect,
+        Start::Commit(suspect),
         cache,
         &mut resource_cache,
         file.as_ref(),

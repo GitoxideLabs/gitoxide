@@ -66,7 +66,7 @@ pub(super) mod function {
 
         let outcome = gix::blame::file(
             &repo.objects,
-            suspect,
+            gix::blame::Start::Commit(suspect),
             cache,
             &mut resource_cache,
             file.as_bstr(),
