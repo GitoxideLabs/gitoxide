@@ -2,6 +2,8 @@
 mod describe;
 #[cfg(feature = "merge_base")]
 mod merge_base;
+#[cfg(feature = "name_rev")]
+mod name_rev;
 mod spec;
 
 pub use gix_testtools::Result;

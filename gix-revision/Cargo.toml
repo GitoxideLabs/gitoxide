@@ -15,7 +15,7 @@ rust-version = "1.85"
 doctest = false
 
 [features]
-default = ["describe", "merge_base"]
+default = ["describe", "merge_base", "name_rev"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 ## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
@@ -23,6 +23,9 @@ sha256 = ["gix-hash/sha256"]
 
 ## `git describe` functionality
 describe = ["dep:gix-trace", "dep:gix-hashtable"]
+
+## `git name-rev` functionality
+name_rev = ["dep:gix-trace"]
 
 ## `git merge-base` functionality
 merge_base = ["dep:gix-trace", "dep:bitflags"]
