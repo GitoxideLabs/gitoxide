@@ -14,6 +14,7 @@ use crate::{
         ref_map,
     },
 };
+use gix_hash::ObjectId;
 
 mod error;
 pub use error::Error;
@@ -173,6 +174,8 @@ where
             reflog_message: None,
             write_packed_refs: WritePackedRefs::Never,
             shallow: Default::default(),
+            filter: None,
+            additional_wants: Vec::new(),
         })
     }
 }
@@ -224,6 +227,8 @@ where
     reflog_message: Option<RefLogMessage>,
     write_packed_refs: WritePackedRefs,
     shallow: remote::fetch::Shallow,
+    filter: Option<remote::fetch::ObjectFilter>,
+    additional_wants: Vec<ObjectId>,
 }
 
 /// Builder
@@ -262,6 +267,14 @@ where
         self.inner.shallow = shallow;
         self
     }
+
+    /// Request that the server also sends the objects identified by the given object ids.
+    ///
+    /// Objects already present locally will be ignored during negotiation.
+    pub fn with_additional_wants(mut self, wants: impl IntoIterator<Item = ObjectId>) -> Self {
+        self.inner = self.inner.with_additional_wants(wants);
+        self
+    }
 }
 
 /// Builder
@@ -286,6 +299,24 @@ where
 
     pub(crate) fn with_shallow(mut self, shallow: remote::fetch::Shallow) -> Self {
         self.shallow = shallow;
+        self
+    }
+
+    /// Ask the server to apply `filter` when sending objects.
+    pub fn with_filter(mut self, filter: Option<remote::fetch::ObjectFilter>) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    /// Request that the server also sends the objects identified by the given object ids.
+    ///
+    /// Objects already present locally will be ignored during negotiation.
+    pub fn with_additional_wants(mut self, wants: impl IntoIterator<Item = ObjectId>) -> Self {
+        for want in wants {
+            if !self.additional_wants.contains(&want) {
+                self.additional_wants.push(want);
+            }
+        }
         self
     }
 }

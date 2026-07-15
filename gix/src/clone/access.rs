@@ -35,6 +35,12 @@ impl PrepareFetch {
         self
     }
 
+    /// Ask the remote to omit objects based on `filter`.
+    pub fn with_filter(mut self, filter: impl Into<Option<crate::remote::fetch::ObjectFilter>>) -> Self {
+        self.filter = filter.into();
+        self
+    }
+
     /// Apply the given configuration `values` right before readying the actual fetch from the remote.
     /// The configuration is marked with [source API](gix_config::Source::Api), and will not be written back, it's
     /// retained only in memory.
