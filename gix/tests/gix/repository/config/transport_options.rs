@@ -58,6 +58,7 @@ mod http {
             ssl_verify,
             http_version,
             backend,
+            should_interrupt,
         } = http_options(&repo, None, "https://example.com/does/not/matter");
         assert_eq!(
             extra_headers,
@@ -78,6 +79,10 @@ mod http {
         assert_eq!(no_proxy, None);
         assert!(!verbose, "verbose is disabled by default");
         assert_eq!(ssl_ca_info.as_deref(), Some(std::path::Path::new("./CA.pem")));
+        assert!(
+            should_interrupt.is_none(),
+            "interrupt flags are provided by callers, never from configuration"
+        );
         #[cfg(feature = "blocking-http-transport-reqwest")]
         {
             assert!(
