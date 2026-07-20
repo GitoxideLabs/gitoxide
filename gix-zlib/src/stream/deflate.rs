@@ -75,16 +75,25 @@ impl Compress {
 }
 
 /// The error produced by [`Compress::compress()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum CompressError {
-    #[error("stream error")]
     StreamError,
-    #[error("The input is not a valid deflate stream.")]
     DataError,
-    #[error("Not enough memory")]
     InsufficientMemory,
 }
+
+impl std::fmt::Display for CompressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CompressError::StreamError => "stream error",
+            CompressError::DataError => "The input is not a valid deflate stream.",
+            CompressError::InsufficientMemory => "Not enough memory",
+        })
+    }
+}
+
+impl std::error::Error for CompressError {}
 
 impl From<zlib_rs::DeflateError> for CompressError {
     fn from(value: zlib_rs::DeflateError) -> Self {
@@ -100,6 +109,7 @@ impl From<zlib_rs::DeflateError> for CompressError {
 /// in-memory data.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 #[non_exhaustive]
+#[allow(clippy::unnecessary_cast)]
 pub enum FlushCompress {
     /// A typical parameter for passing to compression/decompression functions,
     /// this indicates that the underlying stream to decide how much data to
