@@ -43,13 +43,41 @@ pub fn undo(src: &[u8], buf: &mut Vec<u8>) -> Result<bool, std::collections::Try
 ///
 pub mod apply {
     /// The error produced by [`super::apply()`].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Could not allocate buffer")]
-        OutOfMemory(#[from] std::collections::TryReserveError),
-        #[error("Could not hash blob")]
-        Hasher(#[from] gix_hash::hasher::Error),
+        OutOfMemory(std::collections::TryReserveError),
+        Hasher(gix_hash::hasher::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::OutOfMemory(_) => f.write_str("Could not allocate buffer"),
+                Error::Hasher(_) => f.write_str("Could not hash blob"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::OutOfMemory(err) => Some(err),
+                Error::Hasher(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<std::collections::TryReserveError> for Error {
+        fn from(err: std::collections::TryReserveError) -> Self {
+            Error::OutOfMemory(err)
+        }
+    }
+
+    impl From<gix_hash::hasher::Error> for Error {
+        fn from(err: gix_hash::hasher::Error) -> Self {
+            Error::Hasher(err)
+        }
     }
 }
 

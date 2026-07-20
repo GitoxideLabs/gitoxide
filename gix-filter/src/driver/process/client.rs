@@ -11,38 +11,112 @@ use crate::driver::{
 ///
 pub mod handshake {
     /// The error returned by [Client::handshake()][super::Client::handshake()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Failed to read or write to the process")]
-        Io(#[from] std::io::Error),
-        #[error("{msg} '{actual}'")]
+        Io(std::io::Error),
         Protocol { msg: String, actual: String },
-        #[error("The server sent the '{name}' capability which isn't among the ones we desire can support")]
         UnsupportedCapability { name: String },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Failed to read or write to the process"),
+                Error::Protocol { msg, actual } => write!(f, "{msg} '{actual}'"),
+                Error::UnsupportedCapability { name } => write!(
+                    f,
+                    "The server sent the '{name}' capability which isn't among the ones we desire can support"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Protocol { .. } | Error::UnsupportedCapability { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 }
 
 ///
 pub mod invoke {
     /// The error returned by [Client::invoke()][super::Client::invoke()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Failed to read or write to the process")]
-        Io(#[from] std::io::Error),
+        Io(std::io::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Failed to read or write to the process"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 
     ///
     pub mod without_content {
         /// The error returned by [Client::invoke_without_content()][super::super::Client::invoke_without_content()].
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("Failed to read or write to the process")]
-            Io(#[from] std::io::Error),
-            #[error(transparent)]
-            PacketlineDecode(#[from] gix_packetline::decode::Error),
+            Io(std::io::Error),
+            PacketlineDecode(gix_packetline::decode::Error),
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Io(_) => f.write_str("Failed to read or write to the process"),
+                    Error::PacketlineDecode(err) => std::fmt::Display::fmt(err, f),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::Io(err) => Some(err),
+                    Error::PacketlineDecode(err) => err.source(),
+                }
+            }
+        }
+
+        impl From<std::io::Error> for Error {
+            fn from(err: std::io::Error) -> Self {
+                Error::Io(err)
+            }
+        }
+
+        impl From<gix_packetline::decode::Error> for Error {
+            fn from(err: gix_packetline::decode::Error) -> Self {
+                Error::PacketlineDecode(err)
+            }
         }
 
         impl From<super::Error> for Error {

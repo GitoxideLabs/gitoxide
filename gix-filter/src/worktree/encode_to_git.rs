@@ -8,19 +8,45 @@ pub enum RoundTripCheck {
 }
 
 /// The error returned by [`encode_to_git()][super::encode_to_git()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Cannot convert input of {input_len} bytes to UTF-8 without overflowing")]
-    Overflow { input_len: usize },
-    #[error("The input was malformed and could not be decoded as '{encoding}'")]
-    Malformed { encoding: &'static str },
-    #[error("Encoding from '{src_encoding}' to '{dest_encoding}' and back is not the same")]
+    Overflow {
+        input_len: usize,
+    },
+    Malformed {
+        encoding: &'static str,
+    },
     RoundTrip {
         src_encoding: &'static str,
         dest_encoding: &'static str,
     },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Overflow { input_len } => {
+                write!(
+                    f,
+                    "Cannot convert input of {input_len} bytes to UTF-8 without overflowing"
+                )
+            }
+            Error::Malformed { encoding } => {
+                write!(f, "The input was malformed and could not be decoded as '{encoding}'")
+            }
+            Error::RoundTrip {
+                src_encoding,
+                dest_encoding,
+            } => write!(
+                f,
+                "Encoding from '{src_encoding}' to '{dest_encoding}' and back is not the same"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 pub(crate) mod function {
     use encoding_rs::DecoderResult;

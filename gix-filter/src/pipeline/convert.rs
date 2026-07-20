@@ -9,14 +9,23 @@ pub mod configuration {
     use bstr::BString;
 
     /// Errors related to the configuration of filter attributes.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The encoding named '{name}' isn't available")]
         UnknownEncoding { name: BString },
-        #[error("Encodings must be names, like UTF-16, and cannot be booleans.")]
         InvalidEncoding,
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::UnknownEncoding { name } => write!(f, "The encoding named '{name}' isn't available"),
+                Error::InvalidEncoding => f.write_str("Encodings must be names, like UTF-16, and cannot be booleans."),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///
@@ -25,21 +34,83 @@ pub mod to_git {
     pub type IndexObjectFn<'a> = dyn FnMut(&mut Vec<u8>) -> Result<Option<()>, gix_object::find::Error> + 'a;
 
     /// The error returned by [Pipeline::convert_to_git()][super::Pipeline::convert_to_git()].
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): these implementations hand-preserve `#[error(transparent)]` semantics for the
+    //                first four variants: `Display` passes the formatter through and `source()`
+    //                forwards to the inner error's source, exactly like the `thiserror`-generated
+    //                code did. The same pattern is used in `to_worktree::Error` below, for
+    //                `driver::apply::Error::Init`, and for the `PacketlineDecode` variants in
+    //                `driver::process::client` and `driver::process::server`.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Eol(#[from] crate::eol::convert_to_git::Error),
-        #[error(transparent)]
-        Worktree(#[from] crate::worktree::encode_to_git::Error),
-        #[error(transparent)]
-        Driver(#[from] crate::driver::apply::Error),
-        #[error(transparent)]
-        Configuration(#[from] super::configuration::Error),
-        #[error("Copy of driver process output to memory failed")]
-        ReadProcessOutputToBuffer(#[from] std::io::Error),
-        #[error("Could not allocate buffer")]
-        OutOfMemory(#[from] std::collections::TryReserveError),
+        Eol(crate::eol::convert_to_git::Error),
+        Worktree(crate::worktree::encode_to_git::Error),
+        Driver(crate::driver::apply::Error),
+        Configuration(super::configuration::Error),
+        ReadProcessOutputToBuffer(std::io::Error),
+        OutOfMemory(std::collections::TryReserveError),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Eol(err) => std::fmt::Display::fmt(err, f),
+                Error::Worktree(err) => std::fmt::Display::fmt(err, f),
+                Error::Driver(err) => std::fmt::Display::fmt(err, f),
+                Error::Configuration(err) => std::fmt::Display::fmt(err, f),
+                Error::ReadProcessOutputToBuffer(_) => f.write_str("Copy of driver process output to memory failed"),
+                Error::OutOfMemory(_) => f.write_str("Could not allocate buffer"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Eol(err) => err.source(),
+                Error::Worktree(err) => err.source(),
+                Error::Driver(err) => err.source(),
+                Error::Configuration(err) => err.source(),
+                Error::ReadProcessOutputToBuffer(err) => Some(err),
+                Error::OutOfMemory(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<crate::eol::convert_to_git::Error> for Error {
+        fn from(err: crate::eol::convert_to_git::Error) -> Self {
+            Error::Eol(err)
+        }
+    }
+
+    impl From<crate::worktree::encode_to_git::Error> for Error {
+        fn from(err: crate::worktree::encode_to_git::Error) -> Self {
+            Error::Worktree(err)
+        }
+    }
+
+    impl From<crate::driver::apply::Error> for Error {
+        fn from(err: crate::driver::apply::Error) -> Self {
+            Error::Driver(err)
+        }
+    }
+
+    impl From<super::configuration::Error> for Error {
+        fn from(err: super::configuration::Error) -> Self {
+            Error::Configuration(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::ReadProcessOutputToBuffer(err)
+        }
+    }
+
+    impl From<std::collections::TryReserveError> for Error {
+        fn from(err: std::collections::TryReserveError) -> Self {
+            Error::OutOfMemory(err)
+        }
     }
 }
 
@@ -67,19 +138,68 @@ pub mod to_worktree {
     }
 
     /// The error returned by [Pipeline::convert_to_worktree()][super::Pipeline::convert_to_worktree()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Ident(#[from] crate::ident::apply::Error),
-        #[error(transparent)]
-        Eol(#[from] crate::eol::convert_to_worktree::Error),
-        #[error(transparent)]
-        Worktree(#[from] crate::worktree::encode_to_worktree::Error),
-        #[error(transparent)]
-        Driver(#[from] crate::driver::apply::Error),
-        #[error(transparent)]
-        Configuration(#[from] super::configuration::Error),
+        Ident(crate::ident::apply::Error),
+        Eol(crate::eol::convert_to_worktree::Error),
+        Worktree(crate::worktree::encode_to_worktree::Error),
+        Driver(crate::driver::apply::Error),
+        Configuration(super::configuration::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Ident(err) => std::fmt::Display::fmt(err, f),
+                Error::Eol(err) => std::fmt::Display::fmt(err, f),
+                Error::Worktree(err) => std::fmt::Display::fmt(err, f),
+                Error::Driver(err) => std::fmt::Display::fmt(err, f),
+                Error::Configuration(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Ident(err) => err.source(),
+                Error::Eol(err) => err.source(),
+                Error::Worktree(err) => err.source(),
+                Error::Driver(err) => err.source(),
+                Error::Configuration(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<crate::ident::apply::Error> for Error {
+        fn from(err: crate::ident::apply::Error) -> Self {
+            Error::Ident(err)
+        }
+    }
+
+    impl From<crate::eol::convert_to_worktree::Error> for Error {
+        fn from(err: crate::eol::convert_to_worktree::Error) -> Self {
+            Error::Eol(err)
+        }
+    }
+
+    impl From<crate::worktree::encode_to_worktree::Error> for Error {
+        fn from(err: crate::worktree::encode_to_worktree::Error) -> Self {
+            Error::Worktree(err)
+        }
+    }
+
+    impl From<crate::driver::apply::Error> for Error {
+        fn from(err: crate::driver::apply::Error) -> Self {
+            Error::Driver(err)
+        }
+    }
+
+    impl From<super::configuration::Error> for Error {
+        fn from(err: super::configuration::Error) -> Self {
+            Error::Configuration(err)
+        }
     }
 }
 

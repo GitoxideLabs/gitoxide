@@ -6,11 +6,32 @@ use crate::{
 };
 
 /// The error produced by [`convert_to_worktree()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Could not allocate buffer")]
-    OutOfMemory(#[from] std::collections::TryReserveError),
+    OutOfMemory(std::collections::TryReserveError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::OutOfMemory(_) => f.write_str("Could not allocate buffer"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::OutOfMemory(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::collections::TryReserveError> for Error {
+    fn from(err: std::collections::TryReserveError) -> Self {
+        Error::OutOfMemory(err)
+    }
 }
 
 /// Convert all `\n` in `src` to `crlf` if `digest` and `config` indicate it, returning `true` if `buf` holds the result, or `false`

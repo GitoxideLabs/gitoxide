@@ -8,19 +8,35 @@ use crate::{
 };
 
 /// The error returned by [State::maybe_launch_process()][super::State::maybe_launch_process()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Failed to spawn driver: {command:?}")]
     SpawnCommand {
         source: std::io::Error,
         command: std::process::Command,
     },
-    #[error("Process handshake with command {command:?} failed")]
     ProcessHandshake {
         source: process::client::handshake::Error,
         command: std::process::Command,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::SpawnCommand { command, .. } => write!(f, "Failed to spawn driver: {command:?}"),
+            Error::ProcessHandshake { command, .. } => write!(f, "Process handshake with command {command:?} failed"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::SpawnCommand { source, .. } => Some(source),
+            Error::ProcessHandshake { source, .. } => Some(source),
+        }
+    }
 }
 
 /// Lifecycle

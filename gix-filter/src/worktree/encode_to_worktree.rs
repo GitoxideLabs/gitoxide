@@ -1,16 +1,49 @@
 /// The error returned by [`encode_to_worktree()][super::encode_to_worktree()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Cannot convert input of {input_len} UTF-8 bytes to target encoding without overflowing")]
-    Overflow { input_len: usize },
-    #[error("Input was not UTF-8 encoded")]
-    InputAsUtf8(#[from] std::str::Utf8Error),
-    #[error("The character '{character}' could not be mapped to the {worktree_encoding}")]
+    Overflow {
+        input_len: usize,
+    },
+    InputAsUtf8(std::str::Utf8Error),
     Unmappable {
         character: char,
         worktree_encoding: &'static str,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Overflow { input_len } => write!(
+                f,
+                "Cannot convert input of {input_len} UTF-8 bytes to target encoding without overflowing"
+            ),
+            Error::InputAsUtf8(_) => f.write_str("Input was not UTF-8 encoded"),
+            Error::Unmappable {
+                character,
+                worktree_encoding,
+            } => write!(
+                f,
+                "The character '{character}' could not be mapped to the {worktree_encoding}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Overflow { .. } | Error::Unmappable { .. } => None,
+            Error::InputAsUtf8(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::str::Utf8Error> for Error {
+    fn from(err: std::str::Utf8Error) -> Self {
+        Error::InputAsUtf8(err)
+    }
 }
 
 pub(crate) mod function {

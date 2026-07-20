@@ -10,15 +10,44 @@ pub mod list {
     use crate::driver;
 
     /// The error returned by [State::list_delayed_paths()][super::State::list_delayed_paths()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Could not get process named '{}' which should be running and tracked", wanted.0)]
         ProcessMissing { wanted: driver::Key },
-        #[error("Failed to run 'list_available_blobs' command")]
-        ProcessInvoke(#[from] driver::process::client::invoke::without_content::Error),
-        #[error("The invoked command 'list_available_blobs' in process indicated an error: {status:?}")]
+        ProcessInvoke(driver::process::client::invoke::without_content::Error),
         ProcessStatus { status: driver::process::Status },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ProcessMissing { wanted } => write!(
+                    f,
+                    "Could not get process named '{}' which should be running and tracked",
+                    wanted.0
+                ),
+                Error::ProcessInvoke(_) => f.write_str("Failed to run 'list_available_blobs' command"),
+                Error::ProcessStatus { status } => write!(
+                    f,
+                    "The invoked command 'list_available_blobs' in process indicated an error: {status:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ProcessMissing { .. } | Error::ProcessStatus { .. } => None,
+                Error::ProcessInvoke(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<driver::process::client::invoke::without_content::Error> for Error {
+        fn from(err: driver::process::client::invoke::without_content::Error) -> Self {
+            Error::ProcessInvoke(err)
+        }
     }
 }
 
@@ -27,21 +56,46 @@ pub mod fetch {
     use crate::driver;
 
     /// The error returned by [State::fetch_delayed()][super::State::fetch_delayed()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Could not get process named '{}' which should be running and tracked", wanted.0)]
-        ProcessMissing { wanted: driver::Key },
-        #[error("Failed to run '{command}' command")]
+        ProcessMissing {
+            wanted: driver::Key,
+        },
         ProcessInvoke {
             command: String,
             source: driver::process::client::invoke::Error,
         },
-        #[error("The invoked command '{command}' in process indicated an error: {status:?}")]
         ProcessStatus {
             status: driver::process::Status,
             command: String,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ProcessMissing { wanted } => write!(
+                    f,
+                    "Could not get process named '{}' which should be running and tracked",
+                    wanted.0
+                ),
+                Error::ProcessInvoke { command, .. } => write!(f, "Failed to run '{command}' command"),
+                Error::ProcessStatus { status, command } => write!(
+                    f,
+                    "The invoked command '{command}' in process indicated an error: {status:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ProcessMissing { .. } | Error::ProcessStatus { .. } => None,
+                Error::ProcessInvoke { source, .. } => Some(source),
+            }
+        }
     }
 }
 

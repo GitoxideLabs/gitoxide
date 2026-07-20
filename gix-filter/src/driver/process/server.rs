@@ -19,30 +19,85 @@ pub mod next_request {
     use bstr::BString;
 
     /// The error returned by [Server::next_request()][super::Server::next_request()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Failed to read from the client")]
-        Io(#[from] std::io::Error),
-        #[error("{msg} '{actual}'")]
+        Io(std::io::Error),
         Protocol { msg: String, actual: BString },
-        #[error(transparent)]
-        PacketlineDecode(#[from] gix_packetline::decode::Error),
+        PacketlineDecode(gix_packetline::decode::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Failed to read from the client"),
+                Error::Protocol { msg, actual } => write!(f, "{msg} '{actual}'"),
+                Error::PacketlineDecode(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Protocol { .. } => None,
+                Error::PacketlineDecode(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<gix_packetline::decode::Error> for Error {
+        fn from(err: gix_packetline::decode::Error) -> Self {
+            Error::PacketlineDecode(err)
+        }
     }
 }
 
 ///
 pub mod handshake {
     /// The error returned by [Server::handshake()][super::Server::handshake()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Failed to read or write to the client")]
-        Io(#[from] std::io::Error),
-        #[error("{msg} '{actual}'")]
+        Io(std::io::Error),
         Protocol { msg: String, actual: String },
-        #[error("Could not select supported version from the one sent by the client: {}", actual.iter().map(ToString::to_string).collect::<Vec<_>>().join(", "))]
         VersionMismatch { actual: Vec<usize> },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Failed to read or write to the client"),
+                Error::Protocol { msg, actual } => write!(f, "{msg} '{actual}'"),
+                Error::VersionMismatch { actual } => write!(
+                    f,
+                    "Could not select supported version from the one sent by the client: {}",
+                    actual.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Protocol { .. } | Error::VersionMismatch { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 }
 

@@ -27,15 +27,38 @@ pub enum RoundTripCheck<'a> {
 }
 
 /// The error returned by [convert_to_git()][super::convert_to_git()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("{msg} in '{}'", path.display())]
     RoundTrip { msg: &'static str, path: PathBuf },
-    #[error("Could not obtain index object to check line endings for")]
-    FetchObjectFromIndex(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("Could not allocate buffer")]
-    OutOfMemory(#[from] std::collections::TryReserveError),
+    FetchObjectFromIndex(Box<dyn std::error::Error + Send + Sync + 'static>),
+    OutOfMemory(std::collections::TryReserveError),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::RoundTrip { msg, path } => write!(f, "{msg} in '{}'", path.display()),
+            Error::FetchObjectFromIndex(_) => f.write_str("Could not obtain index object to check line endings for"),
+            Error::OutOfMemory(_) => f.write_str("Could not allocate buffer"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::RoundTrip { .. } => None,
+            Error::FetchObjectFromIndex(err) => Some(&**err),
+            Error::OutOfMemory(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::collections::TryReserveError> for Error {
+    fn from(err: std::collections::TryReserveError) -> Self {
+        Error::OutOfMemory(err)
+    }
 }
 
 /// A function that writes a buffer like `fn(&mut buf)` with by tes of an object in the index that is the one that should be converted.
