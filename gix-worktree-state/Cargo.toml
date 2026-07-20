@@ -32,7 +32,6 @@ gix-features = { version = "^0.49.0", path = "../gix-features" }
 gix-filter = { version = "^0.33.0", path = "../gix-filter" }
 
 io-close = "0.3.7"
-thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false }
 
 [dev-dependencies]
