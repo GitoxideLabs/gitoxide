@@ -9,7 +9,8 @@ impl file::Store {
         &self,
         lock_mode: gix_lock::acquire::Fail,
     ) -> Result<packed::Transaction, transaction::Error> {
-        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None)?;
+        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None)
+            .map_err(|err| transaction::Error::TransactionLock(err.into_inner()))?;
         // We 'steal' the possibly existing packed buffer which may safe time if it's already there and fresh.
         // If nothing else is happening, nobody will get to see the soon stale buffer either, but if so, they will pay
         // for reloading it. That seems preferred over always loading up a new one.
@@ -66,13 +67,43 @@ pub mod transaction {
     use crate::store_impl::packed;
 
     /// The error returned by [`file::Transaction::prepare()`][crate::file::Transaction::prepare()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("An existing pack couldn't be opened or read when preparing a transaction")]
-        BufferOpen(#[from] packed::buffer::open::Error),
-        #[error("The lock for a packed transaction could not be obtained")]
-        TransactionLock(#[from] gix_lock::acquire::Error),
+        BufferOpen(packed::buffer::open::Error),
+        TransactionLock(gix_lock::acquire::Failure),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::BufferOpen(_) => {
+                    f.write_str("An existing pack couldn't be opened or read when preparing a transaction")
+                }
+                Error::TransactionLock(_) => f.write_str("The lock for a packed transaction could not be obtained"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::BufferOpen(err) => Some(err),
+                Error::TransactionLock(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<packed::buffer::open::Error> for Error {
+        fn from(err: packed::buffer::open::Error) -> Self {
+            Error::BufferOpen(err)
+        }
+    }
+
+    impl From<gix_lock::acquire::Error> for Error {
+        fn from(err: gix_lock::acquire::Error) -> Self {
+            Error::TransactionLock(err.into_inner())
+        }
     }
 }
 
