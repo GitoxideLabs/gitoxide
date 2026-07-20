@@ -3,17 +3,42 @@ use std::borrow::Cow;
 use bstr::BStr;
 
 /// The error returned by [`index()`](crate::index()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Cannot diff indices that contain sparse entries")]
     IsSparse,
-    #[error("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index")]
     LhsHasUnmerged,
-    #[error("The callback indicated failure")]
-    Callback(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("Failure during rename tracking")]
-    RenameTracking(#[from] crate::rewrites::tracker::emit::Error),
+    Callback(Box<dyn std::error::Error + Send + Sync>),
+    RenameTracking(crate::rewrites::tracker::emit::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IsSparse => f.write_str("Cannot diff indices that contain sparse entries"),
+            Error::LhsHasUnmerged => {
+                f.write_str("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index")
+            }
+            Error::Callback(_) => f.write_str("The callback indicated failure"),
+            Error::RenameTracking(_) => f.write_str("Failure during rename tracking"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Callback(err) => Some(&**err),
+            Error::RenameTracking(err) => Some(err),
+            Error::IsSparse | Error::LhsHasUnmerged => None,
+        }
+    }
+}
+
+impl From<crate::rewrites::tracker::emit::Error> for Error {
+    fn from(err: crate::rewrites::tracker::emit::Error) -> Self {
+        Error::RenameTracking(err)
+    }
 }
 
 /// What to do after a [ChangeRef] was passed ot the callback of [`index()`](crate::index()).

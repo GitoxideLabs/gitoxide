@@ -245,25 +245,54 @@ pub mod set_resource {
     use crate::blob::{ResourceKind, pipeline};
 
     /// The error returned by [Platform::set_resource](super::Platform::set_resource).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Can only diff blobs and links, not {mode:?}")]
-        InvalidMode { mode: gix_object::tree::EntryKind },
-        #[error("Failed to read {kind} worktree data from '{rela_path}'")]
+        InvalidMode {
+            mode: gix_object::tree::EntryKind,
+        },
         Io {
             rela_path: BString,
             kind: ResourceKind,
             source: std::io::Error,
         },
-        #[error("Failed to obtain attributes for {kind} resource at '{rela_path}'")]
         Attributes {
             rela_path: BString,
             kind: ResourceKind,
             source: std::io::Error,
         },
-        #[error(transparent)]
-        ConvertToDiffable(#[from] pipeline::convert_to_diffable::Error),
+        ConvertToDiffable(pipeline::convert_to_diffable::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidMode { mode } => write!(f, "Can only diff blobs and links, not {mode:?}"),
+                Error::Io { rela_path, kind, .. } => {
+                    write!(f, "Failed to read {kind} worktree data from '{rela_path}'")
+                }
+                Error::Attributes { rela_path, kind, .. } => {
+                    write!(f, "Failed to obtain attributes for {kind} resource at '{rela_path}'")
+                }
+                Error::ConvertToDiffable(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io { source, .. } | Error::Attributes { source, .. } => Some(source),
+                Error::ConvertToDiffable(err) => err.source(),
+                Error::InvalidMode { .. } => None,
+            }
+        }
+    }
+
+    impl From<pipeline::convert_to_diffable::Error> for Error {
+        fn from(err: pipeline::convert_to_diffable::Error) -> Self {
+            Error::ConvertToDiffable(err)
+        }
     }
 }
 
@@ -335,14 +364,27 @@ pub mod prepare_diff {
     }
 
     /// The error returned by [Platform::prepare_diff()](super::Platform::prepare_diff()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Either the source or the destination of the diff operation were not set")]
         SourceOrDestinationUnset,
-        #[error("Tried to diff resources that are both considered removed")]
         SourceAndDestinationRemoved,
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::SourceOrDestinationUnset => {
+                    f.write_str("Either the source or the destination of the diff operation were not set")
+                }
+                Error::SourceAndDestinationRemoved => {
+                    f.write_str("Tried to diff resources that are both considered removed")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///
@@ -352,17 +394,43 @@ pub mod prepare_diff_command {
     use bstr::BString;
 
     /// The error returned by [Platform::prepare_diff_command()](super::Platform::prepare_diff_command()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Either the source or the destination of the diff operation were not set")]
         SourceOrDestinationUnset,
-        #[error("Binary resources can't be diffed with an external command (as we don't have the data anymore)")]
         SourceOrDestinationBinary,
-        #[error("Tempfile to store content of '{rela_path}' for passing to external diff command could not be created")]
         CreateTempfile { rela_path: BString, source: std::io::Error },
-        #[error("Could not write content of '{rela_path}' to tempfile for passing to external diff command")]
         WriteTempfile { rela_path: BString, source: std::io::Error },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::SourceOrDestinationUnset => {
+                    f.write_str("Either the source or the destination of the diff operation were not set")
+                }
+                Error::SourceOrDestinationBinary => f.write_str(
+                    "Binary resources can't be diffed with an external command (as we don't have the data anymore)",
+                ),
+                Error::CreateTempfile { rela_path, .. } => write!(
+                    f,
+                    "Tempfile to store content of '{rela_path}' for passing to external diff command could not be created"
+                ),
+                Error::WriteTempfile { rela_path, .. } => write!(
+                    f,
+                    "Could not write content of '{rela_path}' to tempfile for passing to external diff command"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::CreateTempfile { source, .. } | Error::WriteTempfile { source, .. } => Some(source),
+                Error::SourceOrDestinationUnset | Error::SourceOrDestinationBinary => None,
+            }
+        }
     }
 
     /// The outcome of a [`prepare_diff_command`](super::Platform::prepare_diff_command()) operation.

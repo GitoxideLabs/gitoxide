@@ -4,15 +4,44 @@ mod change;
 pub use change::{Change, ChangeRef};
 
 /// The error returned by [`tree_with_rewrites()`](super::tree_with_rewrites()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Diff(#[from] crate::tree::Error),
-    #[error("The user-provided callback failed")]
-    ForEach(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("Failure during rename tracking")]
-    RenameTracking(#[from] crate::rewrites::tracker::emit::Error),
+    Diff(crate::tree::Error),
+    ForEach(Box<dyn std::error::Error + Send + Sync + 'static>),
+    RenameTracking(crate::rewrites::tracker::emit::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Diff(err) => std::fmt::Display::fmt(err, f),
+            Error::ForEach(_) => f.write_str("The user-provided callback failed"),
+            Error::RenameTracking(_) => f.write_str("Failure during rename tracking"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Diff(err) => err.source(),
+            Error::ForEach(err) => Some(&**err),
+            Error::RenameTracking(err) => Some(err),
+        }
+    }
+}
+
+impl From<crate::tree::Error> for Error {
+    fn from(err: crate::tree::Error) -> Self {
+        Error::Diff(err)
+    }
+}
+
+impl From<crate::rewrites::tracker::emit::Error> for Error {
+    fn from(err: crate::rewrites::tracker::emit::Error) -> Self {
+        Error::RenameTracking(err)
+    }
 }
 
 /// Returned by the [`tree_with_rewrites()`](super::tree_with_rewrites()) function to control flow.

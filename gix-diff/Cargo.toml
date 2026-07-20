@@ -67,7 +67,6 @@ gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
 gix-traverse = { version = "^0.60.0", path = "../gix-traverse", optional = true }
 imara-diff = { package = "gix-imara-diff", version = "^0.2.4", optional = true, path = "../gix-imara-diff" }
 
-thiserror = "2.0.18"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
 getrandom = { version = "0.4", optional = true, default-features = false, features = ["wasm_js"] }
 bstr = { version = "1.12.0", default-features = false }

@@ -136,17 +136,55 @@ pub mod visit {
 ///
 pub mod emit {
     /// The error returned by [Tracker::emit()](super::Tracker::emit()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Could not find blob for similarity checking")]
-        FindExistingBlob(#[from] gix_object::find::existing_object::Error),
-        #[error("Could not obtain exhaustive item set to use as possible sources for copy detection")]
-        GetItemsForExhaustiveCopyDetection(#[source] Box<dyn std::error::Error + Send + Sync>),
-        #[error(transparent)]
-        SetResource(#[from] crate::blob::platform::set_resource::Error),
-        #[error(transparent)]
-        PrepareDiff(#[from] crate::blob::platform::prepare_diff::Error),
+        FindExistingBlob(gix_object::find::existing_object::Error),
+        GetItemsForExhaustiveCopyDetection(Box<dyn std::error::Error + Send + Sync>),
+        SetResource(crate::blob::platform::set_resource::Error),
+        PrepareDiff(crate::blob::platform::prepare_diff::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::FindExistingBlob(_) => f.write_str("Could not find blob for similarity checking"),
+                Error::GetItemsForExhaustiveCopyDetection(_) => {
+                    f.write_str("Could not obtain exhaustive item set to use as possible sources for copy detection")
+                }
+                Error::SetResource(err) => std::fmt::Display::fmt(err, f),
+                Error::PrepareDiff(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::FindExistingBlob(err) => Some(err),
+                Error::GetItemsForExhaustiveCopyDetection(err) => Some(&**err),
+                Error::SetResource(err) => err.source(),
+                Error::PrepareDiff(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<gix_object::find::existing_object::Error> for Error {
+        fn from(err: gix_object::find::existing_object::Error) -> Self {
+            Error::FindExistingBlob(err)
+        }
+    }
+
+    impl From<crate::blob::platform::set_resource::Error> for Error {
+        fn from(err: crate::blob::platform::set_resource::Error) -> Self {
+            Error::SetResource(err)
+        }
+    }
+
+    impl From<crate::blob::platform::prepare_diff::Error> for Error {
+        fn from(err: crate::blob::platform::prepare_diff::Error) -> Self {
+            Error::PrepareDiff(err)
+        }
     }
 }
 
@@ -366,7 +404,7 @@ impl<T: Change> Tracker<T> {
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn match_pairs_of_kind(
         &mut self,
         kind: visit::SourceKind,
@@ -417,7 +455,7 @@ impl<T: Change> Tracker<T> {
         Ok(())
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn match_pairs(
         &mut self,
         cb: &mut impl FnMut(visit::Destination<'_, T>, Option<visit::Source<'_, T>>) -> Action,
@@ -695,7 +733,7 @@ type SourceTuple<'a, T> = (usize, &'a Item<T>, Option<DiffLineStats>);
 /// any non-deletion otherwise.
 /// Note that we always try to find by identity first even if a percentage is given as it's much faster and may reduce the set
 /// of items to be searched.
-#[expect(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn find_match<'a, T: Change>(
     items: &'a [Item<T>],
     item: &Item<T>,

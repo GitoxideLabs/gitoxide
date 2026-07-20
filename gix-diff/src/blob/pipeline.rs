@@ -130,41 +130,134 @@ pub mod convert_to_diffable {
     use gix_object::tree::EntryKind;
 
     /// The error returned by [Pipeline::convert_to_diffable()](super::Pipeline::convert_to_diffable()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}")]
-        InvalidEntryKind { rela_path: BString, actual: EntryKind },
-        #[error("Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks")]
-        SymlinkDisabled { rela_path: BString },
-        #[error("Entry at '{rela_path}' could not be read as symbolic link")]
-        ReadLink { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be opened for reading or read from")]
-        OpenOrRead { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be copied from a filter process to a memory buffer")]
-        StreamCopy { rela_path: BString, source: std::io::Error },
-        #[error("Failed to run '{cmd}' for binary-to-text conversion of entry at {rela_path}")]
+        InvalidEntryKind {
+            rela_path: BString,
+            actual: EntryKind,
+        },
+        SymlinkDisabled {
+            rela_path: BString,
+        },
+        ReadLink {
+            rela_path: BString,
+            source: std::io::Error,
+        },
+        OpenOrRead {
+            rela_path: BString,
+            source: std::io::Error,
+        },
+        StreamCopy {
+            rela_path: BString,
+            source: std::io::Error,
+        },
         RunTextConvFilter {
             rela_path: BString,
             cmd: String,
             source: std::io::Error,
         },
-        #[error("Tempfile for binary-to-text conversion for entry at {rela_path} could not be created")]
-        CreateTempfile { rela_path: BString, source: std::io::Error },
-        #[error("Binary-to-text conversion '{cmd}' for entry at {rela_path} failed with: {stderr}")]
+        CreateTempfile {
+            rela_path: BString,
+            source: std::io::Error,
+        },
         TextConvFilterFailed {
             rela_path: BString,
             cmd: String,
             stderr: BString,
         },
-        #[error(transparent)]
-        FindObject(#[from] gix_object::find::existing_object::Error),
-        #[error(transparent)]
-        ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-        #[error(transparent)]
-        ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
-        #[error("Memory allocation failed")]
-        OutOfMemory(#[from] TryReserveError),
+        FindObject(gix_object::find::existing_object::Error),
+        ConvertToWorktree(gix_filter::pipeline::convert::to_worktree::Error),
+        ConvertToGit(gix_filter::pipeline::convert::to_git::Error),
+        OutOfMemory(TryReserveError),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidEntryKind { rela_path, actual } => {
+                    write!(
+                        f,
+                        "Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}"
+                    )
+                }
+                Error::SymlinkDisabled { rela_path } => write!(
+                    f,
+                    "Entry at '{rela_path}' is declared as symlink but symlinks are disabled via core.symlinks"
+                ),
+                Error::ReadLink { rela_path, .. } => {
+                    write!(f, "Entry at '{rela_path}' could not be read as symbolic link")
+                }
+                Error::OpenOrRead { rela_path, .. } => {
+                    write!(f, "Entry at '{rela_path}' could not be opened for reading or read from")
+                }
+                Error::StreamCopy { rela_path, .. } => write!(
+                    f,
+                    "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                ),
+                Error::RunTextConvFilter { rela_path, cmd, .. } => {
+                    write!(
+                        f,
+                        "Failed to run '{cmd}' for binary-to-text conversion of entry at {rela_path}"
+                    )
+                }
+                Error::CreateTempfile { rela_path, .. } => write!(
+                    f,
+                    "Tempfile for binary-to-text conversion for entry at {rela_path} could not be created"
+                ),
+                Error::TextConvFilterFailed { rela_path, cmd, stderr } => write!(
+                    f,
+                    "Binary-to-text conversion '{cmd}' for entry at {rela_path} failed with: {stderr}"
+                ),
+                Error::FindObject(err) => std::fmt::Display::fmt(err, f),
+                Error::ConvertToWorktree(err) => std::fmt::Display::fmt(err, f),
+                Error::ConvertToGit(err) => std::fmt::Display::fmt(err, f),
+                Error::OutOfMemory(_) => f.write_str("Memory allocation failed"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ReadLink { source, .. }
+                | Error::OpenOrRead { source, .. }
+                | Error::StreamCopy { source, .. }
+                | Error::RunTextConvFilter { source, .. }
+                | Error::CreateTempfile { source, .. } => Some(source),
+                Error::FindObject(err) => err.source(),
+                Error::ConvertToWorktree(err) => err.source(),
+                Error::ConvertToGit(err) => err.source(),
+                Error::OutOfMemory(err) => Some(err),
+                Error::InvalidEntryKind { .. } | Error::SymlinkDisabled { .. } | Error::TextConvFilterFailed { .. } => {
+                    None
+                }
+            }
+        }
+    }
+
+    impl From<gix_object::find::existing_object::Error> for Error {
+        fn from(err: gix_object::find::existing_object::Error) -> Self {
+            Error::FindObject(err)
+        }
+    }
+
+    impl From<gix_filter::pipeline::convert::to_worktree::Error> for Error {
+        fn from(err: gix_filter::pipeline::convert::to_worktree::Error) -> Self {
+            Error::ConvertToWorktree(err)
+        }
+    }
+
+    impl From<gix_filter::pipeline::convert::to_git::Error> for Error {
+        fn from(err: gix_filter::pipeline::convert::to_git::Error) -> Self {
+            Error::ConvertToGit(err)
+        }
+    }
+
+    impl From<TryReserveError> for Error {
+        fn from(err: TryReserveError) -> Self {
+            Error::OutOfMemory(err)
+        }
     }
 }
 
@@ -229,7 +322,7 @@ impl Pipeline {
     ///
     /// As these files are ultimately named tempfiles, they will be leaked unless the [gix_tempfile] is configured with
     /// a signal handler. If they leak, they would remain in the system's `$TMP` directory.
-    #[expect(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn convert_to_diffable(
         &mut self,
         id: &gix_hash::oid,
