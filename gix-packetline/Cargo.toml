@@ -42,7 +42,6 @@ required-features = ["blocking-io"]
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
-thiserror = "2.0.18"
 faster-hex = { version = "0.10.0", default-features = false, features = ["std"] }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 # async support
