@@ -6,47 +6,100 @@ use gix_object::FindExt;
 use crate::extension::Tree;
 
 /// The error returned by [`Tree::verify()`][crate::extension::Tree::verify()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(
-        "The entry {entry_id} at path '{name}' in parent tree {parent_id} wasn't found in the nodes children, making it incomplete"
-    )]
     MissingTreeDirectory {
         parent_id: gix_hash::ObjectId,
         entry_id: gix_hash::ObjectId,
         name: BString,
     },
-    #[error(transparent)]
-    TreeNodeNotFound(#[from] gix_object::find::existing_iter::Error),
-    #[error(
-        "The tree with id {oid} should have {expected_childcount} children, but its cached representation had {actual_childcount} of them"
-    )]
+    TreeNodeNotFound(gix_object::find::existing_iter::Error),
     TreeNodeChildcountMismatch {
         oid: gix_hash::ObjectId,
         expected_childcount: usize,
         actual_childcount: usize,
     },
-    #[error("The root tree was named '{name}', even though it should be empty")]
-    RootWithName { name: BString },
-    #[error(
-        "Expected not more than {expected} entries to be reachable from the top-level, but actual count was {actual}"
-    )]
-    EntriesCount { actual: u32, expected: u32 },
-    #[error("TREE entry '{name}' declared {actual} entries, but the index only contains {expected} entries")]
+    RootWithName {
+        name: BString,
+    },
+    EntriesCount {
+        actual: u32,
+        expected: u32,
+    },
     EntriesCountExceedsIndex {
         name: BString,
         actual: u32,
         expected: usize,
     },
-    #[error(
-        "Parent tree '{parent_id}' contained out-of order trees prev = '{previous_path}' and next = '{current_path}'"
-    )]
     OutOfOrder {
         parent_id: gix_hash::ObjectId,
         current_path: BString,
         previous_path: BString,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MissingTreeDirectory {
+                parent_id,
+                entry_id,
+                name,
+            } => write!(
+                f,
+                "The entry {entry_id} at path '{name}' in parent tree {parent_id} wasn't found in the nodes children, making it incomplete"
+            ),
+            Error::TreeNodeNotFound(err) => std::fmt::Display::fmt(err, f),
+            Error::TreeNodeChildcountMismatch {
+                oid,
+                expected_childcount,
+                actual_childcount,
+            } => write!(
+                f,
+                "The tree with id {oid} should have {expected_childcount} children, but its cached representation had {actual_childcount} of them"
+            ),
+            Error::RootWithName { name } => {
+                write!(f, "The root tree was named '{name}', even though it should be empty")
+            }
+            Error::EntriesCount { actual, expected } => write!(
+                f,
+                "Expected not more than {expected} entries to be reachable from the top-level, but actual count was {actual}"
+            ),
+            Error::EntriesCountExceedsIndex { name, actual, expected } => write!(
+                f,
+                "TREE entry '{name}' declared {actual} entries, but the index only contains {expected} entries"
+            ),
+            Error::OutOfOrder {
+                parent_id,
+                current_path,
+                previous_path,
+            } => write!(
+                f,
+                "Parent tree '{parent_id}' contained out-of order trees prev = '{previous_path}' and next = '{current_path}'"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::TreeNodeNotFound(err) => err.source(),
+            Error::MissingTreeDirectory { .. }
+            | Error::TreeNodeChildcountMismatch { .. }
+            | Error::RootWithName { .. }
+            | Error::EntriesCount { .. }
+            | Error::EntriesCountExceedsIndex { .. }
+            | Error::OutOfOrder { .. } => None,
+        }
+    }
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::TreeNodeNotFound(err)
+    }
 }
 
 impl Tree {
@@ -100,6 +153,7 @@ impl Tree {
             }
             for child in children {
                 // This is actually needed here as it's a mut ref, which isn't copy. We do a re-borrow here.
+                #[allow(clippy::needless_option_as_deref)]
                 let actual_num_entries =
                     verify_recursive(child.id, &child.children, object_buf.as_deref_mut(), objects)?;
                 if let Some((actual, num_entries)) = actual_num_entries.zip(child.num_entries) {

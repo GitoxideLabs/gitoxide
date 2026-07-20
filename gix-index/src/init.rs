@@ -12,16 +12,38 @@ pub mod from_tree {
     };
 
     /// The error returned by [State::from_tree()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("The path \"{path}\" is invalid")]
         InvalidComponent {
             path: BString,
             source: gix_validate::path::component::Error,
         },
-        #[error(transparent)]
-        Traversal(#[from] gix_traverse::tree::depthfirst::Error),
+        Traversal(gix_traverse::tree::depthfirst::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidComponent { path, .. } => write!(f, "The path \"{path}\" is invalid"),
+                Error::Traversal(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::InvalidComponent { source, .. } => Some(source),
+                Error::Traversal(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<gix_traverse::tree::depthfirst::Error> for Error {
+        fn from(err: gix_traverse::tree::depthfirst::Error) -> Self {
+            Error::Traversal(err)
+        }
     }
 
     /// Initialization

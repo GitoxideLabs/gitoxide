@@ -10,16 +10,39 @@ mod error {
     use crate::extension;
 
     /// The error returned when decoding extensions.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(
-            "Encountered mandatory extension '{}' which isn't implemented yet",
-            String::from_utf8_lossy(signature)
-        )]
         MandatoryUnimplemented { signature: extension::Signature },
-        #[error("Could not parse mandatory link extension")]
-        Link(#[from] extension::link::decode::Error),
+        Link(extension::link::decode::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::MandatoryUnimplemented { signature } => write!(
+                    f,
+                    "Encountered mandatory extension '{}' which isn't implemented yet",
+                    String::from_utf8_lossy(signature)
+                ),
+                Error::Link(_) => f.write_str("Could not parse mandatory link extension"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::MandatoryUnimplemented { .. } => None,
+                Error::Link(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<extension::link::decode::Error> for Error {
+        fn from(err: extension::link::decode::Error) -> Self {
+            Error::Link(err)
+        }
     }
 }
 pub use error::Error;

@@ -7,12 +7,9 @@ pub mod entries {
     use bstr::BString;
 
     /// The error returned by [`State::verify_entries()`][crate::State::verify_entries()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(
-            "Entry '{current_path}' (stage = {current_stage}) at index {current_index} should order after prior entry '{previous_path}' (stage = {previous_stage})"
-        )]
         OutOfOrder {
             current_index: usize,
             current_path: BString,
@@ -21,6 +18,25 @@ pub mod entries {
             previous_stage: u8,
         },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::OutOfOrder {
+                    current_index,
+                    current_path,
+                    current_stage,
+                    previous_path,
+                    previous_stage,
+                } => write!(
+                    f,
+                    "Entry '{current_path}' (stage = {current_stage}) at index {current_index} should order after prior entry '{previous_path}' (stage = {previous_stage})"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///
@@ -28,11 +44,32 @@ pub mod extensions {
     use crate::extension;
 
     /// The error returned by [`State::verify_extensions()`][crate::State::verify_extensions()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Tree(#[from] extension::tree::verify::Error),
+        Tree(extension::tree::verify::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Tree(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Tree(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<extension::tree::verify::Error> for Error {
+        fn from(err: extension::tree::verify::Error) -> Self {
+            Error::Tree(err)
+        }
     }
 }
 

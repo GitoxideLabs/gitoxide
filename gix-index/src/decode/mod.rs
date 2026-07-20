@@ -11,23 +11,76 @@ mod error {
     use std::collections::TryReserveError;
 
     /// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    // TODO(review): this implementation hand-preserves `#[error(transparent)]` semantics for `Header`:
+    //                `Display` passes the formatter through and `source()` forwards to the inner error's
+    //                source, exactly like the `thiserror`-generated code did. The same pattern is used
+    //                for the transparent variants in `file::init`, `file::write`, `verify::extensions`,
+    //                `init::from_tree`, and `extension::tree::verify`.
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Header(#[from] decode::header::Error),
-        #[error("Could not hash index data")]
-        Hasher(#[from] gix_hash::hasher::Error),
-        #[error("Index data would require more memory than can be reserved")]
+        Header(decode::header::Error),
+        Hasher(gix_hash::hasher::Error),
         OutOfMemory,
-        #[error("Could not parse entry at index {index}")]
         Entry { index: u32 },
-        #[error("Mandatory extension wasn't implemented or malformed.")]
-        Extension(#[from] extension::decode::Error),
-        #[error("Index trailer should have been {expected} bytes long, but was {actual}")]
+        Extension(extension::decode::Error),
         UnexpectedTrailerLength { expected: usize, actual: usize },
-        #[error("Shared index checksum mismatch")]
-        Verify(#[from] gix_hash::verify::Error),
+        Verify(gix_hash::verify::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Header(err) => std::fmt::Display::fmt(err, f),
+                Error::Hasher(_) => f.write_str("Could not hash index data"),
+                Error::OutOfMemory => f.write_str("Index data would require more memory than can be reserved"),
+                Error::Entry { index } => write!(f, "Could not parse entry at index {index}"),
+                Error::Extension(_) => f.write_str("Mandatory extension wasn't implemented or malformed."),
+                Error::UnexpectedTrailerLength { expected, actual } => {
+                    write!(
+                        f,
+                        "Index trailer should have been {expected} bytes long, but was {actual}"
+                    )
+                }
+                Error::Verify(_) => f.write_str("Shared index checksum mismatch"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Header(err) => err.source(),
+                Error::Hasher(err) => Some(err),
+                Error::Extension(err) => Some(err),
+                Error::Verify(err) => Some(err),
+                Error::OutOfMemory | Error::Entry { .. } | Error::UnexpectedTrailerLength { .. } => None,
+            }
+        }
+    }
+
+    impl From<decode::header::Error> for Error {
+        fn from(err: decode::header::Error) -> Self {
+            Error::Header(err)
+        }
+    }
+
+    impl From<gix_hash::hasher::Error> for Error {
+        fn from(err: gix_hash::hasher::Error) -> Self {
+            Error::Hasher(err)
+        }
+    }
+
+    impl From<extension::decode::Error> for Error {
+        fn from(err: extension::decode::Error) -> Self {
+            Error::Extension(err)
+        }
+    }
+
+    impl From<gix_hash::verify::Error> for Error {
+        fn from(err: gix_hash::verify::Error) -> Self {
+            Error::Verify(err)
+        }
     }
 
     impl From<TryReserveError> for Error {

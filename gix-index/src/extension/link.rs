@@ -16,17 +16,29 @@ pub struct Bitmaps {
 pub mod decode {
 
     /// The error returned when decoding link extensions.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    // TODO(review): `BitmapDecode`'s `err` field is not named `source` and carries no `#[source]`,
+    //                so `thiserror` did not treat it as a source; `source()` returning `None` for it
+    //                is preserved behavior.
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("{0}")]
         Corrupt(&'static str),
-        #[error("{kind} bitmap corrupt")]
         BitmapDecode {
             err: gix_bitmap::ewah::decode::Error,
             kind: &'static str,
         },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Corrupt(msg) => f.write_str(msg),
+                Error::BitmapDecode { kind, .. } => write!(f, "{kind} bitmap corrupt"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 
     impl From<std::num::TryFromIntError> for Error {
         fn from(_: std::num::TryFromIntError) -> Self {

@@ -1,15 +1,50 @@
 use crate::{File, Version, write};
 
 /// The error produced by [`File::write()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] gix_hash::io::Error),
-    #[error("Could not acquire lock for index file")]
-    AcquireLock(#[from] gix_lock::acquire::Error),
-    #[error("Could not commit lock for index file")]
-    CommitLock(#[from] gix_lock::commit::Error<gix_lock::File>),
+    Io(gix_hash::io::Error),
+    AcquireLock(gix_lock::acquire::Error),
+    CommitLock(gix_lock::commit::Error<gix_lock::File>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(err) => std::fmt::Display::fmt(err, f),
+            Error::AcquireLock(_) => f.write_str("Could not acquire lock for index file"),
+            Error::CommitLock(_) => f.write_str("Could not commit lock for index file"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => err.source(),
+            Error::AcquireLock(err) => Some(err),
+            Error::CommitLock(err) => Some(err),
+        }
+    }
+}
+
+impl From<gix_hash::io::Error> for Error {
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<gix_lock::acquire::Error> for Error {
+    fn from(err: gix_lock::acquire::Error) -> Self {
+        Error::AcquireLock(err)
+    }
+}
+
+impl From<gix_lock::commit::Error<gix_lock::File>> for Error {
+    fn from(err: gix_lock::commit::Error<gix_lock::File>) -> Self {
+        Error::CommitLock(err)
+    }
 }
 
 impl File {

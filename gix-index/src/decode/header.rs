@@ -7,14 +7,23 @@ pub(crate) const SIGNATURE: &[u8] = b"DIRC";
 mod error {
 
     /// The error produced when failing to decode an index header.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("{0}")]
         Corrupt(&'static str),
-        #[error("Index version {0} is not supported")]
         UnsupportedVersion(u32),
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Corrupt(msg) => f.write_str(msg),
+                Error::UnsupportedVersion(version) => write!(f, "Index version {version} is not supported"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 pub use error::Error;
 

@@ -7,15 +7,50 @@ use crate::{File, State, decode, extension};
 mod error {
 
     /// The error returned by [File::at()][super::File::at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An IO error occurred while opening the index")]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Decode(#[from] crate::decode::Error),
-        #[error(transparent)]
-        LinkExtension(#[from] crate::extension::link::decode::Error),
+        Io(std::io::Error),
+        Decode(crate::decode::Error),
+        LinkExtension(crate::extension::link::decode::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("An IO error occurred while opening the index"),
+                Error::Decode(err) => std::fmt::Display::fmt(err, f),
+                Error::LinkExtension(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Decode(err) => err.source(),
+                Error::LinkExtension(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<crate::decode::Error> for Error {
+        fn from(err: crate::decode::Error) -> Self {
+            Error::Decode(err)
+        }
+    }
+
+    impl From<crate::extension::link::decode::Error> for Error {
+        fn from(err: crate::extension::link::decode::Error) -> Self {
+            Error::LinkExtension(err)
+        }
     }
 }
 
@@ -61,7 +96,7 @@ impl File {
         let (data, mtime) = {
             let mut file = std::fs::File::open(&path)?;
             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
-            #[expect(unsafe_code)]
+            #[allow(unsafe_code)]
             let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file)? };
 
             if !skip_hash {

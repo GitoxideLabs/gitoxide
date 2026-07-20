@@ -4,13 +4,41 @@ use crate::File;
 
 mod error {
     /// The error returned by [File::verify_integrity()][super::File::verify_integrity()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Could not read index file to generate hash")]
-        Io(#[from] gix_hash::io::Error),
-        #[error("Index checksum mismatch")]
-        Verify(#[from] gix_hash::verify::Error),
+        Io(gix_hash::io::Error),
+        Verify(gix_hash::verify::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Could not read index file to generate hash"),
+                Error::Verify(_) => f.write_str("Index checksum mismatch"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Verify(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<gix_hash::io::Error> for Error {
+        fn from(err: gix_hash::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<gix_hash::verify::Error> for Error {
+        fn from(err: gix_hash::verify::Error) -> Self {
+            Error::Verify(err)
+        }
     }
 }
 pub use error::Error;
