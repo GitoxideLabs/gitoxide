@@ -4,22 +4,63 @@ use bstr::{BStr, BString};
 use gix_index::entry;
 
 /// The error returned by [index_as_worktree()`](crate::index_as_worktree()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not convert path to UTF8")]
     IllformedUtf8,
-    #[error("The clock was off when reading file related metadata after updating a file on disk")]
-    Time(#[from] std::time::SystemTimeError),
-    #[error("IO error while writing blob or reading file metadata or changing filetype")]
-    Io(#[from] gix_hash::io::Error),
-    #[error("Failed to obtain blob from object database")]
-    Find(#[from] gix_object::find::existing_object::Error),
-    #[error("Could not determine status for submodule at '{rela_path}'")]
+    Time(std::time::SystemTimeError),
+    Io(gix_hash::io::Error),
+    Find(gix_object::find::existing_object::Error),
     SubmoduleStatus {
         rela_path: BString,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IllformedUtf8 => f.write_str("Could not convert path to UTF8"),
+            Error::Time(_) => {
+                f.write_str("The clock was off when reading file related metadata after updating a file on disk")
+            }
+            Error::Io(_) => f.write_str("IO error while writing blob or reading file metadata or changing filetype"),
+            Error::Find(_) => f.write_str("Failed to obtain blob from object database"),
+            Error::SubmoduleStatus { rela_path, .. } => {
+                write!(f, "Could not determine status for submodule at '{rela_path}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Time(err) => Some(err),
+            Error::Io(err) => Some(err),
+            Error::Find(err) => Some(err),
+            Error::SubmoduleStatus { source, .. } => Some(&**source),
+            Error::IllformedUtf8 => None,
+        }
+    }
+}
+
+impl From<std::time::SystemTimeError> for Error {
+    fn from(err: std::time::SystemTimeError) -> Self {
+        Error::Time(err)
+    }
+}
+
+impl From<gix_hash::io::Error> for Error {
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::Find(err)
+    }
 }
 
 /// Options that control how the index status with a worktree is computed.

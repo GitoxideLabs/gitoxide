@@ -5,27 +5,75 @@ use bstr::{BStr, ByteSlice};
 use crate::index_as_worktree::{Change, EntryStatus};
 
 /// The error returned by [index_as_worktree_with_renames()`](crate::index_as_worktree_with_renames()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): these implementations hand-preserve the `thiserror` semantics of the variants below.
+//                The six `#[error(transparent)]` variants (`TrackedFileModifications`, `DirWalk`,
+//                `SpawnThread`, `HashFile`, `ConvertToGit`, `RewriteTracker`) pass `Display` through to the
+//                wrapped error and forward `source()` to *its* source. The three text variants that wrap a
+//                bare `std::io::Error` (`SetAttributeContext`, `OpenWorktreeFile`, `ReadLink`) carry no
+//                source, matching `thiserror`, which treats only a `#[from]`/`#[source]` field or a field
+//                named `source` as the error source — never an unnamed, unannotated field.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    TrackedFileModifications(#[from] crate::index_as_worktree::Error),
-    #[error(transparent)]
+    TrackedFileModifications(crate::index_as_worktree::Error),
     DirWalk(gix_dir::walk::Error),
-    #[error(transparent)]
     SpawnThread(std::io::Error),
-    #[error("Failed to change the context for querying gitattributes to the respective path")]
     SetAttributeContext(std::io::Error),
-    #[error("Could not open worktree file for reading")]
     OpenWorktreeFile(std::io::Error),
-    #[error(transparent)]
     HashFile(gix_hash::io::Error),
-    #[error("Could not read worktree link content")]
     ReadLink(std::io::Error),
-    #[error(transparent)]
-    ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
-    #[error(transparent)]
-    RewriteTracker(#[from] gix_diff::rewrites::tracker::emit::Error),
+    ConvertToGit(gix_filter::pipeline::convert::to_git::Error),
+    RewriteTracker(gix_diff::rewrites::tracker::emit::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::TrackedFileModifications(err) => std::fmt::Display::fmt(err, f),
+            Error::DirWalk(err) => std::fmt::Display::fmt(err, f),
+            Error::SpawnThread(err) => std::fmt::Display::fmt(err, f),
+            Error::SetAttributeContext(_) => {
+                f.write_str("Failed to change the context for querying gitattributes to the respective path")
+            }
+            Error::OpenWorktreeFile(_) => f.write_str("Could not open worktree file for reading"),
+            Error::HashFile(err) => std::fmt::Display::fmt(err, f),
+            Error::ReadLink(_) => f.write_str("Could not read worktree link content"),
+            Error::ConvertToGit(err) => std::fmt::Display::fmt(err, f),
+            Error::RewriteTracker(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::TrackedFileModifications(err) => err.source(),
+            Error::DirWalk(err) => err.source(),
+            Error::SpawnThread(err) => err.source(),
+            Error::HashFile(err) => err.source(),
+            Error::ConvertToGit(err) => err.source(),
+            Error::RewriteTracker(err) => err.source(),
+            Error::SetAttributeContext(_) | Error::OpenWorktreeFile(_) | Error::ReadLink(_) => None,
+        }
+    }
+}
+
+impl From<crate::index_as_worktree::Error> for Error {
+    fn from(err: crate::index_as_worktree::Error) -> Self {
+        Error::TrackedFileModifications(err)
+    }
+}
+
+impl From<gix_filter::pipeline::convert::to_git::Error> for Error {
+    fn from(err: gix_filter::pipeline::convert::to_git::Error) -> Self {
+        Error::ConvertToGit(err)
+    }
+}
+
+impl From<gix_diff::rewrites::tracker::emit::Error> for Error {
+    fn from(err: gix_diff::rewrites::tracker::emit::Error) -> Self {
+        Error::RewriteTracker(err)
+    }
 }
 
 /// The way all output should be sorted.
