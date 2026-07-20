@@ -145,6 +145,42 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
     Ok(())
 }
 
+#[test]
+fn unknown_encoding_remains_an_error() -> gix_testtools::Result {
+    let (mut cache, mut pipe) = pipeline("unknown-encoding", || {
+        (
+            vec![driver_with_process()],
+            Vec::new(),
+            CrlfRoundTripCheck::Skip,
+            Default::default(),
+        )
+    })?;
+    let err = match pipe.convert_to_git(
+        b"one\n".as_slice(),
+        Path::new("file"),
+        &mut |path, attrs| {
+            cache
+                .at_entry(path, None, &gix_object::find::Never)
+                .expect("attribute lookup succeeds")
+                .matching_attributes(attrs);
+        },
+        &mut no_call,
+    ) {
+        Ok(_) => panic!("conversion into Git rejects unknown encodings"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            gix_filter::pipeline::convert::to_git::Error::Configuration(
+                gix_filter::pipeline::convert::configuration::Error::UnknownEncoding { .. }
+            )
+        ),
+        "Git-bound conversion stays strict"
+    );
+    Ok(())
+}
+
 fn no_call(_buf: &mut Vec<u8>) -> Result<Option<()>, Box<dyn std::error::Error + Send + Sync>> {
     unreachable!("index function will not be called")
 }

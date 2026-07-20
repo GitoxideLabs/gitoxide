@@ -16,3 +16,11 @@ EOF
 * filter=arrow
 EOF
 )
+
+# Unknown encodings must not prevent worktree conversion. The surrounding EOL
+# and process filters make it observable that only the encoding stage is skipped.
+(mkdir unknown-encoding && cd unknown-encoding
+  cat <<EOF > .gitattributes
+* text eol=crlf working-tree-encoding=definitely-not-an-encoding filter=arrow
+EOF
+)

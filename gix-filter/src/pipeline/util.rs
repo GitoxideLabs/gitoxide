@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use bstr::BStr;
+use bstr::{BStr, BString};
 use gix_attributes::StateRef;
 use smallvec::SmallVec;
 
@@ -16,9 +16,15 @@ pub(crate) struct Configuration<'a> {
     pub(crate) _attr_digest: Option<eol::AttributesDigest>,
     /// The final digest that includes configuration values
     pub(crate) digest: eol::AttributesDigest,
-    pub(crate) encoding: Option<&'static encoding_rs::Encoding>,
+    pub(crate) encoding: Encoding,
     /// Whether or not to apply the `ident` filter
     pub(crate) apply_ident_filter: bool,
+}
+
+pub(crate) enum Encoding {
+    None,
+    Known(&'static encoding_rs::Encoding),
+    Unknown(BString),
 }
 
 impl<'driver> Configuration<'driver> {
@@ -37,25 +43,15 @@ impl<'driver> Configuration<'driver> {
             }
         }
 
-        fn extract_encoding(
-            attr: &gix_attributes::search::Match<'_>,
-        ) -> Result<Option<&'static encoding_rs::Encoding>, configuration::Error> {
+        fn extract_encoding(attr: &gix_attributes::search::Match<'_>) -> Result<Encoding, configuration::Error> {
             match attr.assignment.state {
                 StateRef::Set | StateRef::Unset => Err(configuration::Error::InvalidEncoding),
-                StateRef::Value(name) => encoding_rs::Encoding::for_label(name.as_bstr())
-                    .ok_or(configuration::Error::UnknownEncoding {
-                        name: name.as_bstr().to_owned(),
-                    })
-                    .map(|encoding| {
-                        // The working-tree-encoding is the encoding we have to expect in the working tree.
-                        // If the specified one is the default encoding, there is nothing to do.
-                        if encoding == encoding_rs::UTF_8 {
-                            None
-                        } else {
-                            Some(encoding)
-                        }
-                    }),
-                StateRef::Unspecified => Ok(None),
+                StateRef::Value(name) => Ok(match encoding_rs::Encoding::for_label(name.as_bstr()) {
+                    Some(encoding) if encoding == encoding_rs::UTF_8 => Encoding::None,
+                    Some(encoding) => Encoding::Known(encoding),
+                    None => Encoding::Unknown(name.as_bstr().to_owned()),
+                }),
+                StateRef::Unspecified => Ok(Encoding::None),
             }
         }
 

@@ -28,6 +28,7 @@ mod reduce {
                 files,
                 delayed_symlinks,
                 errors,
+                ignored_filter_errors,
                 collisions,
                 delayed_paths_unknown,
                 delayed_paths_unprocessed,
@@ -36,6 +37,7 @@ mod reduce {
             self.aggregate.files += files;
             self.aggregate.delayed_symlinks.extend(delayed_symlinks);
             self.aggregate.errors.extend(errors);
+            self.aggregate.ignored_filter_errors.extend(ignored_filter_errors);
             self.aggregate.collisions.extend(collisions);
             self.aggregate.delayed_paths_unknown.extend(delayed_paths_unknown);
             self.aggregate
@@ -58,6 +60,7 @@ use crate::checkout::entry::DelayedFilteredStream;
 pub struct Outcome<'a> {
     pub collisions: Vec<checkout::Collision>,
     pub errors: Vec<checkout::ErrorRecord>,
+    pub ignored_filter_errors: Vec<checkout::ErrorRecord>,
     pub delayed_symlinks: Vec<(&'a mut gix_index::Entry, &'a BStr)>,
     // all (immediately) written bytes
     pub bytes_written: u64,
@@ -87,6 +90,12 @@ pub struct Options {
     pub filter_process_delay: gix_filter::driver::apply::Delay,
 }
 
+pub struct ErrorBuffers<'a> {
+    pub errors: &'a mut Vec<checkout::ErrorRecord>,
+    pub ignored_filter_errors: &'a mut Vec<checkout::ErrorRecord>,
+    pub collisions: &'a mut Vec<checkout::Collision>,
+}
+
 impl From<&checkout::Options> for Options {
     fn from(opts: &checkout::Options) -> Self {
         Options {
@@ -112,6 +121,7 @@ where
     let mut delayed_symlinks = Vec::new();
     let mut collisions = Vec::new();
     let mut errors = Vec::new();
+    let mut ignored_filter_errors = Vec::new();
     let mut bytes_written = 0;
     let mut files_in_chunk = 0;
 
@@ -134,12 +144,23 @@ where
             continue;
         }
 
-        match checkout_entry_handle_result(entry, entry_path, &mut errors, &mut collisions, files, bytes, ctx)? {
-            entry::Outcome::Written { bytes } => {
+        match checkout_entry_handle_result(
+            entry,
+            entry_path,
+            ErrorBuffers {
+                errors: &mut errors,
+                ignored_filter_errors: &mut ignored_filter_errors,
+                collisions: &mut collisions,
+            },
+            files,
+            bytes,
+            ctx,
+        )? {
+            entry::Outcome::Written { bytes, .. } => {
                 bytes_written += bytes as u64;
                 files_in_chunk += 1;
             }
-            entry::Outcome::Delayed(delayed) => delayed_filter_results.push(delayed),
+            entry::Outcome::Delayed(stream) => delayed_filter_results.push(stream),
         }
     }
 
@@ -147,6 +168,7 @@ where
         bytes_written,
         files: files_in_chunk,
         errors,
+        ignored_filter_errors,
         collisions,
         delayed_symlinks,
         delayed_paths_unknown: Vec::new(),
@@ -232,6 +254,12 @@ where
                     actual_bytes,
                     executable_bit_change,
                 )?;
+                if let Some(err) = delayed.ignored_filter_error.take() {
+                    out.ignored_filter_errors.push(checkout::ErrorRecord {
+                        path: delayed.entry_path.into(),
+                        error: Box::new(err),
+                    });
+                }
                 delayed_files += 1;
                 files.fetch_add(1, Ordering::Relaxed);
             }
@@ -280,8 +308,11 @@ where
 pub fn checkout_entry_handle_result<'entry, Find>(
     entry: &'entry mut gix_index::Entry,
     entry_path: &'entry BStr,
-    errors: &mut Vec<checkout::ErrorRecord>,
-    collisions: &mut Vec<checkout::Collision>,
+    ErrorBuffers {
+        errors,
+        ignored_filter_errors,
+        collisions,
+    }: ErrorBuffers<'_>,
     files: &AtomicUsize,
     bytes: &AtomicUsize,
     Context {
@@ -307,7 +338,13 @@ where
         *options,
     );
     match res {
-        Ok(out) => {
+        Ok(mut out) => {
+            if let Some(err) = out.take_ignored_filter_error() {
+                ignored_filter_errors.push(checkout::ErrorRecord {
+                    path: entry_path.into(),
+                    error: Box::new(err),
+                });
+            }
             if let Some(num) = out.as_bytes() {
                 bytes.fetch_add(num, Ordering::Relaxed);
                 files.fetch_add(1, Ordering::Relaxed);
@@ -315,10 +352,17 @@ where
             Ok(out)
         }
         Err(checkout::Error::Io(err)) if is_collision(&err, entry_path, collisions, files) => {
-            Ok(entry::Outcome::Written { bytes: 0 })
+            Ok(entry::Outcome::Written {
+                bytes: 0,
+                ignored_filter_error: None,
+            })
         }
-        Err(err) => handle_error(err, entry_path, files, errors, options.keep_going)
-            .map(|()| entry::Outcome::Written { bytes: 0 }),
+        Err(err) => {
+            handle_error(err, entry_path, files, errors, options.keep_going).map(|()| entry::Outcome::Written {
+                bytes: 0,
+                ignored_filter_error: None,
+            })
+        }
     }
 }
 

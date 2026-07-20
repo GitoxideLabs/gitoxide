@@ -30,6 +30,8 @@ pub struct Outcome {
     pub collisions: Vec<Collision>,
     /// Other errors that happened during checkout.
     pub errors: Vec<ErrorRecord>,
+    /// Filter errors that were ignored while the affected paths were still checked out.
+    pub ignored_filter_errors: Vec<ErrorRecord>,
     /// Relative paths that the process listed as 'delayed' even though we never passed them.
     pub delayed_paths_unknown: Vec<BString>,
     /// All paths that were left unprocessed, because they were never listed by the process even though we passed them.

@@ -615,6 +615,37 @@ mod blocking_io {
     }
 
     #[test]
+    fn fetch_and_checkout_with_unknown_encoding_uses_git_compatible_fallback() -> crate::Result {
+        let remote = gix_testtools::scripted_fixture_read_only("make_clone_unknown_encoding.sh")?.join("remote");
+        let tmp = gix_testtools::tempfile::TempDir::new()?;
+        let mut prepare = gix::clone::PrepareFetch::new(
+            remote,
+            tmp.path(),
+            gix::create::Kind::WithWorktree,
+            Default::default(),
+            restricted(),
+        )?;
+        let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, outcome) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+
+        assert_eq!(
+            std::fs::read(repo.workdir().expect("non-bare").join("file.txt"))?,
+            b"one\r\ntwo\r\n",
+            "EOL conversion still runs when the encoding stage is skipped"
+        );
+        assert!(outcome.errors.is_empty(), "fallback does not make checkout incomplete");
+        assert!(outcome.collisions.is_empty(), "the fixture has no path collisions");
+        assert_eq!(outcome.ignored_filter_errors.len(), 1, "the fallback is reported");
+        let record = &outcome.ignored_filter_errors[0];
+        assert_eq!(record.path, "file.txt", "the affected path is retained");
+        assert_eq!(
+            record.error.to_string(),
+            "The encoding named 'definitely-not-an-encoding' isn't available"
+        );
+        Ok(())
+    }
+
+    #[test]
     #[cfg(unix)]
     fn fetch_and_checkout_does_not_follow_delayed_symlink_prefixes() -> crate::Result {
         use std::os::unix::fs::PermissionsExt;

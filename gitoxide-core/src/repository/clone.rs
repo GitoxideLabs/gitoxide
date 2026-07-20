@@ -116,10 +116,15 @@ pub(crate) mod function {
             }
         }
 
-        match outcome {
-            Some(gix::worktree::state::checkout::Outcome { collisions, errors, .. })
-                if !(collisions.is_empty() && errors.is_empty()) =>
-            {
+        if let Some(gix::worktree::state::checkout::Outcome {
+            collisions,
+            errors,
+            ignored_filter_errors,
+            ..
+        }) = outcome
+        {
+            crate::report_ignored_filter_errors(ignored_filter_errors, &mut err);
+            if !(collisions.is_empty() && errors.is_empty()) {
                 let mut messages = Vec::new();
                 if !errors.is_empty() {
                     messages.push(format!("kept going through {} errors(s)", errors.len()));
@@ -138,7 +143,6 @@ pub(crate) mod function {
                     messages.join(", ")
                 );
             }
-            _ => {}
         }
         Ok(())
     }

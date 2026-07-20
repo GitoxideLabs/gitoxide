@@ -78,6 +78,7 @@ where
     let chunk::Outcome {
         mut collisions,
         mut errors,
+        mut ignored_filter_errors,
         mut bytes_written,
         files: files_updated,
         delayed_symlinks,
@@ -131,8 +132,11 @@ where
         bytes_written += chunk::checkout_entry_handle_result(
             entry,
             entry_path,
-            &mut errors,
-            &mut collisions,
+            chunk::ErrorBuffers {
+                errors: &mut errors,
+                ignored_filter_errors: &mut ignored_filter_errors,
+                collisions: &mut collisions,
+            },
             &num_files,
             &num_bytes,
             &mut ctx,
@@ -146,6 +150,7 @@ where
         files_updated,
         collisions,
         errors,
+        ignored_filter_errors,
         bytes_written,
         delayed_paths_unknown,
         delayed_paths_unprocessed,

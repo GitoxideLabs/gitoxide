@@ -30,6 +30,8 @@ pub struct DelayedFilteredStream<'a> {
     pub entry: &'a mut gix_index::Entry,
     /// The relative path at which the entry resides (for use when querying the delayed entry).
     pub entry_path: &'a BStr,
+    /// An unavailable-encoding error to report once the delayed file was written.
+    pub ignored_filter_error: Option<gix_filter::pipeline::convert::configuration::Error>,
 }
 
 pub enum Outcome<'a> {
@@ -37,6 +39,8 @@ pub enum Outcome<'a> {
     Written {
         /// The amount of written bytes.
         bytes: usize,
+        /// An unavailable-encoding error ignored during conversion.
+        ignored_filter_error: Option<gix_filter::pipeline::convert::configuration::Error>,
     },
     /// The will be ready later.
     Delayed(DelayedFilteredStream<'a>),
@@ -46,8 +50,18 @@ impl Outcome<'_> {
     /// Return ourselves as (in-memory) bytes if possible.
     pub fn as_bytes(&self) -> Option<usize> {
         match self {
-            Outcome::Written { bytes } => Some(*bytes),
-            Outcome::Delayed { .. } => None,
+            Outcome::Written { bytes, .. } => Some(*bytes),
+            Outcome::Delayed(_) => None,
+        }
+    }
+
+    /// Take the filter error that was ignored while producing this outcome.
+    pub fn take_ignored_filter_error(&mut self) -> Option<gix_filter::pipeline::convert::configuration::Error> {
+        match self {
+            Outcome::Written {
+                ignored_filter_error, ..
+            } => ignored_filter_error.take(),
+            Outcome::Delayed(_) => None,
         }
     }
 }
@@ -77,6 +91,7 @@ pub fn checkout<'entry, Find>(
 where
     Find: gix_object::Find,
 {
+    let mut ignored_filter_error = None;
     let dest_relative = gix_path::try_from_bstr(entry_path).map_err(|_| crate::checkout::Error::IllformedUtf8 {
         path: entry_path.to_owned(),
     })?;
@@ -92,14 +107,19 @@ where
                     path: dest.to_path_buf(),
                 })?;
 
-            let filtered = filters.convert_to_worktree(
+            let converted = filters.convert_to_worktree_with_options(
                 obj.data,
                 entry_path,
                 &mut |_, attrs| {
                     path_cache.matching_attributes(attrs);
                 },
-                filter_process_delay,
+                gix_filter::pipeline::convert::to_worktree::Options {
+                    delay: filter_process_delay,
+                    ..Default::default()
+                },
             )?;
+            ignored_filter_error = converted.ignored_error;
+            let filtered = converted.output;
             let (num_bytes, file, executable_bit_change) = match filtered {
                 ToWorktreeOutcome::Unchanged(buf) | ToWorktreeOutcome::Buffer(buf) => {
                     let (mut file, flag) = open_file(
@@ -130,6 +150,7 @@ where
                         validated_file_path: dest.to_owned(),
                         entry,
                         entry_path,
+                        ignored_filter_error,
                     }));
                 }
             };
@@ -186,7 +207,10 @@ where
         }
         _ => unreachable!(),
     };
-    Ok(Outcome::Written { bytes: object_size })
+    Ok(Outcome::Written {
+        bytes: object_size,
+        ignored_filter_error,
+    })
 }
 
 /// Note that this works only because we assume to not race ourselves when symlinks are involved, and we do this by

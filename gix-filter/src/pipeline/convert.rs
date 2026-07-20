@@ -2,7 +2,11 @@ use std::{io::Read, path::Path};
 
 use bstr::BStr;
 
-use crate::{Pipeline, driver, eol, ident, pipeline::util::Configuration, worktree};
+use crate::{
+    Pipeline, driver, eol, ident,
+    pipeline::util::{Configuration, Encoding},
+    worktree,
+};
 
 ///
 pub mod configuration {
@@ -45,6 +49,33 @@ pub mod to_git {
 
 ///
 pub mod to_worktree {
+    /// How to handle a `working-tree-encoding` that isn't available.
+    #[derive(Default, Debug, Copy, Clone, Eq, PartialEq)]
+    pub enum UnknownEncoding {
+        /// Continue without changing the encoding, like Git does.
+        #[default]
+        Ignore,
+        /// Stop conversion and return the configuration error.
+        Fail,
+    }
+
+    /// Options for converting Git data to its worktree representation.
+    #[derive(Default, Debug, Copy, Clone)]
+    pub struct Options {
+        /// Control whether process filters may delay their output.
+        pub delay: crate::driver::apply::Delay,
+        /// How to handle unavailable working-tree encodings.
+        pub unknown_encoding: UnknownEncoding,
+    }
+
+    /// The result of a worktree conversion with additional information about tolerated errors.
+    pub struct Outcome<'input, 'pipeline> {
+        /// The converted data.
+        pub output: super::ToWorktreeOutcome<'input, 'pipeline>,
+        /// The encoding error that was ignored, if any.
+        pub ignored_error: Option<super::configuration::Error>,
+    }
+
     /// The error returned by [Pipeline::convert_to_worktree()][super::Pipeline::convert_to_worktree()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -92,6 +123,12 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
         )?;
+
+        let encoding = match encoding {
+            Encoding::None => None,
+            Encoding::Known(encoding) => Some(encoding),
+            Encoding::Unknown(name) => return Err(configuration::Error::UnknownEncoding { name }.into()),
+        };
 
         let mut in_src_buffer = false;
         // this is just an approximation, but it's as good as it gets without reading the actual input.
@@ -181,6 +218,33 @@ impl Pipeline {
         attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
         can_delay: driver::apply::Delay,
     ) -> Result<ToWorktreeOutcome<'input, '_>, to_worktree::Error> {
+        let to_worktree::Outcome { output, ignored_error } = self.convert_to_worktree_with_options(
+            src,
+            rela_path,
+            attributes,
+            to_worktree::Options {
+                delay: can_delay,
+                ..Default::default()
+            },
+        )?;
+        if let Some(err) = ignored_error {
+            gix_trace::warn!("{rela_path}: {err}; continued without encoding conversion");
+            drop(err);
+        }
+        Ok(output)
+    }
+
+    /// Convert `src` to its worktree representation with explicit handling for unavailable encodings.
+    ///
+    /// Unlike [`convert_to_worktree()`][Self::convert_to_worktree()], this returns an unavailable-encoding error
+    /// that was tolerated according to `options`, allowing callers to report it without failing the conversion.
+    pub fn convert_to_worktree_with_options<'input>(
+        &mut self,
+        src: &'input [u8],
+        rela_path: &BStr,
+        attributes: &mut dyn FnMut(&BStr, &mut gix_attributes::search::Outcome),
+        options: to_worktree::Options,
+    ) -> Result<to_worktree::Outcome<'input, '_>, to_worktree::Error> {
         let Configuration {
             driver,
             digest,
@@ -194,6 +258,18 @@ impl Pipeline {
             attributes,
             self.options.eol_config,
         )?;
+
+        let (encoding, ignored_error) = match encoding {
+            Encoding::None => (None, None),
+            Encoding::Known(encoding) => (Some(encoding), None),
+            Encoding::Unknown(name) => {
+                let err = configuration::Error::UnknownEncoding { name };
+                match options.unknown_encoding {
+                    to_worktree::UnknownEncoding::Ignore => (None, Some(err)),
+                    to_worktree::UnknownEncoding::Fail => return Err(err.into()),
+                }
+            }
+        };
 
         let mut bufs = self.bufs.use_foreign_src(src);
         let (src, dest) = bufs.src_and_dest();
@@ -218,16 +294,22 @@ impl Pipeline {
                 driver,
                 &mut src,
                 driver::Operation::Smudge,
-                can_delay,
+                options.delay,
                 self.context.with_path(rela_path),
             )? {
-                return Ok(ToWorktreeOutcome::Process(maybe_delayed));
+                return Ok(to_worktree::Outcome {
+                    output: ToWorktreeOutcome::Process(maybe_delayed),
+                    ignored_error,
+                });
             }
         }
 
-        Ok(match bufs.ro_src {
-            Some(src) => ToWorktreeOutcome::Unchanged(src),
-            None => ToWorktreeOutcome::Buffer(bufs.src),
+        Ok(to_worktree::Outcome {
+            output: match bufs.ro_src {
+                Some(src) => ToWorktreeOutcome::Unchanged(src),
+                None => ToWorktreeOutcome::Buffer(bufs.src),
+            },
+            ignored_error,
         })
     }
 }

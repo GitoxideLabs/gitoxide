@@ -108,3 +108,105 @@ fn no_filter() -> gix_testtools::Result {
     assert_eq!(actual.as_ptr(), input.as_ptr(), "…which means it's exactly the same");
     Ok(())
 }
+
+#[test]
+fn unknown_encoding_is_ignored_while_other_filters_are_applied() -> gix_testtools::Result {
+    let (mut cache, mut pipe) = pipeline("unknown-encoding", || {
+        (
+            vec![driver_with_process()],
+            Vec::new(),
+            CrlfRoundTripCheck::Skip,
+            Default::default(),
+        )
+    })?;
+
+    let mut out = pipe.convert_to_worktree(
+        b"one\ntwo\n",
+        "file".into(),
+        &mut |path, attrs| {
+            cache
+                .at_entry(path, None, &gix_object::find::Never)
+                .expect("attribute lookup succeeds")
+                .matching_attributes(attrs);
+        },
+        gix_filter::driver::apply::Delay::Forbid,
+    )?;
+    let mut actual = Vec::new();
+    out.read_to_end(&mut actual)?;
+    assert_eq!(
+        actual.as_bstr(),
+        "➡one\r\n➡two\r\n",
+        "unknown encodings only skip the encoding stage"
+    );
+    Ok(())
+}
+
+#[test]
+fn unknown_encoding_can_be_reported_or_rejected() -> gix_testtools::Result {
+    let (mut cache, mut pipe) = pipeline("unknown-encoding", || {
+        (
+            vec![driver_with_process()],
+            Vec::new(),
+            CrlfRoundTripCheck::Skip,
+            Default::default(),
+        )
+    })?;
+    let mut attributes = |path: &bstr::BStr, attrs: &mut gix_attributes::search::Outcome| {
+        cache
+            .at_entry(path, None, &gix_object::find::Never)
+            .expect("attribute lookup succeeds")
+            .matching_attributes(attrs);
+    };
+
+    let converted = pipe.convert_to_worktree_with_options(
+        b"one\n",
+        "file".into(),
+        &mut attributes,
+        gix_filter::pipeline::convert::to_worktree::Options {
+            delay: gix_filter::driver::apply::Delay::Forbid,
+            ..Default::default()
+        },
+    )?;
+    let gix_filter::pipeline::convert::to_worktree::Outcome { output, ignored_error } = converted;
+    drop(output);
+    assert_eq!(
+        ignored_error.expect("unknown encoding was ignored").to_string(),
+        "The encoding named 'definitely-not-an-encoding' isn't available"
+    );
+
+    let (mut strict_cache, mut strict_pipe) = pipeline("unknown-encoding", || {
+        (
+            vec![driver_with_process()],
+            Vec::new(),
+            CrlfRoundTripCheck::Skip,
+            Default::default(),
+        )
+    })?;
+    let err = match strict_pipe.convert_to_worktree_with_options(
+        b"one\n",
+        "file".into(),
+        &mut |path, attrs| {
+            strict_cache
+                .at_entry(path, None, &gix_object::find::Never)
+                .expect("attribute lookup succeeds")
+                .matching_attributes(attrs);
+        },
+        gix_filter::pipeline::convert::to_worktree::Options {
+            delay: gix_filter::driver::apply::Delay::Forbid,
+            unknown_encoding: gix_filter::pipeline::convert::to_worktree::UnknownEncoding::Fail,
+        },
+    ) {
+        Ok(_) => panic!("strict handling rejects unknown encodings"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(
+            err,
+            gix_filter::pipeline::convert::to_worktree::Error::Configuration(
+                gix_filter::pipeline::convert::configuration::Error::UnknownEncoding { .. }
+            )
+        ),
+        "the configuration error remains available to strict callers"
+    );
+    Ok(())
+}

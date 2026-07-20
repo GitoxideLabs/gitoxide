@@ -84,6 +84,20 @@ pub mod repository;
 
 mod output;
 
+pub(crate) fn report_ignored_filter_errors(
+    records: impl IntoIterator<Item = gix::worktree::state::checkout::ErrorRecord>,
+    mut err: impl std::io::Write,
+) {
+    for record in records {
+        writeln!(
+            err,
+            "warning: {}: {}; continued without encoding conversion",
+            record.path, record.error
+        )
+        .ok();
+    }
+}
+
 mod discover;
 pub use discover::discover;
 
@@ -150,5 +164,28 @@ fn is_dir_to_mode(is_dir: bool) -> gix::index::entry::Mode {
         gix::index::entry::Mode::DIR
     } else {
         gix::index::entry::Mode::FILE
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ignored_filter_errors_are_warnings() {
+        let mut actual = Vec::new();
+        super::report_ignored_filter_errors(
+            [gix::worktree::state::checkout::ErrorRecord {
+                path: "file.txt".into(),
+                error: Box::new(
+                    gix::filter::plumbing::pipeline::convert::configuration::Error::UnknownEncoding {
+                        name: "UTF-32".into(),
+                    },
+                ),
+            }],
+            &mut actual,
+        );
+        assert_eq!(
+            actual,
+            b"warning: file.txt: The encoding named 'UTF-32' isn't available; continued without encoding conversion\n"
+        );
     }
 }

@@ -80,6 +80,7 @@ pub fn checkout_exclusive(
     let no_repo = repo.is_none();
     let checkout::Outcome {
         errors,
+        ignored_filter_errors,
         collisions,
         files_updated,
         bytes_written,
@@ -133,6 +134,7 @@ pub fn checkout_exclusive(
     ));
 
     let mut messages = Vec::new();
+    crate::report_ignored_filter_errors(ignored_filter_errors, &mut err);
     if !errors.is_empty() {
         messages.push(format!("kept going through {} errors(s)", errors.len()));
         for record in errors {
