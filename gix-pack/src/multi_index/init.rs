@@ -6,30 +6,86 @@ mod error {
     use crate::multi_index::chunk;
 
     /// The error returned by [File::at()][super::File::at()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Could not open multi-index file at '{path}'")]
         Io {
             source: std::io::Error,
             path: std::path::PathBuf,
         },
-        #[error("{message}")]
-        Corrupt { message: &'static str },
-        #[error("Unsupported multi-index version: {version})")]
-        UnsupportedVersion { version: u8 },
-        #[error("Unsupported hash kind: {kind})")]
-        UnsupportedObjectHash { kind: u8 },
-        #[error(transparent)]
-        ChunkFileQuery(#[from] gix_error::Message),
-        #[error(transparent)]
-        ChunkFileDecode(#[from] gix_error::ValidationError),
-        #[error("The multi-pack fan doesn't have the correct size of 256 * 4 bytes")]
+        Corrupt {
+            message: &'static str,
+        },
+        UnsupportedVersion {
+            version: u8,
+        },
+        UnsupportedObjectHash {
+            kind: u8,
+        },
+        ChunkFileQuery(gix_error::Message),
+        ChunkFileDecode(gix_error::ValidationError),
         MultiPackFanSize,
-        #[error(transparent)]
-        PackNames(#[from] chunk::index_names::decode::Error),
-        #[error("multi-index chunk {:?} has invalid size: {message}", String::from_utf8_lossy(.id))]
-        InvalidChunkSize { id: gix_chunk::Id, message: &'static str },
+        PackNames(chunk::index_names::decode::Error),
+        InvalidChunkSize {
+            id: gix_chunk::Id,
+            message: &'static str,
+        },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io { path, .. } => write!(f, "Could not open multi-index file at '{}'", path.display()),
+                Error::Corrupt { message } => f.write_str(message),
+                Error::UnsupportedVersion { version } => write!(f, "Unsupported multi-index version: {version})"),
+                Error::UnsupportedObjectHash { kind } => write!(f, "Unsupported hash kind: {kind})"),
+                Error::ChunkFileQuery(err) => std::fmt::Display::fmt(err, f),
+                Error::ChunkFileDecode(err) => std::fmt::Display::fmt(err, f),
+                Error::MultiPackFanSize => {
+                    f.write_str("The multi-pack fan doesn't have the correct size of 256 * 4 bytes")
+                }
+                Error::PackNames(err) => std::fmt::Display::fmt(err, f),
+                Error::InvalidChunkSize { id, message } => write!(
+                    f,
+                    "multi-index chunk {:?} has invalid size: {message}",
+                    String::from_utf8_lossy(id)
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io { source, .. } => Some(source),
+                Error::ChunkFileQuery(err) => err.source(),
+                Error::ChunkFileDecode(err) => err.source(),
+                Error::PackNames(err) => err.source(),
+                Error::Corrupt { .. }
+                | Error::UnsupportedVersion { .. }
+                | Error::UnsupportedObjectHash { .. }
+                | Error::MultiPackFanSize
+                | Error::InvalidChunkSize { .. } => None,
+            }
+        }
+    }
+
+    impl From<gix_error::Message> for Error {
+        fn from(err: gix_error::Message) -> Self {
+            Error::ChunkFileQuery(err)
+        }
+    }
+
+    impl From<gix_error::ValidationError> for Error {
+        fn from(err: gix_error::ValidationError) -> Self {
+            Error::ChunkFileDecode(err)
+        }
+    }
+
+    impl From<chunk::index_names::decode::Error> for Error {
+        fn from(err: chunk::index_names::decode::Error) -> Self {
+            Error::PackNames(err)
+        }
     }
 }
 

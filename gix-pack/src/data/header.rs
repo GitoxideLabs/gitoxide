@@ -39,17 +39,33 @@ pub fn encode(version: data::Version, num_objects: u32) -> [u8; 12] {
 ///
 pub mod decode {
     /// Returned by [`decode()`][super::decode()].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Could not open pack file at '{path}'")]
         Io {
             source: std::io::Error,
             path: std::path::PathBuf,
         },
-        #[error("{0}")]
         Corrupt(String),
-        #[error("Unsupported pack version: {0}")]
         UnsupportedVersion(u32),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io { path, .. } => write!(f, "Could not open pack file at '{}'", path.display()),
+                Error::Corrupt(message) => f.write_str(message),
+                Error::UnsupportedVersion(version) => write!(f, "Unsupported pack version: {version}"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io { source, .. } => Some(source),
+                Error::Corrupt(_) | Error::UnsupportedVersion(_) => None,
+            }
+        }
     }
 }

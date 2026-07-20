@@ -6,18 +6,38 @@ use std::{
 use crate::index::{self, FAN_LEN, V2_SIGNATURE, Version};
 
 /// Returned by [`index::File::at()`].
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not open pack index file at '{path}'")]
     Io {
         source: std::io::Error,
         path: std::path::PathBuf,
     },
-    #[error("{message}")]
-    Corrupt { message: String },
-    #[error("Unsupported index version: {version})")]
-    UnsupportedVersion { version: u32 },
+    Corrupt {
+        message: String,
+    },
+    UnsupportedVersion {
+        version: u32,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io { path, .. } => write!(f, "Could not open pack index file at '{}'", path.display()),
+            Error::Corrupt { message } => f.write_str(message),
+            Error::UnsupportedVersion { version } => write!(f, "Unsupported index version: {version})"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io { source, .. } => Some(source),
+            Error::Corrupt { .. } | Error::UnsupportedVersion { .. } => None,
+        }
+    }
 }
 
 const N32_SIZE: usize = size_of::<u32>();

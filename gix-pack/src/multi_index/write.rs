@@ -4,15 +4,44 @@ use crate::multi_index;
 
 mod error {
     /// The error returned by [`crate::multi_index::write_from_index_paths()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Io(#[from] gix_hash::io::Error),
-        #[error("Interrupted")]
+        Io(gix_hash::io::Error),
         Interrupted,
-        #[error(transparent)]
-        OpenIndex(#[from] crate::index::init::Error),
+        OpenIndex(crate::index::init::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+                Error::Interrupted => f.write_str("Interrupted"),
+                Error::OpenIndex(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => err.source(),
+                Error::OpenIndex(err) => err.source(),
+                Error::Interrupted => None,
+            }
+        }
+    }
+
+    impl From<gix_hash::io::Error> for Error {
+        fn from(err: gix_hash::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<crate::index::init::Error> for Error {
+        fn from(err: crate::index::init::Error) -> Self {
+            Error::OpenIndex(err)
+        }
     }
 }
 pub use error::Error;

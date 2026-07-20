@@ -12,26 +12,62 @@ pub mod integrity {
     use gix_object::bstr::BString;
 
     /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Reserialization of an object failed")]
-        Io(#[from] std::io::Error),
-        #[error("The fan at index {index} is out of order as it's larger then the following value.")]
-        Fan { index: usize },
-        #[error("{kind} object {id} could not be decoded")]
+        Io(std::io::Error),
+        Fan {
+            index: usize,
+        },
         ObjectDecode {
             source: gix_object::decode::Error,
             kind: gix_object::Kind,
             id: gix_hash::ObjectId,
         },
-        #[error("{kind} object {id} wasn't re-encoded without change, wanted\n{expected}\n\nGOT\n\n{actual}")]
         ObjectEncodeMismatch {
             kind: gix_object::Kind,
             id: gix_hash::ObjectId,
             expected: BString,
             actual: BString,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("Reserialization of an object failed"),
+                Error::Fan { index } => write!(
+                    f,
+                    "The fan at index {index} is out of order as it's larger then the following value."
+                ),
+                Error::ObjectDecode { kind, id, .. } => write!(f, "{kind} object {id} could not be decoded"),
+                Error::ObjectEncodeMismatch {
+                    kind,
+                    id,
+                    expected,
+                    actual,
+                } => write!(
+                    f,
+                    "{kind} object {id} wasn't re-encoded without change, wanted\n{expected}\n\nGOT\n\n{actual}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::ObjectDecode { source, .. } => Some(source),
+                Error::Fan { .. } | Error::ObjectEncodeMismatch { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 
     /// Returned by [`index::File::verify_integrity()`][crate::index::File::verify_integrity()].
@@ -233,6 +269,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn verify_entry(
         verify_mode: Mode,
         encode_buf: &mut Vec<u8>,

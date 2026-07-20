@@ -409,13 +409,35 @@ mod types {
     }
 
     /// The error returned by the pack generation function [`iter_from_counts()`][crate::data::output::entry::iter_from_counts()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
         Find(gix_object::find::Error),
-        #[error(transparent)]
-        NewEntry(#[from] entry::Error),
+        NewEntry(entry::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Find(err) => std::fmt::Display::fmt(err, f),
+                Error::NewEntry(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Find(err) => err.source(),
+                Error::NewEntry(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<entry::Error> for Error {
+        fn from(err: entry::Error) -> Self {
+            Error::NewEntry(err)
+        }
     }
 
     /// The progress ids used in [`write_to_directory()`][crate::Bundle::write_to_directory()].

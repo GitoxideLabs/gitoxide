@@ -18,41 +18,105 @@ pub(crate) mod util;
 pub(super) type SharedRefDeltaChildren = OwnShared<Mutable<super::tree::RefDeltaChildren>>;
 
 /// Returned by [`Tree::traverse()`]
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("{message}")]
     ZlibInflate {
         source: gix_zlib::inflate::Error,
         message: &'static str,
     },
-    #[error("The resolver failed to obtain the pack entry bytes for the entry at {pack_offset}")]
-    ResolveFailed { pack_offset: u64 },
-    #[error(transparent)]
-    EntryType(#[from] crate::data::entry::decode::Error),
-    #[error("One of the object inspectors failed")]
-    Inspect(#[from] Box<dyn std::error::Error + Send + Sync>),
-    #[error("Interrupted")]
+    ResolveFailed {
+        pack_offset: u64,
+    },
+    EntryType(crate::data::entry::decode::Error),
+    Inspect(Box<dyn std::error::Error + Send + Sync>),
     Interrupted,
-    #[error("Entry too large to fit in memory")]
     OutOfMemory,
-    #[error(
-        "The base at {base_pack_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
-    )]
     OutOfPackRefDelta {
         /// The base's offset which was from a resolved ref-delta that didn't actually get added to the tree
         base_pack_offset: crate::data::Offset,
     },
-    #[error("The ref-delta base object {base_id} could not be found")]
     UnresolvedRefDelta {
         /// The id named by one or more unresolved ref-delta entries.
         base_id: gix_hash::ObjectId,
     },
-    #[error("Failed to hash an object while resolving in-pack ref-deltas")]
-    ObjectHash(#[from] gix_hash::hasher::Error),
-    #[error("Failed to spawn thread when switching to work-stealing mode")]
-    SpawnThread(#[from] std::io::Error),
-    #[error(transparent)]
-    Delta(#[from] crate::data::delta::apply::Error),
+    ObjectHash(gix_hash::hasher::Error),
+    SpawnThread(std::io::Error),
+    Delta(crate::data::delta::apply::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ZlibInflate { message, .. } => f.write_str(message),
+            Error::ResolveFailed { pack_offset } => write!(
+                f,
+                "The resolver failed to obtain the pack entry bytes for the entry at {pack_offset}"
+            ),
+            Error::EntryType(err) => std::fmt::Display::fmt(err, f),
+            Error::Inspect(_) => f.write_str("One of the object inspectors failed"),
+            Error::Interrupted => f.write_str("Interrupted"),
+            Error::OutOfMemory => f.write_str("Entry too large to fit in memory"),
+            Error::OutOfPackRefDelta { base_pack_offset } => write!(
+                f,
+                "The base at {base_pack_offset} was referred to by a ref-delta, but it was never added to the tree as if the pack was still thin."
+            ),
+            Error::UnresolvedRefDelta { base_id } => {
+                write!(f, "The ref-delta base object {base_id} could not be found")
+            }
+            Error::ObjectHash(_) => f.write_str("Failed to hash an object while resolving in-pack ref-deltas"),
+            Error::SpawnThread(_) => f.write_str("Failed to spawn thread when switching to work-stealing mode"),
+            Error::Delta(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ZlibInflate { source, .. } => Some(source),
+            Error::EntryType(err) => err.source(),
+            Error::Inspect(err) => Some(&**err),
+            Error::ObjectHash(err) => Some(err),
+            Error::SpawnThread(err) => Some(err),
+            Error::Delta(err) => err.source(),
+            Error::ResolveFailed { .. }
+            | Error::Interrupted
+            | Error::OutOfMemory
+            | Error::OutOfPackRefDelta { .. }
+            | Error::UnresolvedRefDelta { .. } => None,
+        }
+    }
+}
+
+impl From<crate::data::entry::decode::Error> for Error {
+    fn from(err: crate::data::entry::decode::Error) -> Self {
+        Error::EntryType(err)
+    }
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for Error {
+    fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Error::Inspect(err)
+    }
+}
+
+impl From<gix_hash::hasher::Error> for Error {
+    fn from(err: gix_hash::hasher::Error) -> Self {
+        Error::ObjectHash(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::SpawnThread(err)
+    }
+}
+
+impl From<crate::data::delta::apply::Error> for Error {
+    fn from(err: crate::data::delta::apply::Error) -> Self {
+        Error::Delta(err)
+    }
 }
 
 impl From<TryReserveError> for Error {

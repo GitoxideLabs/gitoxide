@@ -14,20 +14,31 @@ pub mod index_names {
         use gix_object::bstr::BString;
 
         /// The error returned by [`from_bytes()`][super::from_bytes()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
+        #[derive(Debug)]
+        #[allow(missing_docs)]
         pub enum Error {
-            #[error("The pack names were not ordered alphabetically.")]
             NotOrderedAlphabetically,
-            #[error("Each pack path name must be terminated with a null byte")]
             MissingNullByte,
-            #[error("Entry too large to fit in memory")]
             OutOfMemory,
-            #[error("Couldn't turn path '{path}' into OS path due to encoding issues")]
             PathEncoding { path: BString },
-            #[error("non-padding bytes found after all paths were read.")]
             UnknownTrailerBytes,
         }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::NotOrderedAlphabetically => f.write_str("The pack names were not ordered alphabetically."),
+                    Error::MissingNullByte => f.write_str("Each pack path name must be terminated with a null byte"),
+                    Error::OutOfMemory => f.write_str("Entry too large to fit in memory"),
+                    Error::PathEncoding { path } => {
+                        write!(f, "Couldn't turn path '{path}' into OS path due to encoding issues")
+                    }
+                    Error::UnknownTrailerBytes => f.write_str("non-padding bytes found after all paths were read."),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {}
 
         impl From<TryReserveError> for Error {
             #[cold]
