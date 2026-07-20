@@ -10,7 +10,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
             .set("GIT_ICASE_PATHSPECS", "1")
             .set("GIT_NOGLOB_PATHSPECS", "yes");
         assert_eq!(
-            Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+            Defaults::from_environment(&mut |n| std::env::var_os(n)).map_err(gix_error::Exn::into_error)?,
             Defaults {
                 signature: MagicSignature::ICASE,
                 search_mode: SearchMode::Literal,
@@ -24,7 +24,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
             .set("GIT_ICASE_PATHSPECS", "false")
             .set("GIT_GLOB_PATHSPECS", "yes");
         assert_eq!(
-            Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+            Defaults::from_environment(&mut |n| std::env::var_os(n)).map_err(gix_error::Exn::into_error)?,
             Defaults {
                 signature: MagicSignature::default(),
                 search_mode: SearchMode::Literal,
@@ -38,7 +38,7 @@ fn literal_only_combines_with_icase() -> gix_testtools::Result {
 #[serial]
 fn nothing_is_set_then_it_is_like_the_default_impl() -> gix_testtools::Result {
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |n| std::env::var_os(n)).map_err(gix_error::Exn::into_error)?,
         Defaults::default()
     );
     Ok(())
@@ -67,7 +67,7 @@ fn noglob_works() -> gix_testtools::Result {
         .set("GIT_GLOB_PATHSPECS", "0")
         .set("GIT_NOGLOB_PATHSPECS", "true");
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |n| std::env::var_os(n)).map_err(gix_error::Exn::into_error)?,
         Defaults {
             signature: MagicSignature::default(),
             search_mode: SearchMode::Literal,
@@ -83,7 +83,7 @@ fn noglob_works() -> gix_testtools::Result {
 fn glob_works() -> gix_testtools::Result {
     let _env = gix_testtools::Env::new().set("GIT_GLOB_PATHSPECS", "yes");
     assert_eq!(
-        Defaults::from_environment(&mut |n| std::env::var_os(n))?,
+        Defaults::from_environment(&mut |n| std::env::var_os(n)).map_err(gix_error::Exn::into_error)?,
         Defaults {
             signature: MagicSignature::default(),
             search_mode: SearchMode::PathAwareGlob,
