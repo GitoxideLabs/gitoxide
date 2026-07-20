@@ -26,22 +26,26 @@ fn user_home(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn without_username() -> crate::Result {
-    let (user, resolved_path) = expand_path::parse(b"/~/hello/git".as_bstr())?;
+    let (user, resolved_path) =
+        expand_path::parse(b"/~/hello/git".as_bstr()).map_err(expand_path::Error::into_error)?;
     let resolved_path = expand_path::with(user.as_ref(), resolved_path.as_ref(), |user: &ForUser| match user {
         ForUser::Current => Some(user_home("byron")),
         ForUser::Name(name) => Some(format!("/home/{name}").into()),
-    })?;
+    })
+    .map_err(expand_path::Error::into_error)?;
     assert_eq!(resolved_path, expected_path());
     Ok(())
 }
 
 #[test]
 fn with_username() -> crate::Result {
-    let (user, resolved_path) = expand_path::parse(b"/~byron/hello/git".as_bstr())?;
+    let (user, resolved_path) =
+        expand_path::parse(b"/~byron/hello/git".as_bstr()).map_err(expand_path::Error::into_error)?;
     let resolved_path = expand_path::with(user.as_ref(), resolved_path.as_ref(), |user: &ForUser| match user {
         ForUser::Current => unreachable!("we have a name"),
         ForUser::Name(name) => Some(user_home(name.to_str_lossy().as_ref())),
-    })?;
+    })
+    .map_err(expand_path::Error::into_error)?;
     assert_eq!(resolved_path, expected_path());
     Ok(())
 }
