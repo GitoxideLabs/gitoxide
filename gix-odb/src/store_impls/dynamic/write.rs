@@ -9,15 +9,50 @@ mod error {
     use crate::{loose, store};
 
     /// The error returned by the [dynamic Store's][crate::Store] [`Write`](gix_object::Write) implementation.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        LoadIndex(#[from] store::load_index::Error),
-        #[error(transparent)]
-        LooseWrite(#[from] loose::write::Error),
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
+        LoadIndex(store::load_index::Error),
+        LooseWrite(loose::write::Error),
+        Io(std::io::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::LoadIndex(err) => std::fmt::Display::fmt(err, f),
+                Error::LooseWrite(err) => std::fmt::Display::fmt(err, f),
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::LoadIndex(err) => err.source(),
+                Error::LooseWrite(err) => err.source(),
+                Error::Io(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<store::load_index::Error> for Error {
+        fn from(err: store::load_index::Error) -> Self {
+            Error::LoadIndex(err)
+        }
+    }
+
+    impl From<loose::write::Error> for Error {
+        fn from(err: loose::write::Error) -> Self {
+            Error::LooseWrite(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 }
 pub use error::Error;

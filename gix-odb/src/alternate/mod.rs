@@ -24,17 +24,62 @@ use gix_path::realpath::MAX_SYMLINKS;
 pub mod parse;
 
 /// Returned by [`resolve()`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] io::Error),
-    #[error(transparent)]
-    Realpath(#[from] gix_path::realpath::Error),
-    #[error(transparent)]
-    Parse(#[from] parse::Error),
-    #[error("Alternates form a cycle: {} -> {}", .0.iter().map(|p| format!("'{}'", p.display())).collect::<Vec<_>>().join(" -> "), .0.first().expect("more than one directories").display())]
+    Io(io::Error),
+    Realpath(gix_path::realpath::Error),
+    Parse(parse::Error),
     Cycle(Vec<PathBuf>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(err) => std::fmt::Display::fmt(err, f),
+            Error::Realpath(err) => std::fmt::Display::fmt(err, f),
+            Error::Parse(err) => std::fmt::Display::fmt(err, f),
+            Error::Cycle(paths) => write!(
+                f,
+                "Alternates form a cycle: {} -> {}",
+                paths
+                    .iter()
+                    .map(|p| format!("'{}'", p.display()))
+                    .collect::<Vec<_>>()
+                    .join(" -> "),
+                paths.first().expect("more than one directories").display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => err.source(),
+            Error::Realpath(err) => err.source(),
+            Error::Parse(err) => err.source(),
+            Error::Cycle(_) => None,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<gix_path::realpath::Error> for Error {
+    fn from(err: gix_path::realpath::Error) -> Self {
+        Error::Realpath(err)
+    }
+}
+
+impl From<parse::Error> for Error {
+    fn from(err: parse::Error) -> Self {
+        Error::Parse(err)
+    }
 }
 
 /// Given an `objects_directory`, try to resolve alternate object directories possibly located in the

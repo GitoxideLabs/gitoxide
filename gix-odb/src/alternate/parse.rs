@@ -3,13 +3,42 @@ use std::{borrow::Cow, path::PathBuf};
 use gix_object::bstr::ByteSlice;
 
 /// Returned as part of [`crate::alternate::Error::Parse`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+// TODO(review): `Unquote` wraps `gix_quote::ansi_c::undo::Error`, which is a `gix_error::Exn` and does
+//                not implement `std::error::Error`; `source()` dereferences it to the inner error, just
+//                as the `thiserror` `#[from]` did via `as_dyn_error()` (which auto-derefs the `Exn`).
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not obtain an object path for the alternate directory '{}'", String::from_utf8_lossy(.0))]
     PathConversion(Vec<u8>),
-    #[error("Could not unquote alternate path")]
-    Unquote(#[from] gix_quote::ansi_c::undo::Error),
+    Unquote(gix_quote::ansi_c::undo::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::PathConversion(bytes) => write!(
+                f,
+                "Could not obtain an object path for the alternate directory '{}'",
+                String::from_utf8_lossy(bytes)
+            ),
+            Error::Unquote(_) => f.write_str("Could not unquote alternate path"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Unquote(err) => Some(&**err),
+            Error::PathConversion(_) => None,
+        }
+    }
+}
+
+impl From<gix_quote::ansi_c::undo::Error> for Error {
+    fn from(err: gix_quote::ansi_c::undo::Error) -> Self {
+        Error::Unquote(err)
+    }
 }
 
 pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
