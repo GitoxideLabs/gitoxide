@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use gix_error::ErrorExt;
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
 use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
@@ -40,22 +41,50 @@ impl From<Duration> for Fail {
     }
 }
 
-/// The error returned when acquiring a [`File`] or [`Marker`].
-#[derive(Debug, thiserror::Error)]
+/// The failure that occurred when acquiring a [`File`] or [`Marker`].
+///
+/// It's a concrete type to let callers tell actual lock contention apart from
+/// other IO errors, like path collisions between a lock file and a directory.
+#[derive(Debug)]
 #[expect(missing_docs)]
-pub enum Error {
-    #[error("Another IO error occurred while obtaining the lock")]
-    Io(#[from] std::io::Error),
-    #[error(
-        "The lock for resource '{resource_path}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource_path}{}' might need manual deletion.",
-        super::DOT_LOCK_SUFFIX
-    )]
+pub enum Failure {
+    Io(std::io::Error),
     PermanentlyLocked {
         resource_path: PathBuf,
         mode: Fail,
         attempts: usize,
     },
 }
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Failure::Io(_) => f.write_str("Another IO error occurred while obtaining the lock"),
+            Failure::PermanentlyLocked {
+                resource_path,
+                mode,
+                attempts,
+            } => write!(
+                f,
+                "The lock for resource '{resource_path}' could not be obtained {mode} after {attempts} attempt(s). The lockfile at '{resource_path}{suffix}' might need manual deletion.",
+                resource_path = resource_path.display(),
+                suffix = DOT_LOCK_SUFFIX
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Failure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Failure::Io(err) => Some(err),
+            Failure::PermanentlyLocked { .. } => None,
+        }
+    }
+}
+
+/// The error returned when acquiring a [`File`] or [`Marker`].
+pub type Error = gix_error::Exn<Failure>;
 
 impl File {
     /// Create a writable lock file with failure `mode` whose content will eventually overwrite the given resource `at_path`.
@@ -193,7 +222,7 @@ fn lock_with_mode<T>(
                         std::thread::sleep(wait);
                         continue;
                     }
-                    Err(err) => return Err(Error::from(err)),
+                    Err(err) => return Err(Failure::Io(err).raise()),
                 }
             }
             try_lock(&lock_path, directory, cleanup)
@@ -201,12 +230,13 @@ fn lock_with_mode<T>(
     }
     .map(|v| (lock_path, v))
     .map_err(|err| match err.kind() {
-        AlreadyExists => Error::PermanentlyLocked {
+        AlreadyExists => Failure::PermanentlyLocked {
             resource_path: resource.into(),
             mode,
             attempts,
-        },
-        _ => Error::Io(err),
+        }
+        .raise(),
+        _ => Failure::Io(err).raise(),
     })
 }
 
