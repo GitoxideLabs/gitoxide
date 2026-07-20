@@ -4,15 +4,44 @@ use gix_hash::ObjectId;
 
 /// The error is part of the item returned by the [`breadthfirst()`](crate::tree::breadthfirst())  and
 ///[`depthfirst()`](crate::tree::depthfirst()) functions.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
-    #[error("The delegate cancelled the operation")]
+    Find(gix_object::find::existing_iter::Error),
     Cancelled,
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
+    ObjectDecode(gix_object::decode::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Find(err) => std::fmt::Display::fmt(err, f),
+            Error::Cancelled => f.write_str("The delegate cancelled the operation"),
+            Error::ObjectDecode(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Find(err) => err.source(),
+            Error::Cancelled => None,
+            Error::ObjectDecode(err) => err.source(),
+        }
+    }
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err)
+    }
+}
+
+impl From<gix_object::decode::Error> for Error {
+    fn from(err: gix_object::decode::Error) -> Self {
+        Error::ObjectDecode(err)
+    }
 }
 
 /// The state used and potentially shared by multiple tree traversals.

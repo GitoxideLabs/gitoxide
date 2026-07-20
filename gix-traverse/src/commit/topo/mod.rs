@@ -3,17 +3,46 @@
 use bitflags::bitflags;
 
 /// The errors that can occur during creation and iteration.
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Indegree information is missing")]
     MissingIndegreeUnexpected,
-    #[error("Internal state (bitflags) not found")]
     MissingStateUnexpected,
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
-    #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
+    ObjectDecode(gix_object::decode::Error),
+    Find(gix_object::find::existing_iter::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MissingIndegreeUnexpected => f.write_str("Indegree information is missing"),
+            Error::MissingStateUnexpected => f.write_str("Internal state (bitflags) not found"),
+            Error::ObjectDecode(err) => std::fmt::Display::fmt(err, f),
+            Error::Find(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::MissingIndegreeUnexpected | Error::MissingStateUnexpected => None,
+            Error::ObjectDecode(err) => err.source(),
+            Error::Find(err) => err.source(),
+        }
+    }
+}
+
+impl From<gix_object::decode::Error> for Error {
+    fn from(err: gix_object::decode::Error) -> Self {
+        Error::ObjectDecode(err)
+    }
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err)
+    }
 }
 
 bitflags! {

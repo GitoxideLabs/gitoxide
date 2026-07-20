@@ -69,15 +69,54 @@ pub enum Sorting {
 }
 
 /// The error is part of the item returned by the [Ancestors](super::Simple) iterator.
-#[derive(Debug, thiserror::Error)]
+// TODO(review): these implementations hand-preserve `#[error(transparent)]` semantics for all
+//                variants: `Display` passes the formatter through and `source()` forwards to the
+//                inner error's source, exactly like the `thiserror`-generated code did. The same
+//                pattern is used in `topo::Error` and `tree::breadthfirst::Error`.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Find(#[from] gix_object::find::existing_iter::Error),
-    #[error(transparent)]
-    ObjectDecode(#[from] gix_object::decode::Error),
-    #[error(transparent)]
-    HiddenGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
+    Find(gix_object::find::existing_iter::Error),
+    ObjectDecode(gix_object::decode::Error),
+    HiddenGraph(gix_revwalk::graph::get_or_insert_default::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Find(err) => std::fmt::Display::fmt(err, f),
+            Error::ObjectDecode(err) => std::fmt::Display::fmt(err, f),
+            Error::HiddenGraph(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Find(err) => err.source(),
+            Error::ObjectDecode(err) => err.source(),
+            Error::HiddenGraph(err) => err.source(),
+        }
+    }
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::Find(err)
+    }
+}
+
+impl From<gix_object::decode::Error> for Error {
+    fn from(err: gix_object::decode::Error) -> Self {
+        Error::ObjectDecode(err)
+    }
+}
+
+impl From<gix_revwalk::graph::get_or_insert_default::Error> for Error {
+    fn from(err: gix_revwalk::graph::get_or_insert_default::Error) -> Self {
+        Error::HiddenGraph(err)
+    }
 }
 
 use Result as Either;
