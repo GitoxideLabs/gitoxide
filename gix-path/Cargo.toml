@@ -18,7 +18,7 @@ doctest = true
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }
 gix-validate = { version = "^0.11.3", path = "../gix-validate" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
-thiserror = "2.0.18"
+gix-error = { version = "^0.2.4", path = "../gix-error" }
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
