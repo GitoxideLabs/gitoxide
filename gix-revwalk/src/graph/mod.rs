@@ -17,15 +17,54 @@ mod errors {
         use crate::graph::commit::iter_parents;
 
         /// The error returned by [`insert_parents()`](crate::Graph::insert_parents()).
-        #[derive(Debug, thiserror::Error)]
+        // TODO(review): these implementations hand-preserve `#[error(transparent)]` semantics for
+        //                `Lookup` and `Parent`: `Display` passes the formatter through and `source()`
+        //                forwards to the inner error's source, exactly like the `thiserror`-generated
+        //                code did. The same pattern is used for `get_or_insert_default::Error` below.
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error(transparent)]
-            Lookup(#[from] gix_object::find::existing_iter::Error),
-            #[error("A commit could not be decoded during traversal")]
-            Decode(#[from] gix_object::decode::Error),
-            #[error(transparent)]
-            Parent(#[from] iter_parents::Error),
+            Lookup(gix_object::find::existing_iter::Error),
+            Decode(gix_object::decode::Error),
+            Parent(iter_parents::Error),
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Lookup(err) => std::fmt::Display::fmt(err, f),
+                    Error::Decode(_) => f.write_str("A commit could not be decoded during traversal"),
+                    Error::Parent(err) => std::fmt::Display::fmt(err, f),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::Lookup(err) => err.source(),
+                    Error::Decode(err) => Some(err),
+                    Error::Parent(err) => err.source(),
+                }
+            }
+        }
+
+        impl From<gix_object::find::existing_iter::Error> for Error {
+            fn from(err: gix_object::find::existing_iter::Error) -> Self {
+                Error::Lookup(err)
+            }
+        }
+
+        impl From<gix_object::decode::Error> for Error {
+            fn from(err: gix_object::decode::Error) -> Self {
+                Error::Decode(err)
+            }
+        }
+
+        impl From<iter_parents::Error> for Error {
+            fn from(err: iter_parents::Error) -> Self {
+                Error::Parent(err)
+            }
         }
     }
 
@@ -34,13 +73,41 @@ mod errors {
         use crate::graph::commit::to_owned;
 
         /// The error returned by [`try_lookup_or_insert_default()`](crate::Graph::try_lookup_or_insert_default()).
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error(transparent)]
-            Lookup(#[from] gix_object::find::existing_iter::Error),
-            #[error(transparent)]
-            ToOwned(#[from] to_owned::Error),
+            Lookup(gix_object::find::existing_iter::Error),
+            ToOwned(to_owned::Error),
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Lookup(err) => std::fmt::Display::fmt(err, f),
+                    Error::ToOwned(err) => std::fmt::Display::fmt(err, f),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::Lookup(err) => err.source(),
+                    Error::ToOwned(err) => err.source(),
+                }
+            }
+        }
+
+        impl From<gix_object::find::existing_iter::Error> for Error {
+            fn from(err: gix_object::find::existing_iter::Error) -> Self {
+                Error::Lookup(err)
+            }
+        }
+
+        impl From<to_owned::Error> for Error {
+            fn from(err: to_owned::Error) -> Self {
+                Error::ToOwned(err)
+            }
         }
     }
 }
