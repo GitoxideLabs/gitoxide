@@ -38,25 +38,67 @@ impl Action {
 }
 
 /// The error of [`main()`][crate::program::main()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Action named {name:?} is invalid, need 'get', 'store', 'erase' or 'fill', 'approve', 'reject'")]
-    ActionInvalid { name: OsString },
-    #[error("The first argument must be the action to perform")]
+    ActionInvalid {
+        name: OsString,
+    },
     ActionMissing,
-    #[error(transparent)]
     Helper {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
-    Context(#[from] crate::protocol::context::decode::Error),
-    #[error("Credentials for {url:?} could not be obtained")]
-    CredentialsMissing { url: BString },
-    #[error("Either 'url' field or both 'protocol' and 'host' fields must be provided")]
+    Io(std::io::Error),
+    Context(crate::protocol::context::decode::Error),
+    CredentialsMissing {
+        url: BString,
+    },
     UrlMissing,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ActionInvalid { name } => write!(
+                f,
+                "Action named {name:?} is invalid, need 'get', 'store', 'erase' or 'fill', 'approve', 'reject'"
+            ),
+            Error::ActionMissing => f.write_str("The first argument must be the action to perform"),
+            Error::Helper { source } => std::fmt::Display::fmt(source, f),
+            Error::Io(err) => std::fmt::Display::fmt(err, f),
+            Error::Context(err) => std::fmt::Display::fmt(err, f),
+            Error::CredentialsMissing { url } => write!(f, "Credentials for {url:?} could not be obtained"),
+            Error::UrlMissing => {
+                f.write_str("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Helper { source } => source.source(),
+            Error::Io(err) => err.source(),
+            Error::Context(err) => err.source(),
+            Error::ActionInvalid { .. }
+            | Error::ActionMissing
+            | Error::CredentialsMissing { .. }
+            | Error::UrlMissing => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<crate::protocol::context::decode::Error> for Error {
+    fn from(err: crate::protocol::context::decode::Error) -> Self {
+        Error::Context(err)
+    }
 }
 
 pub(crate) mod function {

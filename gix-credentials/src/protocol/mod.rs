@@ -15,28 +15,83 @@ pub struct Outcome {
 pub type Result = std::result::Result<Option<Outcome>, Error>;
 
 /// The error returned top-level credential functions.
-#[derive(Debug, thiserror::Error)]
+// TODO(review): these implementations hand-preserve `#[error(transparent)]` semantics for
+//                `UrlParse`, `ContextDecode` and `InvokeHelper`: `Display` passes the formatter
+//                through and `source()` forwards to the inner error's source, exactly like the
+//                `thiserror`-generated code did. The same pattern is used in the other error
+//                types of this crate, including the transparent struct-variants
+//                `helper::Error::CredentialsHelperFailed` and `program::main::Error::Helper`,
+//                which forward to their `source` field.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
-    #[error("Either 'url' field or both 'protocol' and 'host' fields must be provided")]
+    UrlParse(gix_url::parse::Error),
     UrlMissing,
-    #[error(transparent)]
-    ContextDecode(#[from] context::decode::Error),
-    #[error(transparent)]
-    InvokeHelper(#[from] helper::Error),
-    #[error("Could not configure credential helpers")]
+    ContextDecode(context::decode::Error),
+    InvokeHelper(helper::Error),
     ConfigureCredentialHelpers {
-        #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[error("Could not obtain identity for context: {}", { let mut buf = Vec::<u8>::new(); context.write_to(&mut buf).ok(); String::from_utf8_lossy(&buf).into_owned() })]
-    IdentityMissing { context: Context },
-    #[error("The handler asked to stop trying to obtain credentials")]
+    IdentityMissing {
+        context: Context,
+    },
     Quit,
-    #[error("Couldn't obtain {prompt}")]
-    Prompt { prompt: String, source: gix_prompt::Error },
+    Prompt {
+        prompt: String,
+        source: gix_prompt::Error,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UrlParse(err) => std::fmt::Display::fmt(err, f),
+            Error::UrlMissing => {
+                f.write_str("Either 'url' field or both 'protocol' and 'host' fields must be provided")
+            }
+            Error::ContextDecode(err) => std::fmt::Display::fmt(err, f),
+            Error::InvokeHelper(err) => std::fmt::Display::fmt(err, f),
+            Error::ConfigureCredentialHelpers { .. } => f.write_str("Could not configure credential helpers"),
+            Error::IdentityMissing { context } => write!(f, "Could not obtain identity for context: {}", {
+                let mut buf = Vec::<u8>::new();
+                context.write_to(&mut buf).ok();
+                String::from_utf8_lossy(&buf).into_owned()
+            }),
+            Error::Quit => f.write_str("The handler asked to stop trying to obtain credentials"),
+            Error::Prompt { prompt, .. } => write!(f, "Couldn't obtain {prompt}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::UrlParse(err) => err.source(),
+            Error::ContextDecode(err) => err.source(),
+            Error::InvokeHelper(err) => err.source(),
+            Error::ConfigureCredentialHelpers { source } => Some(&**source),
+            Error::Prompt { source, .. } => Some(&**source),
+            Error::UrlMissing | Error::IdentityMissing { .. } | Error::Quit => None,
+        }
+    }
+}
+
+impl From<gix_url::parse::Error> for Error {
+    fn from(err: gix_url::parse::Error) -> Self {
+        Error::UrlParse(err)
+    }
+}
+
+impl From<context::decode::Error> for Error {
+    fn from(err: context::decode::Error) -> Self {
+        Error::ContextDecode(err)
+    }
+}
+
+impl From<helper::Error> for Error {
+    fn from(err: helper::Error) -> Self {
+        Error::InvokeHelper(err)
+    }
 }
 
 /// Additional context to be passed to the credentials helper.

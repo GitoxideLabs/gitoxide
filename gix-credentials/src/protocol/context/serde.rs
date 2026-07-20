@@ -74,15 +74,39 @@ pub mod decode {
     use crate::protocol::{Context, ContextOptions, context, context::serde::validate};
 
     /// The error returned by [`from_bytes()`][Context::from_bytes()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Illformed UTF-8 in value of key {key:?}: {value:?}")]
         IllformedUtf8InValue { key: String, value: BString },
-        #[error(transparent)]
-        Encoding(#[from] context::Error),
-        #[error("Invalid format in line {line:?}, expecting key=value")]
+        Encoding(context::Error),
         Syntax { line: BString },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::IllformedUtf8InValue { key, value } => {
+                    write!(f, "Illformed UTF-8 in value of key {key:?}: {value:?}")
+                }
+                Error::Encoding(err) => std::fmt::Display::fmt(err, f),
+                Error::Syntax { line } => write!(f, "Invalid format in line {line:?}, expecting key=value"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Encoding(err) => err.source(),
+                Error::IllformedUtf8InValue { .. } | Error::Syntax { .. } => None,
+            }
+        }
+    }
+
+    impl From<context::Error> for Error {
+        fn from(err: context::Error) -> Self {
+            Error::Encoding(err)
+        }
     }
 
     impl Context {

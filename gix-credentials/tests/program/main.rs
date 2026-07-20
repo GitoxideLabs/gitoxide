@@ -1,9 +1,16 @@
 use gix_credentials::program::main;
 use std::io::Cursor;
 
-#[derive(Debug, thiserror::Error)]
-#[error("Test error")]
+#[derive(Debug)]
 struct TestError;
+
+impl std::fmt::Display for TestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Test error")
+    }
+}
+
+impl std::error::Error for TestError {}
 
 #[test]
 fn context_options_apply_to_input_and_output() {
