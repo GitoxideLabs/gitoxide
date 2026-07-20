@@ -5,21 +5,51 @@ use crate::Protocol;
 use crate::client;
 
 /// The error used in [`Capabilities::from_bytes()`] and [`Capabilities::from_lines()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Capabilities were missing entirely as there was no 0 byte")]
     MissingDelimitingNullByte,
-    #[error("there was not a single capability behind the delimiter")]
     NoCapabilities,
-    #[error("a version line was expected, but none was retrieved")]
     MissingVersionLine,
-    #[error("expected 'version X', got {0:?}")]
     MalformattedVersionLine(BString),
-    #[error("Got unsupported version {actual:?}, expected {}", *desired as u8)]
     UnsupportedVersion { desired: Protocol, actual: BString },
-    #[error("An IO error occurred while reading V2 lines")]
-    Io(#[from] std::io::Error),
+    Io(std::io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MissingDelimitingNullByte => {
+                f.write_str("Capabilities were missing entirely as there was no 0 byte")
+            }
+            Error::NoCapabilities => f.write_str("there was not a single capability behind the delimiter"),
+            Error::MissingVersionLine => f.write_str("a version line was expected, but none was retrieved"),
+            Error::MalformattedVersionLine(line) => write!(f, "expected 'version X', got {line:?}"),
+            Error::UnsupportedVersion { desired, actual } => {
+                write!(f, "Got unsupported version {actual:?}, expected {}", *desired as u8)
+            }
+            Error::Io(_) => f.write_str("An IO error occurred while reading V2 lines"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            Error::MissingDelimitingNullByte
+            | Error::NoCapabilities
+            | Error::MissingVersionLine
+            | Error::MalformattedVersionLine(_)
+            | Error::UnsupportedVersion { .. } => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
 }
 
 /// A structure to represent multiple [capabilities](Capability) or features supported by the server.
@@ -255,6 +285,7 @@ pub mod blocking_recv {
 
 ///
 #[cfg(feature = "async-client")]
+#[allow(missing_docs)]
 pub mod async_recv {
     use bstr::ByteVec;
     use futures_io::AsyncRead;

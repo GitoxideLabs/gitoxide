@@ -179,13 +179,37 @@ pub mod connect {
     use crate::client::git;
 
     /// The error used in [`connect()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An IO error occurred when connecting to the server")]
-        Io(#[from] std::io::Error),
-        #[error("Could not parse {host:?} as virtual host with format <host>[:port]")]
+        Io(std::io::Error),
         VirtualHostInvalid { host: String },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(_) => f.write_str("An IO error occurred when connecting to the server"),
+                Error::VirtualHostInvalid { host } => {
+                    write!(f, "Could not parse {host:?} as virtual host with format <host>[:port]")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::VirtualHostInvalid { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 
     impl crate::IsSpuriousError for Error {

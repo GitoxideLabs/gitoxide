@@ -8,14 +8,31 @@ use gix_url::{ArgumentSafety::*, Url};
 use crate::{Protocol, client::blocking_io::file::SpawnProcessOnDemand};
 
 /// The error used in [`connect()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("The scheme in \"{}\" is not usable for an ssh connection", .0.to_bstring())]
     UnsupportedScheme(gix_url::Url),
-    #[error("Host name '{host}' could be mistaken for a command-line argument")]
     AmbiguousHostName { host: String },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnsupportedScheme(url) => {
+                write!(
+                    f,
+                    "The scheme in \"{}\" is not usable for an ssh connection",
+                    url.to_bstring()
+                )
+            }
+            Error::AmbiguousHostName { host } => {
+                write!(f, "Host name '{host}' could be mistaken for a command-line argument")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl crate::IsSpuriousError for Error {}
 
@@ -43,14 +60,15 @@ pub mod invocation {
     use std::ffi::OsString;
 
     /// The error returned when producing ssh invocation arguments based on a selected invocation kind.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Username '{user}' could be mistaken for a command-line argument")]
-        AmbiguousUserName { user: String },
-        #[error("Host name '{host}' could be mistaken for a command-line argument")]
-        AmbiguousHostName { host: String },
-        #[error("The 'Simple' ssh variant doesn't support {function}")]
+        AmbiguousUserName {
+            user: String,
+        },
+        AmbiguousHostName {
+            host: String,
+        },
         Unsupported {
             /// The simple command that should have been invoked.
             command: OsString,
@@ -58,6 +76,24 @@ pub mod invocation {
             function: &'static str,
         },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::AmbiguousUserName { user } => {
+                    write!(f, "Username '{user}' could be mistaken for a command-line argument")
+                }
+                Error::AmbiguousHostName { host } => {
+                    write!(f, "Host name '{host}' could be mistaken for a command-line argument")
+                }
+                Error::Unsupported { function, .. } => {
+                    write!(f, "The 'Simple' ssh variant doesn't support {function}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///
@@ -101,10 +137,7 @@ pub mod connect {
 /// The `desired_version` is the preferred protocol version when establishing the connection, but note that it can be
 /// downgraded by servers not supporting it.
 /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
+#[allow(clippy::result_large_err)]
 pub fn connect(
     url: Url,
     desired_version: Protocol,
@@ -128,10 +161,7 @@ pub fn connect(
     ))
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
+#[allow(clippy::result_large_err)]
 fn determine_client_kind(
     known_kind: Option<ProgramKind>,
     ssh_cmd: &OsStr,
@@ -151,10 +181,7 @@ fn determine_client_kind(
     Ok(kind)
 }
 
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
+#[allow(clippy::result_large_err)]
 fn build_client_feature_check_command(ssh_cmd: &OsStr, url: &Url, disallow_shell: bool) -> Result<Command, Error> {
     let mut prepare = gix_command::prepare(ssh_cmd)
         .stderr(Stdio::null())

@@ -108,7 +108,6 @@ bstr = { version = "1.12.0", default-features = false, features = [
     "std",
     "unicode",
 ] }
-thiserror = "2.0.18"
 parking_lot = { version = "0.12.4", optional = true }
 
 # for async-client

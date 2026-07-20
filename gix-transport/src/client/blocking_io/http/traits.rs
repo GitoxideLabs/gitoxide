@@ -1,17 +1,42 @@
 use crate::client::WriteMode;
 
 /// The error used by the [Http] trait.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not initialize the http client")]
     InitHttpClient {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[error("{description}")]
-    Detail { description: String },
-    #[error("An IO error occurred while uploading the body of a POST request")]
-    PostBody(#[from] std::io::Error),
+    Detail {
+        description: String,
+    },
+    PostBody(std::io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InitHttpClient { .. } => f.write_str("Could not initialize the http client"),
+            Error::Detail { description } => f.write_str(description),
+            Error::PostBody(_) => f.write_str("An IO error occurred while uploading the body of a POST request"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::InitHttpClient { source } => Some(&**source),
+            Error::Detail { .. } => None,
+            Error::PostBody(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::PostBody(err)
+    }
 }
 
 impl crate::IsSpuriousError for Error {
@@ -86,7 +111,7 @@ impl<A, B, C> From<PostResponse<A, B, C>> for GetResponse<A, B> {
 /// A trait to abstract the HTTP operations needed to power all git interactions: read via GET and write via POST.
 /// Note that 401 must be turned into `std::io::Error(PermissionDenied)`, and other non-success http statuses must be transformed
 /// into `std::io::Error(Other)`
-#[expect(clippy::type_complexity)]
+#[allow(clippy::type_complexity)]
 pub trait Http {
     /// A type providing headers line by line.
     type Headers: std::io::BufRead + Unpin;

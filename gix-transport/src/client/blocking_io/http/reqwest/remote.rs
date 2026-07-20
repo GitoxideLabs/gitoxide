@@ -17,17 +17,59 @@ use crate::client::blocking_io::http::{
 };
 
 /// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error("Request configuration failed")]
-    ConfigureRequest(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    Redirect(#[from] redirect::Error),
+    Reqwest(reqwest::Error),
+    ReadPostBody(std::io::Error),
+    ConfigureRequest(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Redirect(redirect::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Reqwest(err) => std::fmt::Display::fmt(err, f),
+            Error::ReadPostBody(_) => f.write_str("Could not finish reading all data to post to the remote"),
+            Error::ConfigureRequest(_) => f.write_str("Request configuration failed"),
+            Error::Redirect(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Reqwest(err) => err.source(),
+            Error::ReadPostBody(err) => Some(err),
+            Error::ConfigureRequest(err) => Some(&**err),
+            Error::Redirect(err) => err.source(),
+        }
+    }
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::Reqwest(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::ReadPostBody(err)
+    }
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync + 'static>> for Error {
+    fn from(err: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+        Error::ConfigureRequest(err)
+    }
+}
+
+impl From<redirect::Error> for Error {
+    fn from(err: redirect::Error) -> Self {
+        Error::Redirect(err)
+    }
 }
 
 impl crate::IsSpuriousError for Error {

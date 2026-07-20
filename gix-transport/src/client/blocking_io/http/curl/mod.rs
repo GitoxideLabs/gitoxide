@@ -25,17 +25,59 @@ pub struct Options {
 /// The error returned by the 'remote' helper, a purely internal construct to perform http requests.
 ///
 /// It can be used for downcasting errors, which are boxed to hide the actual implementation.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Curl(#[from] curl::Error),
-    #[error(transparent)]
-    Redirect(#[from] http::redirect::Error),
-    #[error("Could not finish reading all data to post to the remote")]
-    ReadPostBody(#[from] std::io::Error),
-    #[error(transparent)]
-    Authenticate(#[from] gix_credentials::protocol::Error),
+    Curl(curl::Error),
+    Redirect(http::redirect::Error),
+    ReadPostBody(std::io::Error),
+    Authenticate(gix_credentials::protocol::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Curl(err) => std::fmt::Display::fmt(err, f),
+            Error::Redirect(err) => std::fmt::Display::fmt(err, f),
+            Error::ReadPostBody(_) => f.write_str("Could not finish reading all data to post to the remote"),
+            Error::Authenticate(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Curl(err) => err.source(),
+            Error::Redirect(err) => err.source(),
+            Error::ReadPostBody(err) => Some(err),
+            Error::Authenticate(err) => err.source(),
+        }
+    }
+}
+
+impl From<curl::Error> for Error {
+    fn from(err: curl::Error) -> Self {
+        Error::Curl(err)
+    }
+}
+
+impl From<http::redirect::Error> for Error {
+    fn from(err: http::redirect::Error) -> Self {
+        Error::Redirect(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::ReadPostBody(err)
+    }
+}
+
+impl From<gix_credentials::protocol::Error> for Error {
+    fn from(err: gix_credentials::protocol::Error) -> Self {
+        Error::Authenticate(err)
+    }
 }
 
 impl crate::IsSpuriousError for Error {
@@ -139,6 +181,7 @@ impl Default for Curl {
     }
 }
 
+#[allow(clippy::type_complexity)]
 impl http::Http for Curl {
     type Headers = io::pipe::Reader;
     type ResponseBody = io::pipe::Reader;

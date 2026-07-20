@@ -1,12 +1,24 @@
 /// The error provided when redirection went beyond what we deem acceptable.
-#[derive(Debug, thiserror::Error)]
-#[error(
-    "Redirect url {redirect_url:?} could not be reconciled with original url {expected_url} as the scheme is insecure or they don't share the same suffix"
-)]
+#[derive(Debug)]
 pub struct Error {
     redirect_url: String,
     expected_url: String,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Error {
+            redirect_url,
+            expected_url,
+        } = self;
+        write!(
+            f,
+            "Redirect url {redirect_url:?} could not be reconciled with original url {expected_url} as the scheme is insecure or they don't share the same suffix"
+        )
+    }
+}
+
+impl std::error::Error for Error {}
 
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Action {

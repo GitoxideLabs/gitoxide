@@ -48,25 +48,75 @@ pub(crate) mod connect {
     /// The error used in `connect()`.
     ///
     /// (Both blocking and async I/O use the same error type.)
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    // TODO(review): this implementation hand-preserves `#[error(transparent)]` semantics for `Url`:
+    //                `Display` passes the formatter through and `source()` forwards to the inner error's
+    //                source, exactly like the `thiserror`-generated code did. The same pattern is used
+    //                for `client::Error::{Http, SshInvocation}` and the http backend errors
+    //                (`http::Error`, curl, reqwest).
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Url(#[from] gix_url::parse::Error),
-        #[error("The git repository path could not be converted to UTF8")]
-        PathConversion(#[from] bstr::Utf8Error),
-        #[error("connection failed")]
-        Connection(#[from] Box<dyn std::error::Error + Send + Sync>),
-        #[error("The url {url:?} contains information that would not be used by the {scheme} protocol")]
+        Url(gix_url::parse::Error),
+        PathConversion(bstr::Utf8Error),
+        Connection(Box<dyn std::error::Error + Send + Sync>),
         UnsupportedUrlTokens {
             url: bstr::BString,
             scheme: gix_url::Scheme,
         },
-        #[error("The '{0}' protocol is currently unsupported")]
         UnsupportedScheme(gix_url::Scheme),
         #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
-        #[error("'{0}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature")]
         CompiledWithoutHttp(gix_url::Scheme),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Url(err) => std::fmt::Display::fmt(err, f),
+                Error::PathConversion(_) => f.write_str("The git repository path could not be converted to UTF8"),
+                Error::Connection(_) => f.write_str("connection failed"),
+                Error::UnsupportedUrlTokens { url, scheme } => write!(
+                    f,
+                    "The url {url:?} contains information that would not be used by the {scheme} protocol"
+                ),
+                Error::UnsupportedScheme(scheme) => write!(f, "The '{scheme}' protocol is currently unsupported"),
+                #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
+                Error::CompiledWithoutHttp(scheme) => write!(
+                    f,
+                    "'{scheme}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Url(err) => err.source(),
+                Error::PathConversion(err) => Some(err),
+                Error::Connection(err) => Some(&**err),
+                Error::UnsupportedUrlTokens { .. } | Error::UnsupportedScheme(_) => None,
+                #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
+                Error::CompiledWithoutHttp(_) => None,
+            }
+        }
+    }
+
+    impl From<gix_url::parse::Error> for Error {
+        fn from(err: gix_url::parse::Error) -> Self {
+            Error::Url(err)
+        }
+    }
+
+    impl From<bstr::Utf8Error> for Error {
+        fn from(err: bstr::Utf8Error) -> Self {
+            Error::PathConversion(err)
+        }
+    }
+
+    impl From<Box<dyn std::error::Error + Send + Sync>> for Error {
+        fn from(err: Box<dyn std::error::Error + Send + Sync>) -> Self {
+            Error::Connection(err)
+        }
     }
 
     // TODO: maybe fix this workaround: want `IsSpuriousError`  in `Connection(…)`
@@ -110,41 +160,97 @@ mod error {
     type SshInvocationError = std::convert::Infallible;
 
     /// The error used in most methods of the [`client`][crate::client] module
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("A request was performed without performing the handshake first")]
         MissingHandshake,
-        #[error("An IO error occurred when talking to the server")]
-        Io(#[from] std::io::Error),
-        #[error("Capabilities could not be parsed")]
-        Capabilities {
-            #[from]
-            err: capabilities::Error,
-        },
-        #[error("A packet line could not be decoded")]
-        LineDecode {
-            #[from]
-            err: gix_packetline::decode::Error,
-        },
-        #[error("A {0} line was expected, but there was none")]
+        Io(std::io::Error),
+        Capabilities { err: capabilities::Error },
+        LineDecode { err: gix_packetline::decode::Error },
         ExpectedLine(&'static str),
-        #[error("Expected a data line, but got a delimiter")]
         ExpectedDataLine,
-        #[error("The transport layer does not support authentication")]
         AuthenticationUnsupported,
-        #[error("The transport layer refuses to use a given identity: {0}")]
         AuthenticationRefused(&'static str),
-        #[error("The protocol version indicated by {:?} is unsupported", {0})]
         UnsupportedProtocolVersion(BString),
-        #[error("Failed to invoke program {command:?}")]
         InvokeProgram { source: std::io::Error, command: OsString },
-        #[error(transparent)]
-        Http(#[from] HttpError),
-        #[error(transparent)]
+        Http(HttpError),
         SshInvocation(SshInvocationError),
-        #[error("The repository path '{path}' could be mistaken for a command-line argument")]
         AmbiguousPath { path: BString },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::MissingHandshake => {
+                    f.write_str("A request was performed without performing the handshake first")
+                }
+                Error::Io(_) => f.write_str("An IO error occurred when talking to the server"),
+                Error::Capabilities { .. } => f.write_str("Capabilities could not be parsed"),
+                Error::LineDecode { .. } => f.write_str("A packet line could not be decoded"),
+                Error::ExpectedLine(line) => write!(f, "A {line} line was expected, but there was none"),
+                Error::ExpectedDataLine => f.write_str("Expected a data line, but got a delimiter"),
+                Error::AuthenticationUnsupported => f.write_str("The transport layer does not support authentication"),
+                Error::AuthenticationRefused(identity) => {
+                    write!(f, "The transport layer refuses to use a given identity: {identity}")
+                }
+                Error::UnsupportedProtocolVersion(version) => {
+                    write!(f, "The protocol version indicated by {version:?} is unsupported")
+                }
+                Error::InvokeProgram { command, .. } => write!(f, "Failed to invoke program {command:?}"),
+                Error::Http(err) => std::fmt::Display::fmt(err, f),
+                Error::SshInvocation(err) => std::fmt::Display::fmt(err, f),
+                Error::AmbiguousPath { path } => {
+                    write!(
+                        f,
+                        "The repository path '{path}' could be mistaken for a command-line argument"
+                    )
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => Some(err),
+                Error::Capabilities { err } => Some(err),
+                Error::LineDecode { err } => Some(err),
+                Error::InvokeProgram { source, .. } => Some(source),
+                Error::Http(err) => err.source(),
+                Error::SshInvocation(err) => err.source(),
+                Error::MissingHandshake
+                | Error::ExpectedLine(_)
+                | Error::ExpectedDataLine
+                | Error::AuthenticationUnsupported
+                | Error::AuthenticationRefused(_)
+                | Error::UnsupportedProtocolVersion(_)
+                | Error::AmbiguousPath { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<capabilities::Error> for Error {
+        fn from(err: capabilities::Error) -> Self {
+            Error::Capabilities { err }
+        }
+    }
+
+    impl From<gix_packetline::decode::Error> for Error {
+        fn from(err: gix_packetline::decode::Error) -> Self {
+            Error::LineDecode { err }
+        }
+    }
+
+    impl From<HttpError> for Error {
+        fn from(err: HttpError) -> Self {
+            Error::Http(err)
+        }
     }
 
     impl crate::IsSpuriousError for Error {
