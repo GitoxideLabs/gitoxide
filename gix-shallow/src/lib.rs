@@ -10,15 +10,22 @@
 //! # let shallow_file = dir.path().join("shallow");
 //! # std::fs::write(&shallow_file, format!("{first}\n"))?;
 //!
-//! let shallow = gix_shallow::read(&shallow_file)?.expect("a shallow boundary");
+//! let shallow = gix_shallow::read(&shallow_file)
+//!     .map_err(|err| err.into_error())?
+//!     .expect("a shallow boundary");
 //! let lock = gix_lock::File::acquire_to_update_resource(
 //!     &shallow_file,
 //!     gix_lock::acquire::Fail::Immediately,
 //!     None,
-//! )?;
-//! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])?;
+//! )
+//! .map_err(|err| err.into_error())?;
+//! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)]).map_err(|err| err.into_error())?;
 //!
-//! let ids = gix_shallow::read(&shallow_file)?.unwrap().into_iter().collect::<Vec<_>>();
+//! let ids = gix_shallow::read(&shallow_file)
+//!     .map_err(|err| err.into_error())?
+//!     .unwrap()
+//!     .into_iter()
+//!     .collect::<Vec<_>>();
 //! assert_eq!(ids, vec![first, second]);
 //! # Ok(()) }
 //! ```
@@ -40,17 +47,31 @@ pub enum Update {
 /// The list of shallow commits represents the shallow boundary, beyond which we are lacking all (parent) commits.
 /// Note that the list is never empty, as `Ok(None)` is returned in that case indicating the repository
 /// isn't a shallow clone.
+// TODO(review): through still-unconverted `thiserror` wrappers (e.g. `gix_protocol::fetch::Error`),
+//                `source()` of these errors reaches the `ValidationError`/`Message` whose source is
+//                `None`, so the underlying io/decode causes are missing from `std` error chains on
+//                that path until consumers are converted. They remain visible in the `Exn` tree and
+//                at erased boundaries.
 pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>, read::Error> {
     use bstr::ByteSlice;
+    use gix_error::{ResultExt, ValidationError};
+
     let buf = match std::fs::read(shallow_file) {
         Ok(buf) => buf,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
+        Err(err) => Err(err).or_raise(|| ValidationError::new("Could not open shallow file for reading"))?,
     };
 
     let mut commits = buf
         .lines()
-        .map(gix_hash::ObjectId::from_hex)
+        .map(|line| {
+            gix_hash::ObjectId::from_hex(line).or_raise(|| {
+                ValidationError::new_with_input(
+                    "Could not decode a line in shallow file as hex-encoded object hash",
+                    line,
+                )
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     commits.sort();
@@ -61,6 +82,8 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<
 pub mod write {
     pub(crate) mod function {
         use std::io::Write;
+
+        use gix_error::{ResultExt, message};
 
         use super::Error;
         use crate::Update;
@@ -73,6 +96,8 @@ pub mod write {
         /// ### Deviation
         ///
         /// Git also prunes the set of shallow commits while writing, we don't until we support some sort of pruning.
+        // TODO(review): the same `std` error chain gap as noted on `read()` applies here, for the
+        //                io and lock-commit causes.
         pub fn write(
             mut file: gix_lock::File,
             shallow_commits: Option<nonempty::NonEmpty<gix_hash::ObjectId>>,
@@ -90,7 +115,7 @@ pub mod write {
             if shallow_commits.is_empty() {
                 if let Err(err) = std::fs::remove_file(file.resource_path()) {
                     if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(err.into());
+                        return Err(err).or_raise(|| message("Could not remove an empty shallow file"));
                     }
                 }
                 drop(file);
@@ -99,39 +124,32 @@ pub mod write {
             shallow_commits.sort();
             let mut buf = Vec::<u8>::new();
             for commit in shallow_commits {
-                commit.write_hex_to(&mut buf).map_err(Error::Io)?;
+                commit
+                    .write_hex_to(&mut buf)
+                    .or_raise(|| message("Failed to write object id to shallow file"))?;
                 buf.push(b'\n');
             }
-            file.write_all(&buf).map_err(Error::Io)?;
-            file.flush().map_err(Error::Io)?;
-            file.commit()?;
+            file.write_all(&buf)
+                .or_raise(|| message("Failed to write object id to shallow file"))?;
+            file.flush()
+                .or_raise(|| message("Failed to write object id to shallow file"))?;
+            file.commit()
+                .or_raise(|| message("Could not commit changes to the shallow file"))?;
             Ok(())
         }
     }
 
     /// The error returned by [`write()`](crate::write()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Commit(#[from] gix_lock::commit::Error<gix_lock::File>),
-        #[error("Could not remove an empty shallow file")]
-        RemoveEmpty(#[from] std::io::Error),
-        #[error("Failed to write object id to shallow file")]
-        Io(std::io::Error),
-    }
+    // TODO(review): as an `Exn`, this no longer implements `std::error::Error` — out-of-tree callers
+    //               that propagated it into `Box<dyn Error>` or `anyhow` need `.into_error()` now.
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 pub use write::function::write;
 
 ///
 pub mod read {
     /// The error returned by [`read`](crate::read()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not open shallow file for reading")]
-        Io(#[from] std::io::Error),
-        #[error("Could not decode a line in shallow file as hex-encoded object hash")]
-        DecodeHash(#[from] gix_hash::decode::Error),
-    }
+    // TODO(review): as an `Exn`, this no longer implements `std::error::Error` — out-of-tree callers
+    //               that propagated it into `Box<dyn Error>` or `anyhow` need `.into_error()` now.
+    pub type Error = gix_error::Exn<gix_error::ValidationError>;
 }
