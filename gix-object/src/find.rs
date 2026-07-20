@@ -5,13 +5,35 @@ pub mod existing {
     use gix_hash::ObjectId;
 
     /// The error returned by the [`find(…)`][crate::FindExt::find()] trait methods.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
         Find(crate::find::Error),
-        #[error("An object with id {} could not be found", .oid)]
         NotFound { oid: ObjectId },
+    }
+
+    // TODO(review): these implementations hand-preserve `#[error(transparent)]` semantics for the
+    //                `Find` variants of all three error types in this module: `Display` passes the
+    //                formatter through and `source()` forwards to the inner error's source, exactly
+    //                like the `thiserror`-generated code did — here through a `Box<dyn Error>`.
+    //                The same pattern is used for `verify::Error`, `tree::editor::Error` and
+    //                `LooseDecodeError` in this crate.
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Find(err) => std::fmt::Display::fmt(err, f),
+                Error::NotFound { oid } => write!(f, "An object with id {oid} could not be found"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Find(err) => err.source(),
+                Error::NotFound { .. } => None,
+            }
+        }
     }
 }
 
@@ -20,24 +42,45 @@ pub mod existing_object {
     use gix_hash::ObjectId;
 
     /// The error returned by the various [`find_*()`][crate::FindExt::find_commit()] trait methods.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
         Find(crate::find::Error),
-        #[error("Could not decode object at {oid}")]
         Decode {
             oid: ObjectId,
             source: crate::decode::Error,
         },
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
+        NotFound {
+            oid: ObjectId,
+        },
         ObjectKind {
             oid: ObjectId,
             actual: crate::Kind,
             expected: crate::Kind,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Find(err) => std::fmt::Display::fmt(err, f),
+                Error::Decode { oid, .. } => write!(f, "Could not decode object at {oid}"),
+                Error::NotFound { oid } => write!(f, "An object with id {oid} could not be found"),
+                Error::ObjectKind { oid, actual, expected } => {
+                    write!(f, "Expected object of kind {expected} but got {actual} at {oid}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Find(err) => err.source(),
+                Error::Decode { source, .. } => Some(source),
+                Error::NotFound { .. } | Error::ObjectKind { .. } => None,
+            }
+        }
     }
 }
 
@@ -46,19 +89,39 @@ pub mod existing_iter {
     use gix_hash::ObjectId;
 
     /// The error returned by the various [`find_*_iter()`][crate::FindExt::find_commit_iter()] trait methods.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
         Find(crate::find::Error),
-        #[error("An object with id {oid} could not be found")]
-        NotFound { oid: ObjectId },
-        #[error("Expected object of kind {expected} but got {actual} at {oid}")]
+        NotFound {
+            oid: ObjectId,
+        },
         ObjectKind {
             oid: ObjectId,
             actual: crate::Kind,
             expected: crate::Kind,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Find(err) => std::fmt::Display::fmt(err, f),
+                Error::NotFound { oid } => write!(f, "An object with id {oid} could not be found"),
+                Error::ObjectKind { oid, actual, expected } => {
+                    write!(f, "Expected object of kind {expected} but got {actual} at {oid}")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Find(err) => err.source(),
+                Error::NotFound { .. } | Error::ObjectKind { .. } => None,
+            }
+        }
     }
 }
 

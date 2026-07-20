@@ -1,10 +1,19 @@
 /// Because the `TryFrom` implementations don't return proper errors
 /// on failure
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 enum Error {
-    #[error("")]
     TryFromError,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::TryFromError => f.write_str(""),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Needed for roundtripping object types that take a `object_hash` parameter.
 /// This is the same as `round_trip`, but for types that have `from_bytes()` with `object_hash`.

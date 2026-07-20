@@ -331,19 +331,48 @@ pub mod decode {
     pub(crate) use error::empty_error;
 
     /// Returned by [`loose_header()`]
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum LooseHeaderDecodeError {
-        #[error("{message}: {number:?}")]
         ParseIntegerError {
             source: gix_utils::btoi::ParseIntegerError,
             message: &'static str,
             number: bstr::BString,
         },
-        #[error("{message}")]
-        InvalidHeader { message: &'static str },
-        #[error("The object header contained an unknown object kind.")]
-        ObjectHeader(#[from] super::kind::Error),
+        InvalidHeader {
+            message: &'static str,
+        },
+        ObjectHeader(super::kind::Error),
+    }
+
+    impl std::fmt::Display for LooseHeaderDecodeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                LooseHeaderDecodeError::ParseIntegerError { message, number, .. } => {
+                    write!(f, "{message}: {number:?}")
+                }
+                LooseHeaderDecodeError::InvalidHeader { message } => f.write_str(message),
+                LooseHeaderDecodeError::ObjectHeader(_) => {
+                    f.write_str("The object header contained an unknown object kind.")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for LooseHeaderDecodeError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                LooseHeaderDecodeError::ParseIntegerError { source, .. } => Some(source),
+                LooseHeaderDecodeError::InvalidHeader { .. } => None,
+                LooseHeaderDecodeError::ObjectHeader(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<super::kind::Error> for LooseHeaderDecodeError {
+        fn from(err: super::kind::Error) -> Self {
+            LooseHeaderDecodeError::ObjectHeader(err)
+        }
     }
 
     use bstr::ByteSlice;

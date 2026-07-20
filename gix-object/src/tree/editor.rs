@@ -32,15 +32,39 @@ impl std::fmt::Debug for Editor<'_> {
 }
 
 /// The error returned by [Editor] or [Cursor] edit operation.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Empty path components are not allowed")]
     EmptyPathComponent,
-    #[error(transparent)]
-    FindExistingObject(#[from] crate::find::existing_object::Error),
-    #[error("Cannot remove '{rela_path}' as leaf entry because it is a tree")]
+    FindExistingObject(crate::find::existing_object::Error),
     CannotRemoveNonLeaf { rela_path: BString },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::EmptyPathComponent => f.write_str("Empty path components are not allowed"),
+            Error::FindExistingObject(err) => std::fmt::Display::fmt(err, f),
+            Error::CannotRemoveNonLeaf { rela_path } => {
+                write!(f, "Cannot remove '{rela_path}' as leaf entry because it is a tree")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::EmptyPathComponent | Error::CannotRemoveNonLeaf { .. } => None,
+            Error::FindExistingObject(err) => err.source(),
+        }
+    }
+}
+
+impl From<crate::find::existing_object::Error> for Error {
+    fn from(err: crate::find::existing_object::Error) -> Self {
+        Error::FindExistingObject(err)
+    }
 }
 
 /// Lifecycle

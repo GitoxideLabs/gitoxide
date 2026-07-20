@@ -6,13 +6,35 @@ use gix_date::parse::TimeBuf;
 use crate::{Kind, Tag, TagRef, encode, encode::NL};
 
 /// An Error used in [`Tag::write_to()`][crate::WriteTo::write_to()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Tags must not start with a dash: '-'")]
     StartsWithDash,
-    #[error("The tag name was no valid reference name")]
-    InvalidRefName(#[from] gix_validate::tag::name::Error),
+    InvalidRefName(gix_validate::tag::name::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::StartsWithDash => f.write_str("Tags must not start with a dash: '-'"),
+            Error::InvalidRefName(_) => f.write_str("The tag name was no valid reference name"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::StartsWithDash => None,
+            Error::InvalidRefName(err) => Some(err),
+        }
+    }
+}
+
+impl From<gix_validate::tag::name::Error> for Error {
+    fn from(err: gix_validate::tag::name::Error) -> Self {
+        Error::InvalidRefName(err)
+    }
 }
 
 impl From<Error> for io::Error {

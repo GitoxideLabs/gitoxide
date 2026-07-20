@@ -4,14 +4,23 @@ use std::io::{self, Write};
 use bstr::{BString, ByteSlice};
 
 /// An error returned when object encoding fails.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Newlines are not allowed in header values: {value:?}")]
     NewlineInHeaderValue { value: BString },
-    #[error("Header values must not be empty")]
     EmptyValue,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::NewlineInHeaderValue { value } => write!(f, "Newlines are not allowed in header values: {value:?}"),
+            Error::EmptyValue => f.write_str("Header values must not be empty"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 macro_rules! check {
     ($e: expr) => {

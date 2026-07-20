@@ -3,12 +3,21 @@ use std::fmt;
 use crate::Kind;
 
 /// The Error used in [`Kind::from_bytes()`].
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Unknown object kind: {kind:?}")]
     InvalidObjectKind { kind: bstr::BString },
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InvalidObjectKind { kind } => write!(f, "Unknown object kind: {kind:?}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Initialization
 impl Kind {
