@@ -26,14 +26,26 @@
 #![deny(missing_docs, unsafe_code)]
 
 /// The error returned when any config value couldn't be instantiated due to malformed input.
-#[derive(Debug, thiserror::Error, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 #[expect(missing_docs)]
-#[error("Could not decode '{input}': {message}")]
 pub struct Error {
     pub message: &'static str,
     pub input: bstr::BString,
-    #[source]
     pub utf8_err: Option<std::str::Utf8Error>,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Could not decode '{}': {}", self.input, self.message)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.utf8_err
+            .as_ref()
+            .map(|err| err as &(dyn std::error::Error + 'static))
+    }
 }
 
 impl Error {

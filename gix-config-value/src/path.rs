@@ -30,21 +30,47 @@ pub mod interpolate {
     }
 
     /// The error returned by [`Path::interpolate()`][crate::Path::interpolate()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("{} is missing", .what)]
-        Missing { what: &'static str },
-        #[error("Ill-formed UTF-8 in {}", .what)]
+        Missing {
+            what: &'static str,
+        },
         Utf8Conversion {
             what: &'static str,
-            #[source]
             err: gix_path::Utf8Error,
         },
-        #[error("Ill-formed UTF-8 in username")]
-        UsernameConversion(#[from] std::str::Utf8Error),
-        #[error("User interpolation is not available on this platform")]
+        UsernameConversion(std::str::Utf8Error),
         UserInterpolationUnsupported,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Missing { what } => write!(f, "{what} is missing"),
+                Error::Utf8Conversion { what, .. } => write!(f, "Ill-formed UTF-8 in {what}"),
+                Error::UsernameConversion(_) => f.write_str("Ill-formed UTF-8 in username"),
+                Error::UserInterpolationUnsupported => {
+                    f.write_str("User interpolation is not available on this platform")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Utf8Conversion { err, .. } => Some(err),
+                Error::UsernameConversion(err) => Some(err),
+                Error::Missing { .. } | Error::UserInterpolationUnsupported => None,
+            }
+        }
+    }
+
+    impl From<std::str::Utf8Error> for Error {
+        fn from(err: std::str::Utf8Error) -> Self {
+            Error::UsernameConversion(err)
+        }
     }
 
     /// Obtain the home directory for the given user `name` or return `None` if the user wasn't found
