@@ -1,35 +1,108 @@
 use std::{env, ffi::OsStr, path::PathBuf};
 
 /// The error returned by [`gix_discover::upwards()`][crate::upwards()].
-#[derive(Debug, thiserror::Error)]
+// TODO(review): the missing space in the `InvalidInput` message ("…\"tries…") replicates the
+//                `thiserror` attribute text byte-for-byte.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Could not obtain the current working directory")]
-    CurrentDir(#[from] std::io::Error),
-    #[error("Relative path \"{}\"tries to reach beyond root filesystem", directory.display())]
-    InvalidInput { directory: PathBuf },
-    #[error("Failed to access a directory, or path is not a directory: '{}'", .path.display())]
-    InaccessibleDirectory { path: PathBuf },
-    #[error("Could not find a git repository in '{}' or in any of its parents", .path.display())]
-    NoGitRepository { path: PathBuf },
-    #[error("Could not find a git repository in '{}' or in any of its parents within ceiling height of {}", .path.display(), .ceiling_height)]
-    NoGitRepositoryWithinCeiling { path: PathBuf, ceiling_height: usize },
-    #[error("Could not find a git repository in '{}' or in any of its parents within device limits below '{}'", .path.display(), .limit.display())]
-    NoGitRepositoryWithinFs { path: PathBuf, limit: PathBuf },
-    #[error("None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.")]
+    CurrentDir(std::io::Error),
+    InvalidInput {
+        directory: PathBuf,
+    },
+    InaccessibleDirectory {
+        path: PathBuf,
+    },
+    NoGitRepository {
+        path: PathBuf,
+    },
+    NoGitRepositoryWithinCeiling {
+        path: PathBuf,
+        ceiling_height: usize,
+    },
+    NoGitRepositoryWithinFs {
+        path: PathBuf,
+        limit: PathBuf,
+    },
     NoMatchingCeilingDir,
-    #[error("Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded", .path.display(), .candidate.display())]
     NoTrustedGitRepository {
         path: PathBuf,
         candidate: PathBuf,
         required: gix_sec::Trust,
     },
-    #[error("Could not determine trust level for path '{}'.", .path.display())]
     CheckTrust {
         path: PathBuf,
-        #[source]
         err: std::io::Error,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::CurrentDir(_) => f.write_str("Could not obtain the current working directory"),
+            Error::InvalidInput { directory } => write!(
+                f,
+                "Relative path \"{}\"tries to reach beyond root filesystem",
+                directory.display()
+            ),
+            Error::InaccessibleDirectory { path } => write!(
+                f,
+                "Failed to access a directory, or path is not a directory: '{}'",
+                path.display()
+            ),
+            Error::NoGitRepository { path } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents",
+                path.display()
+            ),
+            Error::NoGitRepositoryWithinCeiling { path, ceiling_height } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents within ceiling height of {}",
+                path.display(),
+                ceiling_height
+            ),
+            Error::NoGitRepositoryWithinFs { path, limit } => write!(
+                f,
+                "Could not find a git repository in '{}' or in any of its parents within device limits below '{}'",
+                path.display(),
+                limit.display()
+            ),
+            Error::NoMatchingCeilingDir => f.write_str(
+                "None of the passed ceiling directories prefixed the git-dir candidate, making them ineffective.",
+            ),
+            Error::NoTrustedGitRepository { path, candidate, .. } => write!(
+                f,
+                "Could not find a trusted git repository in '{}' or in any of its parents, candidate at '{}' discarded",
+                path.display(),
+                candidate.display()
+            ),
+            Error::CheckTrust { path, .. } => {
+                write!(f, "Could not determine trust level for path '{}'.", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::CurrentDir(err) => Some(err),
+            Error::CheckTrust { err, .. } => Some(err),
+            Error::InvalidInput { .. }
+            | Error::InaccessibleDirectory { .. }
+            | Error::NoGitRepository { .. }
+            | Error::NoGitRepositoryWithinCeiling { .. }
+            | Error::NoGitRepositoryWithinFs { .. }
+            | Error::NoMatchingCeilingDir
+            | Error::NoTrustedGitRepository { .. } => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::CurrentDir(err)
+    }
 }
 
 /// How to obtain the trust level for a discovered repository.

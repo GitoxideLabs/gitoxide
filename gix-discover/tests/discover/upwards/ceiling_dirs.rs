@@ -183,7 +183,8 @@ fn no_matching_ceiling_dirs_errors_by_default() -> crate::Result {
 fn ceilings_are_adjusted_to_match_search_dir() -> crate::Result {
     let relative_work_dir = repo_path()?;
     let cwd = std::env::current_dir()?;
-    let absolute_ceiling_dir = gix_path::realpath_opts(&relative_work_dir, &cwd, 8)?;
+    let absolute_ceiling_dir =
+        gix_path::realpath_opts(&relative_work_dir, &cwd, 8).map_err(gix_path::realpath::Error::into_error)?;
     let dir = relative_work_dir.join("some");
     assert!(dir.is_relative());
     let (repo_path, _trust) = gix_discover::upwards_opts(
@@ -196,7 +197,8 @@ fn ceilings_are_adjusted_to_match_search_dir() -> crate::Result {
     assert_repo_is_current_workdir(repo_path, &relative_work_dir);
 
     assert!(relative_work_dir.is_relative());
-    let absolute_dir = gix_path::realpath_opts(relative_work_dir.join("some").as_ref(), &cwd, 8)?;
+    let absolute_dir = gix_path::realpath_opts(relative_work_dir.join("some").as_ref(), &cwd, 8)
+        .map_err(gix_path::realpath::Error::into_error)?;
     let (repo_path, _trust) = gix_discover::upwards_opts(
         &absolute_dir,
         Options {

@@ -42,31 +42,89 @@ pub mod is_git {
     use std::path::PathBuf;
 
     /// The error returned by [`crate::is_git()`].
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): this implementation hand-preserves `#[error(transparent)]` semantics for
+    //                `GitFile`: `Display` passes the formatter through and `source()` forwards to
+    //                the inner error's source, exactly like the `thiserror`-generated code did.
+    //                The same pattern is used in `path::from_gitdir_file::Error`.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Could not find a valid HEAD reference")]
-        FindHeadRef(#[from] gix_ref::file::find::existing::Error),
-        #[error("Missing HEAD at '.git/HEAD'")]
+        FindHeadRef(gix_ref::file::find::existing::Error),
         MissingHead,
-        #[error("Expected HEAD at '.git/HEAD', got '.git/{}'", .name)]
         MisplacedHead { name: bstr::BString },
-        #[error("Expected an objects directory at '{}'", .missing.display())]
         MissingObjectsDirectory { missing: PathBuf },
-        #[error("The worktree's private repo's commondir file at '{}' or it could not be read", .missing.display())]
         MissingCommonDir { missing: PathBuf, source: std::io::Error },
-        #[error("Expected a refs directory at '{}'", .missing.display())]
         MissingRefsDirectory { missing: PathBuf },
-        #[error(transparent)]
-        GitFile(#[from] crate::path::from_gitdir_file::Error),
-        #[error("Could not retrieve metadata of \"{path}\"")]
+        GitFile(crate::path::from_gitdir_file::Error),
         Metadata { source: std::io::Error, path: PathBuf },
-        #[error(
-            "The repository's config file doesn't exist or didn't have a 'bare' configuration or contained core.worktree without value"
-        )]
         Inconclusive,
-        #[error("Could not obtain current directory for resolving the '.' repository path")]
-        CurrentDir(#[from] std::io::Error),
+        CurrentDir(std::io::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::FindHeadRef(_) => f.write_str("Could not find a valid HEAD reference"),
+                Error::MissingHead => f.write_str("Missing HEAD at '.git/HEAD'"),
+                Error::MisplacedHead { name } => write!(f, "Expected HEAD at '.git/HEAD', got '.git/{name}'"),
+                Error::MissingObjectsDirectory { missing } => {
+                    write!(f, "Expected an objects directory at '{}'", missing.display())
+                }
+                Error::MissingCommonDir { missing, .. } => write!(
+                    f,
+                    "The worktree's private repo's commondir file at '{}' or it could not be read",
+                    missing.display()
+                ),
+                Error::MissingRefsDirectory { missing } => {
+                    write!(f, "Expected a refs directory at '{}'", missing.display())
+                }
+                Error::GitFile(err) => std::fmt::Display::fmt(err, f),
+                Error::Metadata { path, .. } => {
+                    write!(f, "Could not retrieve metadata of \"{}\"", path.display())
+                }
+                Error::Inconclusive => f.write_str(
+                    "The repository's config file doesn't exist or didn't have a 'bare' configuration or contained core.worktree without value",
+                ),
+                Error::CurrentDir(_) => {
+                    f.write_str("Could not obtain current directory for resolving the '.' repository path")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::FindHeadRef(err) => Some(err),
+                Error::MissingCommonDir { source, .. } => Some(source),
+                Error::GitFile(err) => err.source(),
+                Error::Metadata { source, .. } => Some(source),
+                Error::CurrentDir(err) => Some(err),
+                Error::MissingHead
+                | Error::MisplacedHead { .. }
+                | Error::MissingObjectsDirectory { .. }
+                | Error::MissingRefsDirectory { .. }
+                | Error::Inconclusive => None,
+            }
+        }
+    }
+
+    impl From<gix_ref::file::find::existing::Error> for Error {
+        fn from(err: gix_ref::file::find::existing::Error) -> Self {
+            Error::FindHeadRef(err)
+        }
+    }
+
+    impl From<crate::path::from_gitdir_file::Error> for Error {
+        fn from(err: crate::path::from_gitdir_file::Error) -> Self {
+            Error::GitFile(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::CurrentDir(err)
+        }
     }
 }
 

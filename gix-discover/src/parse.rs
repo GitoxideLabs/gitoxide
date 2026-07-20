@@ -7,14 +7,25 @@ pub mod gitdir {
     use bstr::BString;
 
     /// The error returned by [`parse::gitdir()`][super::gitdir()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Format should be 'gitdir: <path>', but got: {:?}", .input)]
         InvalidFormat { input: BString },
-        #[error("Couldn't decode {:?} as UTF8", .input)]
         IllformedUtf8 { input: BString },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidFormat { input } => {
+                    write!(f, "Format should be 'gitdir: <path>', but got: {input:?}")
+                }
+                Error::IllformedUtf8 { input } => write!(f, "Couldn't decode {input:?} as UTF8"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 /// Parse typical `gitdir` files as seen in worktrees and submodules.
