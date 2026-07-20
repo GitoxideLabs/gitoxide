@@ -274,35 +274,99 @@ pub struct Outcome {
 }
 
 /// The error returned by [`walk()`](function::walk()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): `ExcludesAccess`'s single `std::io::Error` field is an unnamed tuple field with no
+//                `#[source]`, so `thiserror` did not treat it as a source; `source()` returning `None`
+//                for it is preserved behavior (unlike the `source`-named fields of the other io variants).
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Interrupted")]
     Interrupted,
-    #[error("Worktree root at '{}' is not a directory", root.display())]
-    WorktreeRootIsFile { root: PathBuf },
-    #[error("Traversal root '{}' contains relative path components and could not be normalized", root.display())]
-    NormalizeRoot { root: PathBuf },
-    #[error("A symlink was found at component {component_index} of traversal root '{}' as seen from worktree root '{}'", root.display(), worktree_root.display())]
+    WorktreeRootIsFile {
+        root: PathBuf,
+    },
+    NormalizeRoot {
+        root: PathBuf,
+    },
     SymlinkInRoot {
         root: PathBuf,
         worktree_root: PathBuf,
         /// This index starts at 0, with 0 being the first component.
         component_index: usize,
     },
-    #[error("Failed to update the excludes stack to see if a path is excluded")]
     ExcludesAccess(std::io::Error),
-    #[error("Failed to read the directory at '{}'", path.display())]
-    ReadDir { path: PathBuf, source: std::io::Error },
-    #[error("Could not obtain directory entry in root of '{}'", parent_directory.display())]
+    ReadDir {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     DirEntry {
         parent_directory: PathBuf,
         source: std::io::Error,
     },
-    #[error("Could not obtain filetype of directory entry '{}'", path.display())]
-    DirEntryFileType { path: PathBuf, source: std::io::Error },
-    #[error("Could not obtain symlink metadata on '{}'", path.display())]
-    SymlinkMetadata { path: PathBuf, source: std::io::Error },
+    DirEntryFileType {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    SymlinkMetadata {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Interrupted => f.write_str("Interrupted"),
+            Error::WorktreeRootIsFile { root } => {
+                write!(f, "Worktree root at '{}' is not a directory", root.display())
+            }
+            Error::NormalizeRoot { root } => write!(
+                f,
+                "Traversal root '{}' contains relative path components and could not be normalized",
+                root.display()
+            ),
+            Error::SymlinkInRoot {
+                root,
+                worktree_root,
+                component_index,
+            } => write!(
+                f,
+                "A symlink was found at component {component_index} of traversal root '{}' as seen from worktree root '{}'",
+                root.display(),
+                worktree_root.display()
+            ),
+            Error::ExcludesAccess(_) => f.write_str("Failed to update the excludes stack to see if a path is excluded"),
+            Error::ReadDir { path, .. } => write!(f, "Failed to read the directory at '{}'", path.display()),
+            Error::DirEntry { parent_directory, .. } => {
+                write!(
+                    f,
+                    "Could not obtain directory entry in root of '{}'",
+                    parent_directory.display()
+                )
+            }
+            Error::DirEntryFileType { path, .. } => {
+                write!(f, "Could not obtain filetype of directory entry '{}'", path.display())
+            }
+            Error::SymlinkMetadata { path, .. } => {
+                write!(f, "Could not obtain symlink metadata on '{}'", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ReadDir { source, .. }
+            | Error::DirEntry { source, .. }
+            | Error::DirEntryFileType { source, .. }
+            | Error::SymlinkMetadata { source, .. } => Some(source),
+            Error::Interrupted
+            | Error::WorktreeRootIsFile { .. }
+            | Error::NormalizeRoot { .. }
+            | Error::SymlinkInRoot { .. }
+            | Error::ExcludesAccess(_) => None,
+        }
+    }
 }
 
 mod classify;

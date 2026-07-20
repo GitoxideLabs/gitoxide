@@ -615,7 +615,7 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
         "even if the traversal root is for deletion, unless the CWD is set it will be collapsed (no special cases)"
     );
 
-    let real_root = gix_path::realpath(&root)?;
+    let real_root = gix_path::realpath(&root).map_err(gix_path::realpath::Error::into_error)?;
     let ((out, _root), entries) = collect_filtered_with_cwd(
         &real_root,
         Some(&real_root.join("ignored")),
@@ -649,7 +649,8 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
         "the traversal starts from the top, but we automatically prevent the 'd' directory from being deleted by stopping its collapse."
     );
 
-    let real_root = gix_path::realpath(fixture("subdir-untracked-and-ignored"))?;
+    let real_root =
+        gix_path::realpath(fixture("subdir-untracked-and-ignored")).map_err(gix_path::realpath::Error::into_error)?;
     let ((out, _root), entries) = collect_filtered_with_cwd(
         &real_root,
         None,
@@ -693,7 +694,7 @@ fn ignored_dir_with_cwd_handling() -> crate::Result {
 
 #[test]
 fn ignored_with_cwd_handling() -> crate::Result {
-    let root = gix_path::realpath(fixture("ignored-with-empty"))?;
+    let root = gix_path::realpath(fixture("ignored-with-empty")).map_err(gix_path::realpath::Error::into_error)?;
     let ((out, _root), entries) = collect_filtered_with_cwd(
         &root,
         None,
@@ -845,7 +846,7 @@ fn only_untracked_with_cwd_handling() -> crate::Result {
         "even if the traversal root is for deletion, unless the CWD is set it will be collapsed (no special cases)"
     );
 
-    let real_root = gix_path::realpath(&root)?;
+    let real_root = gix_path::realpath(&root).map_err(gix_path::realpath::Error::into_error)?;
     let ((out, _root), entries) = collect_filtered_with_cwd(
         &real_root,
         Some(&real_root),
@@ -2506,7 +2507,7 @@ fn untracked_and_ignored_collapse_handling_for_deletion_mixed() -> crate::Result
         but also how 'd/d' collapses as our current working directory the worktree"
     );
 
-    let real_root = gix_path::realpath(&root)?;
+    let real_root = gix_path::realpath(&root).map_err(gix_path::realpath::Error::into_error)?;
     let ((out, _root), entries) = collect_filtered_with_cwd(
         &real_root,
         Some(&real_root),
