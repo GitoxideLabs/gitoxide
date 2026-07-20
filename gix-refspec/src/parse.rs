@@ -1,31 +1,73 @@
 /// The error returned by the [`parse()`][crate::parse()] function.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Empty refspecs are invalid")]
     Empty,
-    #[error("Negative refspecs cannot have destinations as they exclude sources")]
     NegativeWithDestination,
-    #[error("Negative specs must not be empty")]
     NegativeEmpty,
-    #[error("Negative specs must be object hashes")]
     NegativeObjectHash,
-    #[error("Negative specs must be full ref names, starting with \"refs/\"")]
     NegativePartialName,
-    #[error("Negative glob patterns are not allowed")]
     NegativeGlobPattern,
-    #[error("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")]
     InvalidFetchDestination,
-    #[error("Cannot push into an empty destination")]
     PushToEmpty,
-    #[error("glob patterns may only involved a single '*' character, found {pattern:?}")]
     PatternUnsupported { pattern: bstr::BString },
-    #[error("Both sides of the specification need a pattern, like 'a/*:b/*'")]
     PatternUnbalanced,
-    #[error(transparent)]
-    ReferenceName(#[from] gix_validate::reference::name::Error),
-    #[error(transparent)]
-    RevSpec(#[from] gix_revision::spec::parse::Error),
+    ReferenceName(gix_validate::reference::name::Error),
+    RevSpec(gix_revision::spec::parse::Error),
+}
+
+// TODO(review): this implementation hand-preserves `#[error(transparent)]` semantics for the
+//                `ReferenceName` and `RevSpec` variants: `Display` passes the formatter through
+//                and `source()` forwards to the inner error's source, exactly like the
+//                `thiserror`-generated code did.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Empty => f.write_str("Empty refspecs are invalid"),
+            Error::NegativeWithDestination => {
+                f.write_str("Negative refspecs cannot have destinations as they exclude sources")
+            }
+            Error::NegativeEmpty => f.write_str("Negative specs must not be empty"),
+            Error::NegativeObjectHash => f.write_str("Negative specs must be object hashes"),
+            Error::NegativePartialName => f.write_str("Negative specs must be full ref names, starting with \"refs/\""),
+            Error::NegativeGlobPattern => f.write_str("Negative glob patterns are not allowed"),
+            Error::InvalidFetchDestination => {
+                f.write_str("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")
+            }
+            Error::PushToEmpty => f.write_str("Cannot push into an empty destination"),
+            Error::PatternUnsupported { pattern } => {
+                write!(
+                    f,
+                    "glob patterns may only involved a single '*' character, found {pattern:?}"
+                )
+            }
+            Error::PatternUnbalanced => f.write_str("Both sides of the specification need a pattern, like 'a/*:b/*'"),
+            Error::ReferenceName(err) => std::fmt::Display::fmt(err, f),
+            Error::RevSpec(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ReferenceName(err) => err.source(),
+            Error::RevSpec(err) => err.source(),
+            _ => None,
+        }
+    }
+}
+
+impl From<gix_validate::reference::name::Error> for Error {
+    fn from(err: gix_validate::reference::name::Error) -> Self {
+        Error::ReferenceName(err)
+    }
+}
+
+impl From<gix_revision::spec::parse::Error> for Error {
+    fn from(err: gix_revision::spec::parse::Error) -> Self {
+        Error::RevSpec(err)
+    }
 }
 
 /// Define how the parsed refspec should be used.
