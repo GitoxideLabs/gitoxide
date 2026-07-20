@@ -1,10 +1,19 @@
 /// The error returned by [`Hasher::try_finalize()`](crate::Hasher::try_finalize()).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Detected SHA-1 collision attack with digest {digest}")]
     CollisionAttack { digest: crate::ObjectId },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::CollisionAttack { digest } => write!(f, "Detected SHA-1 collision attack with digest {digest}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 pub(super) mod _impl {
     #[cfg(feature = "sha1")]
@@ -75,7 +84,7 @@ pub(super) mod _impl {
                         //
                         // As of Rust 1.84.1, the compiler can’t figure out
                         // this function cannot panic without this.
-                        #[expect(unsafe_code)]
+                        #[allow(unsafe_code)]
                         unsafe {
                             std::hint::unreachable_unchecked()
                         }
