@@ -12,6 +12,8 @@ pub(crate) mod imp {
     use parking_lot::{Mutex, RawMutex, const_mutex, lock_api::MutexGuard};
     use rustix::termios::{self, Termios};
 
+    use gix_error::{ErrorExt, ResultExt, message};
+
     use crate::{Error, Mode, Options, unix::TTY_PATH};
 
     static TERM_STATE: Mutex<Option<Termios>> = const_mutex(None);
@@ -19,18 +21,28 @@ pub(crate) mod imp {
     /// Ask the user given a `prompt`, returning the result.
     pub(crate) fn ask(prompt: &str, Options { mode, .. }: &Options) -> Result<String, Error> {
         match mode {
-            Mode::Disable => Err(Error::Disabled),
+            Mode::Disable => Err(message("Terminal prompts are disabled").raise()),
             Mode::Hidden => {
                 let state = TERM_STATE.lock();
                 let mut in_out = save_term_state_and_disable_echo(
                     state,
-                    std::fs::OpenOptions::new().write(true).read(true).open(TTY_PATH)?,
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .read(true)
+                        .open(TTY_PATH)
+                        .or_raise(|| {
+                            message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                        })?,
                 )?;
-                in_out.write_all(prompt.as_bytes())?;
+                in_out.write_all(prompt.as_bytes()).or_raise(|| {
+                    message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                })?;
 
                 let mut buf_read = std::io::BufReader::with_capacity(64, in_out);
                 let mut out = String::with_capacity(64);
-                buf_read.read_line(&mut out)?;
+                buf_read.read_line(&mut out).or_raise(|| {
+                    message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                })?;
 
                 out.pop();
                 if out.ends_with('\r') {
@@ -40,12 +52,22 @@ pub(crate) mod imp {
                 Ok(out)
             }
             Mode::Visible => {
-                let mut in_out = std::fs::OpenOptions::new().write(true).read(true).open(TTY_PATH)?;
-                in_out.write_all(prompt.as_bytes())?;
+                let mut in_out = std::fs::OpenOptions::new()
+                    .write(true)
+                    .read(true)
+                    .open(TTY_PATH)
+                    .or_raise(|| {
+                        message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                    })?;
+                in_out.write_all(prompt.as_bytes()).or_raise(|| {
+                    message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                })?;
 
                 let mut buf_read = std::io::BufReader::with_capacity(64, in_out);
                 let mut out = String::with_capacity(64);
-                buf_read.read_line(&mut out)?;
+                buf_read.read_line(&mut out).or_raise(|| {
+                    message!("Failed to open terminal at {TTY_PATH:?} for writing prompt, or to write it")
+                })?;
                 Ok(out.trim_end().to_owned())
             }
         }
@@ -88,7 +110,8 @@ pub(crate) mod imp {
     impl RestoreTerminalStateOnDrop<'_> {
         fn restore_term_state(mut self) -> Result<(), Error> {
             let state = self.state.take().expect("BUG: we exist only if something is saved");
-            termios::tcsetattr(&self.fd, termios::OptionalActions::Flush, &state)?;
+            termios::tcsetattr(&self.fd, termios::OptionalActions::Flush, &state)
+                .or_raise(|| message("Failed to obtain or set terminal configuration"))?;
             Ok(())
         }
     }
@@ -110,13 +133,14 @@ pub(crate) mod imp {
             "BUG: recursive calls are not possible and we restore afterwards"
         );
 
-        let prev = termios::tcgetattr(&fd)?;
+        let prev = termios::tcgetattr(&fd).or_raise(|| message("Failed to obtain or set terminal configuration"))?;
         let mut new = prev.clone();
         *state = prev.into();
 
         new.local_modes &= !termios::LocalModes::ECHO;
         new.local_modes |= termios::LocalModes::ECHONL;
-        termios::tcsetattr(&fd, termios::OptionalActions::Flush, &new)?;
+        termios::tcsetattr(&fd, termios::OptionalActions::Flush, &new)
+            .or_raise(|| message("Failed to obtain or set terminal configuration"))?;
 
         Ok(RestoreTerminalStateOnDrop { fd, state })
     }
