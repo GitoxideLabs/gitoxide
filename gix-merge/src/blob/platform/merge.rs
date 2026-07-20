@@ -16,20 +16,64 @@ pub struct Options {
 }
 
 /// The error returned by [`PlatformRef::merge()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. `PrepareExternalDriver` is
+//                `#[error(transparent)]`: `Display` and `source()` forward to the wrapped error.
+//                `SpawnExternalDriver` (named `source`) and `ExternalDriverIO` (`#[from]`) expose their
+//                error as `source()`; `ExternalDriverFailure` has no source.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    PrepareExternalDriver(#[from] inner::prepare_external_driver::Error),
-    #[error("Failed to launch external merge driver: {cmd}")]
-    SpawnExternalDriver { cmd: String, source: std::io::Error },
-    #[error("External merge driver failed with non-zero exit status {status:?}: {cmd}")]
+    PrepareExternalDriver(inner::prepare_external_driver::Error),
+    SpawnExternalDriver {
+        cmd: String,
+        source: std::io::Error,
+    },
     ExternalDriverFailure {
         status: std::process::ExitStatus,
         cmd: String,
     },
-    #[error("IO failed when dealing with merge-driver output")]
-    ExternalDriverIO(#[from] std::io::Error),
+    ExternalDriverIO(std::io::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::PrepareExternalDriver(err) => std::fmt::Display::fmt(err, f),
+            Error::SpawnExternalDriver { cmd, .. } => {
+                write!(f, "Failed to launch external merge driver: {cmd}")
+            }
+            Error::ExternalDriverFailure { status, cmd } => {
+                write!(
+                    f,
+                    "External merge driver failed with non-zero exit status {status:?}: {cmd}"
+                )
+            }
+            Error::ExternalDriverIO(_) => f.write_str("IO failed when dealing with merge-driver output"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::PrepareExternalDriver(err) => err.source(),
+            Error::SpawnExternalDriver { source, .. } => Some(source),
+            Error::ExternalDriverIO(err) => Some(err),
+            Error::ExternalDriverFailure { .. } => None,
+        }
+    }
+}
+
+impl From<inner::prepare_external_driver::Error> for Error {
+    fn from(err: inner::prepare_external_driver::Error) -> Self {
+        Error::PrepareExternalDriver(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::ExternalDriverIO(err)
+    }
 }
 
 /// The product of a [`PlatformRef::prepare_external_driver()`] operation.
@@ -76,27 +120,50 @@ pub(super) mod inner {
         };
 
         /// The error returned by [PlatformRef::prepare_external_driver()](PlatformRef::prepare_external_driver()).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
+        #[derive(Debug)]
+        #[allow(missing_docs)]
         pub enum Error {
-            #[error("The resource of kind {kind:?} was too large to be processed")]
-            ResourceTooLarge { kind: ResourceKind },
-            #[error(
-                "Tempfile to store content of '{rela_path}' ({kind:?}) for passing to external merge command could not be created"
-            )]
+            ResourceTooLarge {
+                kind: ResourceKind,
+            },
             CreateTempfile {
                 rela_path: BString,
                 kind: ResourceKind,
                 source: std::io::Error,
             },
-            #[error(
-                "Could not write content of '{rela_path}' ({kind:?}) to tempfile for passing to external merge command"
-            )]
             WriteTempfile {
                 rela_path: BString,
                 kind: ResourceKind,
                 source: std::io::Error,
             },
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::ResourceTooLarge { kind } => {
+                        write!(f, "The resource of kind {kind:?} was too large to be processed")
+                    }
+                    Error::CreateTempfile { rela_path, kind, .. } => write!(
+                        f,
+                        "Tempfile to store content of '{rela_path}' ({kind:?}) for passing to external merge command could not be created"
+                    ),
+                    Error::WriteTempfile { rela_path, kind, .. } => write!(
+                        f,
+                        "Could not write content of '{rela_path}' ({kind:?}) to tempfile for passing to external merge command"
+                    ),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::CreateTempfile { source, .. } => Some(source),
+                    Error::WriteTempfile { source, .. } => Some(source),
+                    Error::ResourceTooLarge { .. } => None,
+                }
+            }
         }
 
         /// Plumbing

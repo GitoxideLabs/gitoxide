@@ -1,22 +1,72 @@
 /// The error returned by [`commit()`](crate::commit()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. `VirtualMergeBase` and
+//                `MergeTree` are `#[error(transparent)]`: `Display` and `source()` forward to the
+//                wrapped error. The other `#[from]` variants render their own message and expose the
+//                wrapped error as `source()`; `NoMergeBase` has no source.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Failed to obtain the merge base between the two commits to be merged")]
-    MergeBase(#[from] gix_revision::merge_base::Error),
-    #[error(transparent)]
-    VirtualMergeBase(#[from] virtual_merge_base::Error),
-    #[error(transparent)]
-    MergeTree(#[from] crate::tree::Error),
-    #[error("No common ancestor between {our_commit_id} and {their_commit_id}")]
+    MergeBase(gix_revision::merge_base::Error),
+    VirtualMergeBase(virtual_merge_base::Error),
+    MergeTree(crate::tree::Error),
     NoMergeBase {
         /// The commit on our side that was to be merged.
         our_commit_id: gix_hash::ObjectId,
         /// The commit on their side that was to be merged.
         their_commit_id: gix_hash::ObjectId,
     },
-    #[error("Could not find ancestor, our or their commit to extract tree from")]
-    FindCommit(#[from] gix_object::find::existing_object::Error),
+    FindCommit(gix_object::find::existing_object::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MergeBase(_) => f.write_str("Failed to obtain the merge base between the two commits to be merged"),
+            Error::VirtualMergeBase(err) => std::fmt::Display::fmt(err, f),
+            Error::MergeTree(err) => std::fmt::Display::fmt(err, f),
+            Error::NoMergeBase {
+                our_commit_id,
+                their_commit_id,
+            } => write!(f, "No common ancestor between {our_commit_id} and {their_commit_id}"),
+            Error::FindCommit(_) => f.write_str("Could not find ancestor, our or their commit to extract tree from"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::MergeBase(err) => Some(err),
+            Error::VirtualMergeBase(err) => err.source(),
+            Error::MergeTree(err) => err.source(),
+            Error::FindCommit(err) => Some(err),
+            Error::NoMergeBase { .. } => None,
+        }
+    }
+}
+
+impl From<gix_revision::merge_base::Error> for Error {
+    fn from(err: gix_revision::merge_base::Error) -> Self {
+        Error::MergeBase(err)
+    }
+}
+
+impl From<virtual_merge_base::Error> for Error {
+    fn from(err: virtual_merge_base::Error) -> Self {
+        Error::VirtualMergeBase(err)
+    }
+}
+
+impl From<crate::tree::Error> for Error {
+    fn from(err: crate::tree::Error) -> Self {
+        Error::MergeTree(err)
+    }
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindCommit(err)
+    }
 }
 
 /// A way to configure [`commit()`](crate::commit()).

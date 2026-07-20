@@ -40,7 +40,6 @@ gix-diff = { version = "^0.66.0", path = "../gix-diff", default-features = false
 gix-index = { version = "^0.54.0", path = "../gix-index" }
 imara-diff = { package = "gix-imara-diff", version = "^0.2.4", path = "../gix-imara-diff" }
 
-thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false }
 nonempty = "0.12.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }

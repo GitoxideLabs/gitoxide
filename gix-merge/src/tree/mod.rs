@@ -2,27 +2,101 @@ use bstr::BString;
 use gix_diff::{Rewrites, tree_with_rewrites::Change};
 
 /// The error returned by [`tree()`](crate::tree()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. `BlobMergePrepare` and
+//                `BlobMerge` are `#[error(transparent)]`: `Display` and `source()` forward to the
+//                wrapped error. `WriteBlobToOdb` wraps an unnamed, unannotated `Box<dyn Error>` and so
+//                has no `source()` — matching `thiserror`, which never treats such a field as the
+//                source. The remaining `#[from]` variants render their own message and expose the
+//                wrapped error as `source()`.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Could not find ancestor, our or their tree to get started")]
-    FindTree(#[from] gix_object::find::existing_object::Error),
-    #[error("Could not find ancestor, our or their tree iterator to get started")]
-    FindTreeIter(#[from] gix_object::find::existing_iter::Error),
-    #[error("Failed to diff our side or their side")]
-    DiffTree(#[from] gix_diff::tree_with_rewrites::Error),
-    #[error("Could not apply merge result to base tree")]
-    TreeEdit(#[from] gix_object::tree::editor::Error),
-    #[error("Failed to load resource to prepare for blob merge")]
-    BlobMergeSetResource(#[from] crate::blob::platform::set_resource::Error),
-    #[error(transparent)]
-    BlobMergePrepare(#[from] crate::blob::platform::prepare_merge::Error),
-    #[error(transparent)]
-    BlobMerge(#[from] crate::blob::platform::merge::Error),
-    #[error("Failed to write merged blob content as blob to the object database")]
+    FindTree(gix_object::find::existing_object::Error),
+    FindTreeIter(gix_object::find::existing_iter::Error),
+    DiffTree(gix_diff::tree_with_rewrites::Error),
+    TreeEdit(gix_object::tree::editor::Error),
+    BlobMergeSetResource(crate::blob::platform::set_resource::Error),
+    BlobMergePrepare(crate::blob::platform::prepare_merge::Error),
+    BlobMerge(crate::blob::platform::merge::Error),
     WriteBlobToOdb(Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")]
     MergeResourceNotFound,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::FindTree(_) => f.write_str("Could not find ancestor, our or their tree to get started"),
+            Error::FindTreeIter(_) => f.write_str("Could not find ancestor, our or their tree iterator to get started"),
+            Error::DiffTree(_) => f.write_str("Failed to diff our side or their side"),
+            Error::TreeEdit(_) => f.write_str("Could not apply merge result to base tree"),
+            Error::BlobMergeSetResource(_) => f.write_str("Failed to load resource to prepare for blob merge"),
+            Error::BlobMergePrepare(err) => std::fmt::Display::fmt(err, f),
+            Error::BlobMerge(err) => std::fmt::Display::fmt(err, f),
+            Error::WriteBlobToOdb(_) => {
+                f.write_str("Failed to write merged blob content as blob to the object database")
+            }
+            Error::MergeResourceNotFound => f.write_str(
+                "The merge was performed, but the binary merge result couldn't be selected as it wasn't found",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::FindTree(err) => Some(err),
+            Error::FindTreeIter(err) => Some(err),
+            Error::DiffTree(err) => Some(err),
+            Error::TreeEdit(err) => Some(err),
+            Error::BlobMergeSetResource(err) => Some(err),
+            Error::BlobMergePrepare(err) => err.source(),
+            Error::BlobMerge(err) => err.source(),
+            Error::WriteBlobToOdb(_) | Error::MergeResourceNotFound => None,
+        }
+    }
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindTree(err)
+    }
+}
+
+impl From<gix_object::find::existing_iter::Error> for Error {
+    fn from(err: gix_object::find::existing_iter::Error) -> Self {
+        Error::FindTreeIter(err)
+    }
+}
+
+impl From<gix_diff::tree_with_rewrites::Error> for Error {
+    fn from(err: gix_diff::tree_with_rewrites::Error) -> Self {
+        Error::DiffTree(err)
+    }
+}
+
+impl From<gix_object::tree::editor::Error> for Error {
+    fn from(err: gix_object::tree::editor::Error) -> Self {
+        Error::TreeEdit(err)
+    }
+}
+
+impl From<crate::blob::platform::set_resource::Error> for Error {
+    fn from(err: crate::blob::platform::set_resource::Error) -> Self {
+        Error::BlobMergeSetResource(err)
+    }
+}
+
+impl From<crate::blob::platform::prepare_merge::Error> for Error {
+    fn from(err: crate::blob::platform::prepare_merge::Error) -> Self {
+        Error::BlobMergePrepare(err)
+    }
+}
+
+impl From<crate::blob::platform::merge::Error> for Error {
+    fn from(err: crate::blob::platform::merge::Error) -> Self {
+        Error::BlobMerge(err)
+    }
 }
 
 /// The outcome produced by [`tree()`](crate::tree()).

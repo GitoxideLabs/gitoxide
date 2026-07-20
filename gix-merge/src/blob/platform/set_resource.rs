@@ -3,25 +3,58 @@ use bstr::{BStr, BString};
 use crate::blob::{Platform, ResourceKind, pipeline, platform::Resource};
 
 /// The error returned by [Platform::set_resource](Platform::set_resource).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. `ConvertToMergeable` is
+//                `#[error(transparent)]`: `Display` and `source()` forward to the wrapped error. `Io`
+//                and `Attributes` expose their named `source` field; `InvalidMode` has no source.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Can only diff blobs, not {mode:?}")]
-    InvalidMode { mode: gix_object::tree::EntryKind },
-    #[error("Failed to read {kind:?} worktree data from '{rela_path}'")]
+    InvalidMode {
+        mode: gix_object::tree::EntryKind,
+    },
     Io {
         rela_path: BString,
         kind: ResourceKind,
         source: std::io::Error,
     },
-    #[error("Failed to obtain attributes for {kind:?} resource at '{rela_path}'")]
     Attributes {
         rela_path: BString,
         kind: ResourceKind,
         source: std::io::Error,
     },
-    #[error(transparent)]
-    ConvertToMergeable(#[from] pipeline::convert_to_mergeable::Error),
+    ConvertToMergeable(pipeline::convert_to_mergeable::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InvalidMode { mode } => write!(f, "Can only diff blobs, not {mode:?}"),
+            Error::Io { rela_path, kind, .. } => {
+                write!(f, "Failed to read {kind:?} worktree data from '{rela_path}'")
+            }
+            Error::Attributes { rela_path, kind, .. } => {
+                write!(f, "Failed to obtain attributes for {kind:?} resource at '{rela_path}'")
+            }
+            Error::ConvertToMergeable(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io { source, .. } => Some(source),
+            Error::Attributes { source, .. } => Some(source),
+            Error::ConvertToMergeable(err) => err.source(),
+            Error::InvalidMode { .. } => None,
+        }
+    }
+}
+
+impl From<pipeline::convert_to_mergeable::Error> for Error {
+    fn from(err: pipeline::convert_to_mergeable::Error) -> Self {
+        Error::ConvertToMergeable(err)
+    }
 }
 
 /// Preparation

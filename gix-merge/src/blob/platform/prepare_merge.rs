@@ -10,17 +10,37 @@ use crate::blob::{
 };
 
 /// The error returned by [Platform::prepare_merge_state()](Platform::prepare_merge()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")]
     UnsetResource,
-    #[error("Failed to obtain attributes for {kind:?} resource at '{rela_path}'")]
     Attributes {
         rela_path: BString,
         kind: ResourceKind,
         source: std::io::Error,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnsetResource => {
+                f.write_str("The 'current', 'ancestor' or 'other' resource for the merge operation were not set")
+            }
+            Error::Attributes { rela_path, kind, .. } => {
+                write!(f, "Failed to obtain attributes for {kind:?} resource at '{rela_path}'")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Attributes { source, .. } => Some(source),
+            Error::UnsetResource => None,
+        }
+    }
 }
 
 /// Preparation

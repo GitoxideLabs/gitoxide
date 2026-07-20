@@ -12,21 +12,61 @@ pub struct Outcome {
 }
 
 /// The error returned by [`commit::merge_base()`](crate::commit::virtual_merge_base()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. `MergeTree` is
+//                `#[error(transparent)]`: `Display` and `source()` forward to the wrapped error.
+//                `WriteObject` wraps an unnamed, unannotated error and so has no `source()` — matching
+//                `thiserror`, which never treats such a field as the source.
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    MergeTree(#[from] crate::tree::Error),
-    #[error("Failed to write tree for merged merge-base or virtual commit")]
+    MergeTree(crate::tree::Error),
     WriteObject(gix_object::write::Error),
-    #[error("Failed to decode a commit needed to build a virtual merge-base")]
-    DecodeCommit(#[from] gix_object::decode::Error),
-    #[error(
-        "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug."
-    )]
+    DecodeCommit(gix_object::decode::Error),
     VirtualMergeBaseConflict,
-    #[error("Could not find commit to use as basis for a virtual commit")]
-    FindCommit(#[from] gix_object::find::existing_object::Error),
+    FindCommit(gix_object::find::existing_object::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MergeTree(err) => std::fmt::Display::fmt(err, f),
+            Error::WriteObject(_) => f.write_str("Failed to write tree for merged merge-base or virtual commit"),
+            Error::DecodeCommit(_) => f.write_str("Failed to decode a commit needed to build a virtual merge-base"),
+            Error::VirtualMergeBaseConflict => f.write_str(
+                "Conflicts occurred when trying to resolve multiple merge-bases by merging them. This is most certainly a bug.",
+            ),
+            Error::FindCommit(_) => f.write_str("Could not find commit to use as basis for a virtual commit"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::MergeTree(err) => err.source(),
+            Error::DecodeCommit(err) => Some(err),
+            Error::FindCommit(err) => Some(err),
+            Error::WriteObject(_) | Error::VirtualMergeBaseConflict => None,
+        }
+    }
+}
+
+impl From<crate::tree::Error> for Error {
+    fn from(err: crate::tree::Error) -> Self {
+        Error::MergeTree(err)
+    }
+}
+
+impl From<gix_object::decode::Error> for Error {
+    fn from(err: gix_object::decode::Error) -> Self {
+        Error::DecodeCommit(err)
+    }
+}
+
+impl From<gix_object::find::existing_object::Error> for Error {
+    fn from(err: gix_object::find::existing_object::Error) -> Self {
+        Error::FindCommit(err)
+    }
 }
 
 pub(super) mod function {
@@ -45,7 +85,7 @@ pub(super) mod function {
     /// The parameters `graph`, `diff_resource_cache`, `blob_merge`, `objects`, `abbreviate_hash` and `options` are passed
     /// directly to [`tree()`](crate::tree()) for merging the trees of two merge-bases at a time.
     /// Note that most of `options` are overwritten to match the requirements of a merge-base merge.
-    #[expect(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn virtual_merge_base<'objects>(
         first_commit: gix_hash::ObjectId,
         second_commit: gix_hash::ObjectId,
