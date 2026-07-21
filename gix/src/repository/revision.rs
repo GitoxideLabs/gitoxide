@@ -68,10 +68,13 @@ impl crate::Repository {
         let two = two.into();
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        let bases = gix_revision::merge_base(one, &[two], &mut graph)?.ok_or(super::merge_base::Error::NotFound {
-            first: one,
-            second: two,
-        })?;
+        let bases = gix_revision::merge_base(one, &[two], &mut graph)
+            .map_err(gix_error::Error::from_error)?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Could not find a merge-base between commits {one} and {two}"
+                ))
+            })?;
         Ok(bases.first().attach(self))
     }
 
@@ -90,10 +93,12 @@ impl crate::Repository {
         use crate::prelude::ObjectIdExt;
         let one = one.into();
         let two = two.into();
-        let bases =
-            gix_revision::merge_base(one, &[two], graph)?.ok_or(super::merge_base_with_graph::Error::NotFound {
-                first: one,
-                second: two,
+        let bases = gix_revision::merge_base(one, &[two], graph)
+            .map_err(gix_error::Error::from_error)?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Could not find a merge-base between commits {one} and {two}"
+                ))
             })?;
         Ok(bases.first().attach(self))
     }
@@ -134,7 +139,9 @@ impl crate::Repository {
     ) -> Result<Vec<Id<'_>>, crate::repository::merge_bases_many::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        Ok(self.merge_bases_many_with_graph(one, others, &mut graph)?)
+        Ok(self
+            .merge_bases_many_with_graph(one, others, &mut graph)
+            .map_err(gix_error::Error::from_error)?)
     }
 
     /// Return the best merge-base among all `commits`, or fail if `commits` yields no commit or no merge-base was found.
@@ -146,14 +153,17 @@ impl crate::Repository {
         commits: impl IntoIterator<Item = impl Into<gix_hash::ObjectId>>,
         graph: &mut gix_revwalk::Graph<'_, '_, gix_revwalk::graph::Commit<gix_revision::merge_base::Flags>>,
     ) -> Result<Id<'_>, crate::repository::merge_base_octopus_with_graph::Error> {
-        use crate::{prelude::ObjectIdExt, repository::merge_base_octopus_with_graph};
+        use crate::prelude::ObjectIdExt;
         let commits: Vec<_> = commits.into_iter().map(Into::into).collect();
         let first = commits
             .first()
             .copied()
-            .ok_or(merge_base_octopus_with_graph::Error::MissingCommit)?;
-        gix_revision::merge_base::octopus(first, &commits[1..], graph)?
-            .ok_or(merge_base_octopus_with_graph::Error::NoMergeBase)
+            .ok_or_else(|| gix_error::Error::from_error(gix_error::message("No commit was provided")))?;
+        gix_revision::merge_base::octopus(first, &commits[1..], graph)
+            .map_err(gix_error::Error::from_error)?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message("No merge base was found between the given commits"))
+            })
             .map(|id| id.attach(self))
     }
 
