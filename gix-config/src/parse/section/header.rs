@@ -3,15 +3,37 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::parse::{Span, section::HeaderData};
 
 /// The error returned when creating a section header.
-#[derive(Debug, PartialOrd, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, PartialOrd, PartialEq, Eq)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("section names can only be ascii, '-'")]
     InvalidName,
-    #[error("sub-section names must not contain newlines or null bytes")]
     InvalidSubSection,
-    #[error(transparent)]
-    Span(#[from] crate::parse::span::Error),
+    Span(crate::parse::span::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InvalidName => f.write_str("section names can only be ascii, '-'"),
+            Error::InvalidSubSection => f.write_str("sub-section names must not contain newlines or null bytes"),
+            Error::Span(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::InvalidName | Error::InvalidSubSection => None,
+            Error::Span(err) => err.source(),
+        }
+    }
+}
+
+impl From<crate::parse::span::Error> for Error {
+    fn from(err: crate::parse::span::Error) -> Self {
+        Error::Span(err)
+    }
 }
 
 impl HeaderData {

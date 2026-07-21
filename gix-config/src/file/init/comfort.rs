@@ -147,17 +147,66 @@ pub mod from_git_dir {
     use crate::file::init;
 
     /// The error returned by [`File::from_git_dir()`][crate::File::from_git_dir()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     pub enum Error {
-        #[error(transparent)]
-        FromPaths(#[from] init::from_paths::Error),
-        #[error(transparent)]
-        FromEnv(#[from] init::from_env::Error),
-        #[error(transparent)]
-        Init(#[from] init::Error),
-        #[error(transparent)]
-        Includes(#[from] init::includes::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
+        FromPaths(init::from_paths::Error),
+        FromEnv(init::from_env::Error),
+        Init(init::Error),
+        Includes(init::includes::Error),
+        Span(crate::parse::span::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::FromPaths(err) => std::fmt::Display::fmt(err, f),
+                Error::FromEnv(err) => std::fmt::Display::fmt(err, f),
+                Error::Init(err) => std::fmt::Display::fmt(err, f),
+                Error::Includes(err) => std::fmt::Display::fmt(err, f),
+                Error::Span(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::FromPaths(err) => err.source(),
+                Error::FromEnv(err) => err.source(),
+                Error::Init(err) => err.source(),
+                Error::Includes(err) => err.source(),
+                Error::Span(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<init::from_paths::Error> for Error {
+        fn from(err: init::from_paths::Error) -> Self {
+            Error::FromPaths(err)
+        }
+    }
+
+    impl From<init::from_env::Error> for Error {
+        fn from(err: init::from_env::Error) -> Self {
+            Error::FromEnv(err)
+        }
+    }
+
+    impl From<init::Error> for Error {
+        fn from(err: init::Error) -> Self {
+            Error::Init(err)
+        }
+    }
+
+    impl From<init::includes::Error> for Error {
+        fn from(err: init::includes::Error) -> Self {
+            Error::Includes(err)
+        }
+    }
+
+    impl From<crate::parse::span::Error> for Error {
+        fn from(err: crate::parse::span::Error) -> Self {
+            Error::Span(err)
+        }
     }
 }

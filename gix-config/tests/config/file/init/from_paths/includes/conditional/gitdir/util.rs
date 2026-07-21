@@ -69,10 +69,10 @@ impl Condition {
 impl GitEnv {
     pub fn repo_name(repo_name: impl AsRef<Path>) -> crate::Result<Self> {
         let tempdir = gix_testtools::tempfile::tempdir()?;
-        let root_dir = gix_path::realpath(tempdir.path())?;
+        let root_dir = gix_path::realpath(tempdir.path()).map_err(gix_error::Exn::into_error)?;
         let worktree_dir = root_dir.join(repo_name);
         std::fs::create_dir_all(&worktree_dir)?;
-        let home_dir = gix_path::realpath(tempdir.path())?;
+        let home_dir = gix_path::realpath(tempdir.path()).map_err(gix_error::Exn::into_error)?;
         Ok(Self {
             tempdir,
             root_dir,

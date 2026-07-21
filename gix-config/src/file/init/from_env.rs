@@ -3,27 +3,80 @@ use bstr::ByteSlice;
 use crate::{File, KeyRef, file, file::init, parse::section, path::interpolate};
 
 /// Represents the errors that may occur when calling [`File::from_env()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Configuration {kind} at index {index} contained illformed UTF-8")]
     IllformedUtf8 { index: usize, kind: &'static str },
-    #[error("GIT_CONFIG_COUNT was not a positive integer: {}", .input)]
     InvalidConfigCount { input: String },
-    #[error("GIT_CONFIG_KEY_{} was not set", .key_id)]
     InvalidKeyId { key_id: usize },
-    #[error("GIT_CONFIG_KEY_{} was set to an invalid value: {}", .key_id, .key_val)]
     InvalidKeyValue { key_id: usize, key_val: String },
-    #[error("GIT_CONFIG_VALUE_{} was not set", .value_id)]
     InvalidValueId { value_id: usize },
-    #[error(transparent)]
-    PathInterpolationError(#[from] interpolate::Error),
-    #[error(transparent)]
-    Includes(#[from] init::includes::Error),
-    #[error(transparent)]
-    Section(#[from] section::header::Error),
-    #[error(transparent)]
-    SectionValue(#[from] file::section::value::Error),
+    PathInterpolationError(interpolate::Error),
+    Includes(init::includes::Error),
+    Section(section::header::Error),
+    SectionValue(file::section::value::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IllformedUtf8 { index, kind } => {
+                write!(f, "Configuration {kind} at index {index} contained illformed UTF-8")
+            }
+            Error::InvalidConfigCount { input } => {
+                write!(f, "GIT_CONFIG_COUNT was not a positive integer: {input}")
+            }
+            Error::InvalidKeyId { key_id } => write!(f, "GIT_CONFIG_KEY_{key_id} was not set"),
+            Error::InvalidKeyValue { key_id, key_val } => {
+                write!(f, "GIT_CONFIG_KEY_{key_id} was set to an invalid value: {key_val}")
+            }
+            Error::InvalidValueId { value_id } => write!(f, "GIT_CONFIG_VALUE_{value_id} was not set"),
+            Error::PathInterpolationError(err) => std::fmt::Display::fmt(err, f),
+            Error::Includes(err) => std::fmt::Display::fmt(err, f),
+            Error::Section(err) => std::fmt::Display::fmt(err, f),
+            Error::SectionValue(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::IllformedUtf8 { .. }
+            | Error::InvalidConfigCount { .. }
+            | Error::InvalidKeyId { .. }
+            | Error::InvalidKeyValue { .. }
+            | Error::InvalidValueId { .. } => None,
+            Error::PathInterpolationError(err) => err.source(),
+            Error::Includes(err) => err.source(),
+            Error::Section(err) => err.source(),
+            Error::SectionValue(err) => err.source(),
+        }
+    }
+}
+
+impl From<interpolate::Error> for Error {
+    fn from(err: interpolate::Error) -> Self {
+        Error::PathInterpolationError(err)
+    }
+}
+
+impl From<init::includes::Error> for Error {
+    fn from(err: init::includes::Error) -> Self {
+        Error::Includes(err)
+    }
+}
+
+impl From<section::header::Error> for Error {
+    fn from(err: section::header::Error) -> Self {
+        Error::Section(err)
+    }
+}
+
+impl From<file::section::value::Error> for Error {
+    fn from(err: file::section::value::Error) -> Self {
+        Error::SectionValue(err)
+    }
 }
 
 /// Instantiation from environment variables

@@ -1,17 +1,61 @@
 use crate::{file::init, parse, parse::EventRef, path::interpolate};
 
 /// The error returned by [`File::from_bytes_no_includes()`][crate::File::from_bytes_no_includes()].
-#[derive(Debug, thiserror::Error)]
+// TODO(review): all variants were `#[error(transparent)]`: `Display` and `source()` forward to the
+//                wrapped error, exactly like the `thiserror`-generated code did.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Parse(#[from] parse::Error),
-    #[error(transparent)]
-    Interpolate(#[from] interpolate::Error),
-    #[error(transparent)]
-    Includes(#[from] init::includes::Error),
-    #[error(transparent)]
-    Span(#[from] parse::span::Error),
+    Parse(parse::Error),
+    Interpolate(interpolate::Error),
+    Includes(init::includes::Error),
+    Span(parse::span::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Parse(err) => std::fmt::Display::fmt(err, f),
+            Error::Interpolate(err) => std::fmt::Display::fmt(err, f),
+            Error::Includes(err) => std::fmt::Display::fmt(err, f),
+            Error::Span(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Parse(err) => err.source(),
+            Error::Interpolate(err) => err.source(),
+            Error::Includes(err) => err.source(),
+            Error::Span(err) => err.source(),
+        }
+    }
+}
+
+impl From<parse::Error> for Error {
+    fn from(err: parse::Error) -> Self {
+        Error::Parse(err)
+    }
+}
+
+impl From<interpolate::Error> for Error {
+    fn from(err: interpolate::Error) -> Self {
+        Error::Interpolate(err)
+    }
+}
+
+impl From<init::includes::Error> for Error {
+    fn from(err: init::includes::Error) -> Self {
+        Error::Includes(err)
+    }
+}
+
+impl From<parse::span::Error> for Error {
+    fn from(err: parse::span::Error) -> Self {
+        Error::Span(err)
+    }
 }
 
 /// Options when loading git config using [`File::from_paths_metadata()`][crate::File::from_paths_metadata()].

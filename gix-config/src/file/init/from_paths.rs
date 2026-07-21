@@ -6,16 +6,40 @@ use crate::{
 };
 
 /// The error returned by [`File::from_paths_metadata()`] and [`File::from_path_no_includes()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("The configuration file at \"{}\" could not be read", path.display())]
     Io {
         source: std::io::Error,
         path: std::path::PathBuf,
     },
-    #[error(transparent)]
-    Init(#[from] init::Error),
+    Init(init::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io { path, .. } => {
+                write!(f, "The configuration file at \"{}\" could not be read", path.display())
+            }
+            Error::Init(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io { source, .. } => Some(source),
+            Error::Init(err) => err.source(),
+        }
+    }
+}
+
+impl From<init::Error> for Error {
+    fn from(err: init::Error) -> Self {
+        Error::Init(err)
+    }
 }
 
 /// Instantiation from one or more paths

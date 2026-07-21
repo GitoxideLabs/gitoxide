@@ -27,30 +27,100 @@ pub mod section;
 ///
 pub mod rename_section {
     /// The error returned by [`File::rename_section(…)`][crate::File::rename_section()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Lookup(#[from] crate::lookup::existing::Error),
-        #[error(transparent)]
-        Section(#[from] crate::parse::section::header::Error),
+        Lookup(crate::lookup::existing::Error),
+        Section(crate::parse::section::header::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Lookup(err) => std::fmt::Display::fmt(err, f),
+                Error::Section(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Lookup(err) => err.source(),
+                Error::Section(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<crate::lookup::existing::Error> for Error {
+        fn from(err: crate::lookup::existing::Error) -> Self {
+            Error::Lookup(err)
+        }
+    }
+
+    impl From<crate::parse::section::header::Error> for Error {
+        fn from(err: crate::parse::section::header::Error) -> Self {
+            Error::Section(err)
+        }
     }
 }
 
 ///
 pub mod set_raw_value {
     /// The error returned by [`File::set_raw_value(…)`][crate::File::set_raw_value()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Lookup(#[from] crate::lookup::existing::Error),
-        #[error(transparent)]
-        Header(#[from] crate::parse::section::header::Error),
-        #[error(transparent)]
-        ValueName(#[from] crate::parse::section::value_name::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
+        Lookup(crate::lookup::existing::Error),
+        Header(crate::parse::section::header::Error),
+        ValueName(crate::parse::section::value_name::Error),
+        Span(crate::parse::span::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Lookup(err) => std::fmt::Display::fmt(err, f),
+                Error::Header(err) => std::fmt::Display::fmt(err, f),
+                Error::ValueName(err) => std::fmt::Display::fmt(err, f),
+                Error::Span(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Lookup(err) => err.source(),
+                Error::Header(err) => err.source(),
+                Error::ValueName(err) => err.source(),
+                Error::Span(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<crate::lookup::existing::Error> for Error {
+        fn from(err: crate::lookup::existing::Error) -> Self {
+            Error::Lookup(err)
+        }
+    }
+
+    impl From<crate::parse::section::header::Error> for Error {
+        fn from(err: crate::parse::section::header::Error) -> Self {
+            Error::Header(err)
+        }
+    }
+
+    impl From<crate::parse::section::value_name::Error> for Error {
+        fn from(err: crate::parse::section::value_name::Error) -> Self {
+            Error::ValueName(err)
+        }
+    }
+
+    impl From<crate::parse::span::Error> for Error {
+        fn from(err: crate::parse::span::Error) -> Self {
+            Error::Span(err)
+        }
     }
 }
 

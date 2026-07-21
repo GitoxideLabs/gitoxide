@@ -3,27 +3,84 @@ use std::path::PathBuf;
 use crate::{parse, path::interpolate};
 
 /// The error returned when following includes.
-#[derive(Debug, thiserror::Error)]
+// TODO(review): hand-written impls preserve the `thiserror` semantics. The transparent variants
+//                forward `Display` and `source()`; `Realpath` wraps an `Exn` (which does not
+//                implement `std::error::Error`) and exposes the inner error via `&**err` as its
+//                `source()`; the `#[source]`-only `CopyBuffer` and the `source`-named field of `Io`
+//                surface as `source()` without gaining a `From`.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Failed to copy configuration file into buffer")]
-    CopyBuffer(#[source] std::io::Error),
-    #[error("Could not read included configuration file at '{}'", path.display())]
+    CopyBuffer(std::io::Error),
     Io { path: PathBuf, source: std::io::Error },
-    #[error(transparent)]
-    Parse(#[from] parse::Error),
-    #[error(transparent)]
-    Span(#[from] parse::span::Error),
-    #[error(transparent)]
-    Interpolate(#[from] interpolate::Error),
-    #[error("The maximum allowed length {} of the file include chain built by following nested resolve_includes is exceeded", .max_depth)]
+    Parse(parse::Error),
+    Span(parse::span::Error),
+    Interpolate(interpolate::Error),
     IncludeDepthExceeded { max_depth: u8 },
-    #[error("Include paths from environment variables must not be relative as no config file paths exists as root")]
     MissingConfigPath,
-    #[error("The git directory must be provided to support `gitdir:` conditional includes")]
     MissingGitDir,
-    #[error(transparent)]
-    Realpath(#[from] gix_path::realpath::Error),
+    Realpath(gix_path::realpath::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::CopyBuffer(_) => f.write_str("Failed to copy configuration file into buffer"),
+            Error::Io { path, .. } => write!(f, "Could not read included configuration file at '{}'", path.display()),
+            Error::Parse(err) => std::fmt::Display::fmt(err, f),
+            Error::Span(err) => std::fmt::Display::fmt(err, f),
+            Error::Interpolate(err) => std::fmt::Display::fmt(err, f),
+            Error::IncludeDepthExceeded { max_depth } => write!(
+                f,
+                "The maximum allowed length {max_depth} of the file include chain built by following nested resolve_includes is exceeded"
+            ),
+            Error::MissingConfigPath => f.write_str(
+                "Include paths from environment variables must not be relative as no config file paths exists as root",
+            ),
+            Error::MissingGitDir => {
+                f.write_str("The git directory must be provided to support `gitdir:` conditional includes")
+            }
+            Error::Realpath(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::CopyBuffer(err) => Some(err),
+            Error::Io { source, .. } => Some(source),
+            Error::Parse(err) => err.source(),
+            Error::Span(err) => err.source(),
+            Error::Interpolate(err) => err.source(),
+            Error::IncludeDepthExceeded { .. } | Error::MissingConfigPath | Error::MissingGitDir => None,
+            Error::Realpath(err) => Some(&**err),
+        }
+    }
+}
+
+impl From<parse::Error> for Error {
+    fn from(err: parse::Error) -> Self {
+        Error::Parse(err)
+    }
+}
+
+impl From<parse::span::Error> for Error {
+    fn from(err: parse::span::Error) -> Self {
+        Error::Span(err)
+    }
+}
+
+impl From<interpolate::Error> for Error {
+    fn from(err: interpolate::Error) -> Self {
+        Error::Interpolate(err)
+    }
+}
+
+impl From<gix_path::realpath::Error> for Error {
+    fn from(err: gix_path::realpath::Error) -> Self {
+        Error::Realpath(err)
+    }
 }
 
 /// Options to handle includes, like `include.path` or `includeIf.<condition>.path`,
