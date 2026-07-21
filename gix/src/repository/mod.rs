@@ -105,206 +105,84 @@ pub mod blame_file {
     }
 
     /// The error returned by [Repository::blame_file()](crate::Repository::blame_file()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        CommitGraphIfEnabled(#[from] super::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        DiffAlgorithm(#[from] crate::config::diff::algorithm::Error),
-        #[error(transparent)]
-        DiffResourceCache(#[from] super::diff_resource_cache::Error),
-        #[error(transparent)]
-        Blame(#[from] gix_blame::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "blob-diff")]
 pub mod diff_tree_to_tree {
     /// The error returned by [Repository::diff_tree_to_tree()](crate::Repository::diff_tree_to_tree()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        DiffOptions(#[from] crate::diff::options::init::Error),
-        #[error(transparent)]
-        CreateResourceCache(#[from] super::diff_resource_cache::Error),
-        #[error(transparent)]
-        TreeDiff(#[from] gix_diff::tree_with_rewrites::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod blob_merge_options {
     /// The error returned by [Repository::blob_merge_options()](crate::Repository::blob_merge_options()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        DiffAlgorithm(#[from] crate::config::diff::algorithm::Error),
-        #[error(transparent)]
-        ConflictStyle(#[from] crate::config::key::GenericErrorWithValue),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod merge_resource_cache {
     /// The error returned by [Repository::merge_resource_cache()](crate::Repository::merge_resource_cache()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        RenormalizeConfig(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        PipelineOptions(#[from] crate::config::merge::pipeline_options::Error),
-        #[error(transparent)]
-        Index(#[from] crate::repository::index_or_load_from_head_or_empty::Error),
-        #[error(transparent)]
-        AttributeStack(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-        #[error(transparent)]
-        FilterPipeline(#[from] crate::filter::pipeline::options::Error),
-        #[error(transparent)]
-        DriversConfig(#[from] crate::config::merge::drivers::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod merge_trees {
     /// The error returned by [Repository::merge_trees()](crate::Repository::merge_trees()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        MergeResourceCache(#[from] super::merge_resource_cache::Error),
-        #[error(transparent)]
-        DiffResourceCache(#[from] super::diff_resource_cache::Error),
-        #[error(transparent)]
-        TreeMerge(#[from] gix_merge::tree::Error),
-        #[error(transparent)]
-        ValidationOptions(#[from] crate::config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod merge_commits {
     /// The error returned by [Repository::merge_commits()](crate::Repository::merge_commits()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCommitGraph(#[from] super::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        MergeResourceCache(#[from] super::merge_resource_cache::Error),
-        #[error(transparent)]
-        DiffResourceCache(#[from] super::diff_resource_cache::Error),
-        #[error(transparent)]
-        CommitMerge(#[from] gix_merge::commit::Error),
-        #[error(transparent)]
-        ValidationOptions(#[from] crate::config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod virtual_merge_base {
     /// The error returned by [Repository::virtual_merge_base()](crate::Repository::virtual_merge_base()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCommitGraph(#[from] super::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        VirtualMergeBase(#[from] super::virtual_merge_base_with_graph::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod virtual_merge_base_with_graph {
     /// The error returned by [Repository::virtual_merge_base_with_graph()](crate::Repository::virtual_merge_base_with_graph()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("No commit was provided as merge-base")]
-        MissingCommit,
-        #[error(transparent)]
-        MergeResourceCache(#[from] super::merge_resource_cache::Error),
-        #[error(transparent)]
-        DiffResourceCache(#[from] super::diff_resource_cache::Error),
-        #[error(transparent)]
-        CommitMerge(#[from] gix_merge::commit::Error),
-        #[error(transparent)]
-        FindCommit(#[from] crate::object::find::existing::with_conversion::Error),
-        #[error(transparent)]
-        DecodeCommit(#[from] gix_object::decode::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "revision")]
 pub mod merge_base_octopus_with_graph {
     /// The error returned by [Repository::merge_base_octopus_with_graph()](crate::Repository::merge_base_octopus_with_graph()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("No commit was provided")]
-        MissingCommit,
-        #[error("No merge base was found between the given commits")]
-        NoMergeBase,
-        #[error(transparent)]
-        MergeBase(#[from] gix_revision::merge_base::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "revision")]
 pub mod merge_base_octopus {
     /// The error returned by [Repository::merge_base_octopus()](crate::Repository::merge_base_octopus()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCache(#[from] crate::repository::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        MergeBaseOctopus(#[from] super::merge_base_octopus_with_graph::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "revision")]
 pub mod merge_bases_many {
     /// The error returned by [Repository::merge_bases_many()](crate::Repository::merge_bases_many()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCache(#[from] crate::repository::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        MergeBase(#[from] gix_revision::merge_base::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "merge")]
 pub mod tree_merge_options {
     /// The error returned by [Repository::tree_merge_options()](crate::Repository::tree_merge_options()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        BlobMergeOptions(#[from] super::blob_merge_options::Error),
-        #[error(transparent)]
-        RewritesConfig(#[from] crate::diff::new_rewrites::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -327,63 +205,27 @@ pub mod diff_resource_cache {
 #[cfg(feature = "tree-editor")]
 pub mod edit_tree {
     /// The error returned by [Repository::edit_tree()](crate::Repository::edit_tree).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindTree(#[from] crate::object::find::existing::with_conversion::Error),
-        #[error(transparent)]
-        InitEditor(#[from] crate::object::tree::editor::init::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "revision")]
 pub mod merge_base {
     /// The error returned by [Repository::merge_base()](crate::Repository::merge_base()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCache(#[from] crate::repository::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        FindMergeBase(#[from] gix_revision::merge_base::Error),
-        #[error("Could not find a merge-base between commits {first} and {second}")]
-        NotFound {
-            first: gix_hash::ObjectId,
-            second: gix_hash::ObjectId,
-        },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "revision")]
 pub mod merge_base_with_graph {
     /// The error returned by [Repository::merge_base_with_cache()](crate::Repository::merge_base_with_graph()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindMergeBase(#[from] gix_revision::merge_base::Error),
-        #[error("Could not find a merge-base between commits {first} and {second}")]
-        NotFound {
-            first: gix_hash::ObjectId,
-            second: gix_hash::ObjectId,
-        },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod commit_graph_if_enabled {
     /// The error returned by [Repository::commit_graph_if_enabled()](crate::Repository::commit_graph_if_enabled()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigBoolean(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        OpenCommitGraph(#[from] crate::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
