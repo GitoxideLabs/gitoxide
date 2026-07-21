@@ -70,65 +70,66 @@ Result on 2026-04-22:
 
 ### Batch 1: leaves
 
-- [ ] `gix-hash` - 7
-- [ ] `gix-url` - 3
-- [ ] `gix-packetline` - 3
-- [ ] `gix-features` - 3
-- [ ] `gix-path` - 2
-- [ ] `gix-attributes` - 2
+- [x] `gix-hash`
+- [x] `gix-url`
+- [x] `gix-packetline`
+- [x] `gix-features` (already converted when its zlib module moved to `gix-zlib`)
+- [x] `gix-path`
+- [x] `gix-attributes`
 - [x] `gix-quote`
-- [ ] `gix-lock` - 1
-- [x] `gix-fs`
+- [x] `gix-lock`
+- [ ] `gix-fs` (still uses `thiserror`)
 - [x] `gix-bitmap`
 - [x] `gix-mailmap`
+- [x] `gix-zlib` (not originally listed; extracted from `gix-features` after this plan was written)
 
 ### Batch 2: simple dependents
 
-- [ ] `gix-object` - 11
-- [ ] `gix-config-value` - 2
-- [ ] `gix-shallow` - 2
-- [ ] `gix-refspec` - 1
+- [x] `gix-object`
+- [x] `gix-config-value`
+- [x] `gix-shallow`
+- [x] `gix-refspec`
 
 ### Batch 3: ref / filter layer
 
-- [ ] `gix-ref` - 22
-- [ ] `gix-filter` - 18
-- [ ] `gix-revwalk` - 4
-- [ ] `gix-pathspec` - 3
-- [ ] `gix-prompt` - 1
+- [x] `gix-ref`
+- [x] `gix-filter`
+- [x] `gix-revwalk`
+- [x] `gix-pathspec`
+- [x] `gix-prompt`
 
 ### Batch 4: config and discovery
 
-- [ ] `gix-traverse` - 3
-- [ ] `gix-config` - 11
-- [ ] `gix-credentials` - 5
-- [ ] `gix-discover` - 4
+- [x] `gix-traverse`
+- [ ] `gix-config` (deferred: the conversion predates the lifetime-free config refactor; kept at `main` pending re-integration)
+- [x] `gix-credentials`
+- [x] `gix-discover`
 
 ### Batch 5: transport and index-adjacent
 
-- [ ] `gix-index` - 11
-- [ ] `gix-transport` - 10
+- [x] `gix-index`
+- [x] `gix-transport`
 - [x] `gix-worktree-stream`
-- [ ] `gix-submodule` - 6
+- [ ] `gix-submodule` (deferred: entangled with the lifetime-free config refactor; kept at `main` pending re-integration)
 
 ### Batch 6: diff / protocol tier
 
-- [ ] `gix-diff` - 8
+- [x] `gix-diff`
 - [ ] `gix-protocol` - 8
-- [ ] `gix-dir` - 1
-- [ ] `gix-worktree-state` - 1
+- [x] `gix-dir`
+- [x] `gix-worktree-state`
 - [x] `gix-archive`
 
 ### Batch 7: heavier consumers
 
-- [ ] `gix-pack` - 23
-- [ ] `gix-merge` - 8
-- [ ] `gix-status` - 3
-- [ ] `gix-blame` - 1
+- [x] `gix-pack`
+- [x] `gix-merge`
+- [x] `gix-status`
+- [x] `gix-blame`
 
 ### Batch 8: object database
 
-- [ ] `gix-odb` - 11
+- [x] `gix-odb`
 
 ### Batch 9: top-level API
 

@@ -109,7 +109,7 @@ mod blocking_io {
     }
 
     fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
-        let commits = repo.shallow_commits()?.expect(expected);
+        let commits = repo.shallow_commits().map_err(gix::Exn::into_error)?.expect(expected);
         // `gix_shallow::read` returns these sorted by id; the expected side is sorted via `sorted(...)`.
         Ok(std::iter::once(commits.head)
             .chain(commits.tail.iter().copied())
@@ -168,7 +168,10 @@ mod blocking_io {
             .with_shallow(Shallow::undo())
             .receive(gix::progress::Discard, &AtomicBool::default())?;
 
-        assert!(repo.shallow_commits()?.is_none(), "the repo isn't shallow anymore");
+        assert!(
+            repo.shallow_commits().map_err(gix::Exn::into_error)?.is_none(),
+            "the repo isn't shallow anymore"
+        );
         assert!(
             !repo.is_shallow(),
             "both methods agree - if there are no shallow commits, it shouldn't think the repo is shallow"

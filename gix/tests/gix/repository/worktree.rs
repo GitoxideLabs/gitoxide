@@ -63,7 +63,8 @@ mod with_core_worktree_config {
             } else {
                 assert_eq!(
                     repo.workdir().unwrap(),
-                    gix_path::realpath(repo.git_dir().parent().unwrap().parent().unwrap().join("worktree"))?,
+                    gix_path::realpath(repo.git_dir().parent().unwrap().parent().unwrap().join("worktree"))
+                        .map_err(gix_path::realpath::Error::into_error)?,
                     "absolute workdirs are left untouched"
                 );
             }
@@ -78,7 +79,7 @@ mod with_core_worktree_config {
             assert_eq!(baseline.len(), 1, "git lists the main worktree");
             assert_eq!(
                 baseline[0].root,
-                gix_path::realpath(repo.git_dir().parent().unwrap())?,
+                gix_path::realpath(repo.git_dir().parent().unwrap()).map_err(gix_path::realpath::Error::into_error)?,
                 "git lists the original worktree, to which we have no access anymore"
             );
             assert_eq!(
@@ -167,8 +168,9 @@ mod with_core_worktree_config {
         let git_worktree = std::fs::read_to_string(root.join("worktree.baseline"))?;
 
         assert_eq!(
-            gix_path::realpath(repo.workdir().expect("core.worktree is configured"))?,
-            gix_path::realpath(git_worktree.trim_end())?,
+            gix_path::realpath(repo.workdir().expect("core.worktree is configured"))
+                .map_err(gix_path::realpath::Error::into_error)?,
+            gix_path::realpath(git_worktree.trim_end()).map_err(gix_path::realpath::Error::into_error)?,
             "relative core.worktree values from repository config are resolved against the real git dir"
         );
         Ok(())
@@ -309,14 +311,18 @@ fn linked_worktree_proxy_base_with_relative_linking_files() -> crate::Result {
     let proxy = worktrees.into_iter().next().expect("one worktree");
 
     assert_eq!(
-        gix_path::realpath(proxy.base()?)?,
-        gix_path::realpath(&linked)?,
+        gix_path::realpath(proxy.base()?).map_err(gix_path::realpath::Error::into_error)?,
+        gix_path::realpath(&linked).map_err(gix_path::realpath::Error::into_error)?,
         "proxy bases resolve relative worktrees/<id>/gitdir paths against the private git dir"
     );
     let linked_repo = proxy.into_repo()?;
     assert_eq!(
-        linked_repo.workdir().map(gix_path::realpath).transpose()?,
-        Some(gix_path::realpath(&linked)?)
+        linked_repo
+            .workdir()
+            .map(gix_path::realpath)
+            .transpose()
+            .map_err(gix_path::realpath::Error::into_error)?,
+        Some(gix_path::realpath(&linked).map_err(gix_path::realpath::Error::into_error)?)
     );
     assert_eq!(linked_repo.git_dir(), private_git_dir);
 
@@ -336,14 +342,17 @@ fn linked_worktree_proxy_base_with_symlinked_main_repo() -> crate::Result {
     let proxy = worktrees.into_iter().next().expect("one worktree");
 
     assert_eq!(
-        gix_path::realpath(proxy.base()?)?,
-        gix_path::realpath(&linked)?,
+        gix_path::realpath(proxy.base()?).map_err(gix_path::realpath::Error::into_error)?,
+        gix_path::realpath(&linked).map_err(gix_path::realpath::Error::into_error)?,
         "proxy bases preserve symlink semantics when resolving relative worktrees/<id>/gitdir paths"
     );
     let repo = proxy.into_repo()?;
     assert_eq!(
-        repo.workdir().map(gix_path::realpath).transpose()?,
-        Some(gix_path::realpath(&linked)?)
+        repo.workdir()
+            .map(gix_path::realpath)
+            .transpose()
+            .map_err(gix_path::realpath::Error::into_error)?,
+        Some(gix_path::realpath(&linked).map_err(gix_path::realpath::Error::into_error)?)
     );
 
     Ok(())

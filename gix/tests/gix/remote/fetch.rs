@@ -143,7 +143,7 @@ mod blocking_and_async_io {
     }
 
     fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
-        let commits = repo.shallow_commits()?.expect(expected);
+        let commits = repo.shallow_commits().map_err(gix::Exn::into_error)?.expect(expected);
         Ok(std::iter::once(commits.head)
             .chain(commits.tail.iter().copied())
             .collect())
@@ -303,7 +303,9 @@ mod blocking_and_async_io {
                     r.repo().objects.store_ref().path().join("info").join("alternates"),
                     format!(
                         "{}\n",
-                        gix::path::realpath(remote_repo.objects.store_ref().path())?.display()
+                        gix::path::realpath(remote_repo.objects.store_ref().path())
+                            .map_err(gix::path::realpath::Error::into_error)?
+                            .display()
                     )
                     .as_bytes(),
                 )?;

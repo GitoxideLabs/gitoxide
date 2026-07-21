@@ -253,7 +253,8 @@ mod open {
             .expect("modules present")
             .next()
             .expect("one submodule");
-        let submodule_workdir = gix_path::realpath(root.join("home/.config/awesome/lain"))?;
+        let submodule_workdir = gix_path::realpath(root.join("home/.config/awesome/lain"))
+            .map_err(gix_path::realpath::Error::into_error)?;
 
         assert_eq!(
             sm.work_dir()?,
