@@ -36,7 +36,8 @@ impl crate::Repository {
     ) -> Result<Option<gix_commitgraph::Graph>, super::commit_graph_if_enabled::Error> {
         Ok(self
             .config
-            .may_use_commit_graph()?
+            .may_use_commit_graph()
+            .map_err(gix_error::Error::from_error)?
             .then(|| gix_commitgraph::at(self.objects.store_ref().path().join("info")))
             .transpose()
             .or_else(|err| match err.downcast_any_ref::<std::io::Error>() {
