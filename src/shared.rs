@@ -332,10 +332,11 @@ mod clap {
 
         fn parse_ref(&self, cmd: &Command, arg: Option<&Arg>, value: &OsStr) -> Result<Self::Value, Error> {
             OsStringValueParser::new()
-                .try_map(|arg| {
-                    let arg: &std::path::Path = arg.as_os_str().as_ref();
-                    gix::pathspec::parse(gix::path::into_bstr(arg).as_ref(), *PATHSPEC_DEFAULTS)
-                        .map_err(gix::pathspec::parse::Error::into_error)
+                .try_map(|arg| -> Result<_, gix::Error> {
+                    let arg = gix::path::into_bstr(std::path::PathBuf::from(arg));
+                    gix::pathspec::parse(arg.as_ref(), *PATHSPEC_DEFAULTS)
+                        .map_err(gix::pathspec::parse::Error::into_error)?;
+                    Ok(arg.into_owned())
                 })
                 .parse_ref(cmd, arg, value)
         }
