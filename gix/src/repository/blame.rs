@@ -16,7 +16,9 @@ impl Repository {
         options: blame_file::Options,
     ) -> Result<gix_blame::Outcome, blame_file::Error> {
         let cache = self.commit_graph_if_enabled()?;
-        let mut resource_cache = self.diff_resource_cache_for_tree_diff()?;
+        let mut resource_cache = self
+            .diff_resource_cache_for_tree_diff()
+            .map_err(gix_error::Error::from_error)?;
 
         let blame_file::Options {
             diff_algorithm,
@@ -26,7 +28,7 @@ impl Repository {
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,
-            None => self.diff_algorithm()?,
+            None => self.diff_algorithm().map_err(gix_error::Error::from_error)?,
         };
 
         let options = gix_blame::Options {
@@ -44,7 +46,8 @@ impl Repository {
             &mut resource_cache,
             file_path,
             options,
-        )?;
+        )
+        .map_err(gix_error::Error::from_error)?;
 
         Ok(outcome)
     }
