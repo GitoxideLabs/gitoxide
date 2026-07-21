@@ -34,21 +34,18 @@ impl ToNormalPathComponents for PathBuf {
 
 // TODO(review): the previous thiserror enum (`NotANormalComponent`/`IllegalUtf8`) became
 //                `Exn<ValidationError>` per the plan's validation-path rule — no consumer named or
-//                matched the variants. Both cases now carry the offending input, rendered with
-//                debug quoting after the message, where the path was previously interpolated inline.
+//                matched the variants. The `Display` output is preserved verbatim, so the path stays
+//                interpolated inline rather than being attached as `ValidationError` input.
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
 ) -> Result<&'a OsStr, to_normal_path_components::Error> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(ValidationError::new_with_input(
-            "Input path contains relative or absolute components",
-            gix_path::try_into_bstr(path_with_component).map_or_else(
-                |_| path_with_component.to_string_lossy().into_owned().into(),
-                std::borrow::Cow::into_owned,
-            ),
-        )
+        _ => Err(ValidationError::new(format!(
+            "Input path \"{path}\" contains relative or absolute components",
+            path = path_with_component.display()
+        ))
         .raise()),
     }
 }
