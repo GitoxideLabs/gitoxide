@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use gix_error::{ErrorExt, ResultExt};
+#[cfg(feature = "parallel")]
+use gix_error::ErrorExt;
+use gix_error::ResultExt;
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
