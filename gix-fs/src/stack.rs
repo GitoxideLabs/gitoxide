@@ -34,8 +34,11 @@ impl ToNormalPathComponents for PathBuf {
 
 // TODO(review): the previous thiserror enum (`NotANormalComponent`/`IllegalUtf8`) became
 //                `Exn<ValidationError>` per the plan's validation-path rule — no consumer named or
-//                matched the variants. The `Display` output is preserved verbatim, so the path stays
-//                interpolated inline rather than being attached as `ValidationError` input.
+//                matched the variants. Both cases reproduce their previous `Display` output verbatim,
+//                so the path stays interpolated inline rather than being attached as
+//                `ValidationError` input. Attaching it instead would render it as a `: "…"` suffix,
+//                which reads better and keeps the input machine-accessible — happy to switch if you
+//                prefer that, but it changes user-visible text so it isn't done unilaterally here.
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
@@ -78,13 +81,9 @@ fn bytes_component_to_os_str<'a>(
     if component.is_empty() {
         return None;
     }
-    let component = match gix_path::try_from_byte_slice(component.as_bstr()).map_err(|_| {
-        ValidationError::new_with_input(
-            "Could not convert to UTF8 or from UTF8 due to ill-formed input",
-            component,
-        )
-        .raise()
-    }) {
+    let component = match gix_path::try_from_byte_slice(component.as_bstr())
+        .map_err(|_| ValidationError::new("Could not convert to UTF8 or from UTF8 due to ill-formed input").raise())
+    {
         Ok(c) => c,
         Err(err) => return Some(Err(err)),
     };
