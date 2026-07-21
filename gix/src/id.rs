@@ -42,17 +42,28 @@ impl<'repo> Id<'repo> {
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`.
     pub fn shorten(&self) -> Result<gix_hash::Prefix, shorten::Error> {
-        let hex_len = self.repo.config.hex_len.map_or_else(
-            || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
-            Ok,
-        )?;
+        let hex_len = self
+            .repo
+            .config
+            .hex_len
+            .map_or_else(
+                || self.repo.objects.packed_object_count().map(calculate_auto_hex_len),
+                Ok,
+            )
+            .map_err(gix_error::Error::from_error)?;
 
         let prefix = gix_odb::store::prefix::disambiguate::Candidate::new(self.inner, hex_len)
             .expect("BUG: internal hex-len must always be valid");
         self.repo
             .objects
-            .disambiguate_prefix(prefix)?
-            .ok_or(shorten::Error::NotFound { oid: self.inner })
+            .disambiguate_prefix(prefix)
+            .map_err(gix_error::Error::from_error)?
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::message!(
+                    "Id could not be shortened as the object with id {} could not be found",
+                    self.inner
+                ))
+            })
     }
 
     /// Turn this object id into a shortened id with a length in hex as configured by `core.abbrev`, or default
@@ -71,16 +82,7 @@ fn calculate_auto_hex_len(num_packed_objects: u64) -> usize {
 ///
 pub mod shorten {
     /// Returned by [`Id::prefix()`][super::Id::shorten()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        PackedObjectsCount(#[from] gix_odb::store::load_index::Error),
-        #[error(transparent)]
-        DisambiguatePrefix(#[from] gix_odb::store::prefix::disambiguate::Error),
-        #[error("Id could not be shortened as the object with id {} could not be found", .oid)]
-        NotFound { oid: gix_hash::ObjectId },
-    }
+    pub type Error = gix_error::Error;
 }
 
 impl Deref for Id<'_> {

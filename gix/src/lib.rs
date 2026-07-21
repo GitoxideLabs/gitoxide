@@ -254,10 +254,6 @@ pub mod merge;
 /// assert!(repo.workdir_path("this").expect("non-bare").is_file());
 /// # Ok(()) }
 /// ```
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn discover(directory: impl AsRef<std::path::Path>) -> Result<Repository, discover::Error> {
     ThreadSafeRepository::discover(directory).map(Into::into)
 }
@@ -288,10 +284,6 @@ pub fn discover_opts(
 /// Try to discover a git repository directly from the environment.
 ///
 /// For details, see [`ThreadSafeRepository::discover_with_environment_overrides_opts()`].
-#[expect(
-    clippy::result_large_err,
-    reason = "will be removed once `gix-error` is used consistently"
-)]
 pub fn discover_with_environment_overrides(
     directory: impl AsRef<std::path::Path>,
 ) -> Result<Repository, discover::Error> {

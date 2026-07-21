@@ -1,21 +1,10 @@
 use gix_object::TreeRefIter;
 
 use super::{Action, Change, Platform};
-use crate::{Tree, diff::rewrites::tracker};
+use crate::Tree;
 
 /// The error return by methods on the [diff platform][Platform].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Diff(#[from] gix_diff::tree_with_rewrites::Error),
-    #[error("The user-provided callback failed")]
-    ForEach(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    ResourceCache(#[from] crate::repository::diff_resource_cache::Error),
-    #[error("Failure during rename tracking")]
-    RenameTracking(#[from] tracker::emit::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Add the item to compare to.
 impl<'old> Platform<'_, 'old> {
@@ -69,13 +58,15 @@ impl<'old> Platform<'_, 'old> {
         let mut storage;
         let cache = match resource_cache {
             None => {
-                storage = repo.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
+                storage = repo
+                    .diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())
+                    .map_err(gix_error::Error::from_error)?;
                 &mut storage
             }
             Some(cache) => cache,
         };
         let opts = self.options.into();
-        Ok(gix_diff::tree_with_rewrites(
+        gix_diff::tree_with_rewrites(
             TreeRefIter::from_bytes(&self.lhs.data, self.lhs.id.kind()),
             TreeRefIter::from_bytes(&other.data, other.id.kind()),
             cache,
@@ -88,6 +79,7 @@ impl<'old> Platform<'_, 'old> {
                 })
             },
             opts,
-        )?)
+        )
+        .map_err(gix_error::Error::from_error)
     }
 }

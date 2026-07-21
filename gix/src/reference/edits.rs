@@ -5,17 +5,8 @@ pub mod set_target_id {
     use crate::{Reference, bstr::BString};
 
     mod error {
-        use gix_ref::FullName;
-
         /// The error returned by [`Reference::set_target_id()`][super::Reference::set_target_id()].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error("Cannot change symbolic reference {name:?} into a direct one by setting it to an id")]
-            SymbolicReference { name: FullName },
-            #[error(transparent)]
-            ReferenceEdit(#[from] crate::reference::edit::Error),
-        }
+        pub type Error = gix_error::Error;
     }
     pub use error::Error;
 
@@ -33,14 +24,21 @@ pub mod set_target_id {
             reflog_message: impl Into<BString>,
         ) -> Result<(), Error> {
             match &self.inner.target {
-                Target::Symbolic(name) => return Err(Error::SymbolicReference { name: name.clone() }),
+                Target::Symbolic(name) => {
+                    return Err(gix_error::Error::from_error(gix_error::message!(
+                        "Cannot change symbolic reference {name:?} into a direct one by setting it to an id"
+                    )));
+                }
                 Target::Object(current_id) => {
-                    let changed = self.repo.reference(
-                        self.name(),
-                        id,
-                        PreviousValue::MustExistAndMatch(Target::Object(current_id.to_owned())),
-                        reflog_message,
-                    )?;
+                    let changed = self
+                        .repo
+                        .reference(
+                            self.name(),
+                            id,
+                            PreviousValue::MustExistAndMatch(Target::Object(current_id.to_owned())),
+                            reflog_message,
+                        )
+                        .map_err(gix_error::Error::from_error)?;
                     *self = changed;
                 }
             }

@@ -2,20 +2,14 @@ use crate::{Remote, bstr::BStr, config, remote};
 use gix_utils::AsBStr;
 
 /// The error returned by [`Remote::save_to()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("The remote pointing to {} is anonymous and can't be saved.", url.to_bstring())]
-    NameMissing { url: gix_url::Url },
-    #[error(transparent)]
-    Span(#[from] gix_config::parse::span::Error),
-    #[error(transparent)]
-    ConfigValue(#[from] gix_config::file::section::value::Error),
-}
+pub type Error = gix_error::Error;
 
 /// The error returned by [`Remote::save_as_to()`].
 ///
 /// Note that this type should rather be in the `as` module, but cannot be as it's part of the Rust syntax.
+// Note that this stays an enum: `clone::fetch::Error` already embeds the erased
+// `config::overrides::Error`, so erasing this one too would derive `From<gix_error::Error>` twice
+// for that type.
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum AsError {
@@ -32,18 +26,17 @@ impl Remote<'_> {
     /// Note that all sections named `remote "<name>"` will be cleared of all values we are about to write,
     /// and the last `remote "<name>"` section will be containing all relevant values so that reloading the remote
     /// from `config` would yield the same in-memory state.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn save_to(&self, config: &mut gix_config::File) -> Result<(), Error> {
-        let name = self.name().ok_or_else(|| Error::NameMissing {
-            url: self
+        let name = self.name().ok_or_else(|| {
+            let url = self
                 .urls
                 .first()
                 .or_else(|| self.push_urls.first())
                 .expect("one url is always set")
-                .to_owned(),
+                .to_bstring();
+            gix_error::Error::from_error(gix_error::message!(
+                "The remote pointing to {url} is anonymous and can't be saved."
+            ))
         })?;
         let target_meta = config.meta().clone();
         let mut needs_url_reset = false;
@@ -104,26 +97,38 @@ impl Remote<'_> {
                 .expect("section name is validated and 'remote' is acceptable")
         };
         if needs_url_reset {
-            section.push(config::tree::Remote::URL.name, "")?;
+            section
+                .push(config::tree::Remote::URL.name, "")
+                .map_err(gix_error::Error::from_error)?;
         }
         for url in &self.urls {
-            section.push("url", url.to_bstring())?;
+            section
+                .push("url", url.to_bstring())
+                .map_err(gix_error::Error::from_error)?;
         }
         if needs_push_url_reset {
-            section.push(config::tree::Remote::PUSH_URL.name, "")?;
+            section
+                .push(config::tree::Remote::PUSH_URL.name, "")
+                .map_err(gix_error::Error::from_error)?;
         }
         for url in &self.push_urls {
-            section.push("pushurl", url.to_bstring())?;
+            section
+                .push("pushurl", url.to_bstring())
+                .map_err(gix_error::Error::from_error)?;
         }
         if self.fetch_tags != Default::default() {
-            section.push(
-                config::tree::Remote::TAG_OPT.name,
-                BStr::new(match self.fetch_tags {
-                    remote::fetch::Tags::All => "--tags",
-                    remote::fetch::Tags::None => "--no-tags",
-                    remote::fetch::Tags::Included => unreachable!("BUG: the default shouldn't be written and we try"),
-                }),
-            )?;
+            section
+                .push(
+                    config::tree::Remote::TAG_OPT.name,
+                    BStr::new(match self.fetch_tags {
+                        remote::fetch::Tags::All => "--tags",
+                        remote::fetch::Tags::None => "--no-tags",
+                        remote::fetch::Tags::Included => {
+                            unreachable!("BUG: the default shouldn't be written and we try")
+                        }
+                    }),
+                )
+                .map_err(gix_error::Error::from_error)?;
         }
         for (key, spec) in self
             .fetch_specs
@@ -131,7 +136,9 @@ impl Remote<'_> {
             .map(|spec| ("fetch", spec))
             .chain(self.push_specs.iter().map(|spec| ("push", spec)))
         {
-            section.push(key, spec.to_ref().to_bstring())?;
+            section
+                .push(key, spec.to_ref().to_bstring())
+                .map_err(gix_error::Error::from_error)?;
         }
         Ok(())
     }
@@ -141,10 +148,6 @@ impl Remote<'_> {
     /// Note that this sets a name for anonymous remotes, but overwrites the name for those who were named before.
     /// If this name is different from the current one, the git configuration will still contain the previous name,
     /// and the caller should account for that.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn save_as_to(&mut self, name: impl AsBStr, config: &mut gix_config::File) -> Result<(), AsError> {
         let name = crate::remote::name::validated(name.as_bstr().to_owned())?;
         let prev_name = self.name.take();

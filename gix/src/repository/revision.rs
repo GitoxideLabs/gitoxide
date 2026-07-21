@@ -44,9 +44,12 @@ impl crate::Repository {
         spec: impl Into<&'a BStr>,
     ) -> Result<Id<'repo>, revision::spec::parse::single::Error> {
         let spec = spec.into();
-        self.rev_parse(spec)?
-            .single()
-            .ok_or(revision::spec::parse::single::Error::RangedRev { spec: spec.into() })
+        self.rev_parse(spec)?.single().ok_or_else(|| {
+            let spec: crate::bstr::BString = spec.into();
+            gix_error::Error::from_error(gix_error::message!(
+                "revspec {spec:?} did not resolve to a single object"
+            ))
+        })
     }
 
     /// Obtain the best merge-base between commit `one` and `two`, or fail if there is none.

@@ -2,24 +2,12 @@
 pub use gix_pathspec::*;
 
 use crate::{AttributeStack, Pathspec, PathspecDetached, Repository, bstr::BStr};
+use gix_error::ResultExt;
 
 ///
 pub mod init {
     /// The error returned by [`Pathspec::new()`](super::Pathspec::new()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        MakeAttributes(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-        #[error(transparent)]
-        Defaults(#[from] crate::repository::pathspec_defaults_ignore_case::Error),
-        #[error(transparent)]
-        ParseSpec(#[from] gix_pathspec::parse::Error),
-        #[error("Could not obtain the repository prefix as the relative path of the CWD as seen from the working tree")]
-        NormalizeSpec(#[from] gix_pathspec::normalize::Error),
-        #[error(transparent)]
-        RepoPrefix(#[from] gix_path::realpath::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 /// Lifecycle
@@ -43,7 +31,9 @@ impl<'repo> Pathspec<'repo> {
         inherit_ignore_case: bool,
         make_attributes: impl FnOnce() -> Result<gix_worktree::Stack, Box<dyn std::error::Error + Send + Sync + 'static>>,
     ) -> Result<Self, init::Error> {
-        let defaults = repo.pathspec_defaults_inherit_ignore_case(inherit_ignore_case)?;
+        let defaults = repo
+            .pathspec_defaults_inherit_ignore_case(inherit_ignore_case)
+            .map_err(gix_error::Error::from_error)?;
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
@@ -62,8 +52,21 @@ impl<'repo> Pathspec<'repo> {
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
             )?,
-        )?;
-        let cache = needs_cache.then(make_attributes).transpose()?;
+        )
+        .or_raise(|| {
+            gix_error::message(
+                "Could not obtain the repository prefix as the relative path of the CWD as seen from the working tree",
+            )
+        })?;
+        let cache = needs_cache
+            .then(make_attributes)
+            .transpose()
+            // TODO(review): `make_attributes` yields `Box<dyn Error>`, which does not implement
+            //                `std::error::Error` (the std blanket needs a `Sized` inner), so
+            //                `Error::from_error` can't take it directly. `io::Error::other` bridges
+            //                it while preserving the boxed error's `Display` and causes. A dedicated
+            //                `gix_error::Error::from_boxed` would be cleaner and is worth proposing.
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))?;
 
         gix_trace::debug!(
             longest_prefix = ?search.longest_common_directory(),
