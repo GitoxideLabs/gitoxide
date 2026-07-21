@@ -13,7 +13,8 @@
 //!
 //! let components = "src/lib.rs"
 //!     .to_normal_path_components()
-//!     .collect::<Result<Vec<_>, _>>()?;
+//!     .collect::<Result<Vec<_>, _>>()
+//!     .map_err(|err| err.into_error())?;
 //! assert_eq!(
 //!     components
 //!         .into_iter()

@@ -4,22 +4,14 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
+use gix_error::{ErrorExt, ValidationError};
 
 use crate::Stack;
 
 ///
 pub mod to_normal_path_components {
-    use std::path::PathBuf;
-
     /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Input path \"{path}\" contains relative or absolute components", path = .0.display())]
-        NotANormalComponent(PathBuf),
-        #[error("Could not convert to UTF8 or from UTF8 due to ill-formed input")]
-        IllegalUtf8,
-    }
+    pub type Error = gix_error::Exn<gix_error::ValidationError>;
 }
 
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
@@ -40,15 +32,24 @@ impl ToNormalPathComponents for PathBuf {
     }
 }
 
+// TODO(review): the previous thiserror enum (`NotANormalComponent`/`IllegalUtf8`) became
+//                `Exn<ValidationError>` per the plan's validation-path rule — no consumer named or
+//                matched the variants. Both cases now carry the offending input, rendered with
+//                debug quoting after the message, where the path was previously interpolated inline.
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
 ) -> Result<&'a OsStr, to_normal_path_components::Error> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(to_normal_path_components::Error::NotANormalComponent(
-            path_with_component.to_owned(),
-        )),
+        _ => Err(ValidationError::new_with_input(
+            "Input path contains relative or absolute components",
+            gix_path::try_into_bstr(path_with_component).map_or_else(
+                |_| path_with_component.to_string_lossy().into_owned().into(),
+                std::borrow::Cow::into_owned,
+            ),
+        )
+        .raise()),
     }
 }
 
@@ -80,9 +81,13 @@ fn bytes_component_to_os_str<'a>(
     if component.is_empty() {
         return None;
     }
-    let component = match gix_path::try_from_byte_slice(component.as_bstr())
-        .map_err(|_| to_normal_path_components::Error::IllegalUtf8)
-    {
+    let component = match gix_path::try_from_byte_slice(component.as_bstr()).map_err(|_| {
+        ValidationError::new_with_input(
+            "Could not convert to UTF8 or from UTF8 due to ill-formed input",
+            component,
+        )
+        .raise()
+    }) {
         Ok(c) => c,
         Err(err) => return Some(Err(err)),
     };
@@ -203,7 +208,7 @@ impl Stack {
         }
 
         while let Some(comp) = components.next() {
-            let comp = comp.map_err(std::io::Error::other)?;
+            let comp = comp.map_err(|err| std::io::Error::other(err.into_error()))?;
             let is_last_component = components.peek().is_none();
             let parent_is_directory = self.current_is_directory;
             self.current_is_directory = !is_last_component;
