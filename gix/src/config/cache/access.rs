@@ -138,7 +138,7 @@ impl Cache {
         &self,
     ) -> Result<gix_merge::blob::pipeline::Options, config::merge::pipeline_options::Error> {
         Ok(gix_merge::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold()?,
+            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from_error)?,
         })
     }
 
@@ -147,8 +147,8 @@ impl Cache {
         &self,
     ) -> Result<gix_diff::blob::pipeline::Options, config::diff::pipeline_options::Error> {
         Ok(gix_diff::blob::pipeline::Options {
-            large_file_threshold_bytes: self.big_file_threshold()?,
-            fs: self.fs_capabilities()?,
+            large_file_threshold_bytes: self.big_file_threshold().map_err(gix_error::Error::from_error)?,
+            fs: self.fs_capabilities().map_err(gix_error::Error::from_error)?,
         })
     }
 
