@@ -6,7 +6,9 @@ use crate::{parse, path::interpolate};
 // TODO(review): hand-written impls preserve the `thiserror` semantics. The transparent variants
 //                forward `Display` and `source()`; `Realpath` wraps an `Exn` (which does not
 //                implement `std::error::Error`) and exposes the inner error via `&**err` as its
-//                `source()`; the `#[source]`-only `CopyBuffer` and the `source`-named field of `Io`
+//                `source()` — std chain-walkers thus see the realpath message twice in a row, while
+//                the underlying io cause stays reachable through the `Exn` frame tree and at erased
+//                boundaries; the `#[source]`-only `CopyBuffer` and the `source`-named field of `Io`
 //                surface as `source()` without gaining a `From`.
 #[derive(Debug)]
 #[expect(missing_docs)]

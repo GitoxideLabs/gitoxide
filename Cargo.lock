@@ -2467,7 +2467,6 @@ dependencies = [
  "gix-refspec",
  "gix-testtools",
  "gix-url",
- "thiserror 2.0.18",
 ]
 
 [[package]]

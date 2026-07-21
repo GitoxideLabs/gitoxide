@@ -112,17 +112,52 @@ pub mod init {
 
     /// Lifecycle
     /// The error returned when parsing a submodule configuration file.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     pub enum Error {
         /// The configuration could not be parsed.
-        #[error(transparent)]
-        Parse(#[from] gix_config::parse::Error),
+        Parse(gix_config::parse::Error),
         /// Applying configuration overrides exceeded the supported span size.
-        #[error(transparent)]
-        Span(#[from] gix_config::parse::span::Error),
+        Span(gix_config::parse::span::Error),
         /// Applying configuration overrides failed.
-        #[error(transparent)]
-        SectionValue(#[from] gix_config::file::section::value::Error),
+        SectionValue(gix_config::file::section::value::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Parse(err) => std::fmt::Display::fmt(err, f),
+                Error::Span(err) => std::fmt::Display::fmt(err, f),
+                Error::SectionValue(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Parse(err) => err.source(),
+                Error::Span(err) => err.source(),
+                Error::SectionValue(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<gix_config::parse::Error> for Error {
+        fn from(err: gix_config::parse::Error) -> Self {
+            Error::Parse(err)
+        }
+    }
+
+    impl From<gix_config::parse::span::Error> for Error {
+        fn from(err: gix_config::parse::span::Error) -> Self {
+            Error::Span(err)
+        }
+    }
+
+    impl From<gix_config::file::section::value::Error> for Error {
+        fn from(err: gix_config::file::section::value::Error) -> Self {
+            Error::SectionValue(err)
+        }
     }
 
     impl File {
