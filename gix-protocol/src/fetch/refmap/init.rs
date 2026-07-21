@@ -10,15 +10,48 @@ use crate::{
 };
 
 /// The error returned by [`crate::Handshake::prepare_lsrefs_or_extract_refmap()`].
-#[derive(Debug, thiserror::Error)]
+// TODO(review): `MappingValidation`/`ListRefs` hand-preserve `#[error(transparent)]` semantics:
+//                `Display` and `source()` forward to the wrapped error.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("The object format {format:?} as used by the remote is unsupported")]
     UnknownObjectFormat { format: BString },
-    #[error(transparent)]
-    MappingValidation(#[from] gix_refspec::match_group::validate::Error),
-    #[error(transparent)]
-    ListRefs(#[from] crate::ls_refs::Error),
+    MappingValidation(gix_refspec::match_group::validate::Error),
+    ListRefs(crate::ls_refs::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnknownObjectFormat { format } => {
+                write!(f, "The object format {format:?} as used by the remote is unsupported")
+            }
+            Error::MappingValidation(err) => std::fmt::Display::fmt(err, f),
+            Error::ListRefs(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::UnknownObjectFormat { .. } => None,
+            Error::MappingValidation(err) => err.source(),
+            Error::ListRefs(err) => err.source(),
+        }
+    }
+}
+
+impl From<gix_refspec::match_group::validate::Error> for Error {
+    fn from(err: gix_refspec::match_group::validate::Error) -> Self {
+        Error::MappingValidation(err)
+    }
+}
+
+impl From<crate::ls_refs::Error> for Error {
+    fn from(err: crate::ls_refs::Error) -> Self {
+        Error::ListRefs(err)
+    }
 }
 
 /// For use in [`RefMap::from_refs()`].

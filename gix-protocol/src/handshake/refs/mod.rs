@@ -7,27 +7,82 @@ pub mod parse {
     use bstr::BString;
 
     /// The error returned when parsing References/refs from the server response.
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): `Io`/`DecodePacketline`/`Id` hand-preserve `#[error(transparent)]` semantics:
+    //                `Display` and `source()` forward to the wrapped error.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        DecodePacketline(#[from] gix_transport::packetline::decode::Error),
-        #[error(transparent)]
-        Id(#[from] gix_hash::decode::Error),
-        #[error("{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>.")]
+        Io(std::io::Error),
+        DecodePacketline(gix_transport::packetline::decode::Error),
+        Id(gix_hash::decode::Error),
         MalformedSymref { symref: BString },
-        #[error("{0:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'.")]
         MalformedV1RefLine(BString),
-        #[error(
-            "{0:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
-        )]
         MalformedV2RefLine(BString),
-        #[error("The ref attribute {attribute:?} is unknown. Found in line {line:?}")]
         UnknownAttribute { attribute: BString, line: BString },
-        #[error("{message}")]
         InvariantViolation { message: &'static str },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+                Error::DecodePacketline(err) => std::fmt::Display::fmt(err, f),
+                Error::Id(err) => std::fmt::Display::fmt(err, f),
+                Error::MalformedSymref { symref } => {
+                    write!(
+                        f,
+                        "{symref:?} could not be parsed. A symref is expected to look like <NAME>:<target>."
+                    )
+                }
+                Error::MalformedV1RefLine(line) => {
+                    write!(
+                        f,
+                        "{line:?} could not be parsed. A V1 ref line should be '<hex-hash> <path>'."
+                    )
+                }
+                Error::MalformedV2RefLine(line) => write!(
+                    f,
+                    "{line:?} could not be parsed. A V2 ref line should be '<hex-hash> <path>[ (peeled|symref-target):<value>'."
+                ),
+                Error::UnknownAttribute { attribute, line } => {
+                    write!(f, "The ref attribute {attribute:?} is unknown. Found in line {line:?}")
+                }
+                Error::InvariantViolation { message } => f.write_str(message),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => err.source(),
+                Error::DecodePacketline(err) => err.source(),
+                Error::Id(err) => err.source(),
+                Error::MalformedSymref { .. }
+                | Error::MalformedV1RefLine(_)
+                | Error::MalformedV2RefLine(_)
+                | Error::UnknownAttribute { .. }
+                | Error::InvariantViolation { .. } => None,
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<gix_transport::packetline::decode::Error> for Error {
+        fn from(err: gix_transport::packetline::decode::Error) -> Self {
+            Error::DecodePacketline(err)
+        }
+    }
+
+    impl From<gix_hash::decode::Error> for Error {
+        fn from(err: gix_hash::decode::Error) -> Self {
+            Error::Id(err)
+        }
     }
 }
 

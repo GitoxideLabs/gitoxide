@@ -22,19 +22,68 @@ mod error {
     use gix_transport::client;
 
     /// The error used in [`fetch()`][crate::fetch()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Handshake(#[from] handshake::Error),
-        #[error("Could not access repository or failed to read streaming pack file")]
-        Io(#[from] io::Error),
-        #[error(transparent)]
-        Transport(#[from] client::Error),
-        #[error(transparent)]
-        LsRefs(#[from] ls_refs::Error),
-        #[error(transparent)]
-        Response(#[from] response::Error),
+        Handshake(handshake::Error),
+        Io(io::Error),
+        Transport(client::Error),
+        LsRefs(ls_refs::Error),
+        Response(response::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Handshake(err) => std::fmt::Display::fmt(err, f),
+                Error::Io(_) => f.write_str("Could not access repository or failed to read streaming pack file"),
+                Error::Transport(err) => std::fmt::Display::fmt(err, f),
+                Error::LsRefs(err) => std::fmt::Display::fmt(err, f),
+                Error::Response(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Handshake(err) => err.source(),
+                Error::Io(err) => Some(err),
+                Error::Transport(err) => err.source(),
+                Error::LsRefs(err) => err.source(),
+                Error::Response(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<handshake::Error> for Error {
+        fn from(err: handshake::Error) -> Self {
+            Error::Handshake(err)
+        }
+    }
+
+    impl From<io::Error> for Error {
+        fn from(err: io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<client::Error> for Error {
+        fn from(err: client::Error) -> Self {
+            Error::Transport(err)
+        }
+    }
+
+    impl From<ls_refs::Error> for Error {
+        fn from(err: ls_refs::Error) -> Self {
+            Error::LsRefs(err)
+        }
+    }
+
+    impl From<response::Error> for Error {
+        fn from(err: response::Error) -> Self {
+            Error::Response(err)
+        }
     }
 }
 pub use error::Error;

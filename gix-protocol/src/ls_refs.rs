@@ -3,17 +3,61 @@ mod error {
     use crate::handshake::refs::parse;
 
     /// The error returned by invoking a [`super::function::LsRefsCommand`].
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): all four variants were `#[error(transparent)]`: `Display` and `source()`
+    //                forward to the wrapped error, exactly like the `thiserror`-generated code did.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Transport(#[from] gix_transport::client::Error),
-        #[error(transparent)]
-        Parse(#[from] parse::Error),
-        #[error(transparent)]
-        ArgumentValidation(#[from] crate::command::validate_argument_prefixes::Error),
+        Io(std::io::Error),
+        Transport(gix_transport::client::Error),
+        Parse(parse::Error),
+        ArgumentValidation(crate::command::validate_argument_prefixes::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+                Error::Transport(err) => std::fmt::Display::fmt(err, f),
+                Error::Parse(err) => std::fmt::Display::fmt(err, f),
+                Error::ArgumentValidation(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => err.source(),
+                Error::Transport(err) => err.source(),
+                Error::Parse(err) => err.source(),
+                Error::ArgumentValidation(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<gix_transport::client::Error> for Error {
+        fn from(err: gix_transport::client::Error) -> Self {
+            Error::Transport(err)
+        }
+    }
+
+    impl From<parse::Error> for Error {
+        fn from(err: parse::Error) -> Self {
+            Error::Parse(err)
+        }
+    }
+
+    impl From<crate::command::validate_argument_prefixes::Error> for Error {
+        fn from(err: crate::command::validate_argument_prefixes::Error) -> Self {
+            Error::ArgumentValidation(err)
+        }
     }
 
     impl gix_transport::IsSpuriousError for Error {

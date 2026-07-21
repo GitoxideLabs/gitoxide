@@ -239,14 +239,27 @@ mod with_io {
         use bstr::BString;
 
         /// The error returned by [Command::validate_argument_prefixes()](super::Command::validate_argument_prefixes()).
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("{command}: argument {argument} is not known or allowed")]
             UnsupportedArgument { command: &'static str, argument: BString },
-            #[error("{command}: capability {feature} is not supported")]
             UnsupportedCapability { command: &'static str, feature: String },
         }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::UnsupportedArgument { command, argument } => {
+                        write!(f, "{command}: argument {argument} is not known or allowed")
+                    }
+                    Error::UnsupportedCapability { command, feature } => {
+                        write!(f, "{command}: capability {feature} is not supported")
+                    }
+                }
+            }
+        }
+
+        impl std::error::Error for Error {}
     }
 }
 #[cfg(any(test, feature = "async-client", feature = "blocking-client"))]

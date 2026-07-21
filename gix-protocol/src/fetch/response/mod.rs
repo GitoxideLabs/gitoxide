@@ -4,21 +4,61 @@ use gix_transport::{Protocol, client};
 use crate::{command::Feature, fetch::Response};
 
 /// The error returned in the [response module][crate::fetch::response].
-#[derive(Debug, thiserror::Error)]
+// TODO(review): `UploadPack`/`Transport` hand-preserve `#[error(transparent)]` semantics; `Io` is a
+//                text variant whose `#[source]` field surfaces via `source()` but has no `From`,
+//                exactly like the `thiserror`-generated code.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Failed to read from line reader")]
-    Io(#[source] std::io::Error),
-    #[error(transparent)]
-    UploadPack(#[from] gix_transport::packetline::read::Error),
-    #[error(transparent)]
-    Transport(#[from] client::Error),
-    #[error("Currently we require feature {feature:?}, which is not supported by the server")]
+    Io(std::io::Error),
+    UploadPack(gix_transport::packetline::read::Error),
+    Transport(client::Error),
     MissingServerCapability { feature: &'static str },
-    #[error("Encountered an unknown line prefix in {line:?}")]
     UnknownLineType { line: String },
-    #[error("Unknown or unsupported header: {header:?}")]
     UnknownSectionHeader { header: String },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(_) => f.write_str("Failed to read from line reader"),
+            Error::UploadPack(err) => std::fmt::Display::fmt(err, f),
+            Error::Transport(err) => std::fmt::Display::fmt(err, f),
+            Error::MissingServerCapability { feature } => {
+                write!(
+                    f,
+                    "Currently we require feature {feature:?}, which is not supported by the server"
+                )
+            }
+            Error::UnknownLineType { line } => write!(f, "Encountered an unknown line prefix in {line:?}"),
+            Error::UnknownSectionHeader { header } => write!(f, "Unknown or unsupported header: {header:?}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            Error::UploadPack(err) => err.source(),
+            Error::Transport(err) => err.source(),
+            Error::MissingServerCapability { .. }
+            | Error::UnknownLineType { .. }
+            | Error::UnknownSectionHeader { .. } => None,
+        }
+    }
+}
+
+impl From<gix_transport::packetline::read::Error> for Error {
+    fn from(err: gix_transport::packetline::read::Error) -> Self {
+        Error::UploadPack(err)
+    }
+}
+
+impl From<client::Error> for Error {
+    fn from(err: client::Error) -> Self {
+        Error::Transport(err)
+    }
 }
 
 impl From<std::io::Error> for Error {

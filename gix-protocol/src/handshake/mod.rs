@@ -167,23 +167,68 @@ mod error {
     use crate::{credentials, handshake::refs};
 
     /// The error returned by [`handshake()`][crate::handshake()].
-    #[derive(Debug, thiserror::Error)]
+    // TODO(review): hand-written impls preserve the `thiserror` semantics. `Transport`/`ParseRefs`
+    //                are `#[error(transparent)]`; `Credentials` (`#[from]`) and the `source`-named
+    //                field of `InvalidCredentials` surface as `source()` like before.
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Failed to obtain credentials")]
-        Credentials(#[from] credentials::protocol::Error),
-        #[error("No credentials were returned at all as if the credential helper isn't functioning unknowingly")]
+        Credentials(credentials::protocol::Error),
         EmptyCredentials,
-        #[error("Credentials provided for \"{url}\" were not accepted by the remote")]
         InvalidCredentials { url: BString, source: std::io::Error },
-        #[error(transparent)]
-        Transport(#[from] client::Error),
-        #[error(
-            "The transport didn't accept the advertised server version {actual_version:?} and closed the connection client side"
-        )]
+        Transport(client::Error),
         TransportProtocolPolicyViolation { actual_version: gix_transport::Protocol },
-        #[error(transparent)]
-        ParseRefs(#[from] refs::parse::Error),
+        ParseRefs(refs::parse::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Credentials(_) => f.write_str("Failed to obtain credentials"),
+                Error::EmptyCredentials => f.write_str(
+                    "No credentials were returned at all as if the credential helper isn't functioning unknowingly",
+                ),
+                Error::InvalidCredentials { url, .. } => {
+                    write!(f, "Credentials provided for \"{url}\" were not accepted by the remote")
+                }
+                Error::Transport(err) => std::fmt::Display::fmt(err, f),
+                Error::TransportProtocolPolicyViolation { actual_version } => write!(
+                    f,
+                    "The transport didn't accept the advertised server version {actual_version:?} and closed the connection client side"
+                ),
+                Error::ParseRefs(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Credentials(err) => Some(err),
+                Error::EmptyCredentials | Error::TransportProtocolPolicyViolation { .. } => None,
+                Error::InvalidCredentials { source, .. } => Some(source),
+                Error::Transport(err) => err.source(),
+                Error::ParseRefs(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<credentials::protocol::Error> for Error {
+        fn from(err: credentials::protocol::Error) -> Self {
+            Error::Credentials(err)
+        }
+    }
+
+    impl From<client::Error> for Error {
+        fn from(err: client::Error) -> Self {
+            Error::Transport(err)
+        }
+    }
+
+    impl From<refs::parse::Error> for Error {
+        fn from(err: refs::parse::Error) -> Self {
+            Error::ParseRefs(err)
+        }
     }
 
     impl gix_transport::IsSpuriousError for Error {

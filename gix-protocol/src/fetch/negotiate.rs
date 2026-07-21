@@ -16,23 +16,80 @@ use crate::fetch::{RefMap, Shallow, Tags, refmap};
 type Queue = gix_revwalk::PriorityQueue<SecondsSinceUnixEpoch, gix_hash::ObjectId>;
 
 /// The error returned during [`one_round()`] or [`mark_complete_and_common_ref()`].
-#[derive(Debug, thiserror::Error)]
+// TODO(review): all variants but `NegotiationFailed` were `#[error(transparent)]`: `Display` and
+//                `source()` forward to the wrapped error, including through the boxed
+//                `AlternateRefsAndObjects` which deliberately has no `From`.
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("We were unable to figure out what objects the server should send after {rounds} round(s)")]
     NegotiationFailed { rounds: usize },
-    #[error(transparent)]
-    LookupCommitInGraph(#[from] gix_revwalk::graph::get_or_insert_default::Error),
-    #[error(transparent)]
-    OpenPackedRefsBuffer(#[from] gix_ref::packed::buffer::open::Error),
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-    #[error(transparent)]
-    InitRefIter(#[from] gix_ref::file::iter::loose_then_packed::Error),
-    #[error(transparent)]
-    PeelToId(#[from] gix_ref::peel::to_id::Error),
-    #[error(transparent)]
+    LookupCommitInGraph(gix_revwalk::graph::get_or_insert_default::Error),
+    OpenPackedRefsBuffer(gix_ref::packed::buffer::open::Error),
+    IO(std::io::Error),
+    InitRefIter(gix_ref::file::iter::loose_then_packed::Error),
+    PeelToId(gix_ref::peel::to_id::Error),
     AlternateRefsAndObjects(Box<dyn std::error::Error + Send + Sync + 'static>),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::NegotiationFailed { rounds } => write!(
+                f,
+                "We were unable to figure out what objects the server should send after {rounds} round(s)"
+            ),
+            Error::LookupCommitInGraph(err) => std::fmt::Display::fmt(err, f),
+            Error::OpenPackedRefsBuffer(err) => std::fmt::Display::fmt(err, f),
+            Error::IO(err) => std::fmt::Display::fmt(err, f),
+            Error::InitRefIter(err) => std::fmt::Display::fmt(err, f),
+            Error::PeelToId(err) => std::fmt::Display::fmt(err, f),
+            Error::AlternateRefsAndObjects(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::NegotiationFailed { .. } => None,
+            Error::LookupCommitInGraph(err) => err.source(),
+            Error::OpenPackedRefsBuffer(err) => err.source(),
+            Error::IO(err) => err.source(),
+            Error::InitRefIter(err) => err.source(),
+            Error::PeelToId(err) => err.source(),
+            Error::AlternateRefsAndObjects(err) => err.source(),
+        }
+    }
+}
+
+impl From<gix_revwalk::graph::get_or_insert_default::Error> for Error {
+    fn from(err: gix_revwalk::graph::get_or_insert_default::Error) -> Self {
+        Error::LookupCommitInGraph(err)
+    }
+}
+
+impl From<gix_ref::packed::buffer::open::Error> for Error {
+    fn from(err: gix_ref::packed::buffer::open::Error) -> Self {
+        Error::OpenPackedRefsBuffer(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IO(err)
+    }
+}
+
+impl From<gix_ref::file::iter::loose_then_packed::Error> for Error {
+    fn from(err: gix_ref::file::iter::loose_then_packed::Error) -> Self {
+        Error::InitRefIter(err)
+    }
+}
+
+impl From<gix_ref::peel::to_id::Error> for Error {
+    fn from(err: gix_ref::peel::to_id::Error) -> Self {
+        Error::PeelToId(err)
+    }
 }
 
 /// Determines what should be done after [preparing the commit-graph for negotiation](mark_complete_and_common_ref).
