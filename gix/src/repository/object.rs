@@ -25,7 +25,7 @@ impl crate::Repository {
         id: impl Into<ObjectId>,
     ) -> Result<object::tree::Editor<'_>, crate::repository::edit_tree::Error> {
         let tree = self.find_tree(id).map_err(gix_error::Error::from_error)?;
-        Ok(tree.edit()?)
+        tree.edit()
     }
 }
 

@@ -139,9 +139,8 @@ impl crate::Repository {
     ) -> Result<Vec<Id<'_>>, crate::repository::merge_bases_many::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        Ok(self
-            .merge_bases_many_with_graph(one, others, &mut graph)
-            .map_err(gix_error::Error::from_error)?)
+        self.merge_bases_many_with_graph(one, others, &mut graph)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the best merge-base among all `commits`, or fail if `commits` yields no commit or no merge-base was found.
@@ -177,7 +176,7 @@ impl crate::Repository {
     ) -> Result<Id<'_>, crate::repository::merge_base_octopus::Error> {
         let cache = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(cache.as_ref());
-        Ok(self.merge_base_octopus_with_graph(commits, &mut graph)?)
+        self.merge_base_octopus_with_graph(commits, &mut graph)
     }
 
     /// Create the baseline for a revision walk by initializing it with the `tips` to start iterating on.

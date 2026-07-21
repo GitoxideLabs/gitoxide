@@ -265,7 +265,7 @@ impl Repository {
     ) -> Result<crate::merge::virtual_merge_base::Outcome<'_>, virtual_merge_base::Error> {
         let commit_graph = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(commit_graph.as_ref());
-        Ok(self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)?)
+        self.virtual_merge_base_with_graph(merge_bases, &mut graph, options)
     }
 
     /// Like [`Self::virtual_merge_base()`], but also allows to reuse a `graph` for faster merge-base calculation,
