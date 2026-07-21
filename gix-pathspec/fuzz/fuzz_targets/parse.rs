@@ -4,7 +4,7 @@ use libfuzzer_sys::fuzz_target;
 use std::hint::black_box;
 
 fn fuzz(data: &[u8]) -> Result<()> {
-    let pattern = gix_pathspec::parse(data, Default::default())?;
+    let pattern = gix_pathspec::parse(data, Default::default()).map_err(gix_pathspec::parse::Error::into_error)?;
     _ = black_box(pattern.is_nil());
     _ = black_box(pattern.prefix_directory());
     _ = black_box(pattern.path());
