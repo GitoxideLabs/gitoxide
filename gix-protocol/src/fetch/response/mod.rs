@@ -4,9 +4,11 @@ use gix_transport::{Protocol, client};
 use crate::{command::Feature, fetch::Response};
 
 /// The error returned in the [response module][crate::fetch::response].
-// TODO(review): `UploadPack`/`Transport` hand-preserve `#[error(transparent)]` semantics; `Io` is a
-//                text variant whose `#[source]` field surfaces via `source()` but has no `From`,
-//                exactly like the `thiserror`-generated code.
+// TODO(review): `UploadPack`/`Transport` hand-preserve `#[error(transparent)]` semantics; `Io`
+//                renders a fixed message but still exposes its field via `source()`. Its
+//                `From<std::io::Error>` impl (below) predates the `thiserror` removal and was
+//                never derive-generated: it downcasts to recover a smuggled `UploadPack` error
+//                before falling back to plain `Io`.
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
