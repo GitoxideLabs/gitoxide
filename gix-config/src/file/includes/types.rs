@@ -3,13 +3,10 @@ use std::path::PathBuf;
 use crate::{parse, path::interpolate};
 
 /// The error returned when following includes.
-// TODO(review): hand-written impls preserve the `thiserror` semantics. The transparent variants
-//                forward `Display` and `source()`; `Realpath` wraps an `Exn` (which does not
-//                implement `std::error::Error`) and exposes the inner error via `&**err` as its
-//                `source()` — std chain-walkers thus see the realpath message twice in a row, while
-//                the underlying io cause stays reachable through the `Exn` frame tree and at erased
-//                boundaries; the `#[source]`-only `CopyBuffer` and the `source`-named field of `Io`
-//                surface as `source()` without gaining a `From`.
+// The hand-written impls below preserve the `thiserror` semantics they replace: the formerly
+// transparent variants (`Parse`, `Span`, `Interpolate` and `Realpath`) forward both `Display` and
+// `source()` to the error they carry, while the `#[source]`-only `CopyBuffer` and the
+// `source`-named field of `Io` keep their own message and surface the cause via `source()`.
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -56,7 +53,7 @@ impl std::error::Error for Error {
             Error::Span(err) => err.source(),
             Error::Interpolate(err) => err.source(),
             Error::IncludeDepthExceeded { .. } | Error::MissingConfigPath | Error::MissingGitDir => None,
-            Error::Realpath(err) => Some(&**err),
+            Error::Realpath(err) => err.source(),
         }
     }
 }

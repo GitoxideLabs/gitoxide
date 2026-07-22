@@ -2,8 +2,6 @@ use std::borrow::Cow;
 
 use bstr::{BStr, ByteSlice};
 
-use gix_error::{ErrorExt, OptionExt, ValidationError};
-
 use crate::{AssignmentRef, Name, NameRef, StateRef, name};
 
 /// The kind of attribute that was parsed.
@@ -16,8 +14,58 @@ pub enum Kind {
     Macro(Name),
 }
 
-/// The error returned by [`parse::Lines`][crate::parse::Lines].
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
+mod error {
+    use bstr::BString;
+    /// The error returned by [`parse::Lines`][crate::parse::Lines].
+    #[derive(Debug)]
+    #[expect(missing_docs)]
+    pub enum Error {
+        PatternNegation { line_number: usize, line: BString },
+        AttributeName { line_number: usize, attribute: BString },
+        MacroName { line_number: usize, macro_name: BString },
+        Unquote(gix_quote::ansi_c::undo::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::PatternNegation { line_number, line } => write!(
+                    f,
+                    r"Line {line_number} has a negative pattern, for literal characters use \!: {line}"
+                ),
+                Error::AttributeName { line_number, attribute } => write!(
+                    f,
+                    "Attribute in line {line_number} has non-ascii characters or starts with '-': {attribute}"
+                ),
+                Error::MacroName {
+                    line_number,
+                    macro_name,
+                } => write!(
+                    f,
+                    "Macro in line {line_number} has non-ascii characters or starts with '-': {macro_name}"
+                ),
+                Error::Unquote(_) => f.write_str("Could not unquote attributes line"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::PatternNegation { .. } | Error::AttributeName { .. } | Error::MacroName { .. } => None,
+                // `Exn` does not implement `std::error::Error` itself, so expose the error it carries.
+                Error::Unquote(err) => Some(&**err),
+            }
+        }
+    }
+
+    impl From<gix_quote::ansi_c::undo::Error> for Error {
+        fn from(err: gix_quote::ansi_c::undo::Error) -> Self {
+            Error::Unquote(err)
+        }
+    }
+}
+pub use error::Error;
 
 /// An iterator over attribute assignments, parsed line by line.
 pub struct Lines<'a> {
@@ -63,7 +111,7 @@ fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
 
     attr_valid(attr)
         .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-        .ok_or_raise(|| ValidationError::new_with_input("Attribute has non-ascii characters or starts with '-'", attr))
+        .ok_or_else(|| name::Error { attribute: attr.into() })
 }
 
 impl<'a> Iterator for Iter<'a> {
@@ -117,11 +165,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
     let (line, attrs): (Cow<'_, _>, _) = if line.starts_with(b"\"") {
         let (unquoted, consumed) = match gix_quote::ansi_c::undo(line) {
             Ok(res) => res,
-            Err(err) => {
-                return Some(Err(err.raise(ValidationError::new(format!(
-                    "Could not unquote attributes line {line_number}"
-                )))));
-            }
+            Err(err) => return Some(Err(err.into())),
         };
         (unquoted, &line[consumed..])
     } else {
@@ -132,20 +176,18 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
 
     let kind_res = match line.strip_prefix(b"[attr]") {
         Some(macro_name) => check_attr(macro_name.into())
-            .map_err(|err| {
-                err.raise(ValidationError::new(format!(
-                    "Macro in line {line_number} has non-ascii characters or starts with '-'"
-                )))
+            .map_err(|err| Error::MacroName {
+                line_number,
+                macro_name: err.attribute,
             })
             .map(|name| Kind::Macro(name.to_owned())),
         None => {
             let pattern = gix_glob::Pattern::from_bytes(line.as_ref())?;
             if pattern.mode.contains(gix_glob::pattern::Mode::NEGATIVE) {
-                Err(ValidationError::new_with_input(
-                    format!(r"Line {line_number} has a negative pattern, for literal characters use \!"),
-                    line.as_ref(),
-                )
-                .raise())
+                Err(Error::PatternNegation {
+                    line: line.into_owned(),
+                    line_number,
+                })
             } else {
                 Ok(Kind::Pattern(pattern))
             }

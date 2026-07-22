@@ -3,7 +3,7 @@ use serial_test::parallel;
 use crate::util::{hex_to_id, named_subrepo_opts};
 
 fn shallow_ids(repo: &gix::Repository) -> crate::Result<Vec<gix::ObjectId>> {
-    let commits = repo.shallow_commits().map_err(gix::Exn::into_error)?.expect("present");
+    let commits = repo.shallow_commits()?.expect("present");
     Ok(std::iter::once(commits.head)
         .chain(commits.tail.iter().copied())
         .collect())
@@ -15,7 +15,7 @@ fn no() -> crate::Result {
     for name in ["base", "empty"] {
         let repo = named_subrepo_opts("make_shallow_repo.sh", name, crate::restricted())?;
         assert!(!repo.is_shallow());
-        assert!(repo.shallow_commits().map_err(gix::Exn::into_error)?.is_none());
+        assert!(repo.shallow_commits()?.is_none());
         let commits: Vec<_> = repo
             .head_id()?
             .ancestors()
@@ -88,8 +88,7 @@ mod traverse {
     #[test]
     #[parallel]
     fn complex_graphs_can_be_iterated_despite_multiple_shallow_boundaries() -> crate::Result {
-        let base = gix_path::realpath(gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")?.join("base"))
-            .map_err(gix_path::realpath::Error::into_error)?;
+        let base = gix_path::realpath(gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")?.join("base"))?;
         let shallow_base = gix_testtools::scripted_fixture_read_only_with_args_single_archive(
             "make_complex_shallow_repo.sh",
             Some(base.to_string_lossy()),

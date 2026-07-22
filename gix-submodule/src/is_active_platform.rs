@@ -3,9 +3,8 @@ use bstr::BStr;
 use crate::IsActivePlatform;
 
 /// The error returned by [File::names_and_active_state](crate::File::names_and_active_state()).
-// TODO(review): both variants were `#[error(transparent)]` and wrap `Exn` types (which do not
-//                implement `std::error::Error`): `Display` forwards to the wrapped error, and
-//                `source()` exposes the inner error via `&**err`.
+// TODO(review): both variants were `#[error(transparent)]`, so `Display` and `source()` forward
+//                to the wrapped error.
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -25,8 +24,8 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::NormalizePattern(err) => Some(&**err),
-            Error::ParsePattern(err) => Some(&**err),
+            Error::NormalizePattern(err) => err.source(),
+            Error::ParsePattern(err) => err.source(),
         }
     }
 }

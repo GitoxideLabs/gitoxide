@@ -18,6 +18,7 @@ pub enum Error {
         kind: UrlKind,
         source: crate::simple_url::UrlParseError,
     },
+
     TooLong {
         truncated_url: BString,
         len: usize,

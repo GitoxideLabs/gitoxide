@@ -1,5 +1,44 @@
 /// The error returned by [`realpath()`][super::realpath()].
-pub type Error = gix_error::Exn<gix_error::Message>;
+#[derive(Debug)]
+#[expect(missing_docs)]
+pub enum Error {
+    MaxSymlinksExceeded { max_symlinks: u8 },
+    ExcessiveComponentCount { max_symlink_checks: usize },
+    ReadLink(std::io::Error),
+    CurrentWorkingDir(std::io::Error),
+    EmptyPath,
+    MissingParent,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MaxSymlinksExceeded { max_symlinks } => write!(
+                f,
+                "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
+            ),
+            Error::ExcessiveComponentCount { max_symlink_checks } => write!(
+                f,
+                "Cannot resolve symlinks in path with more than {max_symlink_checks} components (takes too long)"
+            ),
+            Error::ReadLink(err) | Error::CurrentWorkingDir(err) => std::fmt::Display::fmt(err, f),
+            Error::EmptyPath => f.write_str("Empty is not a valid path"),
+            Error::MissingParent => f.write_str("Ran out of path components while following parent component '..'"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ReadLink(err) | Error::CurrentWorkingDir(err) => err.source(),
+            Error::MaxSymlinksExceeded { .. }
+            | Error::ExcessiveComponentCount { .. }
+            | Error::EmptyPath
+            | Error::MissingParent => None,
+        }
+    }
+}
 
 /// The default amount of symlinks we may follow when resolving a path in [`realpath()`][crate::realpath()].
 pub const MAX_SYMLINKS: u8 = 32;
@@ -10,8 +49,6 @@ pub(crate) mod function {
         Path, PathBuf,
     };
 
-    use gix_error::{ErrorExt, ResultExt, message};
-
     use super::Error;
     use crate::realpath::MAX_SYMLINKS;
 
@@ -21,17 +58,13 @@ pub(crate) mod function {
     /// If `path` is relative, the current working directory be used to make it absolute.
     /// Note that the returned path will be verbatim, and repositories with `core.precomposeUnicode`
     /// set will probably want to precompose the paths unicode.
-    // TODO(review): through still-unconverted `thiserror` wrappers, `source()` of these errors
-    //                reaches the `Message` whose source is `None`, so the underlying io error is
-    //                missing from `std` error chains on that path until consumers are converted.
-    //                It remains visible in the `Exn` tree and at erased boundaries.
     pub fn realpath(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
         let path = path.as_ref();
         let cwd = path
             .is_relative()
             .then(std::env::current_dir)
             .unwrap_or_else(|| Ok(PathBuf::default()))
-            .or_raise(|| message("Failed to obtain the current working directory"))?;
+            .map_err(Error::CurrentWorkingDir)?;
         realpath_opts(path, &cwd, MAX_SYMLINKS)
     }
 
@@ -39,7 +72,7 @@ pub(crate) mod function {
     /// This serves to avoid running into cycles or doing unreasonable amounts of work.
     pub fn realpath_opts(path: &Path, cwd: &Path, max_symlinks: u8) -> Result<PathBuf, Error> {
         if path.as_os_str().is_empty() {
-            return Err(message("Empty is not a valid path").raise());
+            return Err(Error::EmptyPath);
         }
 
         let mut real_path = PathBuf::new();
@@ -58,9 +91,7 @@ pub(crate) mod function {
                 CurDir => {}
                 ParentDir => {
                     if !real_path.pop() {
-                        return Err(
-                            message("Ran out of path components while following parent component '..'").raise(),
-                        );
+                        return Err(Error::MissingParent);
                     }
                 }
                 Normal(part) => {
@@ -69,17 +100,9 @@ pub(crate) mod function {
                     if real_path.is_symlink() {
                         num_symlinks += 1;
                         if num_symlinks > max_symlinks {
-                            return Err(message!(
-                                "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
-                            )
-                            .raise());
+                            return Err(Error::MaxSymlinksExceeded { max_symlinks });
                         }
-                        let mut link_destination = std::fs::read_link(real_path.as_path()).or_raise(|| {
-                            message!(
-                                "Failed to read the symbolic link at '{path}'",
-                                path = real_path.display()
-                            )
-                        })?;
+                        let mut link_destination = std::fs::read_link(real_path.as_path()).map_err(Error::ReadLink)?;
                         if link_destination.is_absolute() {
                             // pushing absolute path to real_path resets it to the pushed absolute path
                         } else {
@@ -90,10 +113,9 @@ pub(crate) mod function {
                         components = path_backing.components();
                     }
                     if symlink_checks > MAX_SYMLINK_CHECKS {
-                        return Err(message!(
-                            "Cannot resolve symlinks in path with more than {MAX_SYMLINK_CHECKS} components (takes too long)"
-                        )
-                        .raise());
+                        return Err(Error::ExcessiveComponentCount {
+                            max_symlink_checks: MAX_SYMLINK_CHECKS,
+                        });
                     }
                 }
             }

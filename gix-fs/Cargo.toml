@@ -23,7 +23,6 @@ bstr = "1.12.0"
 gix-path = { version = "^0.12.3", path = "../gix-path" }
 gix-features = { version = "^0.49.0", path = "../gix-features", features = ["fs-read-dir"] }
 gix-utils = { version = "^0.3.5", path = "../gix-utils" }
-gix-error = { version = "^0.2.5", path = "../gix-error" }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["std", "derive"] }
 
 [dev-dependencies]

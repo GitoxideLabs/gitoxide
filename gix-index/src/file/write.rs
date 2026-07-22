@@ -1,8 +1,6 @@
 use crate::{File, Version, write};
 
 /// The error produced by [`File::write()`].
-// TODO(review): `AcquireLock` wraps an `Exn` (which does not implement `std::error::Error`) and
-//                exposes the inner `Failure` via `&**err` as its `source()`.
 #[derive(Debug)]
 #[allow(missing_docs)]
 pub enum Error {
@@ -25,7 +23,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io(err) => err.source(),
-            Error::AcquireLock(err) => Some(&**err),
+            Error::AcquireLock(err) => Some(err),
             Error::CommitLock(err) => Some(err),
         }
     }

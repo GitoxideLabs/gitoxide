@@ -23,12 +23,12 @@ pub enum UrlParseError {
 
 impl std::fmt::Display for UrlParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            UrlParseError::RelativeUrlWithoutBase => "relative URL without a base",
-            UrlParseError::InvalidPort => "invalid port number - must be between 1-65535",
-            UrlParseError::InvalidDomainCharacter => "invalid domain character",
-            UrlParseError::SchemeRequiresHost => "Scheme requires host",
-        })
+        match self {
+            UrlParseError::RelativeUrlWithoutBase => f.write_str("relative URL without a base"),
+            UrlParseError::InvalidPort => f.write_str("invalid port number - must be between 1-65535"),
+            UrlParseError::InvalidDomainCharacter => f.write_str("invalid domain character"),
+            UrlParseError::SchemeRequiresHost => f.write_str("Scheme requires host"),
+        }
     }
 }
 

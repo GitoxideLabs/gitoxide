@@ -4,11 +4,7 @@ mod canonicalized {
     #[test]
     fn non_file_scheme_is_noop() -> crate::Result {
         let url = gix_url::parse("https://github.com/byron/gitoxide")?;
-        assert_eq!(
-            url.canonicalized(&std::env::current_dir()?)
-                .map_err(gix_path::realpath::Error::into_error)?,
-            url
-        );
+        assert_eq!(url.canonicalized(&std::env::current_dir()?)?, url);
         Ok(())
     }
 
@@ -18,11 +14,7 @@ mod canonicalized {
         let url = gix_url::parse("/this/path/does/not/exist")?;
         #[cfg(windows)]
         let url = gix_url::parse(r"C:\non\existing")?;
-        assert_eq!(
-            url.canonicalized(&std::env::current_dir()?)
-                .map_err(gix_path::realpath::Error::into_error)?,
-            url
-        );
+        assert_eq!(url.canonicalized(&std::env::current_dir()?)?, url);
         Ok(())
     }
 
@@ -32,10 +24,7 @@ mod canonicalized {
         assert!(gix_path::from_bstr(Cow::Borrowed(url.path.as_ref())).is_relative());
         assert!(
             gix_path::from_bstr(Cow::Borrowed(
-                url.canonicalized(&std::env::current_dir()?)
-                    .map_err(gix_path::realpath::Error::into_error)?
-                    .path
-                    .as_ref()
+                url.canonicalized(&std::env::current_dir()?)?.path.as_ref()
             ))
             .is_absolute()
         );

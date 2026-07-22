@@ -2,7 +2,6 @@
 use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{OptionExt, ResultExt, message};
 
 /// Whether a repository is resolving for the current user, or the given one.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
@@ -24,9 +23,31 @@ impl From<ForUser> for Option<BString> {
 }
 
 /// The error used by [`parse()`], [`with()`] and [`expand_path()`](crate::expand_path()).
-// TODO(review): as an `Exn`, this no longer implements `std::error::Error` — out-of-tree callers
-//               that propagated it into `Box<dyn Error>` or `anyhow` need `.into_error()` now.
-pub type Error = gix_error::Exn<gix_error::Message>;
+#[derive(Debug)]
+#[expect(missing_docs)]
+pub enum Error {
+    IllformedUtf8 { path: BString },
+    MissingHome { user: Option<BString> },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IllformedUtf8 { path } => {
+                write!(f, "UTF8 conversion on non-unix system failed for path: {path:?}")
+            }
+            Error::MissingHome { user } => {
+                let user: std::borrow::Cow<'_, str> = match user {
+                    Some(user) => format!("user '{user}'").into(),
+                    None => "current user".into(),
+                };
+                write!(f, "Home directory could not be obtained for {user}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 fn path_segments(path: &BStr) -> Option<impl Iterator<Item = &[u8]>> {
     if path.starts_with(b"/") {
@@ -98,18 +119,11 @@ pub fn with(
     fn make_relative(path: &Path) -> PathBuf {
         path.components().skip(1).collect()
     }
-    let path = gix_path::try_from_byte_slice(path)
-        .or_raise(|| message!("UTF8 conversion on non-unix system failed for path: {path:?}"))?;
+    let path = gix_path::try_from_byte_slice(path).map_err(|_| Error::IllformedUtf8 { path: path.to_owned() })?;
     Ok(match user {
         Some(user) => home_for_user(user)
-            .ok_or_raise(|| {
-                message!(
-                    "Home directory could not be obtained for {who}",
-                    who = match user {
-                        ForUser::Name(user) => format!("user '{user}'"),
-                        ForUser::Current => "current user".into(),
-                    }
-                )
+            .ok_or_else(|| Error::MissingHome {
+                user: user.to_owned().into(),
             })?
             .join(make_relative(path)),
         None => path.into(),

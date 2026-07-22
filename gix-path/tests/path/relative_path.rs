@@ -1,5 +1,5 @@
 use bstr::{BStr, BString};
-use gix_path::RelativePath;
+use gix_path::{RelativePath, relative_path::Error};
 
 #[cfg(not(windows))]
 #[test]
@@ -10,46 +10,26 @@ fn absolute_paths_return_err() {
     let path_u8: &[u8] = &b"/refs/heads"[..];
     let path_bstring: BString = "/refs/heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8a)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8a),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::IsAbsolute)
+    ));
 }
 
 #[cfg(windows)]
@@ -60,38 +40,22 @@ fn absolute_paths_with_backslashes_return_err() {
     let path_u8: &[u8] = &b"c:\\refs\\heads"[..];
     let path_bstring: BString = r"c:\refs\heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("A RelativePath is not allowed to be absolute"),
-        "absolute paths are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::IsAbsolute)
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::IsAbsolute)
+    ));
 }
 
 #[test]
@@ -101,38 +65,22 @@ fn dots_in_paths_return_err() {
     let path_u8: &[u8] = &b"./heads"[..];
     let path_bstring: BString = "./heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
 }
 
 #[test]
@@ -142,38 +90,22 @@ fn dots_in_paths_with_backslashes_return_err() {
     let path_u8: &[u8] = &b".\\heads"[..];
     let path_bstring: BString = r".\heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
 }
 
 #[test]
@@ -183,38 +115,22 @@ fn double_dots_in_paths_return_err() {
     let path_u8: &[u8] = &b"../heads"[..];
     let path_bstring: BString = "../heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
 }
 
 #[test]
@@ -224,36 +140,20 @@ fn double_dots_in_paths_with_backslashes_return_err() {
     let path_u8: &[u8] = &b"..\\heads"[..];
     let path_bstring: BString = r"..\heads".into();
 
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_str)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_bstr)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(path_u8)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
-    assert!(
-        TryInto::<&RelativePath>::try_into(&path_bstring)
-            .err()
-            .map(|err| err.to_string())
-            .expect("conversion must fail")
-            .starts_with("The path contains an invalid component"),
-        "invalid components are rejected"
-    );
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_str),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_bstr),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(path_u8),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
+    assert!(matches!(
+        TryInto::<&RelativePath>::try_into(&path_bstring),
+        Err(Error::ContainsInvalidComponent(_))
+    ));
 }

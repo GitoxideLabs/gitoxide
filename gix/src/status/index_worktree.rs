@@ -104,7 +104,8 @@ impl Repository {
             self.index_worktree_status_pathspec::<Error>(patterns, index, options.dirwalk_options.as_ref())?;
 
         let cwd = self.current_dir();
-        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)?;
+        let git_dir_realpath = crate::path::realpath_opts(self.git_dir(), cwd, crate::path::realpath::MAX_SYMLINKS)
+            .map_err(gix_error::Error::from_error)?;
         let fs_caps = self.filesystem_options().map_err(gix_error::Error::from_error)?;
         let fscache = config::tree::Core::FS_CACHE
             .enrich_error(self.config.resolved.boolean(config::tree::Core::FS_CACHE))

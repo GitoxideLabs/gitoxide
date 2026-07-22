@@ -1,3 +1,5 @@
+use gix_pathspec::parse::Error;
+
 use crate::parse::check_against_baseline;
 
 #[test]
@@ -8,10 +10,7 @@ fn empty_input() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert_eq!(
-        output.unwrap_err().to_string(),
-        "An empty string is not a valid pathspec"
-    );
+    assert!(matches!(output.unwrap_err(), Error::EmptyString));
 }
 
 #[test]
@@ -26,12 +25,7 @@ fn invalid_short_signatures() {
 
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err());
-        assert!(
-            output
-                .map_err(|err| err.to_string())
-                .unwrap_err()
-                .starts_with("Unimplemented short keyword:")
-        );
+        assert!(matches!(output.unwrap_err(), Error::Unimplemented { .. }));
     }
 }
 
@@ -49,12 +43,7 @@ fn invalid_keywords() {
 
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err());
-        assert!(
-            output
-                .map_err(|err| err.to_string())
-                .unwrap_err()
-                .ends_with("in signature, which is not a valid keyword")
-        );
+        assert!(matches!(output.unwrap_err(), Error::InvalidKeyword { .. }));
     }
 }
 
@@ -72,12 +61,7 @@ fn invalid_attributes() {
 
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert!(
-            output
-                .map_err(|err| err.to_string())
-                .unwrap_err()
-                .starts_with("Attribute has non-ascii characters or starts with '-'")
-        );
+        assert!(matches!(output.unwrap_err(), Error::InvalidAttribute { .. }));
     }
 }
 
@@ -100,10 +84,7 @@ fn invalid_attribute_values() {
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err(), "This pathspec did not produce an error {input}");
         assert!(
-            output
-                .map_err(|err| err.to_string())
-                .unwrap_err()
-                .starts_with("Invalid character in attribute value:"),
+            matches!(output.unwrap_err(), Error::InvalidAttributeValue { .. }),
             "Errors did not match for pathspec: {input}"
         );
     }
@@ -122,10 +103,7 @@ fn escape_character_at_end_of_attribute_value() {
 
         let output = gix_pathspec::parse(input.as_bytes(), Default::default());
         assert!(output.is_err(), "This pathspec did not produce an error {input}");
-        assert_eq!(
-            output.unwrap_err().to_string(),
-            r"Escape character '\' is not allowed as the last character in an attribute value"
-        );
+        assert!(matches!(output.unwrap_err(), Error::TrailingEscapeCharacter));
     }
 }
 
@@ -137,10 +115,7 @@ fn empty_attribute_specification() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert_eq!(
-        output.unwrap_err().to_string(),
-        "Attribute specification cannot be empty"
-    );
+    assert!(matches!(output.unwrap_err(), Error::EmptyAttribute));
 }
 
 #[test]
@@ -151,10 +126,7 @@ fn multiple_attribute_specifications() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert_eq!(
-        output.unwrap_err().to_string(),
-        "Only one attribute specification is allowed in the same pathspec"
-    );
+    assert!(matches!(output.unwrap_err(), Error::MultipleAttributeSpecifications));
 }
 
 #[test]
@@ -165,10 +137,7 @@ fn missing_parentheses() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert_eq!(
-        output.unwrap_err().to_string(),
-        "Missing ')' at the end of pathspec signature"
-    );
+    assert!(matches!(output.unwrap_err(), Error::MissingClosingParenthesis));
 }
 
 #[test]
@@ -179,8 +148,5 @@ fn glob_and_literal_keywords_present() {
 
     let output = gix_pathspec::parse(input.as_bytes(), Default::default());
     assert!(output.is_err());
-    assert_eq!(
-        output.unwrap_err().to_string(),
-        "'literal' and 'glob' keywords cannot be used together in the same pathspec"
-    );
+    assert!(matches!(output.unwrap_err(), Error::IncompatibleSearchModes));
 }

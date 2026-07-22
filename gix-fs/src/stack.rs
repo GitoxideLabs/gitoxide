@@ -4,14 +4,35 @@ use std::{
 };
 
 use bstr::{BStr, BString, ByteSlice};
-use gix_error::{ErrorExt, ValidationError};
 
 use crate::Stack;
 
 ///
 pub mod to_normal_path_components {
+    use std::path::PathBuf;
+
     /// The error used in [`ToNormalPathComponents::to_normal_path_components()`](super::ToNormalPathComponents::to_normal_path_components()).
-    pub type Error = gix_error::Exn<gix_error::ValidationError>;
+    #[derive(Debug)]
+    #[expect(missing_docs)]
+    pub enum Error {
+        NotANormalComponent(PathBuf),
+        IllegalUtf8,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::NotANormalComponent(path) => write!(
+                    f,
+                    "Input path \"{path}\" contains relative or absolute components",
+                    path = path.display()
+                ),
+                Error::IllegalUtf8 => f.write_str("Could not convert to UTF8 or from UTF8 due to ill-formed input"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 /// Obtain an iterator over `OsStr`-components which are normal, none-relative and not absolute.
@@ -32,24 +53,15 @@ impl ToNormalPathComponents for PathBuf {
     }
 }
 
-// TODO(review): the previous thiserror enum (`NotANormalComponent`/`IllegalUtf8`) became
-//                `Exn<ValidationError>` per the plan's validation-path rule — no consumer named or
-//                matched the variants. Both cases reproduce their previous `Display` output verbatim,
-//                so the path stays interpolated inline rather than being attached as
-//                `ValidationError` input. Attaching it instead would render it as a `: "…"` suffix,
-//                which reads better and keeps the input machine-accessible — happy to switch if you
-//                prefer that, but it changes user-visible text so it isn't done unilaterally here.
 fn component_to_os_str<'a>(
     component: Component<'a>,
     path_with_component: &Path,
 ) -> Result<&'a OsStr, to_normal_path_components::Error> {
     match component {
         Component::Normal(os_str) => Ok(os_str),
-        _ => Err(ValidationError::new(format!(
-            "Input path \"{path}\" contains relative or absolute components",
-            path = path_with_component.display()
-        ))
-        .raise()),
+        _ => Err(to_normal_path_components::Error::NotANormalComponent(
+            path_with_component.to_owned(),
+        )),
     }
 }
 
@@ -82,7 +94,7 @@ fn bytes_component_to_os_str<'a>(
         return None;
     }
     let component = match gix_path::try_from_byte_slice(component.as_bstr())
-        .map_err(|_| ValidationError::new("Could not convert to UTF8 or from UTF8 due to ill-formed input").raise())
+        .map_err(|_| to_normal_path_components::Error::IllegalUtf8)
     {
         Ok(c) => c,
         Err(err) => return Some(Err(err)),
@@ -204,7 +216,7 @@ impl Stack {
         }
 
         while let Some(comp) = components.next() {
-            let comp = comp.map_err(|err| std::io::Error::other(err.into_error()))?;
+            let comp = comp.map_err(std::io::Error::other)?;
             let is_last_component = components.peek().is_none();
             let parent_is_directory = self.current_is_directory;
             self.current_is_directory = !is_last_component;

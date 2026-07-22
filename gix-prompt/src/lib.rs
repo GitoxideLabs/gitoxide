@@ -17,20 +17,14 @@ use unix::imp;
 
 #[cfg(not(unix))]
 mod imp {
-    use gix_error::{ErrorExt, message};
-
     use crate::{Error, Options};
 
     pub(crate) fn ask(_prompt: &str, _opts: &Options) -> Result<String, Error> {
-        Err(message("The current platform has no implementation for prompting in the terminal").raise())
+        Err(Error::UnsupportedPlatform)
     }
 }
 
 /// Ask the user given a `prompt`, returning the result.
-// TODO(review): through still-unconverted `thiserror` wrappers (e.g. `gix_credentials::protocol::Error`),
-//                `source()` of this error reaches the `Message` whose source is `None`, so the underlying
-//                io/termios cause is missing from `std` error chains on that path until consumers are
-//                converted. It remains visible in the `Exn` tree and at erased boundaries.
 pub fn ask(prompt: &str, opts: &Options) -> Result<String, Error> {
     if let Some(askpass) = opts.askpass.as_deref() {
         match gix_command::prepare(askpass).arg(prompt).spawn() {

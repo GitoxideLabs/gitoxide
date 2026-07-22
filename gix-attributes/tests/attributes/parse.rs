@@ -94,18 +94,16 @@ fn exclamation_marks_must_be_escaped_or_error_unlike_gitignore() {
         line(r"\!hello"),
         (pattern(r"!hello", Mode::NO_SUB_DIR, None), vec![], 1)
     );
-    assert!(
-        try_line(r"!hello")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Line 1 has a negative pattern")
-    );
+    assert!(matches!(
+        try_line(r"!hello"),
+        Err(parse::Error::PatternNegation { line_number: 1, .. })
+    ));
     assert!(lenient_lines(r#"!hello"#).is_empty());
     assert!(
-        try_line(r#""!hello""#)
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Line 1 has a negative pattern"),
+        matches!(
+            try_line(r#""!hello""#),
+            Err(parse::Error::PatternNegation { line_number: 1, .. }),
+        ),
         "even in quotes they trigger…"
     );
     assert!(lenient_lines(r#""!hello""#).is_empty());
@@ -118,12 +116,7 @@ fn exclamation_marks_must_be_escaped_or_error_unlike_gitignore() {
 
 #[test]
 fn invalid_escapes_in_quotes_are_an_error() {
-    assert!(
-        try_line(r#""\!hello""#)
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Could not unquote attributes line")
-    );
+    assert!(matches!(try_line(r#""\!hello""#), Err(parse::Error::Unquote(_))));
     assert!(lenient_lines(r#""\!hello""#).is_empty());
 }
 
@@ -177,56 +170,46 @@ fn macros_can_be_empty() {
 
 #[test]
 fn custom_macros_must_be_valid_attribute_names() {
-    assert!(
-        try_line(r"[attr]-prefixdash")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Macro in line 1 has non-ascii characters")
-    );
+    assert!(matches!(
+        try_line(r"[attr]-prefixdash"),
+        Err(parse::Error::MacroName { line_number: 1, .. })
+    ));
     assert!(lenient_lines(r"[attr]-prefixdash").is_empty());
-    assert!(
-        try_line(r"[attr]!exclamation")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Macro in line 1 has non-ascii characters")
-    );
-    assert!(
-        try_line(r"[attr]assignment=value")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Macro in line 1 has non-ascii characters")
-    );
-    assert!(
-        try_line(r"[attr]你好")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Macro in line 1 has non-ascii characters")
-    );
+    assert!(matches!(
+        try_line(r"[attr]!exclamation"),
+        Err(parse::Error::MacroName { line_number: 1, .. })
+    ));
+    assert!(matches!(
+        try_line(r"[attr]assignment=value"),
+        Err(parse::Error::MacroName { line_number: 1, .. })
+    ));
+    assert!(matches!(
+        try_line(r"[attr]你好"),
+        Err(parse::Error::MacroName { line_number: 1, .. })
+    ));
     assert!(lenient_lines(r"[attr]你好").is_empty());
 }
 
 #[test]
 fn attribute_names_must_not_begin_with_dash_and_must_be_ascii_only() {
-    assert!(
-        try_line(r"p !-a")
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Attribute in line 1 ")
-    );
+    assert!(matches!(
+        try_line(r"p !-a"),
+        Err(parse::Error::AttributeName { line_number: 1, .. })
+    ));
     assert!(lenient_lines(r"p !-a").is_empty());
     assert!(
-        try_line(r#"p !!a"#)
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Attribute in line 1 "),
+        matches!(
+            try_line(r#"p !!a"#),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
         "exclamation marks aren't allowed either"
     );
     assert!(lenient_lines(r#"p !!a"#).is_empty());
     assert!(
-        try_line(r#"p 你好"#)
-            .map_err(|err| err.to_string())
-            .unwrap_err()
-            .starts_with("Attribute in line 1 "),
+        matches!(
+            try_line(r#"p 你好"#),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
         "nor is utf-8 encoded characters - gitoxide could consider to relax this when established"
     );
     assert!(lenient_lines(r#"p 你好"#).is_empty());
@@ -407,10 +390,9 @@ fn expand(
     let attrs = attrs
         .map(|r| r.map(|attr| (attr.name.as_str().into(), attr.state)))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            e.raise(gix_error::ValidationError::new(format!(
-                "Attribute in line {line_no} is invalid"
-            )))
+        .map_err(|e| parse::Error::AttributeName {
+            attribute: e.attribute,
+            line_number: line_no,
         })?;
     Ok((pattern, attrs, line_no))
 }

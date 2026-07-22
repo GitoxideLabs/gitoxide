@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 
-use bstr::{BStr, ByteSlice};
-use gix_error::{OptionExt, ValidationError};
+use bstr::{BStr, BString, ByteSlice};
 use gix_features::threading::OwnShared;
 
 use crate::{Name, NameRef};
@@ -39,9 +38,7 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
 
         attr_valid(attr)
             .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-            .ok_or_raise(|| {
-                ValidationError::new_with_input("Attribute has non-ascii characters or starts with '-'", attr)
-            })
+            .ok_or_else(|| Error { attribute: attr.into() })
     }
 }
 
@@ -95,4 +92,20 @@ impl<'de> serde::Deserialize<'de> for Name {
 }
 
 /// The error returned by [`parse::Iter`][crate::parse::Iter].
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
+#[derive(Debug)]
+pub struct Error {
+    /// The attribute that failed to parse.
+    pub attribute: BString,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Attribute has non-ascii characters or starts with '-': {}",
+            self.attribute
+        )
+    }
+}
+
+impl std::error::Error for Error {}

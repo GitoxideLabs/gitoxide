@@ -9,8 +9,7 @@ impl file::Store {
         &self,
         lock_mode: gix_lock::acquire::Fail,
     ) -> Result<packed::Transaction, transaction::Error> {
-        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None)
-            .map_err(|err| transaction::Error::TransactionLock(err.into_inner()))?;
+        let lock = gix_lock::File::acquire_to_update_resource(self.packed_refs_path(), lock_mode, None)?;
         // We 'steal' the possibly existing packed buffer which may safe time if it's already there and fresh.
         // If nothing else is happening, nobody will get to see the soon stale buffer either, but if so, they will pay
         // for reloading it. That seems preferred over always loading up a new one.
@@ -71,7 +70,7 @@ pub mod transaction {
     #[expect(missing_docs)]
     pub enum Error {
         BufferOpen(packed::buffer::open::Error),
-        TransactionLock(gix_lock::acquire::Failure),
+        TransactionLock(gix_lock::acquire::Error),
     }
 
     impl std::fmt::Display for Error {
@@ -102,7 +101,7 @@ pub mod transaction {
 
     impl From<gix_lock::acquire::Error> for Error {
         fn from(err: gix_lock::acquire::Error) -> Self {
-            Error::TransactionLock(err.into_inner())
+            Error::TransactionLock(err)
         }
     }
 }

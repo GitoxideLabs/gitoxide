@@ -7,8 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             askpass: Some(std::env::current_exe()?.parent().unwrap().join("askpass")),
             mode: Mode::Disable,
         },
-    )
-    .map_err(gix_prompt::Error::into_error)?;
+    )?;
     eprintln!("{pass:?}");
     Ok(())
 }

@@ -1,14 +1,56 @@
 use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
-use gix_error::{ErrorExt, OptionExt, ValidationError};
 
 use crate::{Defaults, MagicSignature, Pattern, SearchMode};
 
 /// The error returned by [parse()][crate::parse()].
-// TODO(review): as an `Exn`, this no longer implements `std::error::Error` — out-of-tree callers
-//               that propagated it into `Box<dyn Error>` or `anyhow` need `.into_error()` now.
-pub type Error = gix_error::Exn<gix_error::ValidationError>;
+#[derive(Debug)]
+#[expect(missing_docs)]
+pub enum Error {
+    EmptyString,
+    InvalidKeyword { keyword: BString },
+    Unimplemented { short_keyword: char },
+    MissingClosingParenthesis,
+    InvalidAttribute { attribute: BString },
+    InvalidAttributeValue { character: char },
+    TrailingEscapeCharacter,
+    EmptyAttribute,
+    MultipleAttributeSpecifications,
+    IncompatibleSearchModes,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::EmptyString => f.write_str("An empty string is not a valid pathspec"),
+            Error::InvalidKeyword { keyword } => {
+                write!(f, "Found {keyword:?} in signature, which is not a valid keyword")
+            }
+            Error::Unimplemented { short_keyword } => write!(f, "Unimplemented short keyword: {short_keyword:?}"),
+            Error::MissingClosingParenthesis => f.write_str("Missing ')' at the end of pathspec signature"),
+            Error::InvalidAttribute { attribute } => write!(
+                f,
+                "Attribute has non-ascii characters or starts with '-': {attribute:?}"
+            ),
+            Error::InvalidAttributeValue { character } => {
+                write!(f, "Invalid character in attribute value: {character:?}")
+            }
+            Error::TrailingEscapeCharacter => {
+                f.write_str(r"Escape character '\' is not allowed as the last character in an attribute value")
+            }
+            Error::EmptyAttribute => f.write_str("Attribute specification cannot be empty"),
+            Error::MultipleAttributeSpecifications => {
+                f.write_str("Only one attribute specification is allowed in the same pathspec")
+            }
+            Error::IncompatibleSearchModes => {
+                f.write_str("'literal' and 'glob' keywords cannot be used together in the same pathspec")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl Pattern {
     /// Try to parse a path-spec pattern from the given `input` bytes.
@@ -21,7 +63,7 @@ impl Pattern {
         }: Defaults,
     ) -> Result<Self, Error> {
         if input.is_empty() {
-            return Err(ValidationError::new("An empty string is not a valid pathspec").raise());
+            return Err(Error::EmptyString);
         }
         if literal {
             return Ok(Self::from_literal(input, signature));
@@ -84,8 +126,9 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
             b'^' | b'!' => MagicSignature::EXCLUDE,
             b':' => break,
             _ if unimplemented_chars.contains(&b) => {
-                let short_keyword: char = b.into();
-                return Err(ValidationError::new(format!("Unimplemented short keyword: {short_keyword:?}")).raise());
+                return Err(Error::Unimplemented {
+                    short_keyword: b.into(),
+                });
             }
             _ => {
                 *cursor -= 1;
@@ -98,9 +141,7 @@ fn parse_short_keywords(input: &[u8], cursor: &mut usize) -> Result<MagicSignatu
 }
 
 fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Result<(), Error> {
-    let end = input
-        .find(")")
-        .ok_or_raise(|| ValidationError::new("Missing ')' at the end of pathspec signature"))?;
+    let end = input.find(")").ok_or(Error::MissingClosingParenthesis)?;
 
     let input = &input[*cursor..end];
     *cursor = end + 1;
@@ -117,39 +158,24 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
             b"icase" => p.signature |= MagicSignature::ICASE,
             b"exclude" => p.signature |= MagicSignature::EXCLUDE,
             b"literal" => match p.search_mode {
-                SearchMode::PathAwareGlob => {
-                    return Err(ValidationError::new(
-                        "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                    )
-                    .raise());
-                }
+                SearchMode::PathAwareGlob => return Err(Error::IncompatibleSearchModes),
                 _ => p.search_mode = SearchMode::Literal,
             },
             b"glob" => match p.search_mode {
-                SearchMode::Literal => {
-                    return Err(ValidationError::new(
-                        "'literal' and 'glob' keywords cannot be used together in the same pathspec",
-                    )
-                    .raise());
-                }
+                SearchMode::Literal => return Err(Error::IncompatibleSearchModes),
                 _ => p.search_mode = SearchMode::PathAwareGlob,
             },
             _ if keyword.starts_with(attr_prefix) => {
                 if p.attributes.is_empty() {
                     p.attributes = parse_attributes(&keyword[attr_prefix.len()..])?;
                 } else {
-                    return Err(ValidationError::new(
-                        "Only one attribute specification is allowed in the same pathspec",
-                    )
-                    .raise());
+                    return Err(Error::MultipleAttributeSpecifications);
                 }
             }
             _ => {
-                let keyword = BString::from(keyword);
-                return Err(ValidationError::new(format!(
-                    "Found {keyword:?} in signature, which is not a valid keyword"
-                ))
-                .raise());
+                return Err(Error::InvalidKeyword {
+                    keyword: BString::from(keyword),
+                });
             }
         }
         Ok(())
@@ -177,7 +203,7 @@ fn split_on_non_escaped_char(
 
 fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Error> {
     if input.is_empty() {
-        return Err(ValidationError::new("Attribute specification cannot be empty").raise());
+        return Err(Error::EmptyAttribute);
     }
 
     let unescaped = unescape_attribute_values(input.into())?;
@@ -185,13 +211,7 @@ fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Err
     gix_attributes::parse::Iter::new(unescaped.as_bstr())
         .map(|res| res.map(gix_attributes::AssignmentRef::to_owned))
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| {
-            let attribute = e.input.clone().unwrap_or_default();
-            e.raise(ValidationError::new_with_input(
-                "Attribute has non-ascii characters or starts with '-'",
-                attribute,
-            ))
-        })
+        .map_err(|e| Error::InvalidAttribute { attribute: e.attribute })
 }
 
 fn unescape_attribute_values(input: &BStr) -> Result<Cow<'_, BStr>, Error> {
@@ -235,9 +255,7 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, Error> {
     let mut bytes = value.iter();
     while let Some(mut b) = bytes.next().copied() {
         if b == b'\\' {
-            b = *bytes.next().ok_or_raise(|| {
-                ValidationError::new(r"Escape character '\' is not allowed as the last character in an attribute value")
-            })?;
+            b = *bytes.next().ok_or(Error::TrailingEscapeCharacter)?;
         }
 
         out.push(validated_attr_value_byte(b)?);
@@ -247,10 +265,7 @@ fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, Error> {
 
 fn check_attribute_value(input: &BStr) -> Result<(), Error> {
     match input.iter().copied().find(|b| !is_valid_attr_value(*b)) {
-        Some(b) => {
-            let character = b as char;
-            Err(ValidationError::new(format!("Invalid character in attribute value: {character:?}")).raise())
-        }
+        Some(b) => Err(Error::InvalidAttributeValue { character: b as char }),
         None => Ok(()),
     }
 }
@@ -263,7 +278,8 @@ fn validated_attr_value_byte(byte: u8) -> Result<u8, Error> {
     if is_valid_attr_value(byte) {
         Ok(byte)
     } else {
-        let character = byte as char;
-        Err(ValidationError::new(format!("Invalid character in attribute value: {character:?}")).raise())
+        Err(Error::InvalidAttributeValue {
+            character: byte as char,
+        })
     }
 }

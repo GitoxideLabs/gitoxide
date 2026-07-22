@@ -70,7 +70,7 @@ impl std::error::Error for Error {
             Error::ContextDecode(err) => err.source(),
             Error::InvokeHelper(err) => err.source(),
             Error::ConfigureCredentialHelpers { source } => Some(&**source),
-            Error::Prompt { source, .. } => Some(&**source),
+            Error::Prompt { source, .. } => Some(source),
             Error::UrlMissing | Error::IdentityMissing { .. } | Error::Quit => None,
         }
     }

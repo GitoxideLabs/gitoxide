@@ -1345,8 +1345,7 @@ mod util {
                 .map(|p| gix_pathspec::Pattern::from_bytes(p.as_bytes(), Default::default()).expect("valid pattern")),
             None,
             &root,
-        )
-        .map_err(gix_pathspec::normalize::Error::into_error)?;
+        )?;
         Ok((lhs, rhs, cache, odb, pathspecs))
     }
 

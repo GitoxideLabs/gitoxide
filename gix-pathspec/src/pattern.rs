@@ -2,8 +2,6 @@ use std::path::{Component, Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 
-use gix_error::{ErrorExt, message};
-
 use crate::{MagicSignature, Pattern, SearchMode, normalize};
 
 /// Access
@@ -67,12 +65,10 @@ impl Pattern {
             let rela_path = match path.strip_prefix(root) {
                 Ok(path) => path,
                 Err(_) => {
-                    return Err(message!(
-                        "The path '{}' is not inside of the worktree '{}'",
-                        path.display(),
-                        root.display()
-                    )
-                    .raise());
+                    return Err(normalize::Error::AbsolutePathOutsideOfWorktree {
+                        path: path.into_owned(),
+                        worktree_path: root.into(),
+                    });
                 }
             };
             path = rela_path.to_owned().into();
@@ -107,7 +103,9 @@ impl Pattern {
                 path
             }
             None => {
-                return Err(message!("The path '{}' leaves the repository", path.display()).raise());
+                return Err(normalize::Error::OutsideOfWorktree {
+                    path: path.into_owned(),
+                });
             }
         };
 

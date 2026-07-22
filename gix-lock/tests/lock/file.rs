@@ -10,8 +10,7 @@ mod close {
         let resource = dir.path().join("resource-existing.ext");
         std::fs::write(&resource, b"old state")?;
         let resource_lock = resource.with_extension("ext.lock");
-        let mut file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let mut file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)?;
         assert!(resource_lock.is_file());
         file.with_mut(|out| out.write_all(b"hello world"))?;
         let mark = file.close()?;
@@ -36,8 +35,7 @@ mod commit {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("resource-existing.ext");
         std::fs::create_dir(&resource)?;
-        let mark = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let mark = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
         let lock_path = mark.lock_path().to_owned();
         assert!(lock_path.is_file(), "the lock is placed");
 
@@ -59,8 +57,7 @@ mod commit {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("resource-existing.ext");
         std::fs::create_dir(&resource)?;
-        let file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let file = gix_lock::File::acquire_to_update_resource(&resource, Fail::Immediately, None)?;
         let lock_path = file.lock_path().to_owned();
         assert!(lock_path.is_file(), "the lock is placed");
 
@@ -104,8 +101,7 @@ mod acquire {
         let resource = dir.path().join("a").join("resource-nonexisting");
         let resource_lock = resource.with_extension("lock");
         let mut file =
-            gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), Some(dir.path().into()))
-                .map_err(gix_lock::acquire::Error::into_error)?;
+            gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), Some(dir.path().into()))?;
         assert_eq!(file.lock_path(), resource_lock);
         assert_eq!(file.resource_path(), resource);
         assert!(resource_lock.is_file());
@@ -135,8 +131,7 @@ mod acquire {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("resource-nonexisting.ext");
         {
-            let mut file = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)
-                .map_err(gix_lock::acquire::Error::into_error)?;
+            let mut file = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None)?;
             file.with_mut(|out| out.write_all(b"probably we will be interrupted"))?;
         }
         assert!(!resource.is_file(), "the file wasn't created");
@@ -148,10 +143,7 @@ mod acquire {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("a").join("resource.ext");
         let res = gix_lock::File::acquire_to_update_resource(&resource, fail_immediately(), None);
-        assert!(
-            matches!(res.map_err(acquire::Error::into_inner), Err(acquire::Failure::Io(err)) if err.kind() == ErrorKind::NotFound),
-            "the underlying failure is still identifiable after type-erasure"
-        );
+        assert!(matches!(res, Err(acquire::Error::Io(err)) if err.kind() == ErrorKind::NotFound));
         assert!(dir.path().is_dir(), "it won't meddle with the containing directory");
         assert!(!resource.is_file(), "the resource is not created");
         assert!(

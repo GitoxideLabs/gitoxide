@@ -52,8 +52,8 @@ impl Transaction<'_, '_> {
     /// burying them in [`Error::LockAcquire`], which is reserved for actual contention.
     // This happens for path collisions where `a` is a ref file, and `a/b` is the lock to be created.
     fn lock_acquire_error(err: gix_lock::acquire::Error, full_name: &str) -> Error {
-        match err.into_inner() {
-            gix_lock::acquire::Failure::Io(err) => Error::Io(err),
+        match err {
+            gix_lock::acquire::Error::Io(err) => Error::Io(err),
             source => Error::LockAcquire {
                 source,
                 full_name: full_name.into(),
@@ -360,7 +360,7 @@ impl Transaction<'_, '_> {
                                     self.store.precompose_unicode,
                                     self.store.namespace.clone(),
                                 )
-                                .map_err(|err| Error::PackedTransactionAcquire(err.into_inner()))
+                                .map_err(Error::PackedTransactionAcquire)
                             })
                             .transpose()?
                     };
@@ -478,12 +478,12 @@ mod error {
     #[expect(missing_docs)]
     pub enum Error {
         Packed(packed::buffer::open::Error),
-        PackedTransactionAcquire(gix_lock::acquire::Failure),
+        PackedTransactionAcquire(gix_lock::acquire::Error),
         PackedTransactionPrepare(packed::transaction::prepare::Error),
         PackedFind(packed::find::Error),
         PreprocessingFailed(std::io::Error),
         LockAcquire {
-            source: gix_lock::acquire::Failure,
+            source: gix_lock::acquire::Error,
             full_name: BString,
         },
         Io(std::io::Error),

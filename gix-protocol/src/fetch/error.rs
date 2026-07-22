@@ -1,8 +1,6 @@
 /// The error returned by [`fetch()`](crate::fetch()).
 // TODO(review): hand-written impls preserve the `thiserror` semantics. `Negotiate`/`Client` are
-//                `#[error(transparent)]`; the shallow-file variants wrap `Exn` types (which do not
-//                implement `std::error::Error`) and expose the inner error via `&**err` as their
-//                `source()`; `ConsumePack` does the same for its boxed source.
+//                `#[error(transparent)]`; `ConsumePack` exposes its boxed source via `&**err`.
 #[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
@@ -53,9 +51,9 @@ impl std::error::Error for Error {
             Error::Negotiate(err) => err.source(),
             Error::Client(err) => err.source(),
             Error::MissingServerFeature { .. } | Error::RejectShallowRemote => None,
-            Error::WriteShallowFile(err) => Some(&**err),
-            Error::ReadShallowFile(err) => Some(&**err),
-            Error::LockShallowFile(err) => Some(&**err),
+            Error::WriteShallowFile(err) => Some(err),
+            Error::ReadShallowFile(err) => Some(err),
+            Error::LockShallowFile(err) => Some(err),
             Error::ConsumePack(err) => Some(&**err),
             Error::ReadRemainingBytes(err) => Some(err),
         }

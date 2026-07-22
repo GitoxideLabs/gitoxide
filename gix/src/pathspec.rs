@@ -37,12 +37,13 @@ impl<'repo> Pathspec<'repo> {
         let patterns = patterns
             .into_iter()
             .map(move |p| parse(p.as_ref(), defaults))
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(gix_error::Error::from_error)?;
         let needs_cache = patterns.iter().any(|p| !p.attributes.is_empty());
         let prefix = if patterns.is_empty() && !empty_patterns_match_prefix {
             None
         } else {
-            repo.prefix()?
+            repo.prefix().map_err(gix_error::Error::from_error)?
         };
         let search = Search::from_specs(
             patterns,
@@ -51,7 +52,8 @@ impl<'repo> Pathspec<'repo> {
                 repo.workdir().unwrap_or_else(|| repo.git_dir()),
                 repo.options.current_dir_or_empty(),
                 gix_path::realpath::MAX_SYMLINKS,
-            )?,
+            )
+            .map_err(gix_error::Error::from_error)?,
         )
         .or_raise(|| {
             gix_error::message(

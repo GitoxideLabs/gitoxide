@@ -2,7 +2,7 @@ use std::path::Path;
 
 #[test]
 fn consuming_the_entire_prefix_does_not_lead_to_a_single_dot() -> crate::Result {
-    let spec = normalized_spec("..", "a", "").map_err(gix_error::Exn::into_error)?;
+    let spec = normalized_spec("..", "a", "")?;
     assert_eq!(
         spec.path(),
         ".",
@@ -34,7 +34,7 @@ fn removes_relative_path_components() -> crate::Result {
         ("././/./c/", "a/b/c", "a/b"),
         ("././/./../c/d/", "a/c/d", "a"),
     ] {
-        let spec = normalized_spec(input_path, "a/b", "").map_err(gix_error::Exn::into_error)?;
+        let spec = normalized_spec(input_path, "a/b", "")?;
         assert_eq!(spec.path(), expected_path);
         assert_eq!(
             spec.prefix_directory(),
@@ -48,7 +48,7 @@ fn removes_relative_path_components() -> crate::Result {
 #[test]
 fn single_dot_is_special_and_directory_is_implied_without_trailing_slash() -> crate::Result {
     for (input_path, expected) in [(".", "."), ("./", ".")] {
-        let spec = normalized_spec(input_path, "", "/repo").map_err(gix_error::Exn::into_error)?;
+        let spec = normalized_spec(input_path, "", "/repo")?;
         assert_eq!(spec.path(), expected);
         assert!(spec.is_nil(), "such a spec has to match everything");
         assert_eq!(spec.prefix_directory(), "");
@@ -70,7 +70,7 @@ fn absolute_path_made_relative() -> crate::Result {
         ("/repo/a/b/*", "a/b/*", "a/b"),
         ("/repo/a/b/c/..", "a/b", "a"),
     ] {
-        let spec = normalized_spec(input_path, "", "/repo").map_err(gix_error::Exn::into_error)?;
+        let spec = normalized_spec(input_path, "", "/repo")?;
         assert_eq!(spec.path(), expected);
         assert_eq!(spec.prefix_directory(), prefix_dir, "{input_path}");
     }
@@ -79,7 +79,7 @@ fn absolute_path_made_relative() -> crate::Result {
 
 #[test]
 fn relative_top_patterns_ignore_the_prefix() -> crate::Result {
-    let spec = normalized_spec(":(top)c", "a/b", "").map_err(gix_error::Exn::into_error)?;
+    let spec = normalized_spec(":(top)c", "a/b", "")?;
     assert_eq!(spec.path(), "c");
     assert_eq!(spec.prefix_directory(), "");
     Ok(())
@@ -87,7 +87,7 @@ fn relative_top_patterns_ignore_the_prefix() -> crate::Result {
 
 #[test]
 fn absolute_top_patterns_ignore_the_prefix_but_are_made_relative() -> crate::Result {
-    let spec = normalized_spec(":(top)/a/b", "prefix-ignored", "/a").map_err(gix_error::Exn::into_error)?;
+    let spec = normalized_spec(":(top)/a/b", "prefix-ignored", "/a")?;
     assert_eq!(spec.path(), "b");
     assert_eq!(spec.prefix_directory(), "");
     Ok(())

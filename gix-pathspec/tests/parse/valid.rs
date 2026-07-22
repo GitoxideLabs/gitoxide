@@ -91,7 +91,7 @@ fn defaults_are_used() -> crate::Result {
         search_mode: SearchMode::Literal,
         literal: false,
     };
-    let p = gix_pathspec::parse(".".as_bytes(), defaults).map_err(gix_error::Exn::into_error)?;
+    let p = gix_pathspec::parse(".".as_bytes(), defaults)?;
     assert_eq!(p.path(), ".");
     assert_eq!(p.signature, defaults.signature);
     assert_eq!(p.search_mode, defaults.search_mode);
@@ -106,7 +106,7 @@ fn literal_from_defaults_is_overridden_by_element_glob() -> crate::Result {
         search_mode: SearchMode::Literal,
         ..Default::default()
     };
-    let p = gix_pathspec::parse(":(glob)*override".as_bytes(), defaults).map_err(gix_error::Exn::into_error)?;
+    let p = gix_pathspec::parse(":(glob)*override".as_bytes(), defaults)?;
     assert_eq!(p.path(), "*override");
     assert_eq!(p.signature, MagicSignature::default());
     assert_eq!(p.search_mode, SearchMode::PathAwareGlob, "this is the element override");
@@ -121,7 +121,7 @@ fn glob_from_defaults_is_overridden_by_element_glob() -> crate::Result {
         search_mode: SearchMode::PathAwareGlob,
         ..Default::default()
     };
-    let p = gix_pathspec::parse(":(literal)*override".as_bytes(), defaults).map_err(gix_error::Exn::into_error)?;
+    let p = gix_pathspec::parse(":(literal)*override".as_bytes(), defaults)?;
     assert_eq!(p.path(), "*override");
     assert_eq!(p.signature, MagicSignature::default());
     assert_eq!(p.search_mode, SearchMode::Literal, "this is the element override");

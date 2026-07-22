@@ -7,8 +7,7 @@ mod acquire {
     fn fail_mode_immediately_produces_a_descriptive_error() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
         assert!(guard.lock_path().ends_with("the-resource.lock"));
         assert!(guard.resource_path().ends_with("the-resource"));
         let err_str = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
@@ -24,8 +23,7 @@ mod acquire {
     fn fail_mode_after_duration_fails_after_a_given_duration_or_more() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let _guard = gix_lock::Marker::acquire_to_hold_resource(&resource, Fail::Immediately, None)?;
         let start = Instant::now();
         let time_to_wait = Duration::from_millis(50);
         let err_str =
@@ -72,8 +70,7 @@ mod commit {
     fn fails_for_ordinary_marker_that_was_never_writable() -> crate::Result {
         let dir = tempfile::tempdir()?;
         let resource = dir.path().join("the-resource");
-        let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)
-            .map_err(gix_lock::acquire::Error::into_error)?;
+        let mark = gix_lock::Marker::acquire_to_hold_resource(resource, Fail::Immediately, None)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

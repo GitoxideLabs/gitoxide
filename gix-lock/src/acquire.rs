@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use gix_error::ErrorExt;
 use gix_tempfile::{AutoRemove, ContainingDirectory};
 
 use crate::{DOT_LOCK_SUFFIX, File, Marker, backoff};
@@ -41,13 +40,10 @@ impl From<Duration> for Fail {
     }
 }
 
-/// The failure that occurred when acquiring a [`File`] or [`Marker`].
-///
-/// It's a concrete type to let callers tell actual lock contention apart from
-/// other IO errors, like path collisions between a lock file and a directory.
+/// The error returned when acquiring a [`File`] or [`Marker`].
 #[derive(Debug)]
 #[expect(missing_docs)]
-pub enum Failure {
+pub enum Error {
     Io(std::io::Error),
     PermanentlyLocked {
         resource_path: PathBuf,
@@ -56,11 +52,11 @@ pub enum Failure {
     },
 }
 
-impl fmt::Display for Failure {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Failure::Io(_) => f.write_str("Another IO error occurred while obtaining the lock"),
-            Failure::PermanentlyLocked {
+            Error::Io(_) => f.write_str("Another IO error occurred while obtaining the lock"),
+            Error::PermanentlyLocked {
                 resource_path,
                 mode,
                 attempts,
@@ -74,17 +70,20 @@ impl fmt::Display for Failure {
     }
 }
 
-impl std::error::Error for Failure {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Failure::Io(err) => Some(err),
-            Failure::PermanentlyLocked { .. } => None,
+            Error::Io(err) => Some(err),
+            Error::PermanentlyLocked { .. } => None,
         }
     }
 }
 
-/// The error returned when acquiring a [`File`] or [`Marker`].
-pub type Error = gix_error::Exn<Failure>;
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
 
 impl File {
     /// Create a writable lock file with failure `mode` whose content will eventually overwrite the given resource `at_path`.
@@ -222,7 +221,7 @@ fn lock_with_mode<T>(
                         std::thread::sleep(wait);
                         continue;
                     }
-                    Err(err) => return Err(Failure::Io(err).raise()),
+                    Err(err) => return Err(Error::from(err)),
                 }
             }
             try_lock(&lock_path, directory, cleanup)
@@ -230,13 +229,12 @@ fn lock_with_mode<T>(
     }
     .map(|v| (lock_path, v))
     .map_err(|err| match err.kind() {
-        AlreadyExists => Failure::PermanentlyLocked {
+        AlreadyExists => Error::PermanentlyLocked {
             resource_path: resource.into(),
             mode,
             attempts,
-        }
-        .raise(),
-        _ => Failure::Io(err).raise(),
+        },
+        _ => Error::Io(err),
     })
 }
 

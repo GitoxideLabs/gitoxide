@@ -385,17 +385,13 @@ fn from_existing_worktree_with_relative_linking_files() -> crate::Result {
         assert_eq!(trust, expected_trust());
         let (actual_git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
         assert_eq!(
-            gix_path::realpath(&actual_git_dir).map_err(gix_path::realpath::Error::into_error)?,
-            gix_path::realpath(&private_git_dir).map_err(gix_path::realpath::Error::into_error)?,
+            gix_path::realpath(&actual_git_dir)?,
+            gix_path::realpath(&private_git_dir)?,
             "discovery resolves the private git dir from relative worktree metadata"
         );
         assert_eq!(
-            actual_worktree
-                .as_deref()
-                .map(gix_path::realpath)
-                .transpose()
-                .map_err(gix_path::realpath::Error::into_error)?,
-            Some(gix_path::realpath(&linked).map_err(gix_path::realpath::Error::into_error)?),
+            actual_worktree.as_deref().map(gix_path::realpath).transpose()?,
+            Some(gix_path::realpath(&linked)?),
             "discovery resolves the linked worktree from relative worktree metadata"
         );
     }
@@ -414,8 +410,8 @@ fn from_symlinked_worktree_with_relative_linking_files() -> crate::Result {
     assert_eq!(trust, expected_trust());
     let (actual_git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
     assert_eq!(
-        gix_path::realpath(&actual_git_dir).map_err(gix_path::realpath::Error::into_error)?,
-        gix_path::realpath(main.join(".git/worktrees/linked")).map_err(gix_path::realpath::Error::into_error)?,
+        gix_path::realpath(&actual_git_dir)?,
+        gix_path::realpath(main.join(".git/worktrees/linked"))?,
         "the private git dir is found through a relative gitdir file reached via a symlinked checkout"
     );
     assert_eq!(

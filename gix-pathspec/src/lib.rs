@@ -19,8 +19,7 @@
 //! let specs = ["src/**", ":!src/generated/**"]
 //!     .into_iter()
 //!     .map(|spec| gix_pathspec::parse(spec.as_bytes(), Default::default()).unwrap());
-//! let mut search = gix_pathspec::Search::from_specs(specs, None, Path::new(""))
-//!     .map_err(|err| err.into_error())?;
+//! let mut search = gix_pathspec::Search::from_specs(specs, None, Path::new(""))?;
 //!
 //! assert!(search.can_match_relative_path("src".into(), Some(true)));
 //!
@@ -49,10 +48,33 @@ pub use gix_attributes as attributes;
 
 ///
 pub mod normalize {
+    use std::path::PathBuf;
+
     /// The error returned by [Pattern::normalize()](super::Pattern::normalize()).
-    // TODO(review): as an `Exn`, this no longer implements `std::error::Error` — out-of-tree callers
-    //               that propagated it into `Box<dyn Error>` or `anyhow` need `.into_error()` now.
-    pub type Error = gix_error::Exn<gix_error::Message>;
+    #[derive(Debug)]
+    #[expect(missing_docs)]
+    pub enum Error {
+        AbsolutePathOutsideOfWorktree { path: PathBuf, worktree_path: PathBuf },
+        OutsideOfWorktree { path: PathBuf },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::AbsolutePathOutsideOfWorktree { path, worktree_path } => write!(
+                    f,
+                    "The path '{}' is not inside of the worktree '{}'",
+                    path.display(),
+                    worktree_path.display()
+                ),
+                Error::OutsideOfWorktree { path } => {
+                    write!(f, "The path '{}' leaves the repository", path.display())
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 mod pattern;
@@ -172,12 +194,6 @@ pub enum SearchMode {
 /// setting the given `default` values in case these aren't specified in `input`.
 ///
 /// Note that empty [paths](Pattern::path) are allowed here, and generally some processing has to be performed.
-// TODO(review): through still-unconverted `thiserror` wrappers (e.g. `gix::pathspec::init::Error`,
-//                `gix_submodule::is_active_platform::Error`), `source()` of these errors reaches the
-//                `ValidationError`/`Message` whose source is `None`, so the newly-chained causes
-//                (`gix-attributes`, `gix-config-value`) are missing from `std` error chains on that
-//                path until consumers are converted. They remain visible in the `Exn` tree and at
-//                erased boundaries.
 pub fn parse(input: &[u8], default: Defaults) -> Result<Pattern, parse::Error> {
     Pattern::from_bytes(input, default)
 }
