@@ -62,7 +62,14 @@ impl<'repo> SharedState<'repo> {
         if state.is_none() {
             let platform = self
                 .modules
-                .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)?;
+                .is_active_platform(
+                    &self.repo.config.resolved,
+                    self.repo
+                        .config
+                        .pathspec_defaults()
+                        .map_err(gix_error::Error::from_error)?,
+                )
+                .map_err(gix_error::Error::from_error)?;
             let index = self.index()?;
             let attributes = self
                 .repo
@@ -70,7 +77,8 @@ impl<'repo> SharedState<'repo> {
                     &index,
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                         .adjust_for_bare(self.repo.is_bare()),
-                )?
+                )
+                .map_err(gix_error::Error::from_error)?
                 .detach();
             *state = Some(IsActiveState { platform, attributes });
         }
@@ -132,11 +140,19 @@ impl Submodule<'_> {
 
     /// Return the `fetchRecurseSubmodules` field from this submodule's configuration, or retrieve the value from `fetch.recurseSubmodules` if unset.
     pub fn fetch_recurse(&self) -> Result<Option<config::FetchRecurse>, fetch_recurse::Error> {
-        Ok(match self.state.modules.fetch_recurse(self.name())? {
-            Some(val) => Some(val),
-            None => crate::config::tree::Fetch::RECURSE_SUBMODULES
-                .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))?,
-        })
+        Ok(
+            match self
+                .state
+                .modules
+                .fetch_recurse(self.name())
+                .map_err(gix_error::Error::from_error)?
+            {
+                Some(val) => Some(val),
+                None => crate::config::tree::Fetch::RECURSE_SUBMODULES
+                    .try_into_recurse_submodules(self.state.repo.config.resolved.boolean("fetch.recurseSubmodules"))
+                    .map_err(gix_error::Error::from_error)?,
+            },
+        )
     }
 
     /// Return the `ignore` field from this submodule's configuration, if present, or `None`.
@@ -158,16 +174,18 @@ impl Submodule<'_> {
     /// Please see the [plumbing crate documentation](gix_submodule::IsActivePlatform::is_active()) for details.
     pub fn is_active(&self) -> Result<bool, is_active::Error> {
         let (mut platform, mut attributes) = self.state.active_state_mut()?;
-        let is_active = platform.is_active(
-            &self.state.repo.config.resolved,
-            self.name.as_ref(),
-            &mut |relative_path, case, is_dir, out| {
-                attributes
-                    .set_case(case)
-                    .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
-                    .is_ok_and(|platform| platform.matching_attributes(out))
-            },
-        )?;
+        let is_active = platform
+            .is_active(
+                &self.state.repo.config.resolved,
+                self.name.as_ref(),
+                &mut |relative_path, case, is_dir, out| {
+                    attributes
+                        .set_case(case)
+                        .at_entry(relative_path, Some(is_dir_to_mode(is_dir)), &self.state.repo.objects)
+                        .is_ok_and(|platform| platform.matching_attributes(out))
+                },
+            )
+            .map_err(gix_error::Error::from_error)?;
         Ok(is_active)
     }
 

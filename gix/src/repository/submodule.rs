@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use gix_error::{ErrorExt, ResultExt};
+
 use crate::{Repository, submodule};
 
 impl Repository {
@@ -21,17 +23,19 @@ impl Repository {
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.into()),
+            Err(err) => {
+                return Err(err
+                    .and_raise(gix_error::message("Could not read '.gitmodules' file"))
+                    .into());
+            }
         };
         if metadata.file_type().is_symlink() {
             return Ok(None);
         }
-        let buf = std::fs::read(&path)?;
-        Ok(Some(gix_submodule::File::from_bytes(
-            &buf,
-            path,
-            &self.config.resolved,
-        )?))
+        let buf = std::fs::read(&path).or_raise(|| gix_error::message("Could not read '.gitmodules' file"))?;
+        Ok(Some(
+            gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     /// Return a shared [`.gitmodules` file](submodule::File) which is updated automatically if the in-memory snapshot
@@ -55,20 +59,32 @@ impl Repository {
         )? {
             Some(m) => Ok(Some(m)),
             None => {
-                let id = match self.try_index()?.and_then(|index| {
-                    index
-                        .entry_by_path(submodule::MODULES_FILE.into())
-                        .map(|entry| entry.id)
-                }) {
+                let id = match self
+                    .try_index()
+                    .map_err(gix_error::Error::from_error)?
+                    .and_then(|index| {
+                        index
+                            .entry_by_path(submodule::MODULES_FILE.into())
+                            .map(|entry| entry.id)
+                    }) {
                     Some(id) => id,
                     None => match self
-                        .head()?
-                        .try_peel_to_id()?
+                        .head()
+                        .map_err(gix_error::Error::from_error)?
+                        .try_peel_to_id()
+                        .map_err(gix_error::Error::from_error)?
                         .map(|id| -> Result<Option<_>, submodule::modules::Error> {
                             Ok(id
-                                .object()?
-                                .peel_to_commit()?
-                                .tree()?
+                                .object()
+                                .or_raise(|| {
+                                    gix_error::message(
+                                        "Could not find the .gitmodules file by id in the object database",
+                                    )
+                                })?
+                                .peel_to_commit()
+                                .map_err(gix_error::Error::from_error)?
+                                .tree()
+                                .map_err(gix_error::Error::from_error)?
                                 .find_entry(submodule::MODULES_FILE)
                                 .map(|entry| entry.inner.oid.to_owned()))
                         })
@@ -80,9 +96,18 @@ impl Repository {
                     },
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
-                    gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(submodule::open_modules_file::Error::from)?
-                        .into(),
+                    gix_submodule::File::from_bytes(
+                        &self
+                            .find_object(id)
+                            .or_raise(|| {
+                                gix_error::message("Could not find the .gitmodules file by id in the object database")
+                            })?
+                            .data,
+                        None,
+                        &self.config.resolved,
+                    )
+                    .map_err(gix_error::Error::from_error)?
+                    .into(),
                 )))
             }
         }

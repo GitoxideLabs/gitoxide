@@ -1,71 +1,25 @@
 ///
 pub mod open_modules_file {
     /// The error returned by [Repository::open_modules_file()](crate::Repository::open_modules_file()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Configuration(#[from] gix_submodule::init::Error),
-        #[error("Could not read '.gitmodules' file")]
-        Io(#[from] std::io::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod modules {
     /// The error returned by [Repository::modules()](crate::Repository::modules()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenModulesFile(#[from] crate::submodule::open_modules_file::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-        #[error("Could not find the .gitmodules file by id in the object database")]
-        FindExistingBlob(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        FindHeadRef(#[from] crate::reference::find::existing::Error),
-        #[error(transparent)]
-        PeelHeadRef(#[from] crate::head::peel::Error),
-        #[error(transparent)]
-        PeelObjectToCommit(#[from] crate::object::peel::to_kind::Error),
-        #[error(transparent)]
-        TreeFromCommit(#[from] crate::object::commit::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod is_active {
     /// The error returned by [Submodule::is_active()](crate::Submodule::is_active()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        InitIsActivePlatform(#[from] gix_submodule::is_active_platform::Error),
-        #[error(transparent)]
-        QueryIsActive(#[from] gix_config::value::Error),
-        #[error(transparent)]
-        InitAttributes(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        InitPathspecDefaults(#[from] gix_pathspec::defaults::from_environment::Error),
-        // TODO(review): embeds an erased `gix_error::Error`; erasing a sibling variant would collide
-        //                with it via a duplicate `From<gix::Error>` impl (E0119).
-        #[error(transparent)]
-        ObtainIndex(#[from] crate::repository::index_or_load_from_head::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod fetch_recurse {
     /// The error returned by [Submodule::fetch_recurse()](crate::Submodule::fetch_recurse()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ModuleBoolean(#[from] gix_submodule::config::Error),
-        #[error(transparent)]
-        ConfigurationFallback(#[from] crate::config::key::GenericErrorWithValue),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -123,6 +77,9 @@ pub mod state {
 ///
 pub mod index_id {
     /// The error returned by [Submodule::index_id()](crate::Submodule::index_id()).
+    // TODO(review): kept concrete because `submodule::status::Error` already embeds the erased
+    //                `status::into_iter::Error` (via `StatusIter`); erasing this one would give it
+    //                a second `From<gix::Error>` via `IndexId`.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -138,6 +95,9 @@ pub mod index_id {
 ///
 pub mod head_id {
     /// The error returned by [Submodule::head_id()](crate::Submodule::head_id()).
+    // TODO(review): kept concrete because `submodule::status::Error` already embeds the erased
+    //                `status::into_iter::Error` (via `StatusIter`); erasing this one would give it
+    //                a second `From<gix::Error>` via `HeadId`.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
