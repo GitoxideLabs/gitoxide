@@ -271,9 +271,15 @@ pub mod pathspec {
                     Some(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT),
                 )
                 .map_err(|err| {
-                    Error::Init(gix_error::Error::from_error(
-                        crate::repository::pathspec_defaults_ignore_case::Error::from(err),
-                    ))
+                    Error::Init(
+                        gix_error::ErrorExt::and_raise(
+                            err,
+                            gix_error::message(
+                                "Filesystem configuration could not be obtained to learn about case sensitivity",
+                            ),
+                        )
+                        .into(),
+                    )
                 })?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
             Ok(self.parent.pathspec(

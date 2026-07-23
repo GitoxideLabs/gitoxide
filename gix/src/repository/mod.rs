@@ -63,29 +63,13 @@ mod worktree;
 ///
 mod new_commit {
     /// The error returned by [`new_commit(…)`](crate::Repository::new_commit()).
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        ParseTime(#[from] crate::config::time::Error),
-        #[error("Committer identity is not configured")]
-        CommitterMissing,
-        #[error("Author identity is not configured")]
-        AuthorMissing,
-        #[error(transparent)]
-        NewCommitAs(#[from] crate::repository::new_commit_as::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 mod new_commit_as {
     /// The error returned by [`new_commit_as(…)`](crate::Repository::new_commit_as()).
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        WriteObject(#[from] crate::object::write::Error),
-        #[error(transparent)]
-        FindCommit(#[from] crate::object::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -189,6 +173,15 @@ pub mod tree_merge_options {
 #[cfg(feature = "blob-diff")]
 pub mod diff_resource_cache {
     /// The error returned by [Repository::diff_resource_cache()](crate::Repository::diff_resource_cache()).
+    // TODO(review): kept concrete because `status::tree_index::Error` already embeds the erased
+    //                `diff::new_rewrites::Error` (via `RewritesConfiguration`); erasing this one would give
+    //                it a second `From<gix::Error>` via `DiffResourceCache`. `status::tree_index::Error` in
+    //                turn has to stay concrete because `status::iter::Error` already embeds the erased
+    //                `status::index_worktree::Error`, and erasing `tree_index::Error` would give it a second
+    //                `From<gix::Error>` too - and `status::iter::Error` must stay concrete since callers match
+    //                its variants. `index_or_load_from_head_or_empty` also has to stay concrete, because its
+    //                erasure would give this enum's own `ResourceCache` variant (already erased) a colliding
+    //                sibling in `Index`.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -232,6 +225,9 @@ pub mod commit_graph_if_enabled {
 #[cfg(feature = "index")]
 pub mod index_from_tree {
     /// The error returned by [Repository::index_from_tree()](crate::Repository::index_from_tree).
+    // TODO(review): kept concrete because `worktree_stream::Error` already embeds the erased
+    //                `filter::pipeline::options::Error` (via `FilterPipeline`); erasing this one would give
+    //                it a second `From<gix::Error>` via `OpenTree`.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -248,50 +244,19 @@ pub mod index_from_tree {
 ///
 pub mod branch_remote_ref_name {
     /// The error returned by [Repository::branch_remote_ref_name()](crate::Repository::branch_remote_ref_name()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The configured name of the remote ref to merge wasn't valid")]
-        ValidateFetchRemoteRefName(#[from] gix_validate::reference::name::Error),
-        #[error(transparent)]
-        PushDefault(#[from] crate::config::key::GenericErrorWithValue),
-        #[error(transparent)]
-        FindPushRemote(#[from] crate::remote::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod branch_remote_tracking_ref_name {
     /// The error returned by [Repository::branch_remote_tracking_ref_name()](crate::Repository::branch_remote_tracking_ref_name()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The name of the tracking reference was invalid")]
-        ValidateTrackingRef(#[from] gix_validate::reference::name::Error),
-        #[error("Could not get the remote reference to translate into the local tracking branch")]
-        RemoteRef(#[from] super::branch_remote_ref_name::Error),
-        #[error("Couldn't find remote to obtain fetch-specs for mapping to the tracking reference")]
-        FindRemote(#[from] crate::remote::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod upstream_branch_and_remote_name_for_tracking_branch {
     /// The error returned by [Repository::upstream_branch_and_remote_name_for_tracking_branch()](crate::Repository::upstream_branch_and_remote_for_tracking_branch()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The input branch '{}' needs to be a remote tracking branch", full_name.as_bstr())]
-        BranchCategory { full_name: gix_ref::FullName },
-        #[error(transparent)]
-        FindRemote(#[from] crate::remote::find::existing::Error),
-        #[error("Found ambiguous remotes without 1:1 mapping or more than one match: {}", remotes.iter()
-                                                                            .map(|r| r.as_bstr().to_string())
-                                                                            .collect::<Vec<_>>().join(", "))]
-        AmbiguousRemotes { remotes: Vec<crate::remote::Name<'static>> },
-        #[error(transparent)]
-        ValidateUpstreamBranch(#[from] gix_ref::name::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -320,38 +285,24 @@ pub mod normalize_path {
 #[cfg(feature = "attributes")]
 pub mod pathspec_defaults_ignore_case {
     /// The error returned by [Repository::pathspec_defaults_ignore_case()](crate::Repository::pathspec_defaults_inherit_ignore_case()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Filesystem configuration could not be obtained to learn about case sensitivity")]
-        FilesystemConfig(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        Defaults(#[from] gix_pathspec::defaults::from_environment::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "index")]
 pub mod index_or_load_from_head {
     /// The error returned by [`Repository::index_or_load_from_head()`](crate::Repository::index_or_load_from_head()).
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        HeadCommit(#[from] crate::reference::head_commit::Error),
-        #[error(transparent)]
-        TreeId(#[from] gix_object::decode::Error),
-        #[error(transparent)]
-        TraverseTree(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "index")]
 pub mod index_or_load_from_head_or_empty {
     /// The error returned by [`Repository::index_or_load_from_head_or_empty()`](crate::Repository::index_or_load_from_head_or_empty()).
+    // TODO(review): kept concrete because `diff_resource_cache::Error` already embeds the erased
+    //                `diff::resource_cache::Error` (via `ResourceCache`); erasing this one would give it a
+    //                second `From<gix::Error>` via `Index`. `diff_resource_cache::Error` in turn has to stay
+    //                concrete for the reasons noted on its own `TODO(review)`.
     #[derive(thiserror::Error, Debug)]
     #[expect(missing_docs)]
     pub enum Error {

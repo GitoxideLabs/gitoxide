@@ -163,7 +163,7 @@ impl<'repo> Reference<'repo> {
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>, peel::to_kind::Error> {
         let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
-            peel::to_kind::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
+            gix_error::Error::from_error(gix_ref::peel::to_object::Error::Follow(
                 file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
             ))
         })?;
@@ -221,9 +221,14 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Object<'repo>, peel::to_kind::Error> {
         let target = self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
+            .follow_to_object_packed(&self.repo.refs, packed)
+            .map_err(gix_error::Error::from_error)?
             .attach(self.repo);
-        Ok(target.object()?.peel_to_kind(kind)?)
+        target
+            .object()
+            .map_err(gix_error::Error::from_error)?
+            .peel_to_kind(kind)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Follow all symbolic references we point to up to the first object, which is typically (but not always) a tag,
@@ -233,7 +238,7 @@ impl<'repo> Reference<'repo> {
     #[doc(alias = "resolve", alias = "git2")]
     pub fn follow_to_object(&mut self) -> Result<Id<'repo>, follow::to_object::Error> {
         let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
-            follow::to_object::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
+            gix_error::Error::from_error(gix_ref::peel::to_object::Error::Follow(
                 file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
             ))
         })?;
@@ -249,7 +254,8 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Id<'repo>, follow::to_object::Error> {
         Ok(self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
+            .follow_to_object_packed(&self.repo.refs, packed)
+            .map_err(gix_error::Error::from_error)?
             .attach(self.repo))
     }
 

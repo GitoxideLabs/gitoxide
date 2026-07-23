@@ -48,6 +48,8 @@ pub mod is_active {
         InitAttributes(#[from] crate::config::attribute_stack::Error),
         #[error(transparent)]
         InitPathspecDefaults(#[from] gix_pathspec::defaults::from_environment::Error),
+        // TODO(review): embeds an erased `gix_error::Error`; erasing a sibling variant would collide
+        //                with it via a duplicate `From<gix::Error>` impl (E0119).
         #[error(transparent)]
         ObtainIndex(#[from] crate::repository::index_or_load_from_head::Error),
     }
@@ -126,6 +128,8 @@ pub mod index_id {
     pub enum Error {
         #[error(transparent)]
         PathConfiguration(#[from] gix_submodule::config::path::Error),
+        // TODO(review): embeds an erased `gix_error::Error`; erasing a sibling variant would collide
+        //                with it via a duplicate `From<gix::Error>` impl (E0119).
         #[error(transparent)]
         Index(#[from] crate::repository::index_or_load_from_head::Error),
     }

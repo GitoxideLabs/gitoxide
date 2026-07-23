@@ -1,3 +1,4 @@
+use gix_error::ErrorExt;
 use gix_hash::ObjectId;
 use gix_ref::{
     FullName, PartialNameRef, Target,
@@ -209,7 +210,10 @@ impl crate::Repository {
     /// Also note that the returned id is likely to point to a commit, but could also
     /// point to a tree or blob. It won't, however, point to a tag as these are always peeled.
     pub fn head_id(&self) -> Result<crate::Id<'_>, reference::head_id::Error> {
-        Ok(self.head()?.into_peeled_id()?)
+        self.head()
+            .map_err(gix_error::Error::from_error)?
+            .into_peeled_id()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the name to the symbolic reference `HEAD` points to, or `None` if the head is detached.
@@ -248,7 +252,10 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn head_commit(&self) -> Result<crate::Commit<'_>, reference::head_commit::Error> {
-        Ok(self.head()?.peel_to_commit()?)
+        self.head()
+            .map_err(gix_error::Error::from_error)?
+            .peel_to_commit()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the tree id the `HEAD` reference currently points to after peeling it fully,
@@ -263,18 +270,30 @@ impl crate::Repository {
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
     pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
-        self.head_tree_id().or_else(|err| {
-            if let reference::head_tree_id::Error::HeadCommit(reference::head_commit::Error::PeelToCommit(
-                crate::head::peel::to_commit::Error::PeelToObject(crate::head::peel::to_object::Error::Unborn {
-                    ..
-                }),
-            )) = err
-            {
-                Ok(self.empty_tree().id())
-            } else {
-                Err(err)
+        // We can't recover the unborn-HEAD case from `self.head_tree_id()` once it has failed: by then,
+        // `head_commit()` has already erased `Head::peel_to_commit()`'s concrete error into `gix_error::Error`,
+        // and under the `auto-chain-error` feature without `tree-error`, that erasure flattens the error into
+        // a `ChainedError` whose original concrete type is no longer reachable by *any* downcast - the frame
+        // tree that `downcast_any_ref()` walks only exists prior to that conversion.
+        //
+        // So instead we call `peel_to_commit()` ourselves and inspect its still-concrete error before it gets
+        // erased, exactly like `Repository::commit_graph_if_enabled()` does in `graph.rs`: raise it into an
+        // `Exn` and use `downcast_any_ref()` (`gix-error/src/exn/impls.rs`, not cfg-gated) to look for the
+        // nested `to_object::Error::Unborn`. This works regardless of the `tree-error`/`auto-chain-error`
+        // feature combination.
+        let mut head = self.head().map_err(gix_error::Error::from_error)?;
+        match head.peel_to_commit() {
+            Ok(commit) => Ok(commit.tree_id()?),
+            Err(err) => {
+                let err = err.raise();
+                match err.downcast_any_ref::<crate::head::peel::to_commit::Error>() {
+                    Some(crate::head::peel::to_commit::Error::PeelToObject(
+                        crate::head::peel::to_object::Error::Unborn { .. },
+                    )) => Ok(self.empty_tree().id()),
+                    _ => Err(err.into_error().into()),
+                }
             }
-        })
+        }
     }
 
     /// Return the tree object the `HEAD^{tree}` reference currently points to after peeling it fully,
@@ -296,7 +315,7 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn head_tree(&self) -> Result<crate::Tree<'_>, reference::head_tree::Error> {
-        Ok(self.head_commit()?.tree()?)
+        self.head_commit()?.tree().map_err(gix_error::Error::from_error)
     }
 
     /// Find the reference with the given partial or full `name`, like `main`, `HEAD`, `heads/branch` or `origin/other`,
@@ -327,7 +346,7 @@ impl crate::Repository {
         let partial_name = name
             .clone()
             .try_into()
-            .map_err(|err| reference::find::Error::Find(gix_ref::file::find::Error::from(err)))?;
+            .map_err(|err| gix_error::Error::from_error(gix_ref::file::find::Error::from(err)))?;
         self.try_find_reference(name)?
             .ok_or_else(|| reference::find::existing::Error::NotFound {
                 name: partial_name.to_owned(),
@@ -375,7 +394,7 @@ impl crate::Repository {
                 Some(r) => Ok(Some(Reference::from_ref(r, self))),
                 None => Ok(None),
             },
-            Err(err) => Err(err.into()),
+            Err(err) => Err(gix_error::Error::from_error(err)),
         }
     }
 }
