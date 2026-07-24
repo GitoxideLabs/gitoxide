@@ -80,6 +80,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     for (index, (row, metadata)) in visible_rows.iter().zip(metadata).enumerate() {
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
+        let metadata_width = metadata.width();
         let style = if selected {
             Style::default().add_modifier(Modifier::REVERSED)
         } else {
@@ -116,6 +117,23 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
                 row_area,
             );
             color_graph(frame, row_area, &row.lane, horizontal_offset as usize, selected);
+        }
+        if selected && body.width > 0 {
+            let line_width = if pin_metadata {
+                pane_width.saturating_add(metadata_width)
+            } else {
+                row.lane
+                    .chars()
+                    .count()
+                    .saturating_add(metadata_width)
+                    .saturating_sub(horizontal_offset as usize)
+            };
+            let marker_x = content
+                .x
+                .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
+                .saturating_add(1)
+                .min(body.right().saturating_sub(1));
+            frame.buffer_mut()[(marker_x, y)].set_style(style);
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
@@ -516,10 +534,8 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
 
         let footer_text = "1 commits · complete · ↑↓/jk move · h/l pan · [ pane · ] natural · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
-        let mut expected = Buffer::with_lines([
-            format!("{:<140}", "> ● 0101010 (HEAD) 1970-01-01 mapped author subject"),
-            format!("{footer_text:<140}"),
-        ]);
+        let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
+        let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
@@ -540,6 +556,8 @@ mod tests {
         for x in 30..44 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Green));
         }
+        expected[(selected_line.chars().count() as u16 + 1, 0)]
+            .set_style(Style::default().add_modifier(Modifier::REVERSED));
         let refs = footer_text[..footer_text.find("r refs").expect("the refs toggle is present")]
             .chars()
             .count();
@@ -644,6 +662,10 @@ mod tests {
         assert!(
             buffer[(0, 1)].modifier.contains(Modifier::REVERSED),
             "the slice-local selection highlights the global selection"
+        );
+        assert!(
+            buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
+            "a clipped selection marker uses the right border"
         );
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
