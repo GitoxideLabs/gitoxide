@@ -18,8 +18,7 @@ pub struct RequestWriter<'a> {
 impl io::Write for RequestWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if self.trace {
-            use bstr::ByteSlice;
-            gix_features::trace::trace!(">> {}", buf.as_bstr());
+            gix_features::trace::trace!(">> {}", bstr::BStr::new(buf));
         }
         self.writer.write(buf)
     }
@@ -78,8 +77,7 @@ impl<'a> RequestWriter<'a> {
             }
             MessageKind::Text(t) => {
                 if self.trace {
-                    use bstr::ByteSlice;
-                    gix_features::trace::trace!(">> {}", t.as_bstr());
+                    gix_features::trace::trace!(">> {}", bstr::BStr::new(t));
                 }
                 encode::write_text(&gix_packetline::TextRef::from(t), self.writer.inner_mut())
             }

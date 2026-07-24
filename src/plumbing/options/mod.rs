@@ -798,8 +798,17 @@ pub mod clone {
         pub remote: OsString,
 
         /// The name of the reference to check out.
-        #[clap(long = "ref", value_parser = crate::shared::AsPartialRefName, value_name = "REF_NAME")]
+        #[clap(
+            long = "ref",
+            value_parser = crate::shared::AsPartialRefName,
+            value_name = "REF_NAME",
+            conflicts_with = "revision"
+        )]
         pub ref_name: Option<gix::refs::PartialName>,
+
+        /// Fetch only this full reference or object ID and check it out with a detached HEAD.
+        #[clap(long, value_parser = crate::shared::AsBString, value_name = "REVISION")]
+        pub revision: Option<gix::bstr::BString>,
 
         /// The directory to initialize with the new repository and to which all data should be written.
         pub directory: Option<PathBuf>,

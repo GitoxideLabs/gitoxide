@@ -128,33 +128,46 @@ pub fn update_head(
     reflog_message: &BStr,
     remote_name: &BStr,
     ref_name: Option<&PartialName>,
+    revision: Option<&gix_refspec::RefSpec>,
 ) -> Result<(), Error> {
     use gix_ref::{
         Target,
         transaction::{PreviousValue, RefEdit},
     };
-    let head_info = match ref_name {
-        Some(ref_name) => {
-            let (target, full_ref_name) = find_custom_refname(ref_map, ref_name)?;
-            Some((Some(target), Some(full_ref_name)))
-        }
-        None => ref_map.remote_refs.iter().find_map(|r| {
-            Some(match r {
-                gix_protocol::handshake::Ref::Symbolic {
-                    full_ref_name,
-                    target,
-                    tag: _,
-                    object,
-                } if full_ref_name == "HEAD" => (Some(object.as_ref()), Some(target.as_bstr())),
-                gix_protocol::handshake::Ref::Direct { full_ref_name, object } if full_ref_name == "HEAD" => {
-                    (Some(object.as_ref()), None)
-                }
-                gix_protocol::handshake::Ref::Unborn { full_ref_name, target } if full_ref_name == "HEAD" => {
-                    (None, Some(target.as_bstr()))
-                }
-                _ => return None,
-            })
-        }),
+    let revision_head_id = revision
+        .map(|revision| -> Result<gix_hash::ObjectId, Error> {
+            let mapping = find_revision(ref_map, revision)?;
+            let id = mapping.remote.peeled_id().ok_or_else(|| Error::RevisionMissing {
+                wanted: revision.to_ref().source().expect("validated revision").to_owned(),
+            })?;
+            Ok(repo.find_object(id)?.peel_to_commit()?.id)
+        })
+        .transpose()?;
+    let head_info = match revision_head_id.as_ref() {
+        Some(id) => Some((Some(id.as_ref()), None)),
+        None => match ref_name {
+            Some(ref_name) => {
+                let (target, full_ref_name) = find_custom_refname(ref_map, ref_name)?;
+                Some((Some(target), Some(full_ref_name)))
+            }
+            None => ref_map.remote_refs.iter().find_map(|r| {
+                Some(match r {
+                    gix_protocol::handshake::Ref::Symbolic {
+                        full_ref_name,
+                        target,
+                        tag: _,
+                        object,
+                    } if full_ref_name == "HEAD" => (Some(object.as_ref()), Some(target.as_bstr())),
+                    gix_protocol::handshake::Ref::Direct { full_ref_name, object } if full_ref_name == "HEAD" => {
+                        (Some(object.as_ref()), None)
+                    }
+                    gix_protocol::handshake::Ref::Unborn { full_ref_name, target } if full_ref_name == "HEAD" => {
+                        (None, Some(target.as_bstr()))
+                    }
+                    _ => return None,
+                })
+            }),
+        },
     };
     let Some((head_peeled_id, head_ref)) = head_info else {
         return Ok(());
@@ -247,6 +260,31 @@ pub fn update_head(
     Ok(())
 }
 
+/// Find the mapping produced by the exact refspec used to request `revision`.
+///
+/// Returns [`Error::RevisionMissing`] if the remote did not map that refspec.
+pub(super) fn find_revision<'a>(
+    ref_map: &'a crate::remote::fetch::RefMap,
+    revision: &gix_refspec::RefSpec,
+) -> Result<&'a gix_protocol::fetch::refmap::Mapping, Error> {
+    ref_map
+        .mappings
+        .iter()
+        .find(|mapping| {
+            mapping
+                .spec_index
+                .get(&ref_map.refspecs, &ref_map.extra_refspecs)
+                .is_some_and(|spec| spec == revision)
+        })
+        .ok_or_else(|| Error::RevisionMissing {
+            wanted: revision.to_ref().source().expect("validated revision").to_owned(),
+        })
+}
+
+/// Resolve `ref_name` to its object ID and full name among the mapped remote references.
+///
+/// Full names match directly. Partial names prefer branches over tags, then use normal refspec matching.
+/// Returns [`Error::RefNameMissing`] or [`Error::RefNameAmbiguous`] when there is no unique match.
 pub(super) fn find_custom_refname<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
     ref_name: &PartialName,

@@ -1,5 +1,5 @@
 use crate::{
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
     clone::PrepareFetch,
 };
 use gix_ref::Category;
@@ -54,6 +54,12 @@ pub enum Error {
         wanted: gix_ref::PartialName,
         candidates: Vec<BString>,
     },
+    #[error("The remote didn't have the requested revision {wanted:?}")]
+    RevisionMissing { wanted: BString },
+    #[error("The requested revision could not be read")]
+    FindRevision(#[from] crate::object::find::existing::Error),
+    #[error("The requested revision did not peel to a commit")]
+    PeelRevision(#[from] crate::object::peel::to_kind::Error),
     #[error(transparent)]
     CommitterOrFallback(#[from] crate::config::commit_signature::Error),
     #[error(transparent)]
@@ -136,7 +142,8 @@ impl PrepareFetch {
         // to match git's behavior (matching git's single-branch behavior for shallow clones).
         let use_single_branch_for_shallow = self.shallow != remote::fetch::Shallow::NoChange
             && remote.fetch_specs.is_empty()
-            && self.fetch_options.extra_refspecs.is_empty();
+            && self.fetch_options.extra_refspecs.is_empty()
+            && self.revision.is_none();
 
         let target_ref = if use_single_branch_for_shallow {
             // Determine target branch from user-specified ref_name or default branch
@@ -218,7 +225,7 @@ impl PrepareFetch {
 
         // Set up refspec based on whether we're doing a single-branch shallow clone,
         // which requires a single ref to match Git unless it's overridden.
-        if remote.fetch_specs.is_empty() {
+        if remote.fetch_specs.is_empty() && self.revision.is_none() {
             if let Some(target_ref) = &target_ref {
                 // Single-branch refspec for shallow clones
                 let destination = match target_ref.category_and_short_name() {
@@ -247,8 +254,14 @@ impl PrepareFetch {
         let mut clone_fetch_tags = None;
         if let Some(f) = self.configure_remote.as_mut() {
             remote = f(remote).map_err(Error::RemoteConfiguration)?;
-        } else {
+        } else if self.revision.is_none() {
             clone_fetch_tags = remote::fetch::Tags::All.into();
+        }
+        if self.revision.is_some() {
+            remote
+                .replace_refspecs(std::iter::empty::<&BStr>(), remote::Direction::Fetch)
+                .expect("an empty refspec list is always valid");
+            remote = remote.with_fetch_tags(remote::fetch::Tags::None);
         }
 
         // The remote section just written to `.git/config`, kept around so we can
@@ -284,15 +297,20 @@ impl PrepareFetch {
             let connection = connection.into_detached();
             let mut fetch_opts = {
                 let mut opts = self.fetch_options.clone();
-                if !opts.extra_refspecs.contains(&head_refspec) {
-                    opts.extra_refspecs.push(head_refspec.clone());
-                }
-                if let Some(ref_name) = &self.ref_name {
-                    opts.extra_refspecs.push(
-                        gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
-                            .expect("partial names are valid refspecs")
-                            .to_owned(),
-                    );
+                if let Some(revision) = &self.revision {
+                    opts.extra_refspecs.clear();
+                    opts.extra_refspecs.push(revision.clone());
+                } else {
+                    if !opts.extra_refspecs.contains(&head_refspec) {
+                        opts.extra_refspecs.push(head_refspec.clone());
+                    }
+                    if let Some(ref_name) = &self.ref_name {
+                        opts.extra_refspecs.push(
+                            gix_refspec::parse(ref_name.as_ref().as_bstr(), gix_refspec::parse::Operation::Fetch)
+                                .expect("partial names are valid refspecs")
+                                .to_owned(),
+                        );
+                    }
                 }
                 opts
             };
@@ -332,6 +350,9 @@ impl PrepareFetch {
         // Assure problems with custom branch names fail early, not after getting the pack or during negotiation.
         if let Some(ref_name) = &self.ref_name {
             util::find_custom_refname(pending_pack.ref_map(), ref_name)?;
+        }
+        if let Some(revision) = &self.revision {
+            util::find_revision(pending_pack.ref_map(), revision)?;
         }
         // On an object-format mismatch: adopt the remote's format before receiving the pack.
         // Only reachable with sha256, otherwise `gix_hash::Kind` has a single variant, so
@@ -388,6 +409,7 @@ impl PrepareFetch {
             reflog_message.as_ref(),
             remote_name.as_ref(),
             self.ref_name.as_ref(),
+            self.revision.as_ref(),
         )?;
 
         drop(self.repo.take().expect("still present"));
