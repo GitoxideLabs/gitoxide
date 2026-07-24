@@ -30,13 +30,12 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         .map(|row| row.lane.trim_end().chars().count().saturating_add(1))
         .max()
         .unwrap_or_default();
-    let pane_limit = ((body.width as usize) / 3)
+    let align_limit = ((body.width as usize) / 3)
         .saturating_sub(2)
         .max(1)
         .min(content.width as usize);
-    let pane_width = max_lane_width.min(pane_limit);
-    let graph_is_wide = max_lane_width > pane_limit;
-    let pin_metadata = app.pin_metadata.unwrap_or(graph_is_wide);
+    let align_width = max_lane_width.min(align_limit);
+    let align_metadata = app.align_metadata;
     let show_committer_date = app.show_committer_date;
     let show_author_name = app.show_author_name;
     let show_trailers = app.show_trailers;
@@ -62,8 +61,19 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
             )
         })
         .collect();
-    let max_offset = if pin_metadata {
-        max_lane_width.saturating_sub(pane_width)
+    let graph_max_offset = max_lane_width.saturating_sub(align_width);
+    let metadata_max_offset = if align_metadata {
+        metadata
+            .iter()
+            .map(Line::width)
+            .max()
+            .unwrap_or_default()
+            .saturating_sub((content.width as usize).saturating_sub(align_width))
+    } else {
+        0
+    };
+    let max_offset = if align_metadata {
+        graph_max_offset.saturating_add(metadata_max_offset)
     } else {
         visible_rows
             .iter()
@@ -74,7 +84,9 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
             .saturating_sub(content.width as usize)
     }
     .min(u16::MAX as usize);
-    let horizontal_offset = app.horizontal_offset.min(max_offset) as u16;
+    let horizontal_offset = app.horizontal_offset.min(max_offset);
+    let graph_offset = horizontal_offset.min(graph_max_offset);
+    let metadata_offset = horizontal_offset.saturating_sub(graph_max_offset);
 
     let visible_rows = &app.rows[start..end];
     for (index, (row, metadata)) in visible_rows.iter().zip(metadata).enumerate() {
@@ -92,41 +104,41 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         );
 
         let row_area = Rect::new(content.x, y, content.width, 1);
-        if pin_metadata {
+        if align_metadata {
             frame.render_widget(
                 Paragraph::new(row.lane.as_str())
                     .style(style)
-                    .scroll((0, horizontal_offset)),
+                    .scroll((0, graph_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, horizontal_offset as usize, selected);
-            let pane = Rect::new(
-                content.x.saturating_add(pane_width as u16),
+            color_graph(frame, row_area, &row.lane, graph_offset, selected);
+            let aligned = Rect::new(
+                content.x.saturating_add(align_width as u16),
                 y,
-                content.width.saturating_sub(pane_width as u16),
+                content.width.saturating_sub(align_width as u16),
                 1,
             );
-            frame.render_widget(Clear, pane);
-            frame.render_widget(Paragraph::new(metadata), pane);
+            frame.render_widget(Clear, aligned);
+            frame.render_widget(Paragraph::new(metadata).scroll((0, metadata_offset as u16)), aligned);
         } else {
             let mut spans = Vec::with_capacity(metadata.spans.len() + 1);
             spans.push(Span::styled(row.lane.as_str(), style));
             spans.extend(metadata.spans);
             frame.render_widget(
-                Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset)),
+                Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, horizontal_offset as usize, selected);
+            color_graph(frame, row_area, &row.lane, horizontal_offset, selected);
         }
         if selected && body.width > 0 {
-            let line_width = if pin_metadata {
-                pane_width.saturating_add(metadata_width)
+            let line_width = if align_metadata {
+                align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
             } else {
                 row.lane
                     .chars()
                     .count()
                     .saturating_add(metadata_width)
-                    .saturating_sub(horizontal_offset as usize)
+                    .saturating_sub(horizontal_offset)
             };
             let marker_x = content
                 .x
@@ -145,9 +157,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         State::Cancelled => "cancelled",
     };
     let mut footer_spans = vec![Span::raw(format!(
-        "{} commits · {status} · ↑↓/jk move · h/l pan · [ pane · ] natural",
+        "{} commits · {status} · ↑↓/jk move · h/l pan",
         app.rows.len()
     ))];
+    footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -533,7 +546,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
 
-        let footer_text = "1 commits · complete · ↑↓/jk move · h/l pan · [ pane · ] natural · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · complete · ↑↓/jk move · h/l pan · [ align · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -780,38 +793,36 @@ mod tests {
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: Box::default(),
-            title: "subject".into(),
+            title: format!("{} subject-tail", "a".repeat(50)).into(),
         }]);
         app.update(Action::Complete);
         app.rows[0].lane = format!("{}{}", "A".repeat(40), "B".repeat(40));
         let mut terminal = Terminal::new(TestBackend::new(60, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let pane_column = rendered_row(&terminal)
+        let aligned_column = rendered_row(&terminal)
             .find("0101010")
-            .expect("wide graphs automatically pin metadata");
-        assert!(
-            pane_column < 60,
-            "wide graphs automatically pin metadata within the viewport"
-        );
+            .expect("alignment keeps metadata visible beside wide graphs");
+        assert!(aligned_column < 60, "alignment keeps metadata within the viewport");
 
         app.update(Action::ScrollRight);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "B");
         assert_eq!(
             rendered_row(&terminal).find("0101010"),
-            Some(pane_column),
-            "horizontal graph scrolling leaves pinned metadata fixed"
+            Some(aligned_column),
+            "horizontal graph scrolling leaves aligned metadata fixed"
         );
 
         app.update(Action::ScrollLeft);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        app.update(Action::UnpinMetadata);
+        app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
             !rendered_row(&terminal).contains("0101010"),
-            "] restores natural post-graph placement"
+            "[ restores natural post-graph placement"
         );
+        assert!(footer_is_dim(&terminal, "[ align"), "disabled alignment is dimmed");
 
         app.update(Action::ScrollRight);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -820,13 +831,25 @@ mod tests {
             "l pages far enough right to reveal natural metadata"
         );
 
+        app.update(Action::ScrollLeft);
         app.rows[0].lane = "● ".into();
-        app.update(Action::PinMetadata);
+        app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
             terminal.backend().buffer()[(4, 0)].symbol(),
             "0",
-            "the pane starts immediately after the widest visible lane"
+            "aligned metadata starts immediately after the widest visible lane"
+        );
+        assert!(
+            !rendered_row(&terminal).contains("subject-tail"),
+            "long aligned metadata starts clipped"
+        );
+
+        app.update(Action::ScrollRight);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_row(&terminal).contains("subject-tail"),
+            "l reveals clipped aligned metadata after graph panning is exhausted"
         );
         Ok(())
     }

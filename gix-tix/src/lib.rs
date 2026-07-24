@@ -331,8 +331,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('m') => Some(Action::ToggleMailmap),
         KeyCode::Char('r') => Some(Action::ToggleSpecialRefs),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
-        KeyCode::Char('[') => Some(Action::PinMetadata),
-        KeyCode::Char(']') => Some(Action::UnpinMetadata),
+        KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     }
@@ -432,11 +431,7 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),
-            Some(Action::PinMetadata)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)),
-            Some(Action::UnpinMetadata)
+            Some(Action::ToggleAlign)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
