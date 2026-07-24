@@ -32,6 +32,22 @@ fn username_and_password() -> crate::Result {
 }
 
 #[test]
+fn colon_in_username_roundtrips() -> crate::Result {
+    assert_url_roundtrip(
+        "http://a%3Ab@example.com/",
+        url(Scheme::Http, "a:b", "example.com", None, b"/"),
+    )
+}
+
+#[test]
+fn colon_in_password_roundtrips() -> crate::Result {
+    assert_url_roundtrip(
+        "http://user:a:b@example.com/",
+        url_with_pass(Scheme::Http, "user", "a:b", "example.com", None, b"/"),
+    )
+}
+
+#[test]
 fn username_and_password_and_port() -> crate::Result {
     assert_url_roundtrip(
         "http://user:password@example.com:8080/~byron/hello",
