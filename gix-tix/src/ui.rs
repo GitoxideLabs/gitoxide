@@ -25,11 +25,17 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         body.width.saturating_sub(2),
         body.height,
     );
-    let max_lane_width = visible_rows
+    let rendered_lane_width = visible_rows
         .iter()
+        .filter(|row| !row.lane.is_empty())
         .map(|row| row.lane.trim_end().chars().count().saturating_add(1))
         .max()
         .unwrap_or_default();
+    let max_lane_width = if rendered_lane_width == 0 {
+        app.estimated_lane_width
+    } else {
+        rendered_lane_width
+    };
     let align_limit = ((body.width as usize) / 3)
         .saturating_sub(2)
         .max(1)
