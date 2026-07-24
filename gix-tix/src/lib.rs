@@ -24,7 +24,7 @@ use crossterm::{
     event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     style::Print,
-    terminal,
+    terminal::{self, Clear, ClearType},
 };
 use history::{Authors, Decorations, Event};
 use ratatui::{TerminalOptions, Viewport};
@@ -115,6 +115,11 @@ fn restore_terminal(terminal: &mut ratatui::DefaultTerminal, inline: bool) -> Re
     let cursor = (|| {
         let area = terminal.get_frame().area();
         let terminal_height = terminal.size()?.height;
+        execute!(
+            terminal.backend_mut(),
+            cursor::MoveTo(0, area.bottom().saturating_sub(1)),
+            Clear(ClearType::CurrentLine)
+        )?;
         if area.bottom() < terminal_height {
             execute!(terminal.backend_mut(), cursor::MoveTo(0, area.bottom()))
         } else {
