@@ -390,7 +390,7 @@ impl Url {
     }
 
     fn write_canonical_form_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
-        fn percent_encode(s: &str) -> Cow<'_, str> {
+        fn percent_encode(s: &str, encode_colon: bool) -> Cow<'_, str> {
             /// Characters that must be percent-encoded in the userinfo component of a URL.
             ///
             /// According to RFC 3986, userinfo can contain:
@@ -419,7 +419,14 @@ impl Url {
                 .add(b'{')
                 .add(b'|')
                 .add(b'}');
-            percent_encoding::utf8_percent_encode(s, USERINFO_ENCODE_SET).into()
+            const USERNAME_ENCODE_SET: &percent_encoding::AsciiSet = &USERINFO_ENCODE_SET.add(b':');
+
+            let encode_set = if encode_colon {
+                USERNAME_ENCODE_SET
+            } else {
+                USERINFO_ENCODE_SET
+            };
+            percent_encoding::utf8_percent_encode(s, encode_set).into()
         }
 
         out.write_all(self.scheme.as_str().as_bytes())?;
@@ -429,10 +436,10 @@ impl Url {
 
         match (&self.user, &self.host) {
             (Some(user), Some(host)) => {
-                out.write_all(percent_encode(user).as_bytes())?;
+                out.write_all(percent_encode(user, true).as_bytes())?;
                 if let Some(password) = &self.password {
                     out.write_all(b":")?;
-                    out.write_all(percent_encode(password).as_bytes())?;
+                    out.write_all(percent_encode(password, false).as_bytes())?;
                 }
                 out.write_all(b"@")?;
                 if needs_brackets {
