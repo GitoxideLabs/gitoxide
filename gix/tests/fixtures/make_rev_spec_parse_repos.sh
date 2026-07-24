@@ -9,37 +9,30 @@ function baseline() {
   local spec=${1:?first argument is the spec to test}
   {
     echo "$spec"
-    git rev-parse -q --verify "$spec" 2>/dev/null || echo $?
+    # Revspecs containing `/` must reach Git unchanged when run through Git Bash.
+    MSYS2_ARG_CONV_EXCL='*' git rev-parse -q --verify "$spec" 2>/dev/null || echo $?
   }>> baseline.git
 }
 
 function loose-obj() {
-  # Read content from stdin, compute header and hash, write compressed object
-  script=$(cat <<'EOF'
-import sys
-import hashlib
-import zlib
-import os
-
-type = sys.argv[1]
-objects_dir = sys.argv[2]
-content = sys.stdin.buffer.read()
-header = f"{type} {len(content)}\0".encode()
-full = header + content
-sha1 = hashlib.sha1(full).hexdigest()
-compressed = zlib.compress(full)
-
-bucket = f"{objects_dir}/" + sha1[:2]
-filename = sha1[2:]
-
-os.makedirs(bucket, exist_ok=True)
-with open(f"{bucket}/{filename}", "wb") as f:
-    f.write(compressed)
-
-print(sha1)
-EOF
-)
-  python3 -c "$script" "$@"
+  # Git validates object types even with `hash-object --literally`, so write the
+  # deliberately invalid loose object using Perl, which ships with Git Bash.
+  perl -MDigest::SHA=sha1_hex -MCompress::Zlib=compress -e '
+    use strict;
+    use warnings;
+    binmode STDIN;
+    local $/;
+    my ($type, $objects_dir) = @ARGV;
+    my $content = <STDIN>;
+    my $full = $type . " " . length($content) . "\0" . $content;
+    my $sha1 = sha1_hex($full);
+    my $bucket = $objects_dir . "/" . substr($sha1, 0, 2);
+    mkdir $bucket or die "mkdir $bucket: $!" unless -d $bucket;
+    open my $fh, ">:raw", $bucket . "/" . substr($sha1, 2) or die "open object: $!";
+    print {$fh} compress($full);
+    close $fh or die "close object: $!";
+    print $sha1, "\n";
+  ' "$@"
 }
 
 # The contents of this file is based on https://github.com/git/git/blob/8168d5e9c23ed44ae3d604f392320d66556453c9/t/t1512-rev-parse-disambiguation.sh#L38

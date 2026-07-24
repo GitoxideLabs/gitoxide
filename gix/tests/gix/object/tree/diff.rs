@@ -163,10 +163,6 @@ mod track_rewrites {
     use crate::{object::tree::diff::tree_named, util::named_subrepo_opts};
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Fails on some Window systems, like the fixture doesn't get set up correctly."
-    )]
     fn jj_realistic_needs_to_be_more_clever() -> crate::Result {
         // The test case only works (and is only needed) for SHA-1.
         // Ideally this can be ported to SHA-256 once rename tracking is par with Git.
@@ -447,10 +443,6 @@ mod track_rewrites {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Fails on some Window systems, like the fixture doesn't get set up correctly."
-    )]
     fn jj_realistic_directory_rename() -> crate::Result {
         // The test case only works (and is only needed) for SHA-1.
         // Ideally this can be ported to SHA-256 once rename tracking is par with Git.

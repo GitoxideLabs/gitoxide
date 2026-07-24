@@ -7,6 +7,12 @@ git config core.ignorecase false
 
 while read -r pattern value; do
   echo "$pattern" "$value"
+  if [[ -n ${MSYSTEM:-} && $pattern == "*/\\'" && $value == "XXX/\\'" ]]; then
+    # Git for Windows treats the backslash in this stdin path as a separator,
+    # so reproduce the Git-on-Unix baseline for this repository-relative path.
+    printf '::\t"%s"\n' "${value//\\/\\\\}"
+    continue
+  fi
   echo "$pattern" > .gitignore
   echo "$value" | git check-ignore -vn --stdin 2>&1 || :
 done <<EOF >git-baseline.nmatch

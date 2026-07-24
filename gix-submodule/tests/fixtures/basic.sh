@@ -10,9 +10,21 @@ git clone super multiple
 (cd multiple
   git submodule add ../multiple submodule
   git submodule add ../multiple a/b
-  git submodule add --name .a/..c ../multiple a\\c
-  git submodule add --name a/d\\ ../multiple a/d\\
-  git submodule add --name a\\e ../multiple a/e/
+  # These deliberately unusual names and paths exercise .gitmodules parsing.
+  # Add them as configuration only, as names ending in a backslash cannot be
+  # represented in the module directory hierarchy on Windows.
+  cat >>.gitmodules <<'EOF'
+[submodule ".a/..c"]
+	path = a\\c
+	url = ../multiple
+[submodule "a/d\\"]
+	path = a/d\\
+	url = ../multiple
+[submodule "a\\e"]
+	path = a/e
+	url = ../multiple
+EOF
+  git add .gitmodules
   git commit -m "subsubmodule-a"
 )
 

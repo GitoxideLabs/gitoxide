@@ -356,34 +356,12 @@ jobs:
         with:
           tool: nextest
       - name: Test (nextest)
-        id: nextest
         env:
           GIX_TEST_IGNORE_ARCHIVES: "1"
           TEST_ARGS: ${{ matrix.test-args }}
         run: |
-          cargo nextest --profile=with-xml run --workspace --no-fail-fast --exclude gix-error -- `
+          cargo nextest run --workspace --no-fail-fast --exclude gix-error -- `
             (-split $Env:TEST_ARGS)
-        continue-on-error: true
-      - name: Check for errors
-        run: |
-          [xml]$junit_xml = Get-Content -Path 'target/nextest/with-xml/junit.xml'
-          if ($junit_xml.testsuites.errors -ne 0) { exit 1 }
-      - name: Collect actual failures
-        run: |
-          [xml]$junit_xml = Get-Content -Path 'target/nextest/with-xml/junit.xml'
-
-          $actual_failures = $junit_xml.SelectNodes("//testcase[failure]") |
-            ForEach-Object { "$($_.classname) $($_.name)" } |
-            Sort-Object
-
-          Write-Output $actual_failures
-          Set-Content -Path 'actual-failures.txt' -Value $actual_failures
-      - name: Compare expected and actual failures
-        run: |
-          # Fail on any differences, even unexpectedly passing tests, so they can be investigated.
-          git --no-pager -c diff.color.old='magenta bold' -c diff.color.new='blue bold' `
-            diff --no-index --exit-code --unified=1000000 --color=always -- `
-            etc/test-fixtures-windows-expected-failures-see-issue-1358.txt actual-failures.txt
 
   test-32bit:
     strategy:
