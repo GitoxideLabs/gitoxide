@@ -322,6 +322,10 @@ pub enum PossibleConflict {
 }
 
 impl PossibleConflict {
+    /// Return the index into the [`ChangeList`] from which this conflict tree was built.
+    ///
+    /// This is `None` for structural tree/non-tree conflicts if there is no change at the
+    /// conflicting path itself, only one or more changes below it.
     pub(super) fn change_idx(&self) -> Option<usize> {
         match self {
             PossibleConflict::TreeToNonTree { change_idx, .. } | PossibleConflict::NonTreeToTree { change_idx, .. } => {
@@ -346,6 +350,8 @@ struct TreeNode {
     /// The index to a change, which is always set if this is a leaf node (with no children), and if there are children and this
     /// is a rewritten tree.
     change_idx: Option<usize>,
+    /// Prefer non-tree changes if multiple changes occupy the same path.
+    change_is_tree: bool,
     /// Keep track of where the location of this node is derived from.
     location: ChangeLocation,
 }
@@ -394,6 +400,7 @@ impl TreeNodes {
                         let new_node = TreeNode {
                             children: Default::default(),
                             change_idx: is_last.then_some(change_idx),
+                            change_is_tree: is_last && change.entry_mode().is_tree(),
                             location: location_hint,
                         };
                         cursor.children.insert(component.to_owned(), next_index);
@@ -403,11 +410,15 @@ impl TreeNodes {
                     }
                     Some(index) => {
                         cursor = &mut self.0[index];
-                        if is_last && !cursor.is_leaf_node() {
+                        if is_last {
                             // NOTE: we might encounter the same path multiple times in rare conditions.
-                            //       At least we avoid overwriting existing intermediate changes, for good measure.
-                            if cursor.change_idx.is_none() {
+                            //       Prefer a non-tree change as it describes the actual leaf collision.
+                            if (cursor.change_idx.is_none() && !cursor.is_leaf_node())
+                                || (cursor.change_is_tree && !change.entry_mode().is_tree())
+                            {
                                 cursor.change_idx = Some(change_idx);
+                                cursor.change_is_tree = change.entry_mode().is_tree();
+                                cursor.location = location_hint;
                             }
                         }
                     }
@@ -471,22 +482,6 @@ impl TreeNodes {
         .into()
     }
 
-    /// Compare both changes and return `true` if they are *not* exactly the same.
-    /// One two changes are the same, they will have the same effect.
-    /// Since this is called after [`Self::check_conflict`], *our* change will not be applied,
-    /// only theirs, which naturally avoids double-application
-    /// (which shouldn't have side effects, but let's not risk it)
-    pub fn is_not_same_change_in_possible_conflict(
-        &self,
-        theirs: &Change,
-        conflict: &PossibleConflict,
-        our_changes: &ChangeListRef,
-    ) -> bool {
-        conflict
-            .change_idx()
-            .is_none_or(|idx| our_changes[idx].inner != *theirs)
-    }
-
     pub fn remove_existing_leaf(&mut self, location: &BStr) {
         self.remove_leaf_inner(location, true);
     }
@@ -511,6 +506,7 @@ impl TreeNodes {
                             "BUG: we should really only try to remove leaf nodes: {cursor:?}"
                         );
                         cursor.change_idx = None;
+                        cursor.change_is_tree = false;
                     } else {
                         cursor = &mut self.0[existing_idx];
                     }
@@ -543,6 +539,7 @@ impl TreeNodes {
             "BUG: we thought we wouldn't do that current.location is related?"
         );
         cursor.change_idx = Some(new_change_idx);
+        cursor.change_is_tree = new_change.entry_mode().is_tree();
         cursor.location = ChangeLocation::CurrentLocation;
     }
 }

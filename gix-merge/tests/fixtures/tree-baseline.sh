@@ -163,6 +163,25 @@ git init non-tree-to-tree
   git add a && git commit -m "mv 'a' to 'a/sub/b', populate 'a/' with empty files"
 )
 
+git init deleted-file-added-dir
+(cd deleted-file-added-dir
+  echo original >to-be-deleted
+  git add to-be-deleted && git commit -m "init"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm to-be-deleted
+  git commit -m "delete file"
+
+  git checkout B
+  git rm to-be-deleted
+  mkdir to-be-deleted
+  touch to-be-deleted/a
+  git add to-be-deleted/a && git commit -m "replace file with directory"
+)
+
 git init tree-to-non-tree
 (cd tree-to-non-tree
   mkdir -p a/sub
@@ -1229,6 +1248,7 @@ git init type-change-to-symlink
 
 
 baseline non-tree-to-tree A-B A B
+baseline deleted-file-added-dir A-B A B
 baseline tree-to-non-tree A-B A B
 baseline tree-to-non-tree-with-rename A-B A B
 baseline non-tree-to-tree-with-rename A-B A B

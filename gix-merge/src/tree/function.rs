@@ -197,7 +197,20 @@ where
                         ours.change_idx()
                             .zip(needs_tree_insertion.flatten())
                             .is_none_or(|(ours_idx, ignore_idx)| ours_idx != ignore_idx)
-                            && our_tree.is_not_same_change_in_possible_conflict(theirs, ours, our_changes)
+                            && ours.change_idx().is_none_or(|ours_idx| {
+                                let ours = &mut our_changes[ours_idx];
+                                if ours.inner == *theirs {
+                                    // Identical changes aren't a conflict. Applying `theirs` below also
+                                    // consumes our deletion, which must not be applied a second time.
+                                    if matches!(theirs, Change::Deletion { .. }) {
+                                        ours.was_written = true;
+                                    }
+                                    false
+                                } else {
+                                    // An applied deletion leaves no entry that could still conflict.
+                                    !(ours.was_written && matches!(ours.inner, Change::Deletion { .. }))
+                                }
+                            })
                     }) {
                     None => {
                         if let Some((rewritten_location, ours_idx)) = rewritten_location {
