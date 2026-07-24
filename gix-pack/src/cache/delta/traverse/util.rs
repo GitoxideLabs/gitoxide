@@ -4,16 +4,9 @@ use std::marker::PhantomData;
 /// tree, and we need to access it concurrently with each thread taking its own root node,
 /// and working its way through all the reachable leaves.
 ///
-/// The tree was built by decoding a pack whose entries refer to its bases only by OFS_DELTA -
-/// they are pointing backwards only which assures bases have to be listed first, and that each entry
-/// only has a single parent.
-///
-/// REF_DELTA entries aren't supported here, and cause immediate failure - they are expected to have
-/// been resolved before as part of the thin-pack handling.
-///
-/// If we somehow would allow REF_DELTA entries to point to an in-pack object, then in theory malicious packs could
-/// cause all kinds of graphs as they can point anywhere in the pack, but they still can't link an entry to
-/// more than one base. And that's what one would really have to do for two threads to encounter the same child.
+/// The tree was built by decoding a pack whose entries refer to exactly one base. OFS_DELTA entries point
+/// backwards, while in-pack REF_DELTA entries are attached once their base object id is known.
+/// Ref children are removed from a shared lookup before attachment, so no child can be reached by two threads.
 ///
 /// Thus I believe it's impossible for this data structure to end up in a place where it violates its assumption.
 pub(super) struct ItemSliceSync<'a, T>

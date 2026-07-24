@@ -63,6 +63,10 @@ mod root {
             !self.item.children().is_empty()
         }
 
+        pub fn add_children(&mut self, children: impl IntoIterator<Item = u32>) {
+            self.item.extend_children(children);
+        }
+
         /// Transform this `Node` into an iterator over its children.
         ///
         /// Children are `Node`s referring to pack entries whose base object is this pack entry.
@@ -81,6 +85,28 @@ mod root {
     }
 }
 
+fn attach_ref_delta_children<T: Send>(
+    node: &mut root::Node<'_, T>,
+    entry: &data::Entry,
+    decompressed: &[u8],
+    ref_delta_children: Option<&super::SharedRefDeltaChildren>,
+    object_hash: gix_hash::Kind,
+) -> Result<(), Error> {
+    let Some(ref_delta_children) = ref_delta_children else {
+        return Ok(());
+    };
+    if threading::lock(ref_delta_children).is_empty() {
+        return Ok(());
+    }
+
+    let kind = entry.header.as_kind().expect("a fully resolved object has a base kind");
+    let id = gix_object::compute_hash(object_hash, kind, decompressed)?;
+    if let Some(children) = threading::lock(ref_delta_children).remove(&id) {
+        node.add_children(children);
+    }
+    Ok(())
+}
+
 pub(super) struct State<'items, F, MBFN, T: Send> {
     pub delta_bytes: Vec<u8>,
     pub fully_resolved_delta_bytes: Vec<u8>,
@@ -88,14 +114,29 @@ pub(super) struct State<'items, F, MBFN, T: Send> {
     pub resolve: F,
     pub modify_base: MBFN,
     pub child_items: &'items ItemSliceSync<'items, Item<T>>,
+    pub ref_delta_children: Option<super::SharedRefDeltaChildren>,
 }
 
-/// SAFETY: `item.children` must uniquely reference elements in child_items that no other currently alive
-/// item does. All child_items must also have unique children.
+/// Resolve and visit the complete delta subtree rooted at `item`.
+///
+/// The root entry is read and inflated through `resolve`. Each child entry is inflated as delta instructions and applied
+/// to its resolved parent's bytes. The resulting object inherits its parent's object kind and is passed to `modify_base`;
+/// objects which are themselves bases retain their bytes until their children have been processed.
+///
+/// After resolving an object, its ID is computed if ref-deltas are waiting for a matching base. Those children are then
+/// attached to the object and traversed like children whose bases were known by pack offset.
+///
+/// # Safety
 ///
 /// This safety invariant can be reliably upheld by making sure `item` comes from a Tree and `child_items`
 /// was constructed using that Tree's child_items. This works since Tree has this invariant as well: all
 /// child_items are referenced at most once (really, exactly once) by a node in the tree.
+///
+/// So: `item.children` must contain valid, unique indices into `child_items`, and every child item must recursively uphold the
+/// same rule. No index may be reachable from another live root or child. This gives each worker exclusive access to every
+/// `Item<T>` it obtains through [`ItemSliceSync`], despite that type using a shared raw pointer internally.
+/// The caller can satisfy this contract by taking `item` and `child_items` from the same
+/// [`Tree`](crate::cache::delta::Tree), whose construction maintains the single-parent invariant.
 #[expect(clippy::too_many_arguments, unsafe_code)]
 #[deny(unsafe_op_in_unsafe_fn)] // this is a big function, require unsafe for the one small unsafe op we have
 pub(super) unsafe fn deltas<T, F, MBFN, E, R>(
@@ -109,6 +150,7 @@ pub(super) unsafe fn deltas<T, F, MBFN, E, R>(
         resolve,
         modify_base,
         child_items,
+        ref_delta_children,
     }: &mut State<'_, F, MBFN, T>,
     resolve_data: &R,
     object_hash: gix_hash::Kind,
@@ -175,6 +217,13 @@ where
             objects.fetch_add(1, Ordering::Relaxed);
             size.fetch_add(base_bytes.len(), Ordering::Relaxed);
         }
+        attach_ref_delta_children(
+            &mut base,
+            &base_entry,
+            &base_bytes,
+            ref_delta_children.as_ref(),
+            object_hash,
+        )?;
 
         for mut child in base.into_child_iter() {
             let (mut child_entry, entry_end) = decompress_from_resolver(child.entry_slice(), delta_bytes)?;
@@ -197,6 +246,13 @@ where
             // FIXME: this actually invalidates the "pack_offset()" computation, which is not obvious to consumers
             //        at all
             child_entry.header = base_entry.header; // assign the actual object type, instead of 'delta'
+            attach_ref_delta_children(
+                &mut child,
+                &child_entry,
+                fully_resolved_delta_bytes,
+                ref_delta_children.as_ref(),
+                object_hash,
+            )?;
             if child.has_children() {
                 decompressed_bytes_by_pack_offset.insert(
                     child.offset(),
@@ -243,6 +299,7 @@ where
                     resolve.clone(),
                     resolve_data,
                     modify_base.clone(),
+                    ref_delta_children.clone(),
                     object_hash,
                     alloc_limit_bytes,
                     threads_left,
@@ -269,6 +326,7 @@ fn deltas_mt<T, F, MBFN, E, R>(
     resolve: F,
     resolve_data: &R,
     modify_base: MBFN,
+    ref_delta_children: Option<super::SharedRefDeltaChildren>,
     object_hash: gix_hash::Kind,
     alloc_limit_bytes: Option<usize>,
     threads_left: &AtomicIsize,
@@ -298,6 +356,7 @@ where
                         let decompressed_bytes_by_pack_offset = &decompressed_bytes_by_pack_offset;
                         let resolve = resolve.clone();
                         let mut modify_base = modify_base.clone();
+                        let ref_delta_children = ref_delta_children.clone();
                         let objects = &objects;
                         let size = &size;
 
@@ -360,6 +419,13 @@ where
                                     objects.fetch_add(1, Ordering::Relaxed);
                                     size.fetch_add(base_bytes.len(), Ordering::Relaxed);
                                 }
+                                attach_ref_delta_children(
+                                    &mut base,
+                                    &base_entry,
+                                    &base_bytes,
+                                    ref_delta_children.as_ref(),
+                                    object_hash,
+                                )?;
 
                                 for mut child in base.into_child_iter() {
                                     let (mut child_entry, entry_end) =
@@ -388,6 +454,13 @@ where
                                     // FIXME: this actually invalidates the "pack_offset()" computation, which is not obvious to consumers
                                     //        at all
                                     child_entry.header = base_entry.header; // assign the actual object type, instead of 'delta'
+                                    attach_ref_delta_children(
+                                        &mut child,
+                                        &child_entry,
+                                        &fully_resolved_delta_bytes,
+                                        ref_delta_children.as_ref(),
+                                        object_hash,
+                                    )?;
                                     if child.has_children() {
                                         threading::lock(decompressed_bytes_by_pack_offset).insert(
                                             child.offset(),

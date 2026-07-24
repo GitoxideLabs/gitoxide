@@ -182,21 +182,19 @@ mod lookup_ref_delta_objects {
     }
 
     #[test]
-    fn lookup_errors_trigger_a_fuse_and_stop_iteration() {
-        let input = vec![entry(delta_ref(gix_hash::Kind::Sha1.null()), D_A), entry(base(), D_B)];
+    fn missing_bases_are_left_for_in_pack_resolution() {
+        let input = compute_offsets(vec![
+            entry(delta_ref(gix_hash::Kind::Sha1.null()), D_A),
+            entry(base(), D_B),
+        ]);
+        let expected = input.clone();
         let calls = AtomicUsize::default();
         let db = FindData::new(None, &calls);
-        let mut result =
-            LookupRefDeltaObjectsIter::new(into_results_iter(input), &db, gix_zlib::Compression::BEST_SPEED)
-                .collect::<Vec<_>>();
+        let result = LookupRefDeltaObjectsIter::new(into_results_iter(input), &db, gix_zlib::Compression::BEST_SPEED)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("missing objects may be in the pack itself");
         assert_eq!(calls.load(Ordering::Relaxed), 1, "it tries to lookup the object");
-        assert_eq!(result.len(), 1, "the error stops iteration");
-        assert!(matches!(
-            result.pop().expect("one"),
-            Err(input::Error::NotFound {
-                object_id
-            }) if object_id == gix_hash::Kind::Sha1.null()
-        ));
+        assert_eq!(result, expected, "the unresolved ref-delta is unchanged");
     }
 
     #[test]

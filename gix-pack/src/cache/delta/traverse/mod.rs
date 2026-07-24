@@ -18,6 +18,9 @@ use crate::{
 mod resolve;
 pub(crate) mod util;
 
+/// Shared access to ref-delta child indices awaiting a resolved base, keyed by its object ID.
+pub(super) type SharedRefDeltaChildren = OwnShared<Mutable<super::tree::RefDeltaChildren>>;
+
 /// Returned by [`Tree::traverse()`]
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -43,6 +46,13 @@ pub enum Error {
         /// The base's offset which was from a resolved ref-delta that didn't actually get added to the tree
         base_pack_offset: crate::data::Offset,
     },
+    #[error("The ref-delta base object {base_id} could not be found")]
+    UnresolvedRefDelta {
+        /// The id named by one or more unresolved ref-delta entries.
+        base_id: gix_hash::ObjectId,
+    },
+    #[error("Failed to hash an object while resolving in-pack ref-deltas")]
+    ObjectHash(#[from] gix_hash::hasher::Error),
     #[error("Failed to spawn thread when switching to work-stealing mode")]
     SpawnThread(#[from] std::io::Error),
     #[error(transparent)]
@@ -151,7 +161,9 @@ where
         let object_progress = OwnShared::new(Mutable::new(object_progress));
 
         let start = std::time::Instant::now();
-        let (mut root_items, mut child_items_vec) = self.take_root_and_child();
+        let (mut root_items, mut child_items_vec, ref_delta_children) = self.take_root_child_and_refs();
+        let ref_delta_children =
+            (!ref_delta_children.is_empty()).then(|| OwnShared::new(Mutable::new(ref_delta_children)));
         let child_items = ItemSliceSync::new(&mut child_items_vec);
         let child_items = &child_items;
         in_parallel_with_slice(
@@ -160,6 +172,7 @@ where
             {
                 {
                     let object_progress = object_progress.clone();
+                    let ref_delta_children = ref_delta_children.clone();
                     move |thread_index| resolve::State {
                         delta_bytes: Vec::<u8>::with_capacity(4096),
                         fully_resolved_delta_bytes: Vec::<u8>::with_capacity(4096),
@@ -169,6 +182,7 @@ where
                         resolve: resolve.clone(),
                         modify_base: inspect_object.clone(),
                         child_items,
+                        ref_delta_children: ref_delta_children.clone(),
                     }
                 }
             },
@@ -196,6 +210,12 @@ where
             || (!should_interrupt.load(Ordering::Relaxed)).then(|| std::time::Duration::from_millis(50)),
             |_| (),
         )?;
+
+        if let Some(ref_delta_children) = ref_delta_children {
+            if let Some((base_id, _children)) = threading::lock(&ref_delta_children).first_key_value() {
+                return Err(Error::UnresolvedRefDelta { base_id: *base_id });
+            }
+        }
 
         threading::lock(&object_progress).show_throughput(start);
         size_progress.show_throughput(start);
