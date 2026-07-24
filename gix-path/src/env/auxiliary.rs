@@ -5,6 +5,13 @@ use std::{
 
 use std::sync::LazyLock;
 
+pub(super) struct WindowsExecutable {
+    pub program: OsString,
+    /// Whether `program` was found in `<git-root>/bin`, where Git for Windows
+    /// installs executable shims.
+    pub is_shim: bool,
+}
+
 /// `usr`-like directory component names that MSYS2 may provide, other than for `/usr` itself.
 ///
 /// These are the values of the "Prefix" column of the "Environments" and "Legacy Environments"
@@ -89,7 +96,7 @@ const BIN_DIR_FRAGMENTS: &[&str] = &["bin", "usr/bin"];
 /// depending on desired semantics, it should possibly also check a `cmd` directory; directories
 /// like `<platform>/bin`, for any applicable variants (such as `mingw64`); and `super::core_dir()`
 /// itself, which it could safely check even if its value is not safe for inferring other paths.
-fn find_git_associated_windows_executable(stem: &str) -> Option<OsString> {
+fn find_git_associated_windows_executable(stem: &str) -> Option<WindowsExecutable> {
     let git_root = git_for_windows_root()?;
 
     BIN_DIR_FRAGMENTS
@@ -102,17 +109,23 @@ fn find_git_associated_windows_executable(stem: &str) -> Option<OsString> {
             raw_path.push("/");
             raw_path.push(stem);
             raw_path.push(".exe");
-            raw_path
+            WindowsExecutable {
+                program: raw_path,
+                is_shim: *bin_dir_fragment == "bin",
+            }
         })
-        .find(|raw_path| Path::new(raw_path).is_file())
+        .find(|executable| Path::new(&executable.program).is_file())
 }
 
 /// Like `find_associated_windows_executable`, but if not found, fall back to a simple filename.
-pub(super) fn find_git_associated_windows_executable_with_fallback(stem: &str) -> OsString {
+pub(super) fn find_git_associated_windows_executable_with_fallback(stem: &str) -> WindowsExecutable {
     find_git_associated_windows_executable(stem).unwrap_or_else(|| {
         let mut raw_path = OsString::from(stem);
         raw_path.push(".exe");
-        raw_path
+        WindowsExecutable {
+            program: raw_path,
+            is_shim: false,
+        }
     })
 }
 
@@ -154,7 +167,7 @@ mod tests {
     fn find_git_associated_windows_executable_no_extra() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable(stem);
-            assert_eq!(path, None, "should not find {stem:?}");
+            assert!(path.is_none(), "should not find {stem:?}");
         }
     }
 
@@ -162,8 +175,8 @@ mod tests {
     #[cfg_attr(not(windows), ignore = "only meaningful on Windows")]
     fn find_git_associated_windows_executable_with_fallback() {
         for stem in SHOULD_FIND {
-            let path = super::find_git_associated_windows_executable_with_fallback(stem);
-            assert!(Path::new(&path).is_absolute(), "should find {stem:?}");
+            let executable = super::find_git_associated_windows_executable_with_fallback(stem);
+            assert!(Path::new(&executable.program).is_absolute(), "should find {stem:?}");
         }
     }
 
@@ -172,6 +185,7 @@ mod tests {
     fn find_git_associated_windows_executable_with_fallback_falls_back() {
         for stem in SHOULD_NOT_FIND {
             let path = super::find_git_associated_windows_executable_with_fallback(stem)
+                .program
                 .to_str()
                 .expect("valid Unicode")
                 .to_owned();

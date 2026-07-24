@@ -37,17 +37,52 @@ pub fn installation_config_prefix() -> Option<&'static Path> {
 /// If the bundled shell on Windows cannot be found, `sh.exe` is returned as the name of a shell,
 /// as it could possibly be found in `PATH`. On Unix it's `/bin/sh` as the POSIX-compatible shell.
 ///
+/// Use [`shell_command()`] when constructing a command. On Windows, it passes `--posix` to the
+/// Git for Windows `bin/sh.exe` shim so its delegated `bash.exe` behaves like `sh`.
+///
 /// Note that the returned path might not be a path on disk, if it is a fallback path or if the
 /// file was moved or deleted since the first time this function is called.
 pub fn shell() -> &'static OsStr {
-    static PATH: LazyLock<OsString> = LazyLock::new(|| {
+    &shell_configuration().program
+}
+
+struct Shell {
+    program: OsString,
+    /// Whether `program` requires `--posix` to behave like `sh`.
+    needs_posix_mode: bool,
+}
+
+fn shell_configuration() -> &'static Shell {
+    static SHELL: LazyLock<Shell> = LazyLock::new(|| {
         if cfg!(windows) {
-            auxiliary::find_git_associated_windows_executable_with_fallback("sh")
+            let shell = auxiliary::find_git_associated_windows_executable_with_fallback("sh");
+            Shell {
+                program: shell.program,
+                needs_posix_mode: shell.is_shim,
+            }
         } else {
-            "/bin/sh".into()
+            Shell {
+                program: "/bin/sh".into(),
+                needs_posix_mode: false,
+            }
         }
     });
-    PATH.as_ref()
+    &SHELL
+}
+
+/// Return a command configured to run the shell that Git would use.
+///
+/// On Windows, when [`shell()`] selected the Git for Windows `sh.exe` shim, this also requests
+/// POSIX mode explicitly. The shim delegates to `bash.exe`, which otherwise behaves as Bash
+/// rather than as `sh`. Other shells, including a caller-provided shell, must not receive this
+/// Bash-specific option.
+pub fn shell_command() -> std::process::Command {
+    let shell = shell_configuration();
+    let mut command = std::process::Command::new(&shell.program);
+    if shell.needs_posix_mode {
+        command.arg("--posix");
+    }
+    command
 }
 
 /// Return the name of the Git executable to invoke it.
