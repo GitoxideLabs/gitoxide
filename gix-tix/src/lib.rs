@@ -494,6 +494,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageDown),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Last),
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') => Some(Action::ToggleDate),
@@ -610,6 +611,11 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
             Some(Action::ScrollRight)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT)),
+            Some(Action::Last),
+            "terminals that report shifted letters in lowercase still map Shift-G to the first commit"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
