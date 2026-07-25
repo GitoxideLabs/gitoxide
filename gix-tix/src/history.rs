@@ -11,7 +11,13 @@ use gix::{
     objs::commit::ref_iter::Token,
 };
 
-use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits};
+use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits, Metadata};
+
+pub(crate) type SharedAuthors = gix::features::threading::OwnShared<gix::features::threading::Mutable<Authors>>;
+static EMPTY_AUTHOR: std::sync::LazyLock<Author> = std::sync::LazyLock::new(|| Author {
+    name: BStr::new(b""),
+    email: BStr::new(b""),
+});
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Decoration {
@@ -49,7 +55,7 @@ pub(crate) fn load(
     repo: &gix::Repository,
     revisions: &[OsString],
     hidden_revisions: &[OsString],
-    authors: &mut Authors,
+    authors: &SharedAuthors,
     cancelled: &AtomicBool,
     mut emit: impl FnMut(Event) -> bool,
 ) -> Result<()> {
@@ -77,56 +83,33 @@ pub(crate) fn load(
             return Ok(());
         }
         let info = info.context("could not traverse revision history")?;
-        let object = info.object().context("could not read commit")?;
-        let mut committer_time = None;
-        let mut author = None;
-        let attribution_start = attributions.len();
-        let mut title = None;
-        for token in object.iter() {
-            match token.context("could not decode commit")? {
-                Token::Author { signature } => {
-                    let signature = signature.trim();
-                    author = Some(authors.intern_author(signature.name, signature.email));
-                }
-                Token::Committer { signature } => {
-                    committer_time = Some(signature.time().context("could not decode committer time")?);
-                }
-                Token::Message(message) => {
-                    let message = gix::objs::commit::MessageRef::from_bytes(message);
-                    title = Some(message.summary().into_owned());
-                    if let Some(body) = message.body() {
-                        for trailer in body.trailers() {
-                            let Some(kind) = attribution_kind(&trailer) else {
-                                continue;
-                            };
-                            let mut value: &[u8] = trailer.value.as_ref();
-                            let identity = match gix::actor::IdentityRef::from_bytes_consuming(&mut value) {
-                                Ok(identity) if value.trim().is_empty() => identity.trim(),
-                                _ if kind == AttributionKind::Assisted && !trailer.value.trim().is_empty() => {
-                                    gix::actor::IdentityRef {
-                                        name: trailer.value.trim().as_bstr(),
-                                        email: b"".as_bstr(),
-                                    }
-                                }
-                                _ => continue,
-                            };
-                            attributions.push(Attribution {
-                                kind,
-                                author: authors.intern_author(identity.name, identity.email),
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+        let metadata = if info.generation.is_some() {
+            None
+        } else {
+            let object = info.object().context("could not read commit")?;
+            let mut authors = gix::features::threading::lock(authors);
+            Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+        };
+        let metadata_loaded = metadata.is_some();
+        let Metadata {
+            committer_time,
+            author,
+            attributions: row_attributions,
+            title,
+        } = metadata.unwrap_or_else(|| Metadata {
+            committer_time: Default::default(),
+            author: &EMPTY_AUTHOR,
+            attributions: 0..0,
+            title: BString::default(),
+        });
         rows.push(Commit {
             id: info.id,
             parent_ids: info.parent_ids,
-            committer_time: committer_time.context("commit has no committer time")?,
-            author: author.context("commit has no author")?,
-            attributions: attribution_start..attributions.len(),
-            title: title.context("commit has no message")?,
+            committer_time,
+            author,
+            attributions: row_attributions,
+            title,
+            metadata_loaded,
         });
         if rows.len() == COMMIT_BATCH_SIZE
             && !emit(Event::Commits(LoadedCommits {
@@ -142,6 +125,73 @@ pub(crate) fn load(
     }
     emit(Event::Complete);
     Ok(())
+}
+
+pub(crate) fn load_metadata(
+    repo: &gix::Repository,
+    id: ObjectId,
+    authors: &SharedAuthors,
+) -> Result<(Metadata<BString>, Vec<Attribution>)> {
+    let object = repo.find_commit(id).context("could not read commit")?;
+    let mut attributions = Vec::new();
+    let mut authors = gix::features::threading::lock(authors);
+    let metadata = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
+    Ok((metadata, attributions))
+}
+
+fn decode_metadata<'a>(
+    tokens: impl Iterator<Item = Result<Token<'a>, gix::objs::decode::Error>>,
+    authors: &mut Authors,
+    attributions: &mut Vec<Attribution>,
+) -> Result<Metadata<BString>> {
+    let mut committer_time = None;
+    let mut author = None;
+    let attribution_start = attributions.len();
+    let mut title = None;
+    for token in tokens {
+        match token.context("could not decode commit")? {
+            Token::Author { signature } => {
+                let signature = signature.trim();
+                author = Some(authors.intern_author(signature.name, signature.email));
+            }
+            Token::Committer { signature } => {
+                committer_time = Some(signature.time().context("could not decode committer time")?);
+            }
+            Token::Message(message) => {
+                let message = gix::objs::commit::MessageRef::from_bytes(message);
+                title = Some(message.summary().into_owned());
+                if let Some(body) = message.body() {
+                    for trailer in body.trailers() {
+                        let Some(kind) = attribution_kind(&trailer) else {
+                            continue;
+                        };
+                        let mut value: &[u8] = trailer.value.as_ref();
+                        let identity = match gix::actor::IdentityRef::from_bytes_consuming(&mut value) {
+                            Ok(identity) if value.trim().is_empty() => identity.trim(),
+                            _ if kind == AttributionKind::Assisted && !trailer.value.trim().is_empty() => {
+                                gix::actor::IdentityRef {
+                                    name: trailer.value.trim().as_bstr(),
+                                    email: b"".as_bstr(),
+                                }
+                            }
+                            _ => continue,
+                        };
+                        attributions.push(Attribution {
+                            kind,
+                            author: authors.intern_author(identity.name, identity.email),
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(Metadata {
+        committer_time: committer_time.context("commit has no committer time")?,
+        author: author.context("commit has no author")?,
+        attributions: attribution_start..attributions.len(),
+        title: title.context("commit has no message")?,
+    })
 }
 
 pub(crate) fn count_up_to(
@@ -305,13 +355,14 @@ mod tests {
 
     fn loaded(path: &std::path::Path, revisions: &[&str], hidden_revisions: &[&str]) -> Result<Vec<Event>> {
         let mut events = Vec::new();
-        let mut authors = Authors::default();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let repo = gix::open(path)?;
         load(
             &repo,
             &revisions.iter().map(OsString::from).collect::<Vec<_>>(),
             &hidden_revisions.iter().map(OsString::from).collect::<Vec<_>>(),
-            &mut authors,
+            &authors,
             &AtomicBool::new(false),
             |event| {
                 events.push(event);
@@ -390,6 +441,58 @@ mod tests {
     }
 
     #[test]
+    fn decodes_commits_missing_from_a_stale_graph_and_defers_graph_commits() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let fixture_path = fixture.path();
+        let graph = Command::new("git")
+            .current_dir(fixture_path)
+            .args(["commit-graph", "write", "--reachable"])
+            .status()?;
+        assert!(graph.success(), "git writes the initial commit-graph");
+
+        std::fs::write(fixture_path.join("new"), "new\n")?;
+        let add = Command::new("git")
+            .current_dir(fixture_path)
+            .args(["add", "new"])
+            .status()?;
+        assert!(add.success(), "the new file is staged");
+        let commit = Command::new("git")
+            .current_dir(fixture_path)
+            .env("GIT_AUTHOR_DATE", "2000-01-05T00:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2000-01-05T00:00:00 +0000")
+            .args(["commit", "-q", "-m", "new"])
+            .status()?;
+        assert!(commit.success(), "a commit newer than the graph is created");
+
+        let events = loaded(fixture_path, &["main"], &[])?;
+        let rows: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Commits(batch) => Some(batch.rows.as_slice()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let newest = rows.first().expect("the new commit is walked first");
+        assert!(newest.metadata_loaded, "ODB commits are decoded during the walk");
+        assert_eq!(newest.title, "new");
+        let deferred = rows
+            .iter()
+            .find(|row| !row.metadata_loaded)
+            .expect("older graph commits defer metadata");
+
+        let repo = gix::open(fixture_path)?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let (metadata, _) = load_metadata(&repo, deferred.id, &authors)?;
+        assert!(
+            !metadata.title.is_empty(),
+            "deferred metadata can be loaded for the view"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn hides_tips_and_every_commit_reachable_from_them() -> gix_testtools::Result {
         let fixture = fixture()?;
         let events = loaded(&fixture, &["topic"], &["main"])?;
@@ -454,9 +557,10 @@ mod tests {
         );
 
         let mut cancelled = Vec::new();
-        let mut authors = Authors::default();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let repo = gix::open(&fixture)?;
-        load(&repo, &[], &[], &mut authors, &AtomicBool::new(true), |event| {
+        load(&repo, &[], &[], &authors, &AtomicBool::new(true), |event| {
             cancelled.push(event);
             true
         })?;

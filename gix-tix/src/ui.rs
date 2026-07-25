@@ -347,6 +347,7 @@ fn metadata_line<'a>(
     mailmap: &'a gix::mailmap::Snapshot,
     options: MetadataOptions,
 ) -> Line<'a> {
+    debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
         show_committer_date,
         show_author_name,
@@ -563,6 +564,7 @@ mod tests {
                 author: author(b"Codex", b"codex@openai.com"),
                 attributions: 0..7,
                 title: "subject".into(),
+                metadata_loaded: true,
             }],
             attributions: vec![
                 Attribution {
@@ -667,6 +669,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         }]);
         complete(&mut app);
         let decorations = Decorations::from([(
@@ -845,6 +848,7 @@ mod tests {
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
+                    metadata_loaded: true,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -933,6 +937,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
@@ -1089,6 +1094,7 @@ mod tests {
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
+                    metadata_loaded: true,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -1124,6 +1130,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         };
         let decorations = Decorations::from([(
             id,
@@ -1225,6 +1232,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: format!("{} subject-tail", "a".repeat(50)).into(),
+            metadata_loaded: true,
         }]);
         complete(&mut app);
         app.set_lane(0, &format!("{}{}", "A".repeat(40), "B".repeat(40)));

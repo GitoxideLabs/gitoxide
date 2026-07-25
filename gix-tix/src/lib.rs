@@ -31,12 +31,12 @@ use crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gix::bstr::{BString, ByteSlice};
-use history::{Authors, Decorations, Event};
+use history::{Authors, Decorations, Event, SharedAuthors};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
 
 const EVENT_BATCH_SIZE: usize = 256;
+const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
-type SharedAuthors = gix::features::threading::OwnShared<gix::features::threading::Mutable<Authors>>;
 
 /// Options for [`run()`].
 #[derive(Clone, Debug, Default)]
@@ -192,8 +192,10 @@ fn event_loop(
         hide,
         screen: _,
     } = options;
-    let mailmap = repository.to_thread_local().open_mailmap();
     let repository_path = repository.git_dir().to_owned();
+    let mailmap = gix::open(&repository_path)
+        .context("could not open repository for mailmap")?
+        .open_mailmap();
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let (mut cancelled, mut receiver) = start_history(
         repository,
@@ -212,6 +214,7 @@ fn event_loop(
         &mut app,
         &decorations,
         &mailmap,
+        &authors,
         &repository_path,
         &mut commit_message,
     )?;
@@ -242,6 +245,7 @@ fn event_loop(
                 &mut app,
                 &decorations,
                 &mailmap,
+                &authors,
                 &repository_path,
                 &mut commit_message,
             )?;
@@ -284,6 +288,7 @@ fn event_loop(
                 &mut app,
                 &decorations,
                 &mailmap,
+                &authors,
                 &repository_path,
                 &mut commit_message,
             )?;
@@ -376,13 +381,12 @@ fn start_history(
     let hidden_revisions = hidden_revisions.to_vec();
     std::thread::spawn(move || {
         let mut repository = repository.to_thread_local();
-        repository.object_cache_size(None);
-        let mut authors = gix::features::threading::lock(&authors);
+        repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
         let result = history::load(
             &repository,
             &revisions,
             &hidden_revisions,
-            &mut authors,
+            &authors,
             &worker_cancelled,
             |event| sender.send(Ok(event)).is_ok(),
         );
@@ -398,9 +402,26 @@ fn draw(
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
+    authors: &SharedAuthors,
     repository_path: &Path,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
 ) -> Result<()> {
+    app.viewport_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+    app.ensure_visible();
+    let start = app.offset.min(app.rows.len());
+    let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
+    if app.rows[start..end].iter().any(|row| !row.metadata_loaded) {
+        let mut repository = gix::open(repository_path).context("could not open repository for history view")?;
+        repository.object_cache_size(None);
+        for index in start..end {
+            if app.rows[index].metadata_loaded {
+                continue;
+            }
+            let (metadata, attributions) = history::load_metadata(&repository, app.rows[index].id, authors)
+                .context("could not load visible commit")?;
+            app.set_metadata(index, metadata, attributions);
+        }
+    }
     let selected = app
         .show_commit
         .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
