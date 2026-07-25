@@ -57,6 +57,7 @@ pub(crate) type CommitRow = Commit<Range<usize>>;
 pub(crate) enum State {
     Loading,
     Cancelling,
+    Computing,
     Complete,
     Cancelled,
 }
@@ -70,7 +71,6 @@ pub(crate) enum RefMode {
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
-    Complete,
     Cancelled,
     MoveUp,
     MoveDown,
@@ -197,18 +197,6 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
-            Action::Complete if self.state == State::Loading => {
-                let selected = self.selected.map(|index| self.rows[index].id);
-                self.lane_time = Some(finish_rows(&mut self.rows));
-                self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
-                self.state = State::Complete;
-                self.follow_tail = false;
-                self.ensure_visible();
-            }
-            Action::Complete if self.state == State::Cancelling => {
-                self.state = State::Cancelled;
-                self.follow_tail = false;
-            }
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp => self.move_selection(1, false),
             Action::MoveDown => self.move_selection(1, true),
@@ -267,6 +255,34 @@ impl App {
             _ => {}
         }
         Vec::new()
+    }
+
+    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<CommitRow>> {
+        match self.state {
+            State::Loading => {
+                self.state = State::Computing;
+                self.follow_tail = false;
+                Some(self.rows.clone())
+            }
+            State::Cancelling => {
+                self.state = State::Cancelled;
+                self.follow_tail = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, lane_time: Duration) {
+        if self.state != State::Computing {
+            return;
+        }
+        let selected = self.selected.map(|index| self.rows[index].id);
+        self.rows = rows;
+        self.lane_time = Some(lane_time);
+        self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
+        self.state = State::Complete;
+        self.ensure_visible();
     }
 
     pub(crate) fn reload(&mut self, show_hidden: bool) {
@@ -328,7 +344,7 @@ fn estimate_lane_width(rows: &[CommitRow]) -> usize {
         .map_or(0, |width| width.saturating_add(2))
 }
 
-fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
+pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Duration) {
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     let mut children = vec![0usize; rows.len()];
     for row in rows.iter() {
@@ -358,15 +374,15 @@ fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
         }
     }
     if order.len() == rows.len() {
-        let mut old: Vec<_> = std::mem::take(rows).into_iter().map(Some).collect();
-        *rows = order
+        let mut old: Vec<_> = std::mem::take(&mut rows).into_iter().map(Some).collect();
+        rows = order
             .into_iter()
             .map(|index| old[index].take().expect("each row is moved exactly once"))
             .collect();
     }
     let start = Instant::now();
-    render_lanes(rows, &positions);
-    start.elapsed()
+    render_lanes(&mut rows, &positions);
+    (rows, start.elapsed())
 }
 
 fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) {
@@ -514,6 +530,14 @@ mod tests {
         commit
     }
 
+    fn complete(app: &mut App) {
+        let rows = app
+            .start_lane_computation()
+            .expect("a loading app starts lane computation");
+        let (rows, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, lane_time);
+    }
+
     #[test]
     fn completion_orders_and_draws_merge_lanes() {
         let mut app = App::new(10);
@@ -529,7 +553,7 @@ mod tests {
             "the provisional alignment leaves two extra cells after two estimated graph lanes"
         );
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -542,13 +566,36 @@ mod tests {
     }
 
     #[test]
+    fn lane_computation_keeps_provisional_rows_interactive() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2)]);
+
+        let rows = app
+            .start_lane_computation()
+            .expect("history completion starts lane computation");
+        assert_eq!(app.state, State::Computing);
+        assert_eq!(app.rows.len(), 2, "provisional rows remain available to render");
+
+        app.update(Action::MoveDown);
+        let selected = app.rows[app.selected.expect("selection remains active")].id;
+        let (rows, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, lane_time);
+
+        assert_eq!(app.state, State::Complete);
+        assert_eq!(
+            app.rows[app.selected.expect("selection survives final ordering")].id,
+            selected
+        );
+    }
+
+    #[test]
     fn lane_reuses_a_parent_that_is_already_to_the_right() {
         let mut app = App::new(10);
         for row in [row_with_parents(4, &[2, 3]), row_with_parents(2, &[3]), row(3)] {
             app.extend_commits(vec![row]);
         }
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
             app.rows.iter().map(|row| row.lane.as_str()).collect::<Vec<_>>(),
@@ -567,7 +614,7 @@ mod tests {
             row(1),
         ]);
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -678,7 +725,7 @@ mod tests {
             app.update(Action::ToggleHidden).is_empty(),
             "a running walk cannot be replaced by another detached worker"
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(true)]);
         app.reload(true);
         assert!(app.rows.is_empty(), "reloading drops rows from the previous view");
@@ -688,7 +735,7 @@ mod tests {
             app.update(Action::ToggleHidden).is_empty(),
             "the replacement walk must finish before it can be toggled again"
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(false)]);
     }
 
@@ -702,7 +749,7 @@ mod tests {
         app.extend_commits(vec![row(2)]);
         assert_eq!(app.rows.len(), 1, "commits arriving after cancellation are ignored");
 
-        app.update(Action::Complete);
+        assert!(app.start_lane_computation().is_none());
         assert_eq!(app.state, State::Cancelled);
         assert_eq!(
             app.rows.len(),
@@ -721,7 +768,7 @@ mod tests {
         app.extend_commits(vec![row(7)]);
 
         assert_eq!(app.update(Action::Copy), vec![Effect::Copy(row(7).id)]);
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);

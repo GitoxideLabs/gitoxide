@@ -17,7 +17,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use app::{Action, App, Effect, State};
+use app::{Action, App, CommitRow, Effect, State};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
@@ -158,6 +158,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    let mut lane_receiver = None;
     app.has_hidden_filter = !hide.is_empty();
     let mut decorations = Decorations::new();
     draw(terminal, &mut app, &decorations, &mailmap)?;
@@ -165,6 +166,22 @@ fn event_loop(
     let mut dirty = false;
     let mut urgent = false;
     loop {
+        if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok((rows, lane_time)) => {
+                    app.finish_lane_computation(rows, lane_time);
+                    lane_receiver = None;
+                    dirty = true;
+                    if quit_on_finish {
+                        return Ok(app.lane_time);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    anyhow::bail!("lane worker stopped unexpectedly")
+                }
+            }
+        }
         if urgent {
             draw(terminal, &mut app, &decorations, &mailmap)?;
             last_draw = Instant::now();
@@ -177,7 +194,9 @@ fn event_loop(
             let message = match receiver.try_recv() {
                 Ok(message) => message,
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) if matches!(app.state, State::Complete | State::Cancelled) => {
+                Err(mpsc::TryRecvError::Disconnected)
+                    if matches!(app.state, State::Computing | State::Complete | State::Cancelled) =>
+                {
                     break;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -190,15 +209,14 @@ fn event_loop(
                 Event::Decorations(value) => decorations = value,
                 Event::Commits(rows) => app.extend_commits(rows),
                 Event::Complete => {
-                    drop(app.update(Action::Complete));
-                    if quit_on_finish {
-                        return Ok(app.lane_time);
+                    if let Some(rows) = app.start_lane_computation() {
+                        lane_receiver = Some(start_lane_worker(rows));
                     }
                 }
                 Event::Cancelled => drop(app.update(Action::Cancelled)),
             }
         }
-        let streaming = matches!(app.state, State::Loading | State::Cancelling);
+        let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing);
         if should_draw(dirty, streaming, last_draw.elapsed()) {
             draw(terminal, &mut app, &decorations, &mailmap)?;
             last_draw = Instant::now();
@@ -250,6 +268,14 @@ fn event_loop(
             }
         }
     }
+}
+
+fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, Duration)> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(app::compute_lanes(rows));
+    });
+    receiver
 }
 
 fn start_history(

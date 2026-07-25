@@ -159,6 +159,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     let status = match app.state {
         State::Loading => "",
         State::Cancelling => " · cancelling",
+        State::Computing => " · computing",
         State::Complete => "",
         State::Cancelled => " · cancelled",
     };
@@ -411,6 +412,14 @@ mod tests {
         super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default());
     }
 
+    fn complete(app: &mut App) {
+        let rows = app
+            .start_lane_computation()
+            .expect("a loading app starts lane computation");
+        let (rows, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lane_time);
+    }
+
     #[test]
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
@@ -518,7 +527,7 @@ mod tests {
             attributions: Box::default(),
             title: "subject".into(),
         }]);
-        app.update(Action::Complete);
+        complete(&mut app);
         let decorations = Decorations::from([(
             id,
             vec![
@@ -675,7 +684,7 @@ mod tests {
                 })
                 .collect(),
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         app.update(Action::Last);
         let mut terminal = Terminal::new(TestBackend::new(24, 3))?;
 
@@ -807,7 +816,7 @@ mod tests {
             attributions: Box::default(),
             title: format!("{} subject-tail", "a".repeat(50)).into(),
         }]);
-        app.update(Action::Complete);
+        complete(&mut app);
         app.rows[0].lane = format!("{}{}", "A".repeat(40), "B".repeat(40));
         let mut terminal = Terminal::new(TestBackend::new(60, 2))?;
 
