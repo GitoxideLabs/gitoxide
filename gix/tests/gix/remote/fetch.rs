@@ -28,6 +28,47 @@ mod blocking_and_async_io {
         util::hex_to_id,
     };
 
+    /// The objects `clone-as-base-with-changes` sends on top of what the client already has:
+    /// the new commit, its tree, and the empty blob it adds.
+    pub(crate) const PACK_OBJECTS_WITHOUT_TAG: &[&str] = &[
+        "17f2f33324841332c4f6156b36ecde6e44d1bb23",
+        "4d979abcde5cea47b079c38850828956c9382a56",
+        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+    ];
+
+    /// As above, plus the annotated tag object included when tags are fetched.
+    pub(crate) const PACK_OBJECTS_WITH_TAG: &[&str] = &[
+        "17f2f33324841332c4f6156b36ecde6e44d1bb23",
+        "4d979abcde5cea47b079c38850828956c9382a56",
+        "978f927e6397113757dfec6332e7d9c7e356ac25",
+        "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+    ];
+
+    /// Map SHA-1 hexes through [`hex_to_id`] — which substitutes SHA-256 ids during
+    /// `GIX_TEST_FIXTURE_HASH=sha256` runs — and sort the result.
+    ///
+    /// Sorting must happen *after* the mapping: ids sort by their raw bytes, so a list sorted in
+    /// SHA-1 space is generally not sorted in SHA-256 space.
+    pub(crate) fn expected_pack_object_ids(sha1_hexes: &[&str]) -> Vec<gix::ObjectId> {
+        let mut ids: Vec<_> = sha1_hexes.iter().copied().map(hex_to_id).collect();
+        ids.sort();
+        ids
+    }
+
+    /// Return the sorted object ids of the pack whose index was written to `index_path`.
+    ///
+    /// Prefer this over asserting the pack's `data_hash`/`index_hash`: those cover the *compressed*
+    /// bytes, which differ between zlib implementations — a `zlib-ng`-linked `git` deflates some
+    /// objects a byte smaller than stock zlib — while object ids hash uncompressed content and are
+    /// therefore identical on every host.
+    pub(crate) fn pack_object_ids(index_path: Option<&std::path::Path>, hash: gix::hash::Kind) -> Vec<gix::ObjectId> {
+        let index = gix::odb::pack::index::File::at(index_path.expect("pack index was written"), hash)
+            .expect("written index can be read back");
+        let mut ids: Vec<_> = index.iter().map(|e| e.oid).collect();
+        ids.sort();
+        ids
+    }
+
     pub(crate) fn base_repo_path() -> String {
         gix::path::realpath(
             gix_testtools::scripted_fixture_read_only("make_remote_repos.sh")
@@ -607,25 +648,10 @@ mod blocking_and_async_io {
     #[cfg_attr(feature = "async-network-client-async-std", async_std::test)]
     async fn fetch_pack_without_local_destination() -> crate::Result {
         let daemon = spawn_git_daemon_if_async(repo_path("clone-as-base-with-changes"))?;
-        for (fetch_tags, expected_data_hash, num_objects_offset, expected_ref_edits) in [
-            (
-                gix::remote::fetch::Tags::None,
-                "de303ef102bd5705a40a0c42ae2972eb1a668455",
-                0,
-                0,
-            ),
-            (
-                gix::remote::fetch::Tags::Included,
-                "edc8cc8a25e64e73aacea469fc765564dd2c3f65",
-                1,
-                7,
-            ),
-            (
-                gix::remote::fetch::Tags::All,
-                "edc8cc8a25e64e73aacea469fc765564dd2c3f65",
-                1,
-                7,
-            ),
+        for (fetch_tags, expected_pack_objects, expected_ref_edits) in [
+            (gix::remote::fetch::Tags::None, PACK_OBJECTS_WITHOUT_TAG, 0),
+            (gix::remote::fetch::Tags::Included, PACK_OBJECTS_WITH_TAG, 7),
+            (gix::remote::fetch::Tags::All, PACK_OBJECTS_WITH_TAG, 7),
         ] {
             let (repo, _tmp) = repo_rw("two-origins");
             let mut remote = into_daemon_remote_if_async(
@@ -651,11 +677,10 @@ mod blocking_and_async_io {
                     negotiate,
                 } => {
                     assert_eq!(negotiate.rounds.len(), 1);
-                    assert_eq!(write_pack_bundle.index.data_hash, hex_to_id(expected_data_hash),);
                     assert_eq!(
-                        write_pack_bundle.index.num_objects,
-                        3 + num_objects_offset,
-                        "{fetch_tags:?}"
+                        pack_object_ids(write_pack_bundle.index_path.as_deref(), repo.object_hash()),
+                        expected_pack_object_ids(expected_pack_objects),
+                        "{fetch_tags:?}: the pack contains exactly the expected objects"
                     );
                     assert!(
                         write_pack_bundle
@@ -790,16 +815,14 @@ mod blocking_and_async_io {
                         assert_eq!(write_pack_bundle.pack_version, gix::odb::pack::data::Version::V2);
                         assert_eq!(write_pack_bundle.object_hash, repo.object_hash());
                         assert_eq!(
-                            write_pack_bundle.index.num_objects, 4,
-                            "{dry_run}: this value is 4 when git does it with 'consecutive' negotiation style, but could be 33 if completely naive."
-                        );
-                        assert_eq!(
                             write_pack_bundle.index.index_version,
                             gix::odb::pack::index::Version::V2
                         );
                         assert_eq!(
-                            write_pack_bundle.index.index_hash,
-                            hex_to_id("d07c527cf14e524a8494ce6d5d08e28079f5c6ea")
+                            pack_object_ids(write_pack_bundle.index_path.as_deref(), repo.object_hash()),
+                            expected_pack_object_ids(PACK_OBJECTS_WITH_TAG),
+                            "{dry_run}: these 4 objects are what git sends with 'consecutive' negotiation style; \
+                             a completely naive negotiation would send 33"
                         );
                         assert!(write_pack_bundle.data_path.is_some_and(|f| f.is_file()));
                         assert!(write_pack_bundle.index_path.is_some_and(|f| f.is_file()));
