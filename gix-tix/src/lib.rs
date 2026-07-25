@@ -25,11 +25,11 @@ use crossterm::{
     event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     style::Print,
-    terminal::{self, Clear, ClearType},
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gix::bstr::{BString, ByteSlice};
 use history::{Authors, Decorations, Event};
-use ratatui::{TerminalOptions, Viewport};
+use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
@@ -81,7 +81,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         None => ratatui::try_init(),
     }
     .context("could not initialize terminal")?;
-    let result = event_loop(&mut terminal, repository, revisions, options);
+    let result = event_loop(&mut terminal, repository, revisions, options, inline_height.is_some());
     let restore = restore_terminal(&mut terminal, inline_height.is_some());
     let lane_time = result?;
     restore?;
@@ -139,11 +139,31 @@ fn restore_terminal(terminal: &mut ratatui::DefaultTerminal, inline: bool) -> Re
     Ok(())
 }
 
+fn enter_alternate_screen(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<ratatui::DefaultTerminal> {
+    let alternate = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    Ok(std::mem::replace(terminal, alternate))
+}
+
+fn leave_alternate_screen(
+    terminal: &mut ratatui::DefaultTerminal,
+    inline: ratatui::DefaultTerminal,
+) -> std::io::Result<()> {
+    drop(std::mem::replace(terminal, inline));
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.hide_cursor()
+}
+
+fn should_switch_screen(started_inline: bool, show_commit: bool, in_alternate_screen: bool) -> bool {
+    started_inline && show_commit != in_alternate_screen
+}
+
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
+    started_inline: bool,
 ) -> Result<Option<Duration>> {
     let Options {
         quit_on_finish,
@@ -176,7 +196,8 @@ fn event_loop(
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
-    loop {
+    let mut inline_terminal = None;
+    let result: Result<Option<Duration>> = (|| loop {
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
@@ -270,7 +291,16 @@ fn event_loop(
         let Some(action) = action(key) else { continue };
         dirty = true;
         urgent = true;
-        for effect in app.update(action) {
+        let effects = app.update(action);
+        if should_switch_screen(started_inline, app.show_commit, inline_terminal.is_some()) {
+            if app.show_commit {
+                inline_terminal =
+                    Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+            } else if let Some(inline) = inline_terminal.take() {
+                leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+            }
+        }
+        for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
                 Effect::Copy(id) => execute!(
@@ -293,7 +323,13 @@ fn event_loop(
                 Effect::Quit => return Ok(None),
             }
         }
-    }
+    })();
+    let restore = inline_terminal
+        .map(|inline| leave_alternate_screen(terminal, inline))
+        .transpose();
+    let outcome = result?;
+    restore.context("could not restore the inline terminal")?;
+    Ok(outcome)
 }
 
 fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, app::Graph, Duration)> {
@@ -456,6 +492,26 @@ mod tests {
             inline_height(Screen::Always, 20, 0),
             None,
             "always mode uses the alternate screen"
+        );
+    }
+
+    #[test]
+    fn switches_screens_only_for_an_inline_commit_pane() {
+        assert!(
+            should_switch_screen(true, true, false),
+            "opening the commit pane from inline mode enters the alternate screen"
+        );
+        assert!(
+            should_switch_screen(true, false, true),
+            "closing the commit pane returns to inline mode"
+        );
+        assert!(
+            !should_switch_screen(false, true, true),
+            "a session that started in the alternate screen stays there"
+        );
+        assert!(
+            !should_switch_screen(true, true, true),
+            "an already-active alternate screen is not re-entered"
         );
     }
 
