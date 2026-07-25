@@ -22,14 +22,17 @@ use app::{Action, App, CommitRow, Effect, State};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
-    event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+        ModifierKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     style::Print,
-    terminal::{self, Clear, ClearType},
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gix::bstr::{BString, ByteSlice};
 use history::{Authors, Decorations, Event};
-use ratatui::{TerminalOptions, Viewport};
+use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
@@ -81,9 +84,28 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         None => ratatui::try_init(),
     }
     .context("could not initialize terminal")?;
-    let result = event_loop(&mut terminal, repository, revisions, options);
+    let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
+    let keyboard_setup = if enhanced_keyboard {
+        execute!(
+            terminal.backend_mut(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        )
+    } else {
+        Ok(())
+    };
+    let result = keyboard_setup
+        .context("could not enable enhanced keyboard events")
+        .and_then(|()| event_loop(&mut terminal, repository, revisions, options, inline_height.is_some()));
+    let keyboard_restore = enhanced_keyboard
+        .then(|| execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags))
+        .transpose();
     let restore = restore_terminal(&mut terminal, inline_height.is_some());
     let lane_time = result?;
+    keyboard_restore.context("could not restore keyboard events")?;
     restore?;
     if let Some(lane_time) = lane_time {
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
@@ -139,11 +161,31 @@ fn restore_terminal(terminal: &mut ratatui::DefaultTerminal, inline: bool) -> Re
     Ok(())
 }
 
+fn enter_alternate_screen(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<ratatui::DefaultTerminal> {
+    let alternate = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    Ok(std::mem::replace(terminal, alternate))
+}
+
+fn leave_alternate_screen(
+    terminal: &mut ratatui::DefaultTerminal,
+    inline: ratatui::DefaultTerminal,
+) -> std::io::Result<()> {
+    drop(std::mem::replace(terminal, inline));
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.hide_cursor()
+}
+
+fn should_switch_screen(started_inline: bool, show_commit: bool, in_alternate_screen: bool) -> bool {
+    started_inline && show_commit != in_alternate_screen
+}
+
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
+    started_inline: bool,
 ) -> Result<Option<Duration>> {
     let Options {
         quit_on_finish,
@@ -176,7 +218,8 @@ fn event_loop(
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
-    loop {
+    let mut inline_terminal = None;
+    let result: Result<Option<Duration>> = (|| loop {
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
@@ -264,19 +307,29 @@ fn event_loop(
             }
             _ => continue,
         };
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            continue;
-        }
         let Some(action) = action(key) else { continue };
         dirty = true;
         urgent = true;
-        for effect in app.update(action) {
+        let effects = app.update(action);
+        if should_switch_screen(started_inline, app.show_commit, inline_terminal.is_some()) {
+            if app.show_commit {
+                inline_terminal =
+                    Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+            } else if let Some(inline) = inline_terminal.take() {
+                leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+            }
+        }
+        for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
-                Effect::Copy(id) => execute!(
+                Effect::CopyId(id) => execute!(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
+                Effect::CopyAuthor(author) => {
+                    let actor = actor_bytes(author);
+                    execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
+                }
                 Effect::Reload(show_hidden) => {
                     cancelled.store(true, Ordering::Relaxed);
                     app.reload(show_hidden);
@@ -293,7 +346,13 @@ fn event_loop(
                 Effect::Quit => return Ok(None),
             }
         }
-    }
+    })();
+    let restore = inline_terminal
+        .map(|inline| leave_alternate_screen(terminal, inline))
+        .transpose();
+    let outcome = result?;
+    restore.context("could not restore the inline terminal")?;
+    Ok(outcome)
 }
 
 fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, app::Graph, Duration)> {
@@ -363,6 +422,15 @@ fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BStr
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
+fn actor_bytes(author: &app::Author) -> Vec<u8> {
+    let mut out = Vec::with_capacity(author.name.len() + author.email.len() + 3);
+    out.extend_from_slice(author.name);
+    out.extend_from_slice(b" <");
+    out.extend_from_slice(author.email);
+    out.push(b'>');
+    out
+}
+
 fn should_draw(dirty: bool, streaming: bool, since_draw: Duration) -> bool {
     dirty && (!streaming || since_draw >= FRAME_INTERVAL)
 }
@@ -380,7 +448,18 @@ fn poll_timeout(streaming: bool, events: usize, dirty: bool, since_draw: Duratio
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release
+        && !matches!(
+            key.code,
+            KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
+        )
+    {
+        return None;
+    }
     match key.code {
+        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
+            Some(Action::PreviewAuthorCopy(key.kind != KeyEventKind::Release))
+        }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -403,7 +482,9 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
-        KeyCode::Char(']') => Some(Action::ToggleCommit),
+        KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
+        KeyCode::Char('Y') => Some(Action::CopyAuthor),
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     }
@@ -456,6 +537,26 @@ mod tests {
             inline_height(Screen::Always, 20, 0),
             None,
             "always mode uses the alternate screen"
+        );
+    }
+
+    #[test]
+    fn switches_screens_only_for_an_inline_commit_pane() {
+        assert!(
+            should_switch_screen(true, true, false),
+            "opening the commit pane from inline mode enters the alternate screen"
+        );
+        assert!(
+            should_switch_screen(true, false, true),
+            "closing the commit pane returns to inline mode"
+        );
+        assert!(
+            !should_switch_screen(false, true, true),
+            "a session that started in the alternate screen stays there"
+        );
+        assert!(
+            !should_switch_screen(true, true, true),
+            "an already-active alternate screen is not re-entered"
         );
     }
 
@@ -522,10 +623,48 @@ mod tests {
             Some(Action::ToggleCommit)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommit)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
+            Some(Action::CopyAuthor)
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )),
+            Some(Action::PreviewAuthorCopy(true))
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            Some(Action::PreviewAuthorCopy(false))
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::Quit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn copies_parsed_author_bytes_without_validation() {
+        let author = app::Author {
+            name: b"Author > Name".as_bstr(),
+            email: b"author<@example.com".as_bstr(),
+        };
+
+        assert_eq!(
+            actor_bytes(&author),
+            b"Author > Name <author<@example.com>",
+            "parsed author bytes are copied even if they aren't valid serialization tokens"
+        );
     }
 
     #[test]

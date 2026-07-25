@@ -262,7 +262,7 @@ mod body {
     /// messages, diverging from `git interpret-trailers --parse`.
     #[test]
     fn trailer_as_sole_body_content() {
-        let input = "Signed-off-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>";
+        let input = "Signed-off-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>\nAssisted-by: Agent <agent@example.com>";
         let body = body(input);
         assert_eq!(
             body.trailers().collect::<Vec<_>>(),
@@ -275,7 +275,19 @@ mod body {
                     token: "Co-authored-by".into(),
                     value: b"Bob <bob@example.com>".as_bstr().into(),
                 },
+                TrailerRef {
+                    token: "Assisted-by".into(),
+                    value: b"Agent <agent@example.com>".as_bstr().into(),
+                },
             ],
+        );
+        assert_eq!(
+            body.trailers()
+                .assisted_by()
+                .map(|trailer| trailer.value)
+                .collect::<Vec<_>>(),
+            [b"Agent <agent@example.com>".as_bstr()],
+            "assisted-by trailers have the same convenience filtering as co-authored-by"
         );
         assert_eq!(body.without_trailer(), "", "body-without-trailer must be empty");
     }
@@ -374,6 +386,55 @@ mod body {
             body.without_trailer(),
             "",
             "the entire body is the trailer block, even though not everything can be parsed"
+        );
+    }
+
+    #[test]
+    fn message_blocks_preserve_raw_messages_and_group_contiguous_trailers() {
+        let input = "body paragraph\n\nnot a trailer\n\
+Signed-off-by: Alice <alice@example.com>\n\
+Reviewed-by: Carol <carol@example.com>\n\
+another note\r\n\
+Signed-off-by: Bob <bob@example.com>\n\
+\x20continuation";
+        let body = body(input);
+        let blocks = body.message_blocks().collect::<Vec<_>>();
+
+        assert_eq!(
+            blocks.len(),
+            2,
+            "prose between trailer runs starts another block: {:?}",
+            blocks.iter().map(|block| block.message).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            blocks[0].message, "body paragraph\n\nnot a trailer\n",
+            "message bytes and separator whitespace are preserved"
+        );
+        assert_eq!(
+            blocks[0].trailers().collect::<Vec<_>>(),
+            vec![
+                TrailerRef {
+                    token: "Signed-off-by".into(),
+                    value: b"Alice <alice@example.com>".as_bstr().into(),
+                },
+                TrailerRef {
+                    token: "Reviewed-by".into(),
+                    value: b"Carol <carol@example.com>".as_bstr().into(),
+                },
+            ],
+            "adjacent trailers share a block"
+        );
+        assert_eq!(
+            blocks[1].message, "another note\r\n",
+            "message line endings remain untouched"
+        );
+        assert_eq!(
+            blocks[1].trailers().collect::<Vec<_>>(),
+            vec![TrailerRef {
+                token: "Signed-off-by".into(),
+                value: b"Bob <bob@example.com> continuation".as_bstr().into(),
+            }],
+            "folded trailers remain handled by the existing iterator"
         );
     }
 

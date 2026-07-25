@@ -100,13 +100,16 @@ pub(crate) fn load(
                                 continue;
                             };
                             let mut value: &[u8] = trailer.value.as_ref();
-                            let Ok(identity) = gix::actor::IdentityRef::from_bytes_consuming(&mut value) else {
-                                continue;
+                            let identity = match gix::actor::IdentityRef::from_bytes_consuming(&mut value) {
+                                Ok(identity) if value.trim().is_empty() => identity.trim(),
+                                _ if kind == AttributionKind::Assisted && !trailer.value.trim().is_empty() => {
+                                    gix::actor::IdentityRef {
+                                        name: trailer.value.trim().as_bstr(),
+                                        email: b"".as_bstr(),
+                                    }
+                                }
+                                _ => continue,
                             };
-                            if !value.trim().is_empty() {
-                                continue;
-                            }
-                            let identity = identity.trim();
                             attributions.push(Attribution {
                                 kind,
                                 author: authors.intern_author(identity.name, identity.email),
@@ -180,6 +183,8 @@ fn resolve_tips(repo: &gix::Repository, revisions: &[OsString]) -> Result<Option
 fn attribution_kind(trailer: &gix::objs::commit::message::body::TrailerRef<'_>) -> Option<AttributionKind> {
     if trailer.is_co_authored_by() {
         Some(AttributionKind::CoAuthor)
+    } else if trailer.is_assisted_by() {
+        Some(AttributionKind::Assisted)
     } else if trailer.is_reviewed_by() {
         Some(AttributionKind::Reviewed)
     } else if trailer.is_acked_by() {
@@ -295,7 +300,7 @@ mod tests {
     use crate::app::AttributionKind;
 
     fn fixture() -> gix_testtools::Result<std::path::PathBuf> {
-        gix_testtools::scripted_fixture_read_only("history.sh")
+        gix_testtools::scripted_fixture_read_only_needs_archive("history.sh")
     }
 
     fn loaded(path: &std::path::Path, revisions: &[&str], hidden_revisions: &[&str]) -> Result<Vec<Event>> {
@@ -363,11 +368,12 @@ mod tests {
         assert_eq!(
             attributions[topic.attributions.clone()]
                 .iter()
-                .map(|attribution| { (attribution.kind, attribution.author.name, attribution.author.is_bot(),) })
+                .map(|attribution| { (attribution.kind, attribution.author.name, attribution.is_agent(),) })
                 .collect::<Vec<_>>(),
             [
                 (AttributionKind::CoAuthor, b"Human Coauthor".as_bstr(), false),
                 (AttributionKind::CoAuthor, b"Claude".as_bstr(), true),
+                (AttributionKind::Assisted, b"Opus 4.7".as_bstr(), true),
                 (AttributionKind::Reviewed, b"Reviewer".as_bstr(), false),
                 (AttributionKind::Acked, b"Acknowledger".as_bstr(), false),
                 (AttributionKind::Tested, b"Tester".as_bstr(), false),

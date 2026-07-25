@@ -1,14 +1,14 @@
-use gix::bstr::{BStr, ByteSlice};
+use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Clear, Paragraph, Wrap},
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, RefMode, State},
+    app::{App, AttributionKind, CommitRow, CopyKind, NameMode, RefMode, State},
     history::{DecorationKind, Decorations},
 };
 
@@ -59,8 +59,12 @@ pub(crate) fn draw(
     let align_width = max_lane_width.min(align_limit);
     let align_metadata = app.align_metadata;
     let show_committer_date = app.show_committer_date;
-    let show_author_name = app.show_author_name;
-    let show_trailers = app.show_trailers;
+    let name_mode = app.name_mode;
+    let preview_author_copy = app.preview_author_copy;
+    let copy_feedback = app.copy_feedback.take();
+    let show_author_name =
+        preview_author_copy || copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
+    let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
     let metadata: Vec<_> = visible_rows
@@ -77,9 +81,15 @@ pub(crate) fn draw(
                     show_committer_date,
                     show_author_name,
                     show_trailers,
-                    use_mailmap: app.use_mailmap,
+                    use_mailmap: app.use_mailmap && !preview_author_copy && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
                     selected: selected == Some(start + index),
+                    preview_author_copy,
+                    copy_feedback: if selected == Some(start + index) {
+                        copy_feedback
+                    } else {
+                        None
+                    },
                 },
             )
         })
@@ -169,9 +179,8 @@ pub(crate) fn draw(
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
-    if let Some(area) = commit_pane {
-        let message = commit_message.map(|message| message.to_str_lossy()).unwrap_or_default();
-        frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), area);
+    if let (Some(area), Some(message)) = (commit_pane, commit_message) {
+        render_commit_message(frame, area, message);
     }
 
     let status = match app.state {
@@ -186,7 +195,7 @@ pub(crate) fn draw(
         app.rows.len()
     ))];
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
-    footer_spans.extend([Span::raw(" · "), toggle("] commit", app.show_commit)]);
+    footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -200,12 +209,14 @@ pub(crate) fn draw(
             ),
         ]);
     }
-    for (label, enabled) in [
-        ("d date", app.show_committer_date),
-        ("n name", app.show_author_name),
-        ("m mailmap", app.use_mailmap),
-        ("t trailers", app.show_trailers),
-    ] {
+    footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
+    let (name_label, names_visible) = match app.name_mode {
+        NameMode::All => ("n names", true),
+        NameMode::Author => ("n name", true),
+        NameMode::None => ("n name", false),
+    };
+    footer_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
+    for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
         footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
     }
     let ref_label = match app.ref_mode {
@@ -214,12 +225,95 @@ pub(crate) fn draw(
         RefMode::None => "r no refs",
     };
     footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
-    footer_spans.extend([Span::raw(" · y copy")]);
+    footer_spans.push(Span::raw(if app.preview_author_copy {
+        " · Y copy author"
+    } else {
+        " · y copy"
+    }));
     if app.state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
     footer_spans.push(Span::raw(" · q quit"));
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+}
+
+fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
+    let parsed = gix::objs::commit::MessageRef::from_bytes(message);
+    let Some(body) = parsed.body() else {
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, None)).wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    };
+    let mut body_message = BString::default();
+    let mut trailers = Vec::new();
+    for block in body.message_blocks() {
+        body_message.extend_from_slice(block.message);
+        trailers.extend(block.trailers());
+    }
+    if trailers.is_empty() || area.width < 3 {
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, parsed.body)).wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+    let key_width = trailers
+        .iter()
+        .map(|trailer| Line::raw(trailer.token.to_str_lossy()).width())
+        .max()
+        .unwrap_or_default();
+    if key_width > area.width.saturating_sub(3) as usize {
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, parsed.body)).wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
+    let key_width = key_width as u16;
+
+    let body_message = body_message.trim_end().as_bstr();
+    let text = commit_text(parsed.title, (!body_message.is_empty()).then_some(body_message));
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let mut y = area
+        .y
+        .saturating_add(u16::try_from(paragraph.line_count(area.width)).unwrap_or(u16::MAX))
+        .saturating_add(1);
+    frame.render_widget(paragraph, area);
+
+    let value_x = area.x.saturating_add(key_width).saturating_add(2);
+    let value_width = area.right().saturating_sub(value_x);
+    for trailer in trailers {
+        if y >= area.bottom() {
+            break;
+        }
+        let value = Paragraph::new(trailer.value.to_str_lossy()).wrap(Wrap { trim: false });
+        let height = u16::try_from(value.line_count(value_width))
+            .unwrap_or(u16::MAX)
+            .max(1)
+            .min(area.bottom().saturating_sub(y));
+        frame.render_widget(
+            Paragraph::new(format!("{}:", trailer.token.to_str_lossy()))
+                .style(color(Color::Green))
+                .right_aligned(),
+            Rect::new(area.x, y, key_width.saturating_add(1), 1),
+        );
+        frame.render_widget(value, Rect::new(value_x, y, value_width, height));
+        y = y.saturating_add(height);
+    }
+}
+
+fn commit_text<'a>(title: &'a BStr, body: Option<&'a BStr>) -> Text<'a> {
+    let mut text = Text::raw(title.to_str_lossy());
+    for line in &mut text.lines {
+        line.style = Style::default().add_modifier(Modifier::BOLD);
+    }
+    if let Some(body) = body.filter(|body| !body.is_empty()) {
+        text.lines.push(Line::default());
+        text.lines.extend(Text::raw(body.to_str_lossy()).lines);
+    }
+    text
 }
 
 fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
@@ -241,6 +335,8 @@ struct MetadataOptions {
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
+    preview_author_copy: bool,
+    copy_feedback: Option<CopyKind>,
 }
 
 fn metadata_line<'a>(
@@ -258,9 +354,15 @@ fn metadata_line<'a>(
         use_mailmap,
         ref_mode,
         selected,
+        preview_author_copy,
+        copy_feedback,
     } = options;
     let id = row.id.to_hex().to_string();
-    let id_style = color(Color::Magenta).add_modifier(Modifier::BOLD);
+    let id_style = if preview_author_copy || copy_feedback == Some(CopyKind::Id) {
+        Style::default()
+    } else {
+        color(Color::Magenta).add_modifier(Modifier::BOLD)
+    };
     let mut spans = vec![Span::styled(
         id[..7].to_owned(),
         if selected {
@@ -302,17 +404,25 @@ fn metadata_line<'a>(
     }
     if show_author_name {
         let author = author_name(row.author, mailmap, use_mailmap).to_str_lossy();
+        let author_style = if copy_feedback == Some(CopyKind::Author) {
+            Style::default()
+        } else if preview_author_copy {
+            color(Color::Magenta).add_modifier(Modifier::BOLD)
+        } else {
+            color(Color::Green)
+        };
         spans.push(Span::styled(
             if row.author.is_bot() {
                 format!("[{author}] ")
             } else {
                 format!("{author} ")
             },
-            color(Color::Green),
+            author_style,
         ));
         if show_trailers {
             for (kind, marker) in [
                 (AttributionKind::CoAuthor, "Co: "),
+                (AttributionKind::Assisted, "As: "),
                 (AttributionKind::Reviewed, "Re: "),
                 (AttributionKind::Acked, "Ack: "),
                 (AttributionKind::Tested, "Te: "),
@@ -327,15 +437,17 @@ fn metadata_line<'a>(
                     if index != 0 {
                         spans.push(Span::raw(", "));
                     }
-                    let name = author_name(actor.author, mailmap, use_mailmap).to_str_lossy();
-                    spans.push(Span::styled(
-                        if actor.author.is_bot() {
+                    let name = if actor.author == row.author {
+                        "*".to_owned()
+                    } else {
+                        let name = author_name(actor.author, mailmap, use_mailmap).to_str_lossy();
+                        if actor.is_agent() {
                             format!("[{name}]")
                         } else {
                             name.into_owned()
-                        },
-                        color(Color::Green),
-                    ));
+                        }
+                    };
+                    spans.push(Span::styled(name, color(Color::Green)));
                 }
                 spans.push(Span::raw(" "));
             }
@@ -449,7 +561,7 @@ mod tests {
                 parent_ids: Default::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"Codex", b"codex@openai.com"),
-                attributions: 0..6,
+                attributions: 0..7,
                 title: "subject".into(),
             }],
             attributions: vec![
@@ -460,6 +572,10 @@ mod tests {
                 Attribution {
                     kind: AttributionKind::CoAuthor,
                     author: author(b"Claude", b"noreply@anthropic.com"),
+                },
+                Attribution {
+                    kind: AttributionKind::Assisted,
+                    author: author(b"Codex", b"codex@openai.com"),
                 },
                 Attribution {
                     kind: AttributionKind::Reviewed,
@@ -489,9 +605,9 @@ mod tests {
         let row = rendered_row(&terminal);
         assert!(
             row.contains(
-                "[Codex] Co: Mapped Human, [Claude] Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
+                "[Codex] Co: Mapped Human, [Claude] As: * Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
             ),
-            "same-kind trailers share one marker, use mailmap, and render bots with bracketed names"
+            "same-kind trailers share one marker, use mailmap, and collapse the primary author to an asterisk"
         );
         let buffer = terminal.backend().buffer();
         let style_at = |needle: &str| {
@@ -520,11 +636,16 @@ mod tests {
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         let row = rendered_row(&terminal);
-        assert!(!row.contains("Codex"), "n hides the primary actor");
+        assert!(row.contains("Codex"), "the first n keeps the primary actor");
         assert!(
             !row.contains("Reviewer"),
-            "n hides trailer actors while trailers are enabled"
+            "the first n hides trailer actors while trailers are enabled"
         );
+        app.update(Action::ToggleName);
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        let row = rendered_row(&terminal);
+        assert!(!row.contains("Codex"), "the second n hides the primary actor");
+        assert!(!row.contains("Reviewer"), "the second n keeps trailer actors hidden");
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
@@ -567,7 +688,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · d date · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -592,10 +713,10 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 1, 0)]
             .set_style(Style::default().add_modifier(Modifier::REVERSED));
-        let commit = footer_text[..footer_text.find("] commit").expect("the commit toggle is present")]
+        let commit = footer_text[..footer_text.find("o commit").expect("the commit toggle is present")]
             .chars()
             .count();
-        for x in commit..commit + "] commit".len() {
+        for x in commit..commit + "o commit".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
@@ -628,11 +749,25 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
-        assert!(!row.contains("author"), "n hides the author name");
+        assert!(
+            !row.contains("author"),
+            "the first n hides the author when there are no attributions"
+        );
         assert!(!row.contains("refs/patches"), "special refs are hidden until requested");
         assert!(row.contains("subject"), "the commit subject remains visible");
         assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
+
+        app.update(Action::ToggleName);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(
+            rendered_row(&terminal).contains("author"),
+            "the second n restores the author name"
+        );
+        assert!(
+            !footer_is_dim(&terminal, "n name"),
+            "the restored name mode is not dimmed"
+        );
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
@@ -673,6 +808,100 @@ mod tests {
             rendered_line(&terminal, 1).contains("v hide hidden"),
             "the footer reflects the unfiltered view"
         );
+
+        app.update(Action::PreviewAuthorCopy(true));
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        let row = rendered_row(&terminal);
+        assert!(
+            row.contains("author subject"),
+            "holding Shift reveals the raw author even when names are hidden"
+        );
+        let buffer = terminal.backend().buffer();
+        let hash_x = row.find("0101010").expect("the commit hash is rendered") as u16;
+        let author_x = row.find("author").expect("the author is rendered") as u16;
+        assert_ne!(buffer[(hash_x, 0)].fg, Color::Magenta, "the hash yields its copy color");
+        assert_eq!(
+            buffer[(author_x, 0)].fg,
+            Color::Magenta,
+            "the author takes the copy color"
+        );
+        assert!(
+            rendered_line(&terminal, 1).contains("Y copy author"),
+            "the footer previews the shifted shortcut"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn removes_the_copied_fields_color_from_only_the_selected_row_for_one_frame()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(2);
+        app.extend_commits(
+            (1..=2)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("subject {n}").into(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+
+        drop(app.update(Action::Copy));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let selected_hash = rendered_line(&terminal, 0)
+            .find("0101010")
+            .expect("the selected hash is visible") as u16;
+        let other_hash = rendered_line(&terminal, 1)
+            .find("0202020")
+            .expect("the other hash is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_hash, 0)].fg,
+            Color::Reset,
+            "the copied hash loses its color"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(other_hash, 1)].fg,
+            Color::Magenta,
+            "copy feedback does not affect other rows"
+        );
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_hash, 0)].fg,
+            Color::Magenta,
+            "the hash color returns on the next frame"
+        );
+
+        drop(app.update(Action::PreviewAuthorCopy(true)));
+        drop(app.update(Action::CopyAuthor));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let selected_author = rendered_line(&terminal, 0)
+            .find("author")
+            .expect("the selected author is visible") as u16;
+        let other_author = rendered_line(&terminal, 1)
+            .find("author")
+            .expect("the other author is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_author, 0)].fg,
+            Color::Reset,
+            "the copied author loses its color"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(other_author, 1)].fg,
+            Color::Magenta,
+            "author feedback does not affect other rows"
+        );
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_author, 0)].fg,
+            Color::Magenta,
+            "the author color returns on the next frame"
+        );
         Ok(())
     }
 
@@ -708,7 +937,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(footer_is_dim(&terminal, "] commit"), "the closed commit pane is dimmed");
+        assert!(footer_is_dim(&terminal, "o commit"), "the closed commit pane is dimmed");
 
         app.update(Action::ToggleCommit);
         terminal.draw(|frame| {
@@ -731,7 +960,7 @@ mod tests {
             "vertical margin leaves the full commit body intact"
         );
         assert!(
-            !footer_is_dim(&terminal, "] commit"),
+            !footer_is_dim(&terminal, "o commit"),
             "the open commit pane is not dimmed"
         );
 
@@ -758,6 +987,92 @@ mod tests {
             wide_terminal.backend().buffer()[(122, 1)].symbol(),
             "s",
             "the pane remains eighty columns wide on a wide screen"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aligns_commit_trailers_and_wraps_only_in_the_value_column() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        let message = b"subject\n\nbody\n\nShort: one two three four five six seven\nCo-authored-by: Alice".as_bstr();
+
+        terminal.draw(|frame| render_commit_message(frame, frame.area(), message))?;
+
+        assert_eq!(
+            rendered_line(&terminal, 4).find("one"),
+            Some(16),
+            "values start after the widest trailer key"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 5).find("six"),
+            Some(16),
+            "wrapped values remain in the value column"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 6).find("Alice"),
+            Some(16),
+            "all trailer values share the same column"
+        );
+        assert!(
+            rendered_line(&terminal, 5)[..16].trim().is_empty(),
+            "wrapped values never occupy key space"
+        );
+        let key_x = rendered_line(&terminal, 4)
+            .find("Short:")
+            .expect("the trailer key is visible") as u16;
+        let key = &terminal.backend().buffer()[(key_x, 4)];
+        assert_eq!(key.fg, Color::Green, "trailer keys use the listing color");
+        assert!(
+            !key.modifier.contains(Modifier::DIM),
+            "trailer keys remain fully visible"
+        );
+        assert!(
+            terminal.backend().buffer()[(0, 0)].modifier.contains(Modifier::BOLD),
+            "the commit title is bold"
+        );
+        assert!(
+            !terminal.backend().buffer()[(0, 2)].modifier.contains(Modifier::BOLD),
+            "the commit body is not bold"
+        );
+
+        let mut plain_terminal = Terminal::new(TestBackend::new(40, 4))?;
+        plain_terminal.draw(|frame| {
+            render_commit_message(frame, frame.area(), b"plain subject\n\nplain body".as_bstr());
+        })?;
+        assert!(
+            plain_terminal.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "titles remain bold without trailers"
+        );
+        assert!(
+            !plain_terminal.backend().buffer()[(0, 2)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "plain commit bodies remain unstyled"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 8))?;
+        let message = b"subject\n\nnot a trailer\nSigned-off-by: Alice\nanother note\nSigned-off-by: Bob".as_bstr();
+        terminal.draw(|frame| render_commit_message(frame, frame.area(), message))?;
+        assert!(
+            rendered_line(&terminal, 2).contains("not a trailer")
+                && rendered_line(&terminal, 3).contains("another note"),
+            "mixed message parts are combined ahead of the trailers"
+        );
+        assert!(
+            rendered_line(&terminal, 4).trim().is_empty(),
+            "the combined message remains separated from its trailers"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 5).find("Alice"),
+            Some(15),
+            "the first trailer moves below all message parts"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 6).find("Bob"),
+            Some(15),
+            "later trailer runs share the aligned value column"
         );
         Ok(())
     }
@@ -853,6 +1168,8 @@ mod tests {
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
+                preview_author_copy: false,
+                copy_feedback: None,
             },
         );
         let style = |text| {

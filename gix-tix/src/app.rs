@@ -40,9 +40,23 @@ pub(crate) struct Attribution {
     pub author: &'static Author,
 }
 
+impl Attribution {
+    pub fn is_agent(&self) -> bool {
+        self.author.is_bot()
+            || self.kind == AttributionKind::Assisted
+                && self
+                    .author
+                    .name
+                    .get(..4)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"opus"))
+                && self.author.name.get(4).is_none_or(u8::is_ascii_whitespace)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttributionKind {
     CoAuthor,
+    Assisted,
     Reviewed,
     Acked,
     Tested,
@@ -83,6 +97,19 @@ pub(crate) enum RefMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NameMode {
+    All,
+    Author,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CopyKind {
+    Id,
+    Author,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -106,13 +133,16 @@ pub(crate) enum Action {
     ToggleCommit,
     Cancel,
     Copy,
+    CopyAuthor,
+    PreviewAuthorCopy(bool),
     Quit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Effect {
     Cancel,
-    Copy(ObjectId),
+    CopyId(ObjectId),
+    CopyAuthor(&'static Author),
     Reload(bool),
     Quit,
 }
@@ -131,7 +161,7 @@ pub(crate) struct App {
     pub viewport_rows: usize,
     pub lane_time: Option<Duration>,
     pub show_committer_date: bool,
-    pub show_author_name: bool,
+    pub name_mode: NameMode,
     pub show_trailers: bool,
     pub use_mailmap: bool,
     pub ref_mode: RefMode,
@@ -139,6 +169,8 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
+    pub preview_author_copy: bool,
+    pub copy_feedback: Option<CopyKind>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -161,7 +193,7 @@ impl App {
             viewport_rows,
             lane_time: None,
             show_committer_date: true,
-            show_author_name: true,
+            name_mode: NameMode::All,
             show_trailers: true,
             use_mailmap: true,
             ref_mode: RefMode::Default,
@@ -169,6 +201,8 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
+            preview_author_copy: false,
+            copy_feedback: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -263,7 +297,17 @@ impl App {
                 self.ensure_visible();
             }
             Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
-            Action::ToggleName => self.show_author_name = !self.show_author_name,
+            Action::ToggleName => {
+                let start = self.offset.min(self.rows.len());
+                let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
+                let has_visible_attributions = self.rows[start..end].iter().any(|row| !row.attributions.is_empty());
+                self.name_mode = match self.name_mode {
+                    NameMode::All if has_visible_attributions => NameMode::Author,
+                    NameMode::All => NameMode::None,
+                    NameMode::Author => NameMode::None,
+                    NameMode::None => NameMode::All,
+                };
+            }
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleRefs => {
@@ -280,13 +324,25 @@ impl App {
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
             Action::ToggleCommit => self.show_commit = !self.show_commit,
+            Action::PreviewAuthorCopy(value) => self.preview_author_copy = value,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
             }
             Action::Copy => {
-                if let Some(row) = self.selected.and_then(|index| self.rows.get(index)) {
-                    return vec![Effect::Copy(row.id)];
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    self.copy_feedback = Some(CopyKind::Id);
+                    return vec![Effect::CopyId(id)];
+                }
+            }
+            Action::CopyAuthor => {
+                if let Some(author) = self
+                    .selected
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.author)
+                {
+                    self.copy_feedback = Some(CopyKind::Author);
+                    return vec![Effect::CopyAuthor(author)];
                 }
             }
             Action::Quit => {
@@ -716,6 +772,29 @@ mod tests {
         commit
     }
 
+    #[test]
+    fn recognizes_opus_only_as_an_assisting_agent() {
+        let opus = Box::leak(Box::new(Author {
+            name: b"Opus 4.7".as_bstr(),
+            email: b"".as_bstr(),
+        }));
+
+        assert!(
+            Attribution {
+                kind: AttributionKind::Assisted,
+                author: opus,
+            }
+            .is_agent()
+        );
+        assert!(
+            !Attribution {
+                kind: AttributionKind::Reviewed,
+                author: opus,
+            }
+            .is_agent()
+        );
+    }
+
     fn numbered_row(n: u16, parent: Option<u16>) -> LoadedCommit {
         let mut commit = row(0);
         commit.id = id(n);
@@ -913,7 +992,7 @@ mod tests {
         app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
-        assert!(!app.show_author_name);
+        assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
         assert_eq!(app.ref_mode, RefMode::None);
@@ -925,6 +1004,36 @@ mod tests {
         assert!(app.show_commit);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn cycles_author_names_without_inert_states() {
+        let mut app = App::new(1);
+        let attribution = Attribution {
+            kind: AttributionKind::CoAuthor,
+            author: row(2).author,
+        };
+        let mut attributed = row(2);
+        attributed.attributions = 0..1;
+        app.extend_commits(LoadedCommits {
+            rows: vec![row(1), attributed],
+            attributions: vec![attribution],
+        });
+
+        app.update(Action::ToggleName);
+        assert_eq!(
+            app.name_mode,
+            NameMode::None,
+            "the visible author is hidden immediately when no attributions are visible"
+        );
+        app.name_mode = NameMode::All;
+        app.offset = 1;
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::Author);
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::None);
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::All);
     }
 
     #[test]
@@ -981,9 +1090,14 @@ mod tests {
             app.update(Action::Copy).is_empty(),
             "there is nothing to copy without a selection"
         );
+        assert!(
+            app.update(Action::CopyAuthor).is_empty(),
+            "there is no author to copy without a selection"
+        );
         app.extend_commits(vec![row(7)]);
 
-        assert_eq!(app.update(Action::Copy), vec![Effect::Copy(row(7).id)]);
+        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(app.update(Action::CopyAuthor), vec![Effect::CopyAuthor(row(7).author)]);
         complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
