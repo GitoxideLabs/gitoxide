@@ -39,6 +39,12 @@ impl<'a> CommitRef<'a> {
         self.message_trailers().co_authored_by()
     }
 
+    /// Get an iterator over `Assisted-by` trailers in the commit message.
+    /// This is useful for identifying agents that assisted with a commit.
+    pub fn assisted_by_trailers(&self) -> impl Iterator<Item = body::TrailerRef<'a>> {
+        self.message_trailers().assisted_by()
+    }
+
     /// Get all authors mentioned in `Signed-off-by` and `Co-authored-by` trailers.
     /// This is useful for squashed commits that contain multiple authors.
     /// Returns a Vec of author strings that can include both signers and co-authors.
@@ -47,7 +53,7 @@ impl<'a> CommitRef<'a> {
     }
 
     /// Get an iterator over all attribution-related trailers
-    /// (`Signed-off-by,` `Co-authored-by`, `Acked-by`, `Reviewed-by`, `Tested-by`).
+    /// (`Signed-off-by,` `Co-authored-by`, `Assisted-by`, `Acked-by`, `Reviewed-by`, `Tested-by`).
     /// This provides a comprehensive view of everyone who contributed to or reviewed the commit.
     /// Note that the same name may occur multiple times, it's not a unified list.
     pub fn attribution_trailers(&self) -> impl Iterator<Item = body::TrailerRef<'a>> {

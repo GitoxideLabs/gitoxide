@@ -262,7 +262,7 @@ mod body {
     /// messages, diverging from `git interpret-trailers --parse`.
     #[test]
     fn trailer_as_sole_body_content() {
-        let input = "Signed-off-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>";
+        let input = "Signed-off-by: Alice <alice@example.com>\nCo-authored-by: Bob <bob@example.com>\nAssisted-by: Agent <agent@example.com>";
         let body = body(input);
         assert_eq!(
             body.trailers().collect::<Vec<_>>(),
@@ -275,7 +275,19 @@ mod body {
                     token: "Co-authored-by".into(),
                     value: b"Bob <bob@example.com>".as_bstr().into(),
                 },
+                TrailerRef {
+                    token: "Assisted-by".into(),
+                    value: b"Agent <agent@example.com>".as_bstr().into(),
+                },
             ],
+        );
+        assert_eq!(
+            body.trailers()
+                .assisted_by()
+                .map(|trailer| trailer.value)
+                .collect::<Vec<_>>(),
+            [b"Agent <agent@example.com>".as_bstr()],
+            "assisted-by trailers have the same convenience filtering as co-authored-by"
         );
         assert_eq!(body.without_trailer(), "", "body-without-trailer must be empty");
     }

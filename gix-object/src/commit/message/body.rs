@@ -373,6 +373,11 @@ impl TrailerRef<'_> {
         self.token.eq_ignore_ascii_case(b"Co-authored-by")
     }
 
+    /// Check if this trailer is an `Assisted-by` trailer (case-insensitive).
+    pub fn is_assisted_by(&self) -> bool {
+        self.token.eq_ignore_ascii_case(b"Assisted-by")
+    }
+
     /// Check if this trailer is an `Acked-by` trailer (case-insensitive).
     pub fn is_acked_by(&self) -> bool {
         self.token.eq_ignore_ascii_case(b"Acked-by")
@@ -393,6 +398,7 @@ impl TrailerRef<'_> {
     pub fn is_attribution(&self) -> bool {
         self.is_signed_off_by()
             || self.is_co_authored_by()
+            || self.is_assisted_by()
             || self.is_acked_by()
             || self.is_reviewed_by()
             || self.is_tested_by()
@@ -411,8 +417,13 @@ impl<'a> Trailers<'a> {
         self.filter(TrailerRef::is_co_authored_by)
     }
 
+    /// Filter trailers to only include `Assisted-by` entries.
+    pub fn assisted_by(self) -> impl Iterator<Item = TrailerRef<'a>> {
+        self.filter(TrailerRef::is_assisted_by)
+    }
+
     /// Filter trailers to only include attribution-related entries.
-    /// (`Signed-off-by`, `Co-authored-by`, `Acked-by`, `Reviewed-by`, `Tested-by`).
+    /// (`Signed-off-by`, `Co-authored-by`, `Assisted-by`, `Acked-by`, `Reviewed-by`, `Tested-by`).
     pub fn attributions(self) -> impl Iterator<Item = TrailerRef<'a>> {
         self.filter(TrailerRef::is_attribution)
     }
