@@ -1,10 +1,10 @@
 use gix::bstr::{BStr, ByteSlice};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Clear, Paragraph, Wrap},
 };
 
 use crate::{
@@ -12,8 +12,23 @@ use crate::{
     history::{DecorationKind, Decorations},
 };
 
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decorations, mailmap: &gix::mailmap::Snapshot) {
-    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+pub(crate) fn draw(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    commit_message: Option<&BStr>,
+) {
+    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let commit_pane = app.show_commit.then(|| {
+        let width = 80.min(body.width / 2);
+        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+        body = commits;
+        message.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        })
+    });
     app.viewport_rows = body.height as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
@@ -155,6 +170,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
+    if let Some(area) = commit_pane {
+        let message = commit_message.map(|message| message.to_str_lossy()).unwrap_or_default();
+        frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), area);
+    }
 
     let status = match app.state {
         State::Loading => "",
@@ -168,6 +187,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         app.rows.len()
     ))];
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
+    footer_spans.extend([Span::raw(" · "), toggle("] commit", app.show_commit)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -409,7 +429,7 @@ mod tests {
     }
 
     fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decorations) {
-        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default());
+        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default(), None);
     }
 
     fn complete(app: &mut App) {
@@ -463,7 +483,7 @@ mod tests {
 
         let mailmap =
             gix::mailmap::Snapshot::from_bytes(b"Mapped Human <mapped@example.com> Human <human@example.com>\n");
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
 
         let row = rendered_row(&terminal);
         assert!(
@@ -497,7 +517,7 @@ mod tests {
 
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("Codex"), "n hides the primary actor");
         assert!(
@@ -506,7 +526,7 @@ mod tests {
         );
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         assert!(
             rendered_row(&terminal).contains("Co: Human, [Claude]"),
             "m restores original trailer actor names"
@@ -545,9 +565,9 @@ mod tests {
             gix::mailmap::Snapshot::from_bytes(b"mapped author <mapped@example.com> author <author@example.com>\n");
         let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
 
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -572,6 +592,12 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 1, 0)]
             .set_style(Style::default().add_modifier(Modifier::REVERSED));
+        let commit = footer_text[..footer_text.find("] commit").expect("the commit toggle is present")]
+            .chars()
+            .count();
+        for x in commit..commit + "] commit".len() {
+            expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
+        }
         terminal.backend().assert_buffer(&expected);
         let row = terminal.backend().buffer();
         assert!(
@@ -589,7 +615,7 @@ mod tests {
         );
 
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),
             "m restores the original author name"
@@ -599,7 +625,7 @@ mod tests {
 
         app.update(Action::ToggleDate);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
         assert!(!row.contains("author"), "n hides the author name");
@@ -609,7 +635,7 @@ mod tests {
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
@@ -618,7 +644,7 @@ mod tests {
         assert!(footer_is_dim(&terminal, "r no refs"), "no refs is dimmed");
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(rendered_row(&terminal).contains("HEAD"), "all refs shows regular refs");
         assert!(
             rendered_row(&terminal).contains("refs/patches"),
@@ -627,7 +653,7 @@ mod tests {
         assert!(!footer_is_dim(&terminal, "r all refs"), "all refs is not dimmed");
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(rendered_row(&terminal).contains("HEAD"), "refs shows regular refs");
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
@@ -636,13 +662,13 @@ mod tests {
         assert!(!footer_is_dim(&terminal, "r refs"), "refs is not dimmed");
 
         app.has_hidden_filter = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v show hidden"),
             "the footer advertises the configured hidden-history toggle"
         );
         app.show_hidden = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v hide hidden"),
             "the footer reflects the unfiltered view"
@@ -665,6 +691,75 @@ mod tests {
         app.update(Action::Cancel);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(!rendered_line(&terminal, 1).contains("Esc cancel"));
+        Ok(())
+    }
+
+    #[test]
+    fn toggles_the_full_commit_message_in_a_padded_half_width_pane() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(3);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            lane: String::new(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: Box::default(),
+            title: "subject".into(),
+        }]);
+        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(footer_is_dim(&terminal, "] commit"), "the closed commit pane is dimmed");
+
+        app.update(Action::ToggleCommit);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 1)].symbol(),
+            "s",
+            "the pane is capped at half width with two columns of horizontal margin"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(62, 3)].symbol(),
+            "b",
+            "vertical margin leaves the full commit body intact"
+        );
+        assert!(
+            !footer_is_dim(&terminal, "] commit"),
+            "the open commit pane is not dimmed"
+        );
+
+        app.update(Action::ToggleCommit);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 3)].symbol(),
+            " ",
+            "closing the pane removes the commit body"
+        );
+
+        app.update(Action::ToggleCommit);
+        let mut wide_terminal = Terminal::new(TestBackend::new(200, 6))?;
+        wide_terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject".as_bstr()),
+            );
+        })?;
+        assert_eq!(
+            wide_terminal.backend().buffer()[(122, 1)].symbol(),
+            "s",
+            "the pane remains eighty columns wide on a wide screen"
+        );
         Ok(())
     }
 
@@ -887,8 +982,9 @@ mod tests {
     }
 
     fn footer_is_dim(terminal: &Terminal<TestBackend>, label: &str) -> bool {
-        let footer = rendered_line(terminal, 1);
+        let y = terminal.backend().buffer().area.height - 1;
+        let footer = rendered_line(terminal, y);
         let x = footer[..footer.find(label).expect("toggle is visible")].chars().count() as u16;
-        terminal.backend().buffer()[(x, 1)].modifier.contains(Modifier::DIM)
+        terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM)
     }
 }

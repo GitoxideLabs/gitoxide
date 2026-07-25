@@ -8,6 +8,7 @@ mod ui;
 
 use std::{
     ffi::OsString,
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -26,6 +27,7 @@ use crossterm::{
     style::Print,
     terminal::{self, Clear, ClearType},
 };
+use gix::bstr::{BString, ByteSlice};
 use history::{Authors, Decorations, Event};
 use ratatui::{TerminalOptions, Viewport};
 
@@ -149,9 +151,10 @@ fn event_loop(
         screen: _,
     } = options;
     let mailmap = repository.to_thread_local().open_mailmap();
+    let repository_path = repository.git_dir().to_owned();
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let (mut cancelled, mut receiver) = start_history(
-        &repository,
+        repository,
         &revisions,
         &hide,
         gix::features::threading::OwnShared::clone(&authors),
@@ -159,9 +162,17 @@ fn event_loop(
 
     let mut app = App::new(1);
     let mut lane_receiver = None;
+    let mut commit_message = None;
     app.has_hidden_filter = !hide.is_empty();
     let mut decorations = Decorations::new();
-    draw(terminal, &mut app, &decorations, &mailmap)?;
+    draw(
+        terminal,
+        &mut app,
+        &decorations,
+        &mailmap,
+        &repository_path,
+        &mut commit_message,
+    )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
@@ -183,7 +194,14 @@ fn event_loop(
             }
         }
         if urgent {
-            draw(terminal, &mut app, &decorations, &mailmap)?;
+            draw(
+                terminal,
+                &mut app,
+                &decorations,
+                &mailmap,
+                &repository_path,
+                &mut commit_message,
+            )?;
             last_draw = Instant::now();
             dirty = false;
             urgent = false;
@@ -218,7 +236,14 @@ fn event_loop(
         }
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing);
         if should_draw(dirty, streaming, last_draw.elapsed()) {
-            draw(terminal, &mut app, &decorations, &mailmap)?;
+            draw(
+                terminal,
+                &mut app,
+                &decorations,
+                &mailmap,
+                &repository_path,
+                &mut commit_message,
+            )?;
             last_draw = Instant::now();
             dirty = false;
         }
@@ -258,7 +283,8 @@ fn event_loop(
                     decorations.clear();
                     let hidden = if show_hidden { &[][..] } else { hide.as_slice() };
                     (cancelled, receiver) = start_history(
-                        &repository,
+                        gix::ThreadSafeRepository::open_opts(&repository_path, gix::open::Options::isolated())
+                            .context("could not reopen repository for history reload")?,
                         &revisions,
                         hidden,
                         gix::features::threading::OwnShared::clone(&authors),
@@ -279,7 +305,7 @@ fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, Du
 }
 
 fn start_history(
-    repository: &gix::ThreadSafeRepository,
+    repository: gix::ThreadSafeRepository,
     revisions: &[OsString],
     hidden_revisions: &[OsString],
     authors: SharedAuthors,
@@ -287,7 +313,6 @@ fn start_history(
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
     let (sender, receiver) = mpsc::channel();
-    let repository = repository.clone();
     let revisions = revisions.to_vec();
     let hidden_revisions = hidden_revisions.to_vec();
     std::thread::spawn(move || {
@@ -313,9 +338,28 @@ fn draw(
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
+    repository_path: &Path,
+    commit_message: &mut Option<(gix::ObjectId, BString)>,
 ) -> Result<()> {
-    terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap))?;
+    let selected = app
+        .show_commit
+        .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
+        .flatten();
+    if commit_message.as_ref().map(|(id, _)| *id) != selected {
+        *commit_message = selected
+            .map(|id| load_commit_message(repository_path, id).map(|message| (id, message)))
+            .transpose()?;
+    }
+    let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
+    terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message))?;
     Ok(())
+}
+
+fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BString> {
+    let repo = gix::open_opts(repository_path, gix::open::Options::isolated())
+        .context("could not open repository for commit message")?;
+    let commit = repo.find_commit(id).context("could not load commit message")?;
+    Ok(commit.message_raw_sloppy().to_owned())
 }
 
 fn should_draw(dirty: bool, streaming: bool, since_draw: Duration) -> bool {
@@ -358,6 +402,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
+        KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     }
@@ -366,6 +411,18 @@ fn action(key: KeyEvent) -> Option<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loads_commit_messages_from_an_isolated_repository() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let id = gix::open(&fixture)?.rev_parse_single("topic")?.detach();
+
+        assert!(
+            load_commit_message(&fixture, id)?.starts_with(b"topic\n\nCo-authored-by:"),
+            "on-demand loading retains the full commit message"
+        );
+        Ok(())
+    }
 
     #[test]
     fn chooses_screen_from_terminal_and_history_height() {
@@ -458,6 +515,10 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),
             Some(Action::ToggleAlign)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommit)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),

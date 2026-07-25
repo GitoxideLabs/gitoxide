@@ -89,6 +89,7 @@ pub(crate) enum Action {
     ToggleRefs,
     ToggleHidden,
     ToggleAlign,
+    ToggleCommit,
     Cancel,
     Copy,
     Quit,
@@ -119,6 +120,7 @@ pub(crate) struct App {
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
     pub align_metadata: bool,
+    pub show_commit: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -144,6 +146,7 @@ impl App {
             has_hidden_filter: false,
             show_hidden: false,
             align_metadata: true,
+            show_commit: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -236,6 +239,7 @@ impl App {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
+            Action::ToggleCommit => self.show_commit = !self.show_commit,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -696,6 +700,7 @@ mod tests {
         app.update(Action::ToggleMailmap);
         app.update(Action::ToggleRefs);
         app.update(Action::ToggleAlign);
+        app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
         assert!(!app.show_author_name);
@@ -707,6 +712,7 @@ mod tests {
         app.update(Action::ToggleRefs);
         assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
+        assert!(app.show_commit);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
     }
