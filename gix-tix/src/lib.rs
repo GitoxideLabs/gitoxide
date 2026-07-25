@@ -327,7 +327,7 @@ fn event_loop(
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
                 Effect::CopyAuthor(author) => {
-                    let actor = actor_bytes(author).context("could not format the selected author")?;
+                    let actor = actor_bytes(author);
                     execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
                 }
                 Effect::Reload(show_hidden) => {
@@ -422,14 +422,13 @@ fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BStr
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
-fn actor_bytes(author: &app::Author) -> std::io::Result<Vec<u8>> {
-    let mut out = Vec::new();
-    gix::actor::IdentityRef {
-        name: author.name,
-        email: author.email,
-    }
-    .write_to(&mut out)?;
-    Ok(out)
+fn actor_bytes(author: &app::Author) -> Vec<u8> {
+    let mut out = Vec::with_capacity(author.name.len() + author.email.len() + 3);
+    out.extend_from_slice(author.name);
+    out.extend_from_slice(b" <");
+    out.extend_from_slice(author.email);
+    out.push(b'>');
+    out
 }
 
 fn should_draw(dirty: bool, streaming: bool, since_draw: Duration) -> bool {
@@ -651,14 +650,17 @@ mod tests {
     }
 
     #[test]
-    fn serializes_an_author_for_a_commit_header() -> std::io::Result<()> {
+    fn copies_parsed_author_bytes_without_validation() {
         let author = app::Author {
-            name: b"Author Name".as_bstr(),
-            email: b"author@example.com".as_bstr(),
+            name: b"Author > Name".as_bstr(),
+            email: b"author<@example.com".as_bstr(),
         };
 
-        assert_eq!(actor_bytes(&author)?, b"Author Name <author@example.com>");
-        Ok(())
+        assert_eq!(
+            actor_bytes(&author),
+            b"Author > Name <author<@example.com>",
+            "parsed author bytes are copied even if they aren't valid serialization tokens"
+        );
     }
 
     #[test]
