@@ -284,8 +284,12 @@ impl App {
             }
             Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
             Action::ToggleName => {
+                let start = self.offset.min(self.rows.len());
+                let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
+                let has_visible_attributions = self.rows[start..end].iter().any(|row| !row.attributions.is_empty());
                 self.name_mode = match self.name_mode {
-                    NameMode::All => NameMode::Author,
+                    NameMode::All if has_visible_attributions => NameMode::Author,
+                    NameMode::All => NameMode::None,
                     NameMode::Author => NameMode::None,
                     NameMode::None => NameMode::All,
                 };
@@ -951,7 +955,7 @@ mod tests {
         app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
-        assert_eq!(app.name_mode, NameMode::Author);
+        assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
         assert_eq!(app.ref_mode, RefMode::None);
@@ -966,9 +970,27 @@ mod tests {
     }
 
     #[test]
-    fn cycles_author_names() {
+    fn cycles_author_names_without_inert_states() {
         let mut app = App::new(1);
+        let attribution = Attribution {
+            kind: AttributionKind::CoAuthor,
+            author: row(2).author,
+        };
+        let mut attributed = row(2);
+        attributed.attributions = 0..1;
+        app.extend_commits(LoadedCommits {
+            rows: vec![row(1), attributed],
+            attributions: vec![attribution],
+        });
 
+        app.update(Action::ToggleName);
+        assert_eq!(
+            app.name_mode,
+            NameMode::None,
+            "the visible author is hidden immediately when no attributions are visible"
+        );
+        app.name_mode = NameMode::All;
+        app.offset = 1;
         app.update(Action::ToggleName);
         assert_eq!(app.name_mode, NameMode::Author);
         app.update(Action::ToggleName);

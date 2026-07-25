@@ -742,22 +742,25 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
-        assert!(row.contains("author"), "the first n keeps the author name");
+        assert!(
+            !row.contains("author"),
+            "the first n hides the author when there are no attributions"
+        );
         assert!(!row.contains("refs/patches"), "special refs are hidden until requested");
         assert!(row.contains("subject"), "the commit subject remains visible");
         assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
-        assert!(
-            !footer_is_dim(&terminal, "n name"),
-            "the singular name mode is not dimmed"
-        );
+        assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
-            !rendered_row(&terminal).contains("author"),
-            "the second n hides the author name"
+            rendered_row(&terminal).contains("author"),
+            "the second n restores the author name"
         );
-        assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
+        assert!(
+            !footer_is_dim(&terminal, "n name"),
+            "the restored name mode is not dimmed"
+        );
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
