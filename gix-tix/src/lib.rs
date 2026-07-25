@@ -22,7 +22,10 @@ use app::{Action, App, CommitRow, Effect, State};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
-    event::{self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+        ModifierKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     style::Print,
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -81,9 +84,28 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         None => ratatui::try_init(),
     }
     .context("could not initialize terminal")?;
-    let result = event_loop(&mut terminal, repository, revisions, options, inline_height.is_some());
+    let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
+    let keyboard_setup = if enhanced_keyboard {
+        execute!(
+            terminal.backend_mut(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        )
+    } else {
+        Ok(())
+    };
+    let result = keyboard_setup
+        .context("could not enable enhanced keyboard events")
+        .and_then(|()| event_loop(&mut terminal, repository, revisions, options, inline_height.is_some()));
+    let keyboard_restore = enhanced_keyboard
+        .then(|| execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags))
+        .transpose();
     let restore = restore_terminal(&mut terminal, inline_height.is_some());
     let lane_time = result?;
+    keyboard_restore.context("could not restore keyboard events")?;
     restore?;
     if let Some(lane_time) = lane_time {
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
@@ -285,9 +307,6 @@ fn event_loop(
             }
             _ => continue,
         };
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            continue;
-        }
         let Some(action) = action(key) else { continue };
         dirty = true;
         urgent = true;
@@ -303,10 +322,14 @@ fn event_loop(
         for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
-                Effect::Copy(id) => execute!(
+                Effect::CopyId(id) => execute!(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
+                Effect::CopyAuthor(author) => {
+                    let actor = actor_bytes(author).context("could not format the selected author")?;
+                    execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
+                }
                 Effect::Reload(show_hidden) => {
                     cancelled.store(true, Ordering::Relaxed);
                     app.reload(show_hidden);
@@ -399,6 +422,16 @@ fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BStr
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
+fn actor_bytes(author: &app::Author) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    gix::actor::IdentityRef {
+        name: author.name,
+        email: author.email,
+    }
+    .write_to(&mut out)?;
+    Ok(out)
+}
+
 fn should_draw(dirty: bool, streaming: bool, since_draw: Duration) -> bool {
     dirty && (!streaming || since_draw >= FRAME_INTERVAL)
 }
@@ -416,7 +449,18 @@ fn poll_timeout(streaming: bool, events: usize, dirty: bool, since_draw: Duratio
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
+    if key.kind == KeyEventKind::Release
+        && !matches!(
+            key.code,
+            KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
+        )
+    {
+        return None;
+    }
     match key.code {
+        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
+            Some(Action::PreviewAuthorCopy(key.kind != KeyEventKind::Release))
+        }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -440,6 +484,8 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']') => Some(Action::ToggleCommit),
+        KeyCode::Char('Y') => Some(Action::CopyAuthor),
+        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     }
@@ -578,10 +624,41 @@ mod tests {
             Some(Action::ToggleCommit)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
+            Some(Action::CopyAuthor)
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+                KeyEventKind::Press,
+            )),
+            Some(Action::PreviewAuthorCopy(true))
+        );
+        assert_eq!(
+            action(KeyEvent::new_with_kind(
+                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                KeyModifiers::NONE,
+                KeyEventKind::Release,
+            )),
+            Some(Action::PreviewAuthorCopy(false))
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
             Some(Action::Quit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn serializes_an_author_for_a_commit_header() -> std::io::Result<()> {
+        let author = app::Author {
+            name: b"Author Name".as_bstr(),
+            email: b"author@example.com".as_bstr(),
+        };
+
+        assert_eq!(actor_bytes(&author)?, b"Author Name <author@example.com>");
+        Ok(())
     }
 
     #[test]

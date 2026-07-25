@@ -60,7 +60,8 @@ pub(crate) fn draw(
     let align_metadata = app.align_metadata;
     let show_committer_date = app.show_committer_date;
     let name_mode = app.name_mode;
-    let show_author_name = name_mode != NameMode::None;
+    let preview_author_copy = app.preview_author_copy;
+    let show_author_name = preview_author_copy || name_mode != NameMode::None;
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
@@ -78,9 +79,10 @@ pub(crate) fn draw(
                     show_committer_date,
                     show_author_name,
                     show_trailers,
-                    use_mailmap: app.use_mailmap,
+                    use_mailmap: app.use_mailmap && !preview_author_copy,
                     ref_mode,
                     selected: selected == Some(start + index),
+                    preview_author_copy,
                 },
             )
         })
@@ -217,7 +219,11 @@ pub(crate) fn draw(
         RefMode::None => "r no refs",
     };
     footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
-    footer_spans.extend([Span::raw(" · y copy")]);
+    footer_spans.push(Span::raw(if app.preview_author_copy {
+        " · Y copy author"
+    } else {
+        " · y copy"
+    }));
     if app.state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
@@ -244,6 +250,7 @@ struct MetadataOptions {
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
+    preview_author_copy: bool,
 }
 
 fn metadata_line<'a>(
@@ -261,9 +268,14 @@ fn metadata_line<'a>(
         use_mailmap,
         ref_mode,
         selected,
+        preview_author_copy,
     } = options;
     let id = row.id.to_hex().to_string();
-    let id_style = color(Color::Magenta).add_modifier(Modifier::BOLD);
+    let id_style = if preview_author_copy {
+        Style::default()
+    } else {
+        color(Color::Magenta).add_modifier(Modifier::BOLD)
+    };
     let mut spans = vec![Span::styled(
         id[..7].to_owned(),
         if selected {
@@ -305,13 +317,18 @@ fn metadata_line<'a>(
     }
     if show_author_name {
         let author = author_name(row.author, mailmap, use_mailmap).to_str_lossy();
+        let author_style = if preview_author_copy {
+            color(Color::Magenta).add_modifier(Modifier::BOLD)
+        } else {
+            color(Color::Green)
+        };
         spans.push(Span::styled(
             if row.author.is_bot() {
                 format!("[{author}] ")
             } else {
                 format!("{author} ")
             },
-            color(Color::Green),
+            author_style,
         ));
         if show_trailers {
             for (kind, marker) in [
@@ -692,6 +709,27 @@ mod tests {
             rendered_line(&terminal, 1).contains("v hide hidden"),
             "the footer reflects the unfiltered view"
         );
+
+        app.update(Action::PreviewAuthorCopy(true));
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        let row = rendered_row(&terminal);
+        assert!(
+            row.contains("author subject"),
+            "holding Shift reveals the raw author even when names are hidden"
+        );
+        let buffer = terminal.backend().buffer();
+        let hash_x = row.find("0101010").expect("the commit hash is rendered") as u16;
+        let author_x = row.find("author").expect("the author is rendered") as u16;
+        assert_ne!(buffer[(hash_x, 0)].fg, Color::Magenta, "the hash yields its copy color");
+        assert_eq!(
+            buffer[(author_x, 0)].fg,
+            Color::Magenta,
+            "the author takes the copy color"
+        );
+        assert!(
+            rendered_line(&terminal, 1).contains("Y copy author"),
+            "the footer previews the shifted shortcut"
+        );
         Ok(())
     }
 
@@ -872,6 +910,7 @@ mod tests {
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
+                preview_author_copy: false,
             },
         );
         let style = |text| {

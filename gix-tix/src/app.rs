@@ -113,13 +113,16 @@ pub(crate) enum Action {
     ToggleCommit,
     Cancel,
     Copy,
+    CopyAuthor,
+    PreviewAuthorCopy(bool),
     Quit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Effect {
     Cancel,
-    Copy(ObjectId),
+    CopyId(ObjectId),
+    CopyAuthor(&'static Author),
     Reload(bool),
     Quit,
 }
@@ -146,6 +149,7 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
+    pub preview_author_copy: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -176,6 +180,7 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
+            preview_author_copy: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -293,13 +298,19 @@ impl App {
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
             Action::ToggleCommit => self.show_commit = !self.show_commit,
+            Action::PreviewAuthorCopy(value) => self.preview_author_copy = value,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
             }
             Action::Copy => {
                 if let Some(row) = self.selected.and_then(|index| self.rows.get(index)) {
-                    return vec![Effect::Copy(row.id)];
+                    return vec![Effect::CopyId(row.id)];
+                }
+            }
+            Action::CopyAuthor => {
+                if let Some(row) = self.selected.and_then(|index| self.rows.get(index)) {
+                    return vec![Effect::CopyAuthor(row.author)];
                 }
             }
             Action::Quit => {
@@ -1006,9 +1017,14 @@ mod tests {
             app.update(Action::Copy).is_empty(),
             "there is nothing to copy without a selection"
         );
+        assert!(
+            app.update(Action::CopyAuthor).is_empty(),
+            "there is no author to copy without a selection"
+        );
         app.extend_commits(vec![row(7)]);
 
-        assert_eq!(app.update(Action::Copy), vec![Effect::Copy(row(7).id)]);
+        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(app.update(Action::CopyAuthor), vec![Effect::CopyAuthor(row(7).author)]);
         complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
