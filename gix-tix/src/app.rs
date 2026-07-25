@@ -405,9 +405,8 @@ pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, String
         .rev()
         .filter_map(|(index, count)| (*count == 0).then_some(index))
         .collect();
-    let mut order = Vec::with_capacity(rows.len());
+    let mut ordered = 0;
     while let Some(index) = ready.pop() {
-        order.push(index);
         for parent in rows[index].parent_ids.iter().rev() {
             if let Some(parent_index) = positions.get(parent) {
                 children[*parent_index] -= 1;
@@ -416,13 +415,18 @@ pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, String
                 }
             }
         }
+        // A ready row's child count is dead, so reuse it as the row's destination.
+        children[index] = ordered;
+        ordered += 1;
     }
-    if order.len() == rows.len() {
-        let mut old: Vec<_> = std::mem::take(&mut rows).into_iter().map(Some).collect();
-        rows = order
-            .into_iter()
-            .map(|index| old[index].take().expect("each row is moved exactly once"))
-            .collect();
+    if ordered == rows.len() {
+        for index in 0..rows.len() {
+            while children[index] != index {
+                let destination = children[index];
+                rows.swap(index, destination);
+                children.swap(index, destination);
+            }
+        }
     }
     let start = Instant::now();
     let lanes = render_lanes(&mut rows, &positions);
