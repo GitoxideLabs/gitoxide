@@ -11,7 +11,7 @@ use gix::{
     objs::commit::ref_iter::Token,
 };
 
-use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommit};
+use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Decoration {
@@ -40,7 +40,7 @@ const COMMIT_BATCH_SIZE: usize = 1024;
 #[derive(Debug)]
 pub(crate) enum Event {
     Decorations(Decorations),
-    Commits(Vec<LoadedCommit>),
+    Commits(LoadedCommits),
     Complete,
     Cancelled,
 }
@@ -70,6 +70,7 @@ pub(crate) fn load(
         .all()
         .context("could not start revision walk")?;
     let mut rows = Vec::with_capacity(COMMIT_BATCH_SIZE);
+    let mut attributions = Vec::with_capacity(COMMIT_BATCH_SIZE);
     for info in walk {
         if cancelled.load(Ordering::Relaxed) {
             emit(Event::Cancelled);
@@ -79,7 +80,7 @@ pub(crate) fn load(
         let object = info.object().context("could not read commit")?;
         let mut committer_time = None;
         let mut author = None;
-        let mut attributions = Vec::new();
+        let attribution_start = attributions.len();
         let mut title = None;
         for token in object.iter() {
             match token.context("could not decode commit")? {
@@ -119,22 +120,21 @@ pub(crate) fn load(
         rows.push(Commit {
             id: info.id,
             parent_ids: info.parent_ids,
-            lane: String::new(),
             committer_time: committer_time.context("commit has no committer time")?,
             author: author.context("commit has no author")?,
-            attributions: attributions.into_boxed_slice(),
+            attributions: attribution_start..attributions.len(),
             title: title.context("commit has no message")?,
         });
         if rows.len() == COMMIT_BATCH_SIZE
-            && !emit(Event::Commits(std::mem::replace(
-                &mut rows,
-                Vec::with_capacity(COMMIT_BATCH_SIZE),
-            )))
+            && !emit(Event::Commits(LoadedCommits {
+                rows: std::mem::replace(&mut rows, Vec::with_capacity(COMMIT_BATCH_SIZE)),
+                attributions: std::mem::replace(&mut attributions, Vec::with_capacity(COMMIT_BATCH_SIZE)),
+            }))
         {
             return Ok(());
         }
     }
-    if !rows.is_empty() && !emit(Event::Commits(rows)) {
+    if !rows.is_empty() && !emit(Event::Commits(LoadedCommits { rows, attributions })) {
         return Ok(());
     }
     emit(Event::Complete);
@@ -323,7 +323,7 @@ mod tests {
         let actual: HashSet<_> = events
             .iter()
             .flat_map(|event| match event {
-                Event::Commits(rows) => rows.iter().map(|row| row.id.to_hex().to_string()).collect(),
+                Event::Commits(batch) => batch.rows.iter().map(|row| row.id.to_hex().to_string()).collect(),
                 _ => Vec::new(),
             })
             .collect();
@@ -339,10 +339,14 @@ mod tests {
         let expected = String::from_utf8(output.stdout)?.lines().map(str::to_owned).collect();
         assert_eq!(actual, expected, "all commits reachable from either tip are shown once");
         assert!(matches!(events.last(), Some(Event::Complete)), "the walk completes");
-        let topic = events
+        let (topic, attributions) = events
             .iter()
             .filter_map(|event| match event {
-                Event::Commits(rows) => rows.iter().find(|row| row.title == "topic"),
+                Event::Commits(batch) => batch
+                    .rows
+                    .iter()
+                    .find(|row| row.title == "topic")
+                    .map(|row| (row, &batch.attributions)),
                 _ => None,
             })
             .next()
@@ -357,8 +361,7 @@ mod tests {
             "well-known bot email addresses identify bot authors"
         );
         assert_eq!(
-            topic
-                .attributions
+            attributions[topic.attributions.clone()]
                 .iter()
                 .map(|attribution| { (attribution.kind, attribution.author.name, attribution.author.is_bot(),) })
                 .collect::<Vec<_>>(),
@@ -387,7 +390,7 @@ mod tests {
         let actual: HashSet<_> = events
             .iter()
             .flat_map(|event| match event {
-                Event::Commits(rows) => rows.iter().map(|row| row.id.to_hex().to_string()).collect(),
+                Event::Commits(batch) => batch.rows.iter().map(|row| row.id.to_hex().to_string()).collect(),
                 _ => Vec::new(),
             })
             .collect();

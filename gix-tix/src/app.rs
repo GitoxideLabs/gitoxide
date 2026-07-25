@@ -14,10 +14,9 @@ use gix::{
 pub(crate) struct Commit<T> {
     pub id: ObjectId,
     pub parent_ids: ParentIds,
-    pub lane: String,
     pub committer_time: gix::date::Time,
     pub author: &'static Author,
-    pub attributions: Box<[Attribution]>,
+    pub attributions: Range<usize>,
     pub title: T,
 }
 
@@ -53,17 +52,39 @@ pub(crate) enum AttributionKind {
 pub(crate) type LoadedCommit = Commit<BString>;
 pub(crate) type CommitRow = Commit<Range<usize>>;
 
+#[derive(Debug)]
+pub(crate) struct LoadedCommits {
+    pub rows: Vec<LoadedCommit>,
+    pub attributions: Vec<Attribution>,
+}
+
+impl From<Vec<LoadedCommit>> for LoadedCommits {
+    fn from(rows: Vec<LoadedCommit>) -> Self {
+        LoadedCommits {
+            rows,
+            attributions: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum State {
     Loading,
     Cancelling,
+    Computing,
     Complete,
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefMode {
+    All,
+    Default,
+    None,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
-    Complete,
     Cancelled,
     MoveUp,
     MoveDown,
@@ -79,9 +100,10 @@ pub(crate) enum Action {
     ToggleName,
     ToggleTrailers,
     ToggleMailmap,
-    ToggleSpecialRefs,
+    ToggleRefs,
     ToggleHidden,
     ToggleAlign,
+    ToggleCommit,
     Cancel,
     Copy,
     Quit,
@@ -99,6 +121,10 @@ pub(crate) enum Effect {
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
     titles: Vec<u8>,
+    graph: Option<Graph>,
+    attributions: Vec<Attribution>,
+    #[cfg(test)]
+    test_lanes: Vec<String>,
     pub selected: Option<usize>,
     pub offset: usize,
     pub state: State,
@@ -108,10 +134,11 @@ pub(crate) struct App {
     pub show_author_name: bool,
     pub show_trailers: bool,
     pub use_mailmap: bool,
-    pub show_special_refs: bool,
+    pub ref_mode: RefMode,
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
     pub align_metadata: bool,
+    pub show_commit: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -124,6 +151,10 @@ impl App {
         App {
             rows: Vec::new(),
             titles: Vec::new(),
+            graph: None,
+            attributions: Vec::new(),
+            #[cfg(test)]
+            test_lanes: Vec::new(),
             selected: None,
             offset: 0,
             state: State::Loading,
@@ -133,10 +164,11 @@ impl App {
             show_author_name: true,
             show_trailers: true,
             use_mailmap: true,
-            show_special_refs: false,
+            ref_mode: RefMode::Default,
             has_hidden_filter: false,
             show_hidden: false,
             align_metadata: true,
+            show_commit: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -145,18 +177,20 @@ impl App {
         }
     }
 
-    pub(crate) fn extend_commits(&mut self, rows: Vec<LoadedCommit>) {
+    pub(crate) fn extend_commits(&mut self, commits: impl Into<LoadedCommits>) {
+        let LoadedCommits { rows, attributions } = commits.into();
         if self.state != State::Loading || rows.is_empty() {
             return;
         }
         let was_empty = self.rows.is_empty();
         self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
+        let attribution_base = self.attributions.len();
+        self.attributions.extend(attributions);
         self.rows.reserve(rows.len());
         for row in rows {
             let Commit {
                 id,
                 parent_ids,
-                lane,
                 committer_time,
                 author,
                 attributions,
@@ -167,10 +201,9 @@ impl App {
             self.rows.push(Commit {
                 id,
                 parent_ids,
-                lane,
                 committer_time,
                 author,
-                attributions,
+                attributions: attribution_base + attributions.start..attribution_base + attributions.end,
                 title: start..self.titles.len(),
             });
         }
@@ -188,20 +221,25 @@ impl App {
         self.titles[row.title.clone()].as_bstr()
     }
 
+    pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
+        #[cfg(test)]
+        if !self.test_lanes.is_empty() {
+            return RenderedLanes::from_lanes(
+                self.test_lanes[range.start.min(self.test_lanes.len())..range.end.min(self.test_lanes.len())].iter(),
+            );
+        }
+        match &self.graph {
+            Some(graph) => graph.render(&self.rows, range),
+            None => RenderedLanes::empty(range.len()),
+        }
+    }
+
+    pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
+        &self.attributions[row.attributions.clone()]
+    }
+
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
-            Action::Complete if self.state == State::Loading => {
-                let selected = self.selected.map(|index| self.rows[index].id);
-                self.lane_time = Some(finish_rows(&mut self.rows));
-                self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
-                self.state = State::Complete;
-                self.follow_tail = false;
-                self.ensure_visible();
-            }
-            Action::Complete if self.state == State::Cancelling => {
-                self.state = State::Cancelled;
-                self.follow_tail = false;
-            }
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp => self.move_selection(1, false),
             Action::MoveDown => self.move_selection(1, true),
@@ -228,13 +266,20 @@ impl App {
             Action::ToggleName => self.show_author_name = !self.show_author_name,
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
-            Action::ToggleSpecialRefs => self.show_special_refs = !self.show_special_refs,
+            Action::ToggleRefs => {
+                self.ref_mode = match self.ref_mode {
+                    RefMode::All => RefMode::Default,
+                    RefMode::Default => RefMode::None,
+                    RefMode::None => RefMode::All,
+                };
+            }
             Action::ToggleHidden
                 if self.has_hidden_filter && matches!(self.state, State::Complete | State::Cancelled) =>
             {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
+            Action::ToggleCommit => self.show_commit = !self.show_commit,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -256,9 +301,42 @@ impl App {
         Vec::new()
     }
 
+    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<CommitRow>> {
+        match self.state {
+            State::Loading => {
+                self.state = State::Computing;
+                self.follow_tail = false;
+                Some(self.rows.clone())
+            }
+            State::Cancelling => {
+                self.state = State::Cancelled;
+                self.follow_tail = false;
+                None
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, graph: Graph, lane_time: Duration) {
+        if self.state != State::Computing {
+            return;
+        }
+        let selected = self.selected.map(|index| self.rows[index].id);
+        self.rows = rows;
+        self.graph = Some(graph);
+        self.lane_time = Some(lane_time);
+        self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
+        self.state = State::Complete;
+        self.ensure_visible();
+    }
+
     pub(crate) fn reload(&mut self, show_hidden: bool) {
         self.rows = Vec::new();
         self.titles = Vec::new();
+        self.graph = None;
+        self.attributions = Vec::new();
+        #[cfg(test)]
+        self.test_lanes.clear();
         self.selected = None;
         self.offset = 0;
         self.state = State::Loading;
@@ -303,20 +381,34 @@ impl App {
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_lane(&mut self, index: usize, lane: &str) {
+        self.test_lanes.resize(self.rows.len(), String::new());
+        self.test_lanes[index] = lane.into();
+    }
 }
 
 fn estimate_lane_width(rows: &[CommitRow]) -> usize {
     let mut rows = rows.to_vec();
-    let known = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-    render_lanes(&mut rows, &known);
-    rows.iter()
-        .map(|row| row.lane.chars().count())
+    let known: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    for row in &mut rows {
+        row.parent_ids.retain(|id| known.contains_key(id));
+    }
+    let graph = Graph::new(&rows);
+    graph
+        .render(&rows, 0..rows.len())
+        .iter()
+        .map(|lane| lane.chars().count())
         .max()
         .map_or(0, |width| width.saturating_add(2))
 }
 
-fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
+pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Graph, Duration) {
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    for row in &mut rows {
+        row.parent_ids.retain(|id| positions.contains_key(id));
+    }
     let mut children = vec![0usize; rows.len()];
     for row in rows.iter() {
         for parent in &row.parent_ids {
@@ -332,9 +424,8 @@ fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
         .rev()
         .filter_map(|(index, count)| (*count == 0).then_some(index))
         .collect();
-    let mut order = Vec::with_capacity(rows.len());
+    let mut ordered = 0;
     while let Some(index) = ready.pop() {
-        order.push(index);
         for parent in rows[index].parent_ids.iter().rev() {
             if let Some(parent_index) = positions.get(parent) {
                 children[*parent_index] -= 1;
@@ -343,74 +434,194 @@ fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
                 }
             }
         }
+        // A ready row's child count is dead, so reuse it as the row's destination.
+        children[index] = ordered;
+        ordered += 1;
     }
-    if order.len() == rows.len() {
-        let mut old: Vec<_> = std::mem::take(rows).into_iter().map(Some).collect();
-        *rows = order
-            .into_iter()
-            .map(|index| old[index].take().expect("each row is moved exactly once"))
-            .collect();
-    }
-    let start = Instant::now();
-    render_lanes(rows, &positions);
-    start.elapsed()
-}
-
-fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) {
-    let mut columns = Vec::new();
-    let mut next = Vec::new();
-    let mut parents = Vec::new();
-    let mut edges = Vec::new();
-    for row in rows {
-        let current = columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
-            columns.push(row.id);
-            columns.len() - 1
-        });
-
-        parents.clear();
-        for parent in row.parent_ids.iter().copied().filter(|id| known.contains_key(id)) {
-            if !parents.iter().any(|(id, _, _)| *id == parent) {
-                parents.push((parent, columns.iter().position(|id| *id == parent), 0));
+    if ordered == rows.len() {
+        for index in 0..rows.len() {
+            while children[index] != index {
+                let destination = children[index];
+                rows.swap(index, destination);
+                children.swap(index, destination);
             }
         }
-        next.clear();
-        edges.clear();
-        for (index, id) in columns[..current].iter().copied().enumerate() {
-            let destination = next.len();
-            next.push(id);
-            edges.push((index, destination));
+    }
+    let start = Instant::now();
+    let graph = Graph::new(&rows);
+    (rows, graph, start.elapsed())
+}
+
+const CHECKPOINT_INTERVAL: usize = 256;
+
+#[derive(Debug)]
+pub(crate) struct Graph {
+    offsets: Vec<usize>,
+    columns: Vec<ObjectId>,
+}
+
+impl Graph {
+    fn new(rows: &[CommitRow]) -> Self {
+        let mut state = LaneState::default();
+        let mut graph = Graph {
+            offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
+            columns: Vec::new(),
+        };
+        for (index, row) in rows.iter().enumerate() {
+            if index % CHECKPOINT_INTERVAL == 0 {
+                graph.offsets.push(graph.columns.len());
+                graph.columns.extend_from_slice(&state.columns);
+            }
+            state.advance(row, None);
         }
-        for (parent, old_position, destination) in &mut parents {
+        graph.offsets.push(graph.columns.len());
+        graph
+    }
+
+    fn render(&self, rows: &[CommitRow], range: Range<usize>) -> RenderedLanes {
+        let start = range.start.min(rows.len());
+        let end = range.end.min(rows.len());
+        if start >= end {
+            return RenderedLanes::default();
+        }
+        let checkpoint = start / CHECKPOINT_INTERVAL;
+        let mut state = LaneState {
+            columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
+            ..LaneState::default()
+        };
+        let mut rendered = RenderedLanes {
+            data: String::with_capacity((end - start).saturating_mul(4)),
+            ranges: Vec::with_capacity(end - start),
+        };
+        for (index, row) in rows[checkpoint * CHECKPOINT_INTERVAL..end].iter().enumerate() {
+            let index = checkpoint * CHECKPOINT_INTERVAL + index;
+            if let Some(range) = state.advance(row, (index >= start).then_some(&mut rendered.data)) {
+                rendered.ranges.push(range);
+            }
+        }
+        rendered
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RenderedLanes {
+    data: String,
+    ranges: Vec<Range<usize>>,
+}
+
+impl RenderedLanes {
+    pub(crate) fn lane(&self, index: usize) -> &str {
+        &self.data[self.ranges[index].clone()]
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &str> {
+        self.ranges.iter().map(|range| &self.data[range.clone()])
+    }
+
+    fn empty(len: usize) -> Self {
+        RenderedLanes {
+            data: String::new(),
+            ranges: vec![0..0; len],
+        }
+    }
+
+    #[cfg(test)]
+    fn from_lanes<'a>(lanes: impl IntoIterator<Item = &'a String>) -> Self {
+        let mut rendered = RenderedLanes::default();
+        for lane in lanes {
+            let start = rendered.data.len();
+            rendered.data.push_str(lane);
+            rendered.ranges.push(start..rendered.data.len());
+        }
+        rendered
+    }
+}
+
+#[derive(Default)]
+struct LaneState {
+    columns: Vec<ObjectId>,
+    next: Vec<ObjectId>,
+    parents: Vec<(ObjectId, Option<usize>, usize)>,
+    edges: Vec<(usize, usize)>,
+    cells: Vec<u8>,
+}
+
+impl LaneState {
+    fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
+        let render = out.is_some();
+        let current = self.columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
+            self.columns.push(row.id);
+            self.columns.len() - 1
+        });
+
+        self.parents.clear();
+        for parent in row.parent_ids.iter().copied() {
+            if !self.parents.iter().any(|(id, _, _)| *id == parent) {
+                self.parents
+                    .push((parent, self.columns.iter().position(|id| *id == parent), 0));
+            }
+        }
+        self.next.clear();
+        self.edges.clear();
+        for (index, id) in self.columns[..current].iter().copied().enumerate() {
+            let destination = self.next.len();
+            self.next.push(id);
+            if render {
+                self.edges.push((index, destination));
+            }
+        }
+        for (parent, old_position, destination) in &mut self.parents {
             *destination = match old_position {
                 Some(position) if *position < current => *position,
                 _ => {
-                    let destination = next.len();
-                    next.push(*parent);
-                    match old_position {
-                        Some(position) if *position != current => edges.push((*position, destination)),
-                        _ => {}
+                    let destination = self.next.len();
+                    self.next.push(*parent);
+                    if render && old_position.is_some_and(|position| position != current) {
+                        self.edges
+                            .push((old_position.expect("checked as present"), destination));
                     }
                     destination
                 }
             };
         }
-        for (index, id) in columns.iter().copied().enumerate().skip(current + 1) {
-            if parents.iter().any(|(_, position, _)| *position == Some(index)) {
+        for (index, id) in self.columns.iter().copied().enumerate().skip(current + 1) {
+            if self.parents.iter().any(|(_, position, _)| *position == Some(index)) {
                 continue;
             }
-            let destination = next.len();
-            next.push(id);
-            edges.push((index, destination));
+            let destination = self.next.len();
+            self.next.push(id);
+            if render {
+                self.edges.push((index, destination));
+            }
         }
-        for (_, _, destination) in &parents {
-            edges.push((current, *destination));
+        if render {
+            for (_, _, destination) in &self.parents {
+                self.edges.push((current, *destination));
+            }
         }
-        row.lane = transition(columns.len(), next.len(), current, &edges);
-        std::mem::swap(&mut columns, &mut next);
+        let range = out.map(|out| {
+            transition(
+                self.columns.len(),
+                self.next.len(),
+                current,
+                &self.edges,
+                &mut self.cells,
+                out,
+            )
+        });
+        std::mem::swap(&mut self.columns, &mut self.next);
+        range
     }
 }
 
-fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usize)]) -> String {
+fn transition(
+    before: usize,
+    after: usize,
+    current: usize,
+    edges: &[(usize, usize)],
+    cells: &mut Vec<u8>,
+    out: &mut String,
+) -> Range<usize> {
     const UP: u8 = 1;
     const DOWN: u8 = 2;
     const LEFT: u8 = 4;
@@ -428,7 +639,8 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
     const UP_LEFT: u8 = UP | LEFT;
 
     let width = before.max(after).max(current + 1) * 2 - 1;
-    let mut cells = vec![0u8; width];
+    cells.clear();
+    cells.resize(width, 0);
     for &(from, to) in edges {
         let from = from * 2;
         let to = to * 2;
@@ -449,8 +661,8 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
         }
     }
 
-    let mut out = String::with_capacity(width + 1);
-    for (index, cell) in cells.into_iter().enumerate() {
+    let start = out.len();
+    for (index, cell) in cells.iter().copied().enumerate() {
         out.push(if index == current * 2 {
             '●'
         } else {
@@ -471,26 +683,29 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
         });
     }
     out.push(' ');
-    out
+    start..out.len()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(n: u8) -> LoadedCommit {
+    fn id(n: u16) -> ObjectId {
         let mut bytes = [0; 20];
-        bytes[19] = n;
+        bytes[18..].copy_from_slice(&n.to_be_bytes());
+        ObjectId::Sha1(bytes)
+    }
+
+    fn row(n: u8) -> LoadedCommit {
         Commit {
-            id: ObjectId::Sha1(bytes),
+            id: id(n.into()),
             parent_ids: ParentIds::new(),
-            lane: String::new(),
             committer_time: gix::date::Time::default(),
             author: Box::leak(Box::new(Author {
                 name: b"author".as_bstr(),
                 email: b"author@example.com".as_bstr(),
             })),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: format!("commit {n}").into(),
         }
     }
@@ -499,6 +714,22 @@ mod tests {
         let mut commit = row(n);
         commit.parent_ids = parents.iter().map(|n| row(*n).id).collect();
         commit
+    }
+
+    fn numbered_row(n: u16, parent: Option<u16>) -> LoadedCommit {
+        let mut commit = row(0);
+        commit.id = id(n);
+        commit.parent_ids = parent.map(id).into_iter().collect();
+        commit.title = format!("commit {n}").into();
+        commit
+    }
+
+    fn complete(app: &mut App) {
+        let rows = app
+            .start_lane_computation()
+            .expect("a loading app starts lane computation");
+        let (rows, graph, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
     }
 
     #[test]
@@ -516,15 +747,38 @@ mod tests {
             "the provisional alignment leaves two extra cells after two estimated graph lanes"
         );
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [row(4).id, row(3).id, row(2).id, row(1).id]
         );
         assert_eq!(
-            app.rows.iter().map(|row| row.lane.as_str()).collect::<Vec<_>>(),
+            app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─┐ ", "● │ ", "├─● ", "● "]
+        );
+    }
+
+    #[test]
+    fn lane_computation_keeps_provisional_rows_interactive() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2)]);
+
+        let rows = app
+            .start_lane_computation()
+            .expect("history completion starts lane computation");
+        assert_eq!(app.state, State::Computing);
+        assert_eq!(app.rows.len(), 2, "provisional rows remain available to render");
+
+        app.update(Action::MoveDown);
+        let selected = app.rows[app.selected.expect("selection remains active")].id;
+        let (rows, graph, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
+
+        assert_eq!(app.state, State::Complete);
+        assert_eq!(
+            app.rows[app.selected.expect("selection survives final ordering")].id,
+            selected
         );
     }
 
@@ -535,11 +789,31 @@ mod tests {
             app.extend_commits(vec![row]);
         }
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
-            app.rows.iter().map(|row| row.lane.as_str()).collect::<Vec<_>>(),
+            app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─┐ ", "●─┘ ", "● "]
+        );
+    }
+
+    #[test]
+    fn lanes_render_identically_after_a_checkpoint() {
+        let mut app = App::new(10);
+        app.extend_commits(
+            (0..=300)
+                .rev()
+                .map(|n| numbered_row(n, n.checked_sub(1)))
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+
+        let all = app.render_lanes(0..app.rows.len());
+        let window = app.render_lanes(257..300);
+        assert_eq!(
+            window.iter().collect::<Vec<_>>(),
+            all.iter().skip(257).take(43).collect::<Vec<_>>(),
+            "restoring a checkpoint produces the same graph as replaying from the beginning"
         );
     }
 
@@ -554,7 +828,7 @@ mod tests {
             row(1),
         ]);
 
-        app.update(Action::Complete);
+        complete(&mut app);
 
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -584,7 +858,7 @@ mod tests {
     #[test]
     fn navigation_is_clamped_and_uses_the_viewport_for_pages() {
         let mut app = App::new(2);
-        app.extend_commits((1..=5).map(row).collect());
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
 
         app.update(Action::PageDown);
         assert_eq!(app.selected, Some(2), "page-down advances by the viewport height");
@@ -600,7 +874,7 @@ mod tests {
     #[test]
     fn half_pages_use_half_the_viewport() {
         let mut app = App::new(4);
-        app.extend_commits((1..=5).map(row).collect());
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
 
         app.update(Action::HalfPageDown);
         assert_eq!(app.selected, Some(2));
@@ -634,15 +908,21 @@ mod tests {
         app.update(Action::ToggleName);
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
-        app.update(Action::ToggleSpecialRefs);
+        app.update(Action::ToggleRefs);
         app.update(Action::ToggleAlign);
+        app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
         assert!(!app.show_author_name);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
-        assert!(app.show_special_refs);
+        assert_eq!(app.ref_mode, RefMode::None);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::All);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
+        assert!(app.show_commit);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
     }
@@ -661,7 +941,7 @@ mod tests {
             app.update(Action::ToggleHidden).is_empty(),
             "a running walk cannot be replaced by another detached worker"
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(true)]);
         app.reload(true);
         assert!(app.rows.is_empty(), "reloading drops rows from the previous view");
@@ -671,7 +951,7 @@ mod tests {
             app.update(Action::ToggleHidden).is_empty(),
             "the replacement walk must finish before it can be toggled again"
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(false)]);
     }
 
@@ -685,7 +965,7 @@ mod tests {
         app.extend_commits(vec![row(2)]);
         assert_eq!(app.rows.len(), 1, "commits arriving after cancellation are ignored");
 
-        app.update(Action::Complete);
+        assert!(app.start_lane_computation().is_none());
         assert_eq!(app.state, State::Cancelled);
         assert_eq!(
             app.rows.len(),
@@ -704,7 +984,7 @@ mod tests {
         app.extend_commits(vec![row(7)]);
 
         assert_eq!(app.update(Action::Copy), vec![Effect::Copy(row(7).id)]);
-        app.update(Action::Complete);
+        complete(&mut app);
         assert_eq!(app.state, State::Complete);
         assert_eq!(app.rows.len(), 1, "the loaded row count is the completed total");
         assert_eq!(app.update(Action::Quit), vec![Effect::Quit]);
@@ -731,6 +1011,48 @@ mod tests {
             app.title(&app.rows[1]),
             b"second".as_bstr(),
             "the second span starts at the right offset"
+        );
+    }
+
+    #[test]
+    fn packs_attributions_across_history_batches() {
+        let first_attribution = Attribution {
+            kind: AttributionKind::CoAuthor,
+            author: row(1).author,
+        };
+        let second_attribution = Attribution {
+            kind: AttributionKind::Reviewed,
+            author: row(2).author,
+        };
+        let mut first = row(1);
+        first.attributions = 0..1;
+        let mut second = row(2);
+        second.attributions = 0..1;
+        let mut app = App::new(2);
+
+        app.extend_commits(LoadedCommits {
+            rows: vec![first],
+            attributions: vec![first_attribution],
+        });
+        app.extend_commits(LoadedCommits {
+            rows: vec![second],
+            attributions: vec![second_attribution],
+        });
+
+        assert_eq!(
+            app.attributions,
+            [first_attribution, second_attribution],
+            "all attribution entries share one application-owned buffer"
+        );
+        assert_eq!(
+            app.attributions(&app.rows[0]),
+            [first_attribution],
+            "the first batch retains its attribution range"
+        );
+        assert_eq!(
+            app.attributions(&app.rows[1]),
+            [second_attribution],
+            "later batch ranges are offset into the shared buffer"
         );
     }
 }

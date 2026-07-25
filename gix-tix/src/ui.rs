@@ -1,34 +1,50 @@
 use gix::bstr::{BStr, ByteSlice};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::{Clear, Paragraph, Wrap},
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, State},
+    app::{App, AttributionKind, CommitRow, RefMode, State},
     history::{DecorationKind, Decorations},
 };
 
-pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decorations, mailmap: &gix::mailmap::Snapshot) {
-    let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+pub(crate) fn draw(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    commit_message: Option<&BStr>,
+) {
+    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let commit_pane = app.show_commit.then(|| {
+        let width = 80.min(body.width / 2);
+        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+        body = commits;
+        message.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        })
+    });
     app.viewport_rows = body.height as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
     let visible_rows = &app.rows[start..end];
+    let lanes = app.render_lanes(start..end);
     let content = Rect::new(
         body.x.saturating_add(2),
         body.y,
         body.width.saturating_sub(2),
         body.height,
     );
-    let rendered_lane_width = visible_rows
+    let rendered_lane_width = lanes
         .iter()
-        .filter(|row| !row.lane.is_empty())
-        .map(|row| row.lane.trim_end().chars().count().saturating_add(1))
+        .filter(|lane| !lane.is_empty())
+        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
         .unwrap_or_default();
     let max_lane_width = if rendered_lane_width == 0 {
@@ -45,7 +61,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     let show_committer_date = app.show_committer_date;
     let show_author_name = app.show_author_name;
     let show_trailers = app.show_trailers;
-    let show_special_refs = app.show_special_refs;
+    let ref_mode = app.ref_mode;
     let selected = app.selected;
     let metadata: Vec<_> = visible_rows
         .iter()
@@ -54,6 +70,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
             metadata_line(
                 row,
                 app.title(row),
+                app.attributions(row),
                 decorations,
                 mailmap,
                 MetadataOptions {
@@ -61,7 +78,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
                     show_author_name,
                     show_trailers,
                     use_mailmap: app.use_mailmap,
-                    show_special_refs,
+                    ref_mode,
                     selected: selected == Some(start + index),
                 },
             )
@@ -81,10 +98,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     let max_offset = if align_metadata {
         graph_max_offset.saturating_add(metadata_max_offset)
     } else {
-        visible_rows
+        lanes
             .iter()
             .zip(&metadata)
-            .map(|(row, metadata)| row.lane.chars().count().saturating_add(metadata.width()))
+            .map(|(lane, metadata)| lane.chars().count().saturating_add(metadata.width()))
             .max()
             .unwrap_or_default()
             .saturating_sub(content.width as usize)
@@ -94,8 +111,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     let graph_offset = horizontal_offset.min(graph_max_offset);
     let metadata_offset = horizontal_offset.saturating_sub(graph_max_offset);
 
-    let visible_rows = &app.rows[start..end];
-    for (index, (row, metadata)) in visible_rows.iter().zip(metadata).enumerate() {
+    for (index, metadata) in metadata.into_iter().enumerate() {
+        let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
         let metadata_width = metadata.width();
@@ -112,12 +129,10 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         let row_area = Rect::new(content.x, y, content.width, 1);
         if align_metadata {
             frame.render_widget(
-                Paragraph::new(row.lane.as_str())
-                    .style(style)
-                    .scroll((0, graph_offset as u16)),
+                Paragraph::new(lane).style(style).scroll((0, graph_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, graph_offset, selected);
+            color_graph(frame, row_area, lane, graph_offset, selected);
             let aligned = Rect::new(
                 content.x.saturating_add(align_width as u16),
                 y,
@@ -128,20 +143,19 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
             frame.render_widget(Paragraph::new(metadata).scroll((0, metadata_offset as u16)), aligned);
         } else {
             let mut spans = Vec::with_capacity(metadata.spans.len() + 1);
-            spans.push(Span::styled(row.lane.as_str(), style));
+            spans.push(Span::styled(lane, style));
             spans.extend(metadata.spans);
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, horizontal_offset, selected);
+            color_graph(frame, row_area, lane, horizontal_offset, selected);
         }
         if selected && body.width > 0 {
             let line_width = if align_metadata {
                 align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
             } else {
-                row.lane
-                    .chars()
+                lane.chars()
                     .count()
                     .saturating_add(metadata_width)
                     .saturating_sub(horizontal_offset)
@@ -155,18 +169,24 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
+    if let Some(area) = commit_pane {
+        let message = commit_message.map(|message| message.to_str_lossy()).unwrap_or_default();
+        frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), area);
+    }
 
     let status = match app.state {
-        State::Loading => "loading",
-        State::Cancelling => "cancelling",
-        State::Complete => "complete",
-        State::Cancelled => "cancelled",
+        State::Loading => "",
+        State::Cancelling => " · cancelling",
+        State::Computing => " · computing",
+        State::Complete => "",
+        State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(format!(
-        "{} commits · {status} · ↑↓/jk move · h/l pan",
+        "{} commits{status} · ↑↓/jk move · h/l pan",
         app.rows.len()
     ))];
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
+    footer_spans.extend([Span::raw(" · "), toggle("] commit", app.show_commit)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -185,10 +205,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         ("n name", app.show_author_name),
         ("m mailmap", app.use_mailmap),
         ("t trailers", app.show_trailers),
-        ("r refs", app.show_special_refs),
     ] {
         footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
     }
+    let ref_label = match app.ref_mode {
+        RefMode::All => "r all refs",
+        RefMode::Default => "r refs",
+        RefMode::None => "r no refs",
+    };
+    footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
     footer_spans.extend([Span::raw(" · y copy")]);
     if app.state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
@@ -214,13 +239,14 @@ struct MetadataOptions {
     show_author_name: bool,
     show_trailers: bool,
     use_mailmap: bool,
-    show_special_refs: bool,
+    ref_mode: RefMode,
     selected: bool,
 }
 
 fn metadata_line<'a>(
     row: &'a CommitRow,
     title: &'a BStr,
+    attributions: &'a [crate::app::Attribution],
     decorations: &'a Decorations,
     mailmap: &'a gix::mailmap::Snapshot,
     options: MetadataOptions,
@@ -230,7 +256,7 @@ fn metadata_line<'a>(
         show_author_name,
         show_trailers,
         use_mailmap,
-        show_special_refs,
+        ref_mode,
         selected,
     } = options;
     let id = row.id.to_hex().to_string();
@@ -247,7 +273,11 @@ fn metadata_line<'a>(
         .get(&row.id)
         .into_iter()
         .flatten()
-        .filter(|decoration| show_special_refs || decoration.kind != DecorationKind::Special)
+        .filter(|decoration| match ref_mode {
+            RefMode::All => true,
+            RefMode::Default => decoration.kind != DecorationKind::Special,
+            RefMode::None => false,
+        })
         .peekable();
     if labels.peek().is_some() {
         spans.push(Span::raw(" ("));
@@ -278,11 +308,7 @@ fn metadata_line<'a>(
             } else {
                 format!("{author} ")
             },
-            color(if row.author.is_bot() {
-                Color::LightYellow
-            } else {
-                Color::Green
-            }),
+            color(Color::Green),
         ));
         if show_trailers {
             for (kind, marker) in [
@@ -292,14 +318,11 @@ fn metadata_line<'a>(
                 (AttributionKind::Tested, "Te: "),
                 (AttributionKind::SignedOff, "So: "),
             ] {
-                let mut actors = row.attributions.iter().filter(|actor| actor.kind == kind).peekable();
+                let mut actors = attributions.iter().filter(|actor| actor.kind == kind).peekable();
                 if actors.peek().is_none() {
                     continue;
                 }
-                spans.push(Span::styled(
-                    marker,
-                    color(Color::LightYellow).add_modifier(Modifier::DIM),
-                ));
+                spans.push(Span::styled(marker, color(Color::Green).add_modifier(Modifier::DIM)));
                 for (index, actor) in actors.enumerate() {
                     if index != 0 {
                         spans.push(Span::raw(", "));
@@ -311,11 +334,7 @@ fn metadata_line<'a>(
                         } else {
                             name.into_owned()
                         },
-                        color(if actor.author.is_bot() {
-                            Color::LightYellow
-                        } else {
-                            Color::Green
-                        }),
+                        color(Color::Green),
                     ));
                 }
                 spans.push(Span::raw(" "));
@@ -398,7 +417,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        app::{Action, Attribution, AttributionKind, Author, Commit},
+        app::{Action, Attribution, AttributionKind, Author, Commit, LoadedCommits},
         history::{Decoration, DecorationKind},
     };
 
@@ -410,18 +429,29 @@ mod tests {
     }
 
     fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decorations) {
-        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default());
+        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default(), None);
+    }
+
+    fn complete(app: &mut App) {
+        let rows = app
+            .start_lane_computation()
+            .expect("a loading app starts lane computation");
+        let (rows, lanes, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, lane_time);
     }
 
     #[test]
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
-        app.extend_commits(vec![Commit {
-            id: gix::ObjectId::Sha1([1; 20]),
-            parent_ids: Default::default(),
-            lane: String::new(),
-            committer_time: gix::date::Time::default(),
-            author: author(b"Codex", b"codex@openai.com"),
+        app.extend_commits(LoadedCommits {
+            rows: vec![Commit {
+                id: gix::ObjectId::Sha1([1; 20]),
+                parent_ids: Default::default(),
+                committer_time: gix::date::Time::default(),
+                author: author(b"Codex", b"codex@openai.com"),
+                attributions: 0..6,
+                title: "subject".into(),
+            }],
             attributions: vec![
                 Attribution {
                     kind: AttributionKind::CoAuthor,
@@ -447,16 +477,14 @@ mod tests {
                     kind: AttributionKind::SignedOff,
                     author: author(b"Signer", b"signer@example.com"),
                 },
-            ]
-            .into_boxed_slice(),
-            title: "subject".into(),
-        }]);
+            ],
+        });
         app.selected = None;
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
 
         let mailmap =
             gix::mailmap::Snapshot::from_bytes(b"Mapped Human <mapped@example.com> Human <human@example.com>\n");
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
 
         let row = rendered_row(&terminal);
         assert!(
@@ -470,27 +498,15 @@ mod tests {
             let x = row.find(needle).expect("rendered metadata contains the named actor") as u16;
             buffer[(x, 0)].fg
         };
-        assert_eq!(
-            style_at("[Codex]"),
-            Color::LightYellow,
-            "bot authors use the agent color"
-        );
-        assert_eq!(
-            style_at("Co:"),
-            Color::LightYellow,
-            "attribution markers use the agent color"
-        );
+        assert_eq!(style_at("[Codex]"), Color::Green, "bot authors use the agent color");
+        assert_eq!(style_at("Co:"), Color::Green, "attribution markers use the agent color");
         let marker_x = row.find("Co:").expect("rendered metadata contains a trailer marker") as u16;
         assert!(
             buffer[(marker_x, 0)].modifier.contains(Modifier::DIM),
             "attribution markers are dimmed"
         );
         assert_eq!(style_at("Human"), Color::Green, "human trailer actors are green");
-        assert_eq!(
-            style_at("[Claude]"),
-            Color::LightYellow,
-            "bot co-authors use agent styling"
-        );
+        assert_eq!(style_at("[Claude]"), Color::Green, "bot co-authors use agent styling");
         assert!(
             rendered_line(&terminal, 1).contains("t trailers"),
             "the footer advertises the trailer toggle"
@@ -502,7 +518,7 @@ mod tests {
 
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("Codex"), "n hides the primary actor");
         assert!(
@@ -511,7 +527,7 @@ mod tests {
         );
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         assert!(
             rendered_row(&terminal).contains("Co: Human, [Claude]"),
             "m restores original trailer actor names"
@@ -526,13 +542,12 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
-            lane: String::new(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: "subject".into(),
         }]);
-        app.update(Action::Complete);
+        complete(&mut app);
         let decorations = Decorations::from([(
             id,
             vec![
@@ -550,9 +565,9 @@ mod tests {
             gix::mailmap::Snapshot::from_bytes(b"mapped author <mapped@example.com> author <author@example.com>\n");
         let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
 
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · complete · ↑↓/jk move · h/l pan · [ align · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -577,10 +592,10 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 1, 0)]
             .set_style(Style::default().add_modifier(Modifier::REVERSED));
-        let refs = footer_text[..footer_text.find("r refs").expect("the refs toggle is present")]
+        let commit = footer_text[..footer_text.find("] commit").expect("the commit toggle is present")]
             .chars()
             .count();
-        for x in refs..refs + "r refs".len() {
+        for x in commit..commit + "] commit".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
@@ -600,7 +615,7 @@ mod tests {
         );
 
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),
             "m restores the original author name"
@@ -610,7 +625,7 @@ mod tests {
 
         app.update(Action::ToggleDate);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
         assert!(!row.contains("author"), "n hides the author name");
@@ -619,19 +634,41 @@ mod tests {
         assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
-        app.update(Action::ToggleSpecialRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
-        assert!(rendered_row(&terminal).contains("refs/patches"), "r shows special refs");
-        assert!(!footer_is_dim(&terminal, "r refs"), "enabled refs are not dimmed");
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("refs/patches"),
+            "no refs hides special refs"
+        );
+        assert!(footer_is_dim(&terminal, "r no refs"), "no refs is dimmed");
+
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(rendered_row(&terminal).contains("HEAD"), "all refs shows regular refs");
+        assert!(
+            rendered_row(&terminal).contains("refs/patches"),
+            "all refs shows special refs"
+        );
+        assert!(!footer_is_dim(&terminal, "r all refs"), "all refs is not dimmed");
+
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(rendered_row(&terminal).contains("HEAD"), "refs shows regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("refs/patches"),
+            "refs hides special refs"
+        );
+        assert!(!footer_is_dim(&terminal, "r refs"), "refs is not dimmed");
 
         app.has_hidden_filter = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v show hidden"),
             "the footer advertises the configured hidden-history toggle"
         );
         app.show_hidden = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v hide hidden"),
             "the footer reflects the unfiltered view"
@@ -645,11 +682,83 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            !rendered_line(&terminal, 1).contains("loading"),
+            "loading is already apparent from the streaming history"
+        );
         assert!(rendered_line(&terminal, 1).contains("Esc cancel"));
 
         app.update(Action::Cancel);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(!rendered_line(&terminal, 1).contains("Esc cancel"));
+        Ok(())
+    }
+
+    #[test]
+    fn toggles_the_full_commit_message_in_a_padded_half_width_pane() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(3);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+        }]);
+        let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(footer_is_dim(&terminal, "] commit"), "the closed commit pane is dimmed");
+
+        app.update(Action::ToggleCommit);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject\n\nbody".as_bstr()),
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 1)].symbol(),
+            "s",
+            "the pane is capped at half width with two columns of horizontal margin"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(62, 3)].symbol(),
+            "b",
+            "vertical margin leaves the full commit body intact"
+        );
+        assert!(
+            !footer_is_dim(&terminal, "] commit"),
+            "the open commit pane is not dimmed"
+        );
+
+        app.update(Action::ToggleCommit);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 3)].symbol(),
+            " ",
+            "closing the pane removes the commit body"
+        );
+
+        app.update(Action::ToggleCommit);
+        let mut wide_terminal = Terminal::new(TestBackend::new(200, 6))?;
+        wide_terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject".as_bstr()),
+            );
+        })?;
+        assert_eq!(
+            wide_terminal.backend().buffer()[(122, 1)].symbol(),
+            "s",
+            "the pane remains eighty columns wide on a wide screen"
+        );
         Ok(())
     }
 
@@ -661,15 +770,14 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
-                    lane: String::new(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
-                    attributions: Box::default(),
+                    attributions: 0..0,
                     title: format!("subject {n}").into(),
                 })
-                .collect(),
+                .collect::<Vec<_>>(),
         );
-        app.update(Action::Complete);
+        complete(&mut app);
         app.update(Action::Last);
         let mut terminal = Terminal::new(TestBackend::new(24, 3))?;
 
@@ -697,10 +805,9 @@ mod tests {
         let commit = Commit {
             id,
             parent_ids: Default::default(),
-            lane: "● │ │ │ │ │ │ │ ".into(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: "subject".into(),
         };
         let decorations = Decorations::from([(
@@ -730,11 +837,13 @@ mod tests {
         )]);
         let mut app = App::new(1);
         app.extend_commits(vec![commit]);
+        app.set_lane(0, "● │ │ │ │ │ │ │ ");
         let row = &app.rows[0];
         let mailmap = gix::mailmap::Snapshot::default();
         let line = metadata_line(
             row,
             app.title(row),
+            app.attributions(row),
             &decorations,
             &mailmap,
             MetadataOptions {
@@ -742,7 +851,7 @@ mod tests {
                 show_author_name: true,
                 show_trailers: true,
                 use_mailmap: false,
-                show_special_refs: true,
+                ref_mode: RefMode::All,
                 selected: false,
             },
         );
@@ -795,14 +904,13 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            lane: String::new(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: format!("{} subject-tail", "a".repeat(50)).into(),
         }]);
-        app.update(Action::Complete);
-        app.rows[0].lane = format!("{}{}", "A".repeat(40), "B".repeat(40));
+        complete(&mut app);
+        app.set_lane(0, &format!("{}{}", "A".repeat(40), "B".repeat(40)));
         let mut terminal = Terminal::new(TestBackend::new(60, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -838,7 +946,7 @@ mod tests {
         );
 
         app.update(Action::ScrollLeft);
-        app.rows[0].lane = "● ".into();
+        app.set_lane(0, "● ");
         app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
@@ -872,8 +980,9 @@ mod tests {
     }
 
     fn footer_is_dim(terminal: &Terminal<TestBackend>, label: &str) -> bool {
-        let footer = rendered_line(terminal, 1);
+        let y = terminal.backend().buffer().area.height - 1;
+        let footer = rendered_line(terminal, y);
         let x = footer[..footer.find(label).expect("toggle is visible")].chars().count() as u16;
-        terminal.backend().buffer()[(x, 1)].modifier.contains(Modifier::DIM)
+        terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM)
     }
 }
