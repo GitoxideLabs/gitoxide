@@ -1242,3 +1242,119 @@ fn check_content_type_is_case_insensitive() -> crate::Result {
 fn ignore_reqwest_content_length(header_line: &String) -> bool {
     header_line != "content-length: 0"
 }
+
+#[cfg(feature = "http-client-curl")]
+mod interrupt {
+    use std::{
+        io::Read,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+
+    use gix_transport::{
+        Protocol, Service,
+        client::{
+            TransportWithoutIO,
+            blocking_io::{Transport, http},
+        },
+    };
+
+    /// A server that reads the request and then goes silent for `stall_for` - the situation
+    /// `should_interrupt` exists for, as curl's body callback never fires while nothing is transferred.
+    fn stalling_server(stall_for: Duration) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("an ephemeral local port to be free");
+        let port = listener.local_addr().expect("a local address").port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept to always work");
+            stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .expect("timeout to always work");
+            stream.read_to_end(&mut Vec::new()).ok();
+            std::thread::sleep(stall_for);
+        });
+        port
+    }
+
+    fn client_with_interrupt_flag(port: u16, flag: &Arc<AtomicBool>) -> http::Transport<http::curl::Curl> {
+        let mut client = http::connect::<http::curl::Curl>(
+            format!("http://127.0.0.1:{port}/repo")
+                .try_into()
+                .expect("valid test url"),
+            Protocol::V1,
+            false,
+        );
+        client
+            .configure(&http::Options {
+                should_interrupt: Some(Arc::clone(flag)),
+                ..Default::default()
+            })
+            .expect("curl backend accepts http::Options");
+        client
+    }
+
+    #[test]
+    fn cancellation_reaches_the_caller_as_an_error() -> crate::Result {
+        // The abort must not use `ErrorKind::Interrupted`: the pipe carrying it to the caller yields
+        // an error exactly once, and `read_until()` (headers) and `read_exact()` (packet lines) retry
+        // that kind, so the retry would hit the ended pipe and the caller would see a bogus
+        // "not a smart protocol" or `UnexpectedEof` error instead of the cancellation.
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut client = client_with_interrupt_flag(stalling_server(Duration::from_secs(30)), &flag);
+        {
+            let flag = Arc::clone(&flag);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                flag.store(true, Ordering::Relaxed);
+            });
+        }
+
+        let start = Instant::now();
+        let err = client
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("a stalled transfer that is interrupted must fail");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the transfer is aborted as soon as the flag is seen, not after a timeout"
+        );
+        assert!(
+            format!("{err:?}").contains("Interrupted"),
+            "the cancellation must survive all the way to the caller, got {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_aborted_upload_is_not_reported_as_cancellation() -> crate::Result {
+        // `Handler::read()` also aborts by callback when the body a caller uploads fails to be read,
+        // which curl reports just like a cancelled transfer - only the flag can tell them apart.
+        use gix_transport::client::blocking_io::http::{Http, PostBodyDataKind};
+
+        let port = stalling_server(Duration::from_secs(5));
+        let base = format!("http://127.0.0.1:{port}/repo");
+        let mut curl = http::curl::Curl::default();
+        let mut res = curl.post(
+            &format!("{base}/git-upload-pack"),
+            &base,
+            ["Content-Type: application/x-git-upload-pack-request"],
+            PostBodyDataKind::Unbounded,
+        )?;
+        res.post_body
+            .channel
+            .send(Err(std::io::Error::other("the producer of the request body failed")))
+            .ok();
+
+        let err = res
+            .headers
+            .read(&mut [0u8; 64])
+            .expect_err("an upload that cannot be read fails the request");
+        assert!(
+            !format!("{err:?}").contains("Interrupted"),
+            "without a cancellation flag set, nothing may be reported as cancelled, got {err:?}"
+        );
+        Ok(())
+    }
+}
