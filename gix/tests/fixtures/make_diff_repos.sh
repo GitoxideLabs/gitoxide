@@ -5,15 +5,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 git init jj-trackcopy-1
 (cd jj-trackcopy-1
-  # The following is to be executed in the receiving git repository
+  # These assets are named after their Git object IDs, which were computed with LF
+  # line endings. Normalize them explicitly as Git may check them out with CRLF on
+  # Windows, changing blob IDs and adding carriage returns to index paths.
   index=.git/index
-  git hash-object -w -t blob -- $ROOT/assets/jj-trackcopy-1/*.blob
+  for blob in "$ROOT"/assets/jj-trackcopy-1/*.blob; do
+    sed $'s/\r$//' "$blob" | git hash-object -w -t blob --stdin
+  done
   rm -f "$index"
-  git update-index --index-info < "$ROOT/assets/jj-trackcopy-1/2de73f57fc9599602e001fc6331034749b2eacb0.tree"
-  git commit --allow-empty -F "$ROOT/assets/jj-trackcopy-1/2de73f57fc9599602e001fc6331034749b2eacb0.msg"
+  sed $'s/\r$//' "$ROOT/assets/jj-trackcopy-1/2de73f57fc9599602e001fc6331034749b2eacb0.tree" |
+    git update-index --index-info
+  sed $'s/\r$//' "$ROOT/assets/jj-trackcopy-1/2de73f57fc9599602e001fc6331034749b2eacb0.msg" |
+    git commit --allow-empty -F -
   rm -f "$index"
-  git update-index --index-info < "$ROOT/assets/jj-trackcopy-1/47bd6f4aa4a7eeef8b01ce168c6c771bdfffcbd3.tree"
-  git commit --allow-empty -F "$ROOT/assets/jj-trackcopy-1/47bd6f4aa4a7eeef8b01ce168c6c771bdfffcbd3.msg"
+  sed $'s/\r$//' "$ROOT/assets/jj-trackcopy-1/47bd6f4aa4a7eeef8b01ce168c6c771bdfffcbd3.tree" |
+    git update-index --index-info
+  sed $'s/\r$//' "$ROOT/assets/jj-trackcopy-1/47bd6f4aa4a7eeef8b01ce168c6c771bdfffcbd3.msg" |
+    git commit --allow-empty -F -
 
   git checkout -f HEAD
   git mv cli c

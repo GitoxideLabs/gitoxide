@@ -6,7 +6,13 @@ git init;
 function baseline() {
     local pathspec=$1 # first argument is the pathspec to test
 
-    git ls-files "$pathspec" && status=0 || status=$?
+    if [[ -n ${MSYSTEM:-} && ( $pathspec == ': :some/path' || $pathspec == '\!a' ) ]]; then
+        # Git for Windows rejects these repository-format pathspecs while the
+        # platform-independent parser accepts them, as does Git on Unix.
+        status=0
+    else
+        git ls-files "$pathspec" && status=0 || status=$?
+    fi
     {
         echo "$pathspec"
         echo "$status"
