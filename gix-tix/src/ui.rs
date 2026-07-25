@@ -3,7 +3,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Clear, Paragraph, Wrap},
 };
 
@@ -240,7 +240,10 @@ pub(crate) fn draw(
 fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
     let parsed = gix::objs::commit::MessageRef::from_bytes(message);
     let Some(body) = parsed.body() else {
-        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, None)).wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     };
     let mut body_message = BString::default();
@@ -250,7 +253,10 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
         trailers.extend(block.trailers());
     }
     if trailers.is_empty() || area.width < 3 {
-        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, parsed.body)).wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
     let key_width = trailers
@@ -259,17 +265,16 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
         .max()
         .unwrap_or_default();
     if key_width > area.width.saturating_sub(3) as usize {
-        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        frame.render_widget(
+            Paragraph::new(commit_text(parsed.title, parsed.body)).wrap(Wrap { trim: false }),
+            area,
+        );
         return;
     }
     let key_width = key_width as u16;
 
-    let mut text = parsed.title.to_str_lossy().into_owned();
-    let body_message = body_message.trim_end();
-    if !body_message.is_empty() {
-        text.push_str("\n\n");
-        text.push_str(&body_message.to_str_lossy());
-    }
+    let body_message = body_message.trim_end().as_bstr();
+    let text = commit_text(parsed.title, (!body_message.is_empty()).then_some(body_message));
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let mut y = area
         .y
@@ -289,12 +294,26 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
             .max(1)
             .min(area.bottom().saturating_sub(y));
         frame.render_widget(
-            Paragraph::new(format!("{}:", trailer.token.to_str_lossy())).right_aligned(),
+            Paragraph::new(format!("{}:", trailer.token.to_str_lossy()))
+                .style(color(Color::Green))
+                .right_aligned(),
             Rect::new(area.x, y, key_width.saturating_add(1), 1),
         );
         frame.render_widget(value, Rect::new(value_x, y, value_width, height));
         y = y.saturating_add(height);
     }
+}
+
+fn commit_text<'a>(title: &'a BStr, body: Option<&'a BStr>) -> Text<'a> {
+    let mut text = Text::raw(title.to_str_lossy());
+    for line in &mut text.lines {
+        line.style = Style::default().add_modifier(Modifier::BOLD);
+    }
+    if let Some(body) = body.filter(|body| !body.is_empty()) {
+        text.lines.push(Line::default());
+        text.lines.extend(Text::raw(body.to_str_lossy()).lines);
+    }
+    text
 }
 
 fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
@@ -987,6 +1006,40 @@ mod tests {
         assert!(
             rendered_line(&terminal, 5)[..16].trim().is_empty(),
             "wrapped values never occupy key space"
+        );
+        let key_x = rendered_line(&terminal, 4)
+            .find("Short:")
+            .expect("the trailer key is visible") as u16;
+        let key = &terminal.backend().buffer()[(key_x, 4)];
+        assert_eq!(key.fg, Color::Green, "trailer keys use the listing color");
+        assert!(
+            !key.modifier.contains(Modifier::DIM),
+            "trailer keys remain fully visible"
+        );
+        assert!(
+            terminal.backend().buffer()[(0, 0)].modifier.contains(Modifier::BOLD),
+            "the commit title is bold"
+        );
+        assert!(
+            !terminal.backend().buffer()[(0, 2)].modifier.contains(Modifier::BOLD),
+            "the commit body is not bold"
+        );
+
+        let mut plain_terminal = Terminal::new(TestBackend::new(40, 4))?;
+        plain_terminal.draw(|frame| {
+            render_commit_message(frame, frame.area(), b"plain subject\n\nplain body".as_bstr());
+        })?;
+        assert!(
+            plain_terminal.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "titles remain bold without trailers"
+        );
+        assert!(
+            !plain_terminal.backend().buffer()[(0, 2)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "plain commit bodies remain unstyled"
         );
 
         let mut terminal = Terminal::new(TestBackend::new(60, 8))?;
