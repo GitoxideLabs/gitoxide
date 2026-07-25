@@ -222,20 +222,38 @@ mod context {
 mod prepare {
     use std::sync::LazyLock;
 
-    static SH: LazyLock<&'static str> = LazyLock::new(|| {
-        gix_path::env::shell()
-            .to_str()
+    fn default_shell() -> &'static str {
+        static SH: LazyLock<std::ffi::OsString> =
+            LazyLock::new(|| gix_path::env::shell_command().get_program().to_owned());
+        SH.to_str()
             .expect("`prepare` tests must be run where 'sh' path is valid Unicode")
-    });
+    }
 
     // The basename of the default shell, used as the `command_name` operand
     // after `-c <script>` and observable inside the shell as `$0`. The default
-    // shell is `gix_path::env::shell()`, documented as `/bin/sh` on Unix and a
-    // path ending in `sh.exe` on Windows.
+    // shell command uses `/bin/sh` on Unix and a path ending in `sh.exe` on
+    // Windows.
     const SH_BASENAME: &str = if cfg!(windows) { "sh.exe" } else { "sh" };
 
     fn quoted(input: &[&str]) -> String {
         input.iter().map(|s| format!("\"{s}\"")).collect::<Vec<_>>().join(" ")
+    }
+
+    fn quoted_default_shell(input: &[&str]) -> String {
+        let shell = gix_path::env::shell_command();
+        let mut args = vec![
+            shell
+                .get_program()
+                .to_str()
+                .expect("the default shell path must be valid Unicode in these tests"),
+        ];
+        args.extend(
+            shell
+                .get_args()
+                .map(|arg| arg.to_str().expect("default shell arguments must be valid Unicode")),
+        );
+        args.extend(input.iter().copied());
+        quoted(&args)
     }
 
     #[test]
@@ -255,7 +273,7 @@ mod prepare {
         let cmd = std::process::Command::from(
             gix_command::prepare("   ").command_may_be_shell_script_allow_manual_argument_splitting(),
         );
-        assert_eq!(format!("{cmd:?}"), quoted(&[*SH, "-c", "   ", SH_BASENAME]));
+        assert_eq!(format!("{cmd:?}"), quoted_default_shell(&["-c", "   ", SH_BASENAME]));
     }
 
     #[test]
@@ -296,7 +314,7 @@ mod prepare {
             if cfg!(windows) {
                 quoted(&["ls", "first", "second", "third"])
             } else {
-                quoted(&[*SH, "-c", "ls first second third", SH_BASENAME])
+                quoted(&[default_shell(), "-c", "ls first second third", SH_BASENAME])
             },
             "with shell, this works as it performs word splitting"
         );
@@ -332,7 +350,7 @@ mod prepare {
             if cfg!(windows) {
                 quoted(&["ls", "--foo", "a b", "additional"])
             } else {
-                let sh = *SH;
+                let sh = default_shell();
                 format!(r#""{sh}" "-c" "ls --foo \"a b\" \"$@\"" "{SH_BASENAME}" "additional""#)
             },
             "with shell, this works as it performs word splitting, on windows we can avoid the shell"
@@ -358,7 +376,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[*SH, "-c", r#"ls --foo=\"a b\""#, SH_BASENAME])
+            quoted_default_shell(&["-c", r#"ls --foo=\"a b\""#, SH_BASENAME])
         );
     }
 
@@ -367,7 +385,7 @@ mod prepare {
         let cmd = std::process::Command::from(gix_command::prepare("ls").arg("--foo=a b").with_shell());
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[*SH, "-c", r#"ls \"$@\""#, SH_BASENAME, "--foo=a b"])
+            quoted_default_shell(&["-c", r#"ls \"$@\""#, SH_BASENAME, "--foo=a b"])
         );
     }
 
@@ -381,7 +399,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[*SH, "-c", r#"'ls' \"$@\""#, SH_BASENAME, "--foo=a b"]),
+            quoted_default_shell(&["-c", r#"'ls' \"$@\""#, SH_BASENAME, "--foo=a b"]),
             "looks strange thanks to debug printing, but is the right amount of quotes actually"
         );
     }
@@ -396,8 +414,7 @@ mod prepare {
         );
         assert_eq!(
             format!("{cmd:?}"),
-            quoted(&[
-                *SH,
+            quoted_default_shell(&[
                 "-c",
                 r#"'C:\\Users\\O'\\''Shaughnessy\\with space.exe' \"$@\""#,
                 SH_BASENAME,
@@ -412,10 +429,9 @@ mod prepare {
         let cmd = std::process::Command::from(
             gix_command::prepare("ls --foo=~/path").command_may_be_shell_script_allow_manual_argument_splitting(),
         );
-        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{sh}" "-c" "ls --foo=~/path" "{SH_BASENAME}""#),
+            quoted_default_shell(&["-c", "ls --foo=~/path", SH_BASENAME]),
             "splitting can also handle quotes"
         );
     }
@@ -424,10 +440,9 @@ mod prepare {
     fn tilde_path_and_multiple_arguments_as_part_of_command_with_shell() {
         let cmd =
             std::process::Command::from(gix_command::prepare(r#"~/bin/exe --foo "a b""#).command_may_be_shell_script());
-        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{sh}" "-c" "~/bin/exe --foo \"a b\"" "{SH_BASENAME}""#),
+            quoted_default_shell(&["-c", r#"~/bin/exe --foo \"a b\""#, SH_BASENAME]),
             "this always needs a shell as we need tilde expansion"
         );
     }
@@ -439,10 +454,9 @@ mod prepare {
                 .command_may_be_shell_script()
                 .arg("store"),
         );
-        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{sh}" "-c" "echo \"$@\" >&2" "{SH_BASENAME}" "store""#),
+            quoted_default_shell(&["-c", r#"echo \"$@\" >&2"#, SH_BASENAME, "store"]),
             "this is how credential helpers have to work as for some reason they don't get '$@' added in Git.\
             We deal with it by not doubling the '$@' argument, which seems more flexible."
         );
@@ -456,10 +470,9 @@ mod prepare {
                 .with_quoted_command()
                 .arg("store"),
         );
-        let sh = *SH;
         assert_eq!(
             format!("{cmd:?}"),
-            format!(r#""{sh}" "-c" "echo \"$@\" >&2" "{SH_BASENAME}" "store""#)
+            quoted_default_shell(&["-c", r#"echo \"$@\" >&2"#, SH_BASENAME, "store"])
         );
     }
 
