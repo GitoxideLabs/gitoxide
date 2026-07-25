@@ -40,9 +40,23 @@ pub(crate) struct Attribution {
     pub author: &'static Author,
 }
 
+impl Attribution {
+    pub fn is_agent(&self) -> bool {
+        self.author.is_bot()
+            || self.kind == AttributionKind::Assisted
+                && self
+                    .author
+                    .name
+                    .get(..4)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"opus"))
+                && self.author.name.get(4).is_none_or(u8::is_ascii_whitespace)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AttributionKind {
     CoAuthor,
+    Assisted,
     Reviewed,
     Acked,
     Tested,
@@ -756,6 +770,29 @@ mod tests {
         let mut commit = row(n);
         commit.parent_ids = parents.iter().map(|n| row(*n).id).collect();
         commit
+    }
+
+    #[test]
+    fn recognizes_opus_only_as_an_assisting_agent() {
+        let opus = Box::leak(Box::new(Author {
+            name: b"Opus 4.7".as_bstr(),
+            email: b"".as_bstr(),
+        }));
+
+        assert!(
+            Attribution {
+                kind: AttributionKind::Assisted,
+                author: opus,
+            }
+            .is_agent()
+        );
+        assert!(
+            !Attribution {
+                kind: AttributionKind::Reviewed,
+                author: opus,
+            }
+            .is_agent()
+        );
     }
 
     fn numbered_row(n: u16, parent: Option<u16>) -> LoadedCommit {

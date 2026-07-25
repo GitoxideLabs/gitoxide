@@ -422,6 +422,7 @@ fn metadata_line<'a>(
         if show_trailers {
             for (kind, marker) in [
                 (AttributionKind::CoAuthor, "Co: "),
+                (AttributionKind::Assisted, "As: "),
                 (AttributionKind::Reviewed, "Re: "),
                 (AttributionKind::Acked, "Ack: "),
                 (AttributionKind::Tested, "Te: "),
@@ -436,15 +437,17 @@ fn metadata_line<'a>(
                     if index != 0 {
                         spans.push(Span::raw(", "));
                     }
-                    let name = author_name(actor.author, mailmap, use_mailmap).to_str_lossy();
-                    spans.push(Span::styled(
-                        if actor.author.is_bot() {
+                    let name = if actor.author == row.author {
+                        "*".to_owned()
+                    } else {
+                        let name = author_name(actor.author, mailmap, use_mailmap).to_str_lossy();
+                        if actor.is_agent() {
                             format!("[{name}]")
                         } else {
                             name.into_owned()
-                        },
-                        color(Color::Green),
-                    ));
+                        }
+                    };
+                    spans.push(Span::styled(name, color(Color::Green)));
                 }
                 spans.push(Span::raw(" "));
             }
@@ -558,7 +561,7 @@ mod tests {
                 parent_ids: Default::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"Codex", b"codex@openai.com"),
-                attributions: 0..6,
+                attributions: 0..7,
                 title: "subject".into(),
             }],
             attributions: vec![
@@ -569,6 +572,10 @@ mod tests {
                 Attribution {
                     kind: AttributionKind::CoAuthor,
                     author: author(b"Claude", b"noreply@anthropic.com"),
+                },
+                Attribution {
+                    kind: AttributionKind::Assisted,
+                    author: author(b"Assistant", b"codex@openai.com"),
                 },
                 Attribution {
                     kind: AttributionKind::Reviewed,
@@ -598,7 +605,7 @@ mod tests {
         let row = rendered_row(&terminal);
         assert!(
             row.contains(
-                "[Codex] Co: Mapped Human, [Claude] Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
+                "[Codex] Co: Mapped Human, [Claude] As: [Assistant] Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
             ),
             "same-kind trailers share one marker, use mailmap, and render bots with bracketed names"
         );
