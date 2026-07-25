@@ -172,9 +172,8 @@ pub(crate) fn draw(
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
-    if let Some(area) = commit_pane {
-        let message = commit_message.map(|message| message.to_str_lossy()).unwrap_or_default();
-        frame.render_widget(Paragraph::new(message).wrap(Wrap { trim: false }), area);
+    if let (Some(area), Some(message)) = (commit_pane, commit_message) {
+        render_commit_message(frame, area, message);
     }
 
     let status = match app.state {
@@ -229,6 +228,75 @@ pub(crate) fn draw(
     }
     footer_spans.push(Span::raw(" · q quit"));
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+}
+
+fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
+    let parsed = gix::objs::commit::MessageRef::from_bytes(message);
+    let Some(raw_body) = parsed.body else {
+        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        return;
+    };
+    let body = gix::objs::commit::message::BodyRef::from_bytes(raw_body);
+    let trailers: Vec<_> = body.trailers().collect();
+    let trailer_block = &raw_body[body.without_trailer().len()..];
+    let mut top_level_lines = 0;
+    let mut saw_top_level_line = false;
+    let unattached_continuation = trailer_block.lines().any(|line| {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            return false;
+        }
+        if line[0].is_ascii_whitespace() {
+            return !saw_top_level_line;
+        }
+        saw_top_level_line = true;
+        top_level_lines += 1;
+        false
+    });
+    if trailers.is_empty() || top_level_lines != trailers.len() || unattached_continuation || area.width < 3 {
+        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        return;
+    }
+    let key_width = trailers
+        .iter()
+        .map(|trailer| Line::raw(trailer.token.to_str_lossy()).width())
+        .max()
+        .unwrap_or_default();
+    if key_width > area.width.saturating_sub(3) as usize {
+        frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
+        return;
+    }
+    let key_width = key_width as u16;
+
+    let mut text = parsed.title.to_str_lossy().into_owned();
+    if !body.without_trailer().is_empty() {
+        text.push_str("\n\n");
+        text.push_str(&body.without_trailer().to_str_lossy());
+    }
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let mut y = area
+        .y
+        .saturating_add(u16::try_from(paragraph.line_count(area.width)).unwrap_or(u16::MAX))
+        .saturating_add(1);
+    frame.render_widget(paragraph, area);
+
+    let value_x = area.x.saturating_add(key_width).saturating_add(2);
+    let value_width = area.right().saturating_sub(value_x);
+    for trailer in trailers {
+        if y >= area.bottom() {
+            break;
+        }
+        let value = Paragraph::new(trailer.value.to_str_lossy()).wrap(Wrap { trim: false });
+        let height = u16::try_from(value.line_count(value_width))
+            .unwrap_or(u16::MAX)
+            .max(1)
+            .min(area.bottom().saturating_sub(y));
+        frame.render_widget(
+            Paragraph::new(format!("{}:", trailer.token.to_str_lossy())).right_aligned(),
+            Rect::new(area.x, y, key_width.saturating_add(1), 1),
+        );
+        frame.render_widget(value, Rect::new(value_x, y, value_width, height));
+        y = y.saturating_add(height);
+    }
 }
 
 fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
@@ -815,6 +883,44 @@ mod tests {
             wide_terminal.backend().buffer()[(122, 1)].symbol(),
             "s",
             "the pane remains eighty columns wide on a wide screen"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aligns_commit_trailers_and_wraps_only_in_the_value_column() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(40, 8))?;
+        let message = b"subject\n\nbody\n\nShort: one two three four five six seven\nCo-authored-by: Alice".as_bstr();
+
+        terminal.draw(|frame| render_commit_message(frame, frame.area(), message))?;
+
+        assert_eq!(
+            rendered_line(&terminal, 4).find("one"),
+            Some(16),
+            "values start after the widest trailer key"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 5).find("six"),
+            Some(16),
+            "wrapped values remain in the value column"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 6).find("Alice"),
+            Some(16),
+            "all trailer values share the same column"
+        );
+        assert!(
+            rendered_line(&terminal, 5)[..16].trim().is_empty(),
+            "wrapped values never occupy key space"
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 8))?;
+        let message = b"subject\n\nnot a trailer\nSigned-off-by: Alice\nanother note\nSigned-off-by: Bob".as_bstr();
+        terminal.draw(|frame| render_commit_message(frame, frame.area(), message))?;
+        assert!(
+            rendered_line(&terminal, 2).contains("not a trailer")
+                && rendered_line(&terminal, 4).contains("another note"),
+            "mixed prose in a recognized trailer block is preserved"
         );
         Ok(())
     }
