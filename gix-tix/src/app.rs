@@ -90,6 +90,12 @@ pub(crate) enum NameMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CopyKind {
+    Id,
+    Author,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -150,6 +156,7 @@ pub(crate) struct App {
     pub align_metadata: bool,
     pub show_commit: bool,
     pub preview_author_copy: bool,
+    pub copy_feedback: Option<CopyKind>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -181,6 +188,7 @@ impl App {
             align_metadata: true,
             show_commit: false,
             preview_author_copy: false,
+            copy_feedback: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -304,13 +312,19 @@ impl App {
                 return vec![Effect::Cancel];
             }
             Action::Copy => {
-                if let Some(row) = self.selected.and_then(|index| self.rows.get(index)) {
-                    return vec![Effect::CopyId(row.id)];
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    self.copy_feedback = Some(CopyKind::Id);
+                    return vec![Effect::CopyId(id)];
                 }
             }
             Action::CopyAuthor => {
-                if let Some(row) = self.selected.and_then(|index| self.rows.get(index)) {
-                    return vec![Effect::CopyAuthor(row.author)];
+                if let Some(author) = self
+                    .selected
+                    .and_then(|index| self.rows.get(index))
+                    .map(|row| row.author)
+                {
+                    self.copy_feedback = Some(CopyKind::Author);
+                    return vec![Effect::CopyAuthor(author)];
                 }
             }
             Action::Quit => {

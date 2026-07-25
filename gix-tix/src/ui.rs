@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, NameMode, RefMode, State},
+    app::{App, AttributionKind, CommitRow, CopyKind, NameMode, RefMode, State},
     history::{DecorationKind, Decorations},
 };
 
@@ -61,7 +61,9 @@ pub(crate) fn draw(
     let show_committer_date = app.show_committer_date;
     let name_mode = app.name_mode;
     let preview_author_copy = app.preview_author_copy;
-    let show_author_name = preview_author_copy || name_mode != NameMode::None;
+    let copy_feedback = app.copy_feedback.take();
+    let show_author_name =
+        preview_author_copy || copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
@@ -79,10 +81,15 @@ pub(crate) fn draw(
                     show_committer_date,
                     show_author_name,
                     show_trailers,
-                    use_mailmap: app.use_mailmap && !preview_author_copy,
+                    use_mailmap: app.use_mailmap && !preview_author_copy && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
                     selected: selected == Some(start + index),
                     preview_author_copy,
+                    copy_feedback: if selected == Some(start + index) {
+                        copy_feedback
+                    } else {
+                        None
+                    },
                 },
             )
         })
@@ -319,6 +326,7 @@ struct MetadataOptions {
     ref_mode: RefMode,
     selected: bool,
     preview_author_copy: bool,
+    copy_feedback: Option<CopyKind>,
 }
 
 fn metadata_line<'a>(
@@ -337,9 +345,10 @@ fn metadata_line<'a>(
         ref_mode,
         selected,
         preview_author_copy,
+        copy_feedback,
     } = options;
     let id = row.id.to_hex().to_string();
-    let id_style = if preview_author_copy {
+    let id_style = if preview_author_copy || copy_feedback == Some(CopyKind::Id) {
         Style::default()
     } else {
         color(Color::Magenta).add_modifier(Modifier::BOLD)
@@ -385,7 +394,9 @@ fn metadata_line<'a>(
     }
     if show_author_name {
         let author = author_name(row.author, mailmap, use_mailmap).to_str_lossy();
-        let author_style = if preview_author_copy {
+        let author_style = if copy_feedback == Some(CopyKind::Author) {
+            Style::default()
+        } else if preview_author_copy {
             color(Color::Magenta).add_modifier(Modifier::BOLD)
         } else {
             color(Color::Green)
@@ -802,6 +813,79 @@ mod tests {
     }
 
     #[test]
+    fn removes_the_copied_fields_color_from_only_the_selected_row_for_one_frame()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(2);
+        app.extend_commits(
+            (1..=2)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("subject {n}").into(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+
+        drop(app.update(Action::Copy));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let selected_hash = rendered_line(&terminal, 0)
+            .find("0101010")
+            .expect("the selected hash is visible") as u16;
+        let other_hash = rendered_line(&terminal, 1)
+            .find("0202020")
+            .expect("the other hash is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_hash, 0)].fg,
+            Color::Reset,
+            "the copied hash loses its color"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(other_hash, 1)].fg,
+            Color::Magenta,
+            "copy feedback does not affect other rows"
+        );
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_hash, 0)].fg,
+            Color::Magenta,
+            "the hash color returns on the next frame"
+        );
+
+        drop(app.update(Action::PreviewAuthorCopy(true)));
+        drop(app.update(Action::CopyAuthor));
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let selected_author = rendered_line(&terminal, 0)
+            .find("author")
+            .expect("the selected author is visible") as u16;
+        let other_author = rendered_line(&terminal, 1)
+            .find("author")
+            .expect("the other author is visible") as u16;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_author, 0)].fg,
+            Color::Reset,
+            "the copied author loses its color"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(other_author, 1)].fg,
+            Color::Magenta,
+            "author feedback does not affect other rows"
+        );
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(selected_author, 0)].fg,
+            Color::Magenta,
+            "the author color returns on the next frame"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn advertises_cancel_only_while_loading() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
@@ -1017,6 +1101,7 @@ mod tests {
                 ref_mode: RefMode::All,
                 selected: false,
                 preview_author_copy: false,
+                copy_feedback: None,
             },
         );
         let style = |text| {
