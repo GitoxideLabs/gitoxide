@@ -183,6 +183,15 @@ git init only-untracked
   >c
 )
 
+git init untracked-cache-changed-parent-ignore
+(cd untracked-cache-changed-parent-ignore
+  mkdir child
+  echo ignored >.gitignore
+  >child/ignored
+  git add .gitignore
+  git commit -m "track inherited ignore"
+)
+
 git init ignored-with-empty
 (cd ignored-with-empty
   echo "/target/" >> .gitignore
@@ -328,6 +337,15 @@ git init type-mismatch-icase
   rm file-is-dir && mkdir File-is-Dir && >File-is-Dir/b
 )
 
+git init untracked-cache-icase
+(cd untracked-cache-icase
+  mkdir Dir && >Dir/tracked
+  git add . && git commit -m "tracked directory"
+  mv Dir dir
+  >dir/untracked
+  git config core.ignoreCase true
+)
+
 git init type-mismatch-icase-clash-dir-is-file
 (cd type-mismatch-icase-clash-dir-is-file
   empty_oid=$(git hash-object -w --stdin </dev/null)
@@ -459,3 +477,16 @@ git clone dir-with-tracked-file in-repo-hidden-worktree
   touch hidden/file
   git worktree add -b worktree-branch hidden/subdir/worktree
 )
+
+# Populate UNTR caches so every directory-walk test exercises cache eligibility.
+find . -name .git -prune | while read -r git_dir
+do
+  repo=${git_dir%/.git}
+  git -C "$repo" config core.untrackedCache true
+  git -C "$repo" config core.excludesFile .git/no-global-excludes
+  git -C "$repo" update-index --untracked-cache --index-version 2
+  git -C "$repo" status --porcelain --ignore-submodules=all >/dev/null
+done
+
+# Make the root cache stale while leaving its child's stat and local excludes unchanged.
+>untracked-cache-changed-parent-ignore/.gitignore

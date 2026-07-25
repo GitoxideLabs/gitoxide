@@ -12,3 +12,5 @@ many.tar
 many-symlinks.tar
 # Uses `mkfifo`; FIFOs cannot be represented in archives extracted on Windows.
 fifo.tar
+# Synthetic benchmark repositories are large and cheap to regenerate.
+rust-dirwalk-benchmark.tar

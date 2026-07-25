@@ -104,6 +104,13 @@ pub fn walk(
         return Ok((out, root.to_owned()));
     }
 
+    let untracked_cache = crate::walk::untracked_cache::State::new(
+        worktree_root,
+        ctx.index,
+        ctx.pathspec,
+        ctx.explicit_traversal_root,
+        options,
+    );
     let mut state = readdir::State::new(worktree_root, ctx.current_dir, options.for_deletion.is_some());
     let may_collapse = root != worktree_root && state.may_collapse(&current);
     let (action, _) = readdir::recursive(
@@ -116,6 +123,7 @@ pub fn walk(
         delegate,
         &mut out,
         &mut state,
+        untracked_cache.as_ref().map(|cache| (cache, 0)),
     )?;
     if action.is_continue() {
         state.emit_remaining(may_collapse, options, &mut out, delegate);
