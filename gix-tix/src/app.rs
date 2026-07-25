@@ -14,7 +14,6 @@ use gix::{
 pub(crate) struct Commit<T> {
     pub id: ObjectId,
     pub parent_ids: ParentIds,
-    pub lane: Range<usize>,
     pub committer_time: gix::date::Time,
     pub author: &'static Author,
     pub attributions: Range<usize>,
@@ -122,8 +121,10 @@ pub(crate) enum Effect {
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
     titles: Vec<u8>,
-    lanes: String,
+    graph: Option<Graph>,
     attributions: Vec<Attribution>,
+    #[cfg(test)]
+    test_lanes: Vec<String>,
     pub selected: Option<usize>,
     pub offset: usize,
     pub state: State,
@@ -150,8 +151,10 @@ impl App {
         App {
             rows: Vec::new(),
             titles: Vec::new(),
-            lanes: String::new(),
+            graph: None,
             attributions: Vec::new(),
+            #[cfg(test)]
+            test_lanes: Vec::new(),
             selected: None,
             offset: 0,
             state: State::Loading,
@@ -188,7 +191,6 @@ impl App {
             let Commit {
                 id,
                 parent_ids,
-                lane,
                 committer_time,
                 author,
                 attributions,
@@ -199,7 +201,6 @@ impl App {
             self.rows.push(Commit {
                 id,
                 parent_ids,
-                lane,
                 committer_time,
                 author,
                 attributions: attribution_base + attributions.start..attribution_base + attributions.end,
@@ -220,8 +221,17 @@ impl App {
         self.titles[row.title.clone()].as_bstr()
     }
 
-    pub(crate) fn lane(&self, row: &CommitRow) -> &str {
-        &self.lanes[row.lane.clone()]
+    pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
+        #[cfg(test)]
+        if !self.test_lanes.is_empty() {
+            return RenderedLanes::from_lanes(
+                self.test_lanes[range.start.min(self.test_lanes.len())..range.end.min(self.test_lanes.len())].iter(),
+            );
+        }
+        match &self.graph {
+            Some(graph) => graph.render(&self.rows, range),
+            None => RenderedLanes::empty(range.len()),
+        }
     }
 
     pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
@@ -307,13 +317,13 @@ impl App {
         }
     }
 
-    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, lanes: String, lane_time: Duration) {
+    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, graph: Graph, lane_time: Duration) {
         if self.state != State::Computing {
             return;
         }
         let selected = self.selected.map(|index| self.rows[index].id);
         self.rows = rows;
-        self.lanes = lanes;
+        self.graph = Some(graph);
         self.lane_time = Some(lane_time);
         self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
         self.state = State::Complete;
@@ -323,8 +333,10 @@ impl App {
     pub(crate) fn reload(&mut self, show_hidden: bool) {
         self.rows = Vec::new();
         self.titles = Vec::new();
-        self.lanes = String::new();
+        self.graph = None;
         self.attributions = Vec::new();
+        #[cfg(test)]
+        self.test_lanes.clear();
         self.selected = None;
         self.offset = 0;
         self.state = State::Loading;
@@ -372,24 +384,31 @@ impl App {
 
     #[cfg(test)]
     pub(crate) fn set_lane(&mut self, index: usize, lane: &str) {
-        let start = self.lanes.len();
-        self.lanes.push_str(lane);
-        self.rows[index].lane = start..self.lanes.len();
+        self.test_lanes.resize(self.rows.len(), String::new());
+        self.test_lanes[index] = lane.into();
     }
 }
 
 fn estimate_lane_width(rows: &[CommitRow]) -> usize {
     let mut rows = rows.to_vec();
-    let known = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-    let lanes = render_lanes(&mut rows, &known);
-    rows.iter()
-        .map(|row| lanes[row.lane.clone()].chars().count())
+    let known: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    for row in &mut rows {
+        row.parent_ids.retain(|id| known.contains_key(id));
+    }
+    let graph = Graph::new(&rows);
+    graph
+        .render(&rows, 0..rows.len())
+        .iter()
+        .map(|lane| lane.chars().count())
         .max()
         .map_or(0, |width| width.saturating_add(2))
 }
 
-pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, String, Duration) {
+pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Graph, Duration) {
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    for row in &mut rows {
+        row.parent_ids.retain(|id| positions.contains_key(id));
+    }
     let mut children = vec![0usize; rows.len()];
     for row in rows.iter() {
         for parent in &row.parent_ids {
@@ -429,65 +448,170 @@ pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, String
         }
     }
     let start = Instant::now();
-    let lanes = render_lanes(&mut rows, &positions);
-    (rows, lanes, start.elapsed())
+    let graph = Graph::new(&rows);
+    (rows, graph, start.elapsed())
 }
 
-fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) -> String {
-    let mut columns = Vec::new();
-    let mut next = Vec::new();
-    let mut parents = Vec::new();
-    let mut edges = Vec::new();
-    let mut cells = Vec::new();
-    let mut lanes = String::with_capacity(rows.len().saturating_mul(4));
-    for row in rows {
-        let current = columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
-            columns.push(row.id);
-            columns.len() - 1
-        });
+const CHECKPOINT_INTERVAL: usize = 256;
 
-        parents.clear();
-        for parent in row.parent_ids.iter().copied().filter(|id| known.contains_key(id)) {
-            if !parents.iter().any(|(id, _, _)| *id == parent) {
-                parents.push((parent, columns.iter().position(|id| *id == parent), 0));
+#[derive(Debug)]
+pub(crate) struct Graph {
+    offsets: Vec<usize>,
+    columns: Vec<ObjectId>,
+}
+
+impl Graph {
+    fn new(rows: &[CommitRow]) -> Self {
+        let mut state = LaneState::default();
+        let mut graph = Graph {
+            offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
+            columns: Vec::new(),
+        };
+        for (index, row) in rows.iter().enumerate() {
+            if index % CHECKPOINT_INTERVAL == 0 {
+                graph.offsets.push(graph.columns.len());
+                graph.columns.extend_from_slice(&state.columns);
+            }
+            state.advance(row, None);
+        }
+        graph.offsets.push(graph.columns.len());
+        graph
+    }
+
+    fn render(&self, rows: &[CommitRow], range: Range<usize>) -> RenderedLanes {
+        let start = range.start.min(rows.len());
+        let end = range.end.min(rows.len());
+        if start >= end {
+            return RenderedLanes::default();
+        }
+        let checkpoint = start / CHECKPOINT_INTERVAL;
+        let mut state = LaneState {
+            columns: self.columns[self.offsets[checkpoint]..self.offsets[checkpoint + 1]].to_vec(),
+            ..LaneState::default()
+        };
+        let mut rendered = RenderedLanes {
+            data: String::with_capacity((end - start).saturating_mul(4)),
+            ranges: Vec::with_capacity(end - start),
+        };
+        for (index, row) in rows[checkpoint * CHECKPOINT_INTERVAL..end].iter().enumerate() {
+            let index = checkpoint * CHECKPOINT_INTERVAL + index;
+            if let Some(range) = state.advance(row, (index >= start).then_some(&mut rendered.data)) {
+                rendered.ranges.push(range);
             }
         }
-        next.clear();
-        edges.clear();
-        for (index, id) in columns[..current].iter().copied().enumerate() {
-            let destination = next.len();
-            next.push(id);
-            edges.push((index, destination));
+        rendered
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RenderedLanes {
+    data: String,
+    ranges: Vec<Range<usize>>,
+}
+
+impl RenderedLanes {
+    pub(crate) fn lane(&self, index: usize) -> &str {
+        &self.data[self.ranges[index].clone()]
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &str> {
+        self.ranges.iter().map(|range| &self.data[range.clone()])
+    }
+
+    fn empty(len: usize) -> Self {
+        RenderedLanes {
+            data: String::new(),
+            ranges: vec![0..0; len],
         }
-        for (parent, old_position, destination) in &mut parents {
+    }
+
+    #[cfg(test)]
+    fn from_lanes<'a>(lanes: impl IntoIterator<Item = &'a String>) -> Self {
+        let mut rendered = RenderedLanes::default();
+        for lane in lanes {
+            let start = rendered.data.len();
+            rendered.data.push_str(lane);
+            rendered.ranges.push(start..rendered.data.len());
+        }
+        rendered
+    }
+}
+
+#[derive(Default)]
+struct LaneState {
+    columns: Vec<ObjectId>,
+    next: Vec<ObjectId>,
+    parents: Vec<(ObjectId, Option<usize>, usize)>,
+    edges: Vec<(usize, usize)>,
+    cells: Vec<u8>,
+}
+
+impl LaneState {
+    fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
+        let render = out.is_some();
+        let current = self.columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
+            self.columns.push(row.id);
+            self.columns.len() - 1
+        });
+
+        self.parents.clear();
+        for parent in row.parent_ids.iter().copied() {
+            if !self.parents.iter().any(|(id, _, _)| *id == parent) {
+                self.parents
+                    .push((parent, self.columns.iter().position(|id| *id == parent), 0));
+            }
+        }
+        self.next.clear();
+        self.edges.clear();
+        for (index, id) in self.columns[..current].iter().copied().enumerate() {
+            let destination = self.next.len();
+            self.next.push(id);
+            if render {
+                self.edges.push((index, destination));
+            }
+        }
+        for (parent, old_position, destination) in &mut self.parents {
             *destination = match old_position {
                 Some(position) if *position < current => *position,
                 _ => {
-                    let destination = next.len();
-                    next.push(*parent);
-                    match old_position {
-                        Some(position) if *position != current => edges.push((*position, destination)),
-                        _ => {}
+                    let destination = self.next.len();
+                    self.next.push(*parent);
+                    if render && old_position.is_some_and(|position| position != current) {
+                        self.edges
+                            .push((old_position.expect("checked as present"), destination));
                     }
                     destination
                 }
             };
         }
-        for (index, id) in columns.iter().copied().enumerate().skip(current + 1) {
-            if parents.iter().any(|(_, position, _)| *position == Some(index)) {
+        for (index, id) in self.columns.iter().copied().enumerate().skip(current + 1) {
+            if self.parents.iter().any(|(_, position, _)| *position == Some(index)) {
                 continue;
             }
-            let destination = next.len();
-            next.push(id);
-            edges.push((index, destination));
+            let destination = self.next.len();
+            self.next.push(id);
+            if render {
+                self.edges.push((index, destination));
+            }
         }
-        for (_, _, destination) in &parents {
-            edges.push((current, *destination));
+        if render {
+            for (_, _, destination) in &self.parents {
+                self.edges.push((current, *destination));
+            }
         }
-        row.lane = transition(columns.len(), next.len(), current, &edges, &mut cells, &mut lanes);
-        std::mem::swap(&mut columns, &mut next);
+        let range = out.map(|out| {
+            transition(
+                self.columns.len(),
+                self.next.len(),
+                current,
+                &self.edges,
+                &mut self.cells,
+                out,
+            )
+        });
+        std::mem::swap(&mut self.columns, &mut self.next);
+        range
     }
-    lanes
 }
 
 fn transition(
@@ -566,13 +690,16 @@ fn transition(
 mod tests {
     use super::*;
 
-    fn row(n: u8) -> LoadedCommit {
+    fn id(n: u16) -> ObjectId {
         let mut bytes = [0; 20];
-        bytes[19] = n;
+        bytes[18..].copy_from_slice(&n.to_be_bytes());
+        ObjectId::Sha1(bytes)
+    }
+
+    fn row(n: u8) -> LoadedCommit {
         Commit {
-            id: ObjectId::Sha1(bytes),
+            id: id(n.into()),
             parent_ids: ParentIds::new(),
-            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: Box::leak(Box::new(Author {
                 name: b"author".as_bstr(),
@@ -589,12 +716,20 @@ mod tests {
         commit
     }
 
+    fn numbered_row(n: u16, parent: Option<u16>) -> LoadedCommit {
+        let mut commit = row(0);
+        commit.id = id(n);
+        commit.parent_ids = parent.map(id).into_iter().collect();
+        commit.title = format!("commit {n}").into();
+        commit
+    }
+
     fn complete(app: &mut App) {
         let rows = app
             .start_lane_computation()
             .expect("a loading app starts lane computation");
-        let (rows, lanes, lane_time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, lanes, lane_time);
+        let (rows, graph, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
     }
 
     #[test]
@@ -619,7 +754,7 @@ mod tests {
             [row(4).id, row(3).id, row(2).id, row(1).id]
         );
         assert_eq!(
-            app.rows.iter().map(|row| app.lane(row)).collect::<Vec<_>>(),
+            app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─┐ ", "● │ ", "├─● ", "● "]
         );
     }
@@ -637,8 +772,8 @@ mod tests {
 
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("selection remains active")].id;
-        let (rows, lanes, lane_time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, lanes, lane_time);
+        let (rows, graph, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
 
         assert_eq!(app.state, State::Complete);
         assert_eq!(
@@ -657,8 +792,28 @@ mod tests {
         complete(&mut app);
 
         assert_eq!(
-            app.rows.iter().map(|row| app.lane(row)).collect::<Vec<_>>(),
+            app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─┐ ", "●─┘ ", "● "]
+        );
+    }
+
+    #[test]
+    fn lanes_render_identically_after_a_checkpoint() {
+        let mut app = App::new(10);
+        app.extend_commits(
+            (0..=300)
+                .rev()
+                .map(|n| numbered_row(n, n.checked_sub(1)))
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+
+        let all = app.render_lanes(0..app.rows.len());
+        let window = app.render_lanes(257..300);
+        assert_eq!(
+            window.iter().collect::<Vec<_>>(),
+            all.iter().skip(257).take(43).collect::<Vec<_>>(),
+            "restoring a checkpoint produces the same graph as replaying from the beginning"
         );
     }
 

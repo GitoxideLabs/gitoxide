@@ -120,7 +120,6 @@ pub(crate) fn load(
         rows.push(Commit {
             id: info.id,
             parent_ids: info.parent_ids,
-            lane: 0..0,
             committer_time: committer_time.context("commit has no committer time")?,
             author: author.context("commit has no author")?,
             attributions: attribution_start..attributions.len(),

@@ -34,15 +34,15 @@ pub(crate) fn draw(
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
     let visible_rows = &app.rows[start..end];
+    let lanes = app.render_lanes(start..end);
     let content = Rect::new(
         body.x.saturating_add(2),
         body.y,
         body.width.saturating_sub(2),
         body.height,
     );
-    let rendered_lane_width = visible_rows
+    let rendered_lane_width = lanes
         .iter()
-        .map(|row| app.lane(row))
         .filter(|lane| !lane.is_empty())
         .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
@@ -98,10 +98,10 @@ pub(crate) fn draw(
     let max_offset = if align_metadata {
         graph_max_offset.saturating_add(metadata_max_offset)
     } else {
-        visible_rows
+        lanes
             .iter()
             .zip(&metadata)
-            .map(|(row, metadata)| app.lane(row).chars().count().saturating_add(metadata.width()))
+            .map(|(lane, metadata)| lane.chars().count().saturating_add(metadata.width()))
             .max()
             .unwrap_or_default()
             .saturating_sub(content.width as usize)
@@ -111,9 +111,8 @@ pub(crate) fn draw(
     let graph_offset = horizontal_offset.min(graph_max_offset);
     let metadata_offset = horizontal_offset.saturating_sub(graph_max_offset);
 
-    let visible_rows = &app.rows[start..end];
-    for (index, (row, metadata)) in visible_rows.iter().zip(metadata).enumerate() {
-        let lane = app.lane(row);
+    for (index, metadata) in metadata.into_iter().enumerate() {
+        let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
         let metadata_width = metadata.width();
@@ -448,7 +447,6 @@ mod tests {
             rows: vec![Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
                 parent_ids: Default::default(),
-                lane: 0..0,
                 committer_time: gix::date::Time::default(),
                 author: author(b"Codex", b"codex@openai.com"),
                 attributions: 0..6,
@@ -544,7 +542,6 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
-            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -703,7 +700,6 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -774,7 +770,6 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
-                    lane: 0..0,
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -810,7 +805,6 @@ mod tests {
         let commit = Commit {
             id,
             parent_ids: Default::default(),
-            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -910,7 +904,6 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
