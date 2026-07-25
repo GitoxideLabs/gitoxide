@@ -81,8 +81,7 @@ pub(crate) enum Action {
     ToggleMailmap,
     ToggleSpecialRefs,
     ToggleHidden,
-    PinMetadata,
-    UnpinMetadata,
+    ToggleAlign,
     Cancel,
     Copy,
     Quit,
@@ -112,7 +111,8 @@ pub(crate) struct App {
     pub show_special_refs: bool,
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
-    pub pin_metadata: Option<bool>,
+    pub align_metadata: bool,
+    pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
     horizontal_max: usize,
@@ -136,7 +136,8 @@ impl App {
             show_special_refs: false,
             has_hidden_filter: false,
             show_hidden: false,
-            pin_metadata: None,
+            align_metadata: true,
+            estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
             horizontal_max: 0,
@@ -174,6 +175,7 @@ impl App {
             });
         }
         if was_empty {
+            self.estimated_lane_width = estimate_lane_width(&self.rows[..self.viewport_rows.min(self.rows.len())]);
             self.selected = Some(0);
             self.ensure_visible();
         } else if self.follow_tail {
@@ -232,8 +234,7 @@ impl App {
             {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
-            Action::PinMetadata => self.pin_metadata = Some(true),
-            Action::UnpinMetadata => self.pin_metadata = Some(false),
+            Action::ToggleAlign => self.align_metadata = !self.align_metadata,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -262,6 +263,7 @@ impl App {
         self.offset = 0;
         self.state = State::Loading;
         self.lane_time = None;
+        self.estimated_lane_width = 0;
         self.show_hidden = show_hidden;
         self.horizontal_offset = 0;
         self.follow_tail = false;
@@ -301,6 +303,16 @@ impl App {
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
     }
+}
+
+fn estimate_lane_width(rows: &[CommitRow]) -> usize {
+    let mut rows = rows.to_vec();
+    let known = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
+    render_lanes(&mut rows, &known);
+    rows.iter()
+        .map(|row| row.lane.chars().count())
+        .max()
+        .map_or(0, |width| width.saturating_add(2))
 }
 
 fn finish_rows(rows: &mut Vec<CommitRow>) -> Duration {
@@ -492,14 +504,17 @@ mod tests {
     #[test]
     fn completion_orders_and_draws_merge_lanes() {
         let mut app = App::new(10);
-        for row in [
+        app.extend_commits(vec![
             row_with_parents(4, &[3, 2]),
             row_with_parents(3, &[1]),
             row(1),
             row_with_parents(2, &[1]),
-        ] {
-            app.extend_commits(vec![row]);
-        }
+        ]);
+
+        assert_eq!(
+            app.estimated_lane_width, 6,
+            "the provisional alignment leaves two extra cells after two estimated graph lanes"
+        );
 
         app.update(Action::Complete);
 
@@ -620,16 +635,16 @@ mod tests {
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
         app.update(Action::ToggleSpecialRefs);
-        app.update(Action::PinMetadata);
+        app.update(Action::ToggleAlign);
 
         assert!(!app.show_committer_date);
         assert!(!app.show_author_name);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
         assert!(app.show_special_refs);
-        assert_eq!(app.pin_metadata, Some(true));
-        app.update(Action::UnpinMetadata);
-        assert_eq!(app.pin_metadata, Some(false));
+        assert!(!app.align_metadata);
+        app.update(Action::ToggleAlign);
+        assert!(app.align_metadata);
     }
 
     #[test]
