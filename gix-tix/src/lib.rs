@@ -316,7 +316,8 @@ fn start_history(
     let revisions = revisions.to_vec();
     let hidden_revisions = hidden_revisions.to_vec();
     std::thread::spawn(move || {
-        let repository = repository.to_thread_local();
+        let mut repository = repository.to_thread_local();
+        repository.object_cache_size(None);
         let mut authors = gix::features::threading::lock(&authors);
         let result = history::load(
             &repository,
