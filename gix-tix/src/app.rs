@@ -83,6 +83,13 @@ pub(crate) enum RefMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NameMode {
+    All,
+    Author,
+    None,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Cancelled,
@@ -131,7 +138,7 @@ pub(crate) struct App {
     pub viewport_rows: usize,
     pub lane_time: Option<Duration>,
     pub show_committer_date: bool,
-    pub show_author_name: bool,
+    pub name_mode: NameMode,
     pub show_trailers: bool,
     pub use_mailmap: bool,
     pub ref_mode: RefMode,
@@ -161,7 +168,7 @@ impl App {
             viewport_rows,
             lane_time: None,
             show_committer_date: true,
-            show_author_name: true,
+            name_mode: NameMode::All,
             show_trailers: true,
             use_mailmap: true,
             ref_mode: RefMode::Default,
@@ -263,7 +270,13 @@ impl App {
                 self.ensure_visible();
             }
             Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
-            Action::ToggleName => self.show_author_name = !self.show_author_name,
+            Action::ToggleName => {
+                self.name_mode = match self.name_mode {
+                    NameMode::All => NameMode::Author,
+                    NameMode::Author => NameMode::None,
+                    NameMode::None => NameMode::All,
+                };
+            }
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleRefs => {
@@ -913,7 +926,7 @@ mod tests {
         app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
-        assert!(!app.show_author_name);
+        assert_eq!(app.name_mode, NameMode::Author);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
         assert_eq!(app.ref_mode, RefMode::None);
@@ -925,6 +938,18 @@ mod tests {
         assert!(app.show_commit);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn cycles_author_names() {
+        let mut app = App::new(1);
+
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::Author);
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::None);
+        app.update(Action::ToggleName);
+        assert_eq!(app.name_mode, NameMode::All);
     }
 
     #[test]

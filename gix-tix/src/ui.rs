@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, RefMode, State},
+    app::{App, AttributionKind, CommitRow, NameMode, RefMode, State},
     history::{DecorationKind, Decorations},
 };
 
@@ -59,8 +59,9 @@ pub(crate) fn draw(
     let align_width = max_lane_width.min(align_limit);
     let align_metadata = app.align_metadata;
     let show_committer_date = app.show_committer_date;
-    let show_author_name = app.show_author_name;
-    let show_trailers = app.show_trailers;
+    let name_mode = app.name_mode;
+    let show_author_name = name_mode != NameMode::None;
+    let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
     let metadata: Vec<_> = visible_rows
@@ -200,12 +201,14 @@ pub(crate) fn draw(
             ),
         ]);
     }
-    for (label, enabled) in [
-        ("d date", app.show_committer_date),
-        ("n name", app.show_author_name),
-        ("m mailmap", app.use_mailmap),
-        ("t trailers", app.show_trailers),
-    ] {
+    footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
+    let (name_label, names_visible) = match app.name_mode {
+        NameMode::All => ("n names", true),
+        NameMode::Author => ("n name", true),
+        NameMode::None => ("n name", false),
+    };
+    footer_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
+    for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
         footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
     }
     let ref_label = match app.ref_mode {
@@ -520,11 +523,16 @@ mod tests {
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         let row = rendered_row(&terminal);
-        assert!(!row.contains("Codex"), "n hides the primary actor");
+        assert!(row.contains("Codex"), "the first n keeps the primary actor");
         assert!(
             !row.contains("Reviewer"),
-            "n hides trailer actors while trailers are enabled"
+            "the first n hides trailer actors while trailers are enabled"
         );
+        app.update(Action::ToggleName);
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        let row = rendered_row(&terminal);
+        assert!(!row.contains("Codex"), "the second n hides the primary actor");
+        assert!(!row.contains("Reviewer"), "the second n keeps trailer actors hidden");
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
@@ -567,7 +575,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -628,10 +636,21 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
-        assert!(!row.contains("author"), "n hides the author name");
+        assert!(row.contains("author"), "the first n keeps the author name");
         assert!(!row.contains("refs/patches"), "special refs are hidden until requested");
         assert!(row.contains("subject"), "the commit subject remains visible");
         assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
+        assert!(
+            !footer_is_dim(&terminal, "n name"),
+            "the singular name mode is not dimmed"
+        );
+
+        app.update(Action::ToggleName);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(
+            !rendered_row(&terminal).contains("author"),
+            "the second n hides the author name"
+        );
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
         app.update(Action::ToggleRefs);
