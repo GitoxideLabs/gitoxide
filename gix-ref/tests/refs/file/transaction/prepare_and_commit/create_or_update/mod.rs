@@ -968,3 +968,61 @@ fn packed_refs_deletion_in_deletions_and_updates_mode() -> crate::Result {
     );
     Ok(())
 }
+
+/// Preparing a transaction must keep a constant number of file descriptors open, not one per edit:
+/// `lock_ref_and_apply_change()` writes each lock's content and closes it right away, retaining only
+/// a `gix_lock::Marker`. Should that change, a fetch updating thousands of refs runs into `EMFILE`
+/// at the ~1000th lock under the default `ulimit -n 1024`.
+///
+/// Lowering `RLIMIT_NOFILE` affects the whole process, and under plain `cargo test` sibling tests run
+/// on other threads of that very process and could hit `EMFILE` spuriously. Hence this test
+/// re-executes itself as a child process (marked by an environment variable), and only the
+/// disposable child lowers the limit.
+#[test]
+#[cfg(unix)]
+fn large_transactions_hold_a_constant_number_of_file_descriptors() -> crate::Result {
+    const WORKER_MARK: &str = "GIX_REF_TEST_INTERNAL_LOWER_FD_LIMIT";
+    if std::env::var_os(WORKER_MARK).is_none() {
+        let test_name = format!(
+            "{}::large_transactions_hold_a_constant_number_of_file_descriptors",
+            module_path!()
+                .split_once("::")
+                .expect("this module is nested, so there is a crate-name segment to strip")
+                .1
+        );
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", &test_name])
+            .env(WORKER_MARK, "1")
+            .output()?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child process must have run this very test and passed:\n{stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
+
+    let (_dir, store) = empty_store()?;
+    let edits: Vec<RefEdit> = (0..300).map(|i| create_at(&format!("refs/heads/fd-{i:03}"))).collect();
+
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    limit.rlim_cur = limit.rlim_max.min(96);
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+
+    let applied = store
+        .transaction()
+        .prepare(edits, Fail::Immediately, Fail::Immediately)?
+        .commit(committer().to_ref(&mut TimeBuf::default()))?;
+
+    assert_eq!(applied.len(), 300, "all refs were created despite the low fd limit");
+    Ok(())
+}
