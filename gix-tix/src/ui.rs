@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, State},
+    app::{App, AttributionKind, CommitRow, RefMode, State},
     history::{DecorationKind, Decorations},
 };
 
@@ -45,7 +45,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     let show_committer_date = app.show_committer_date;
     let show_author_name = app.show_author_name;
     let show_trailers = app.show_trailers;
-    let show_special_refs = app.show_special_refs;
+    let ref_mode = app.ref_mode;
     let selected = app.selected;
     let metadata: Vec<_> = visible_rows
         .iter()
@@ -61,7 +61,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
                     show_author_name,
                     show_trailers,
                     use_mailmap: app.use_mailmap,
-                    show_special_refs,
+                    ref_mode,
                     selected: selected == Some(start + index),
                 },
             )
@@ -185,10 +185,15 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
         ("n name", app.show_author_name),
         ("m mailmap", app.use_mailmap),
         ("t trailers", app.show_trailers),
-        ("r refs", app.show_special_refs),
     ] {
         footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
     }
+    let ref_label = match app.ref_mode {
+        RefMode::All => "r all refs",
+        RefMode::Default => "r refs",
+        RefMode::None => "r no refs",
+    };
+    footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
     footer_spans.extend([Span::raw(" · y copy")]);
     if app.state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
@@ -214,7 +219,7 @@ struct MetadataOptions {
     show_author_name: bool,
     show_trailers: bool,
     use_mailmap: bool,
-    show_special_refs: bool,
+    ref_mode: RefMode,
     selected: bool,
 }
 
@@ -230,7 +235,7 @@ fn metadata_line<'a>(
         show_author_name,
         show_trailers,
         use_mailmap,
-        show_special_refs,
+        ref_mode,
         selected,
     } = options;
     let id = row.id.to_hex().to_string();
@@ -247,7 +252,11 @@ fn metadata_line<'a>(
         .get(&row.id)
         .into_iter()
         .flatten()
-        .filter(|decoration| show_special_refs || decoration.kind != DecorationKind::Special)
+        .filter(|decoration| match ref_mode {
+            RefMode::All => true,
+            RefMode::Default => decoration.kind != DecorationKind::Special,
+            RefMode::None => false,
+        })
         .peekable();
     if labels.peek().is_some() {
         spans.push(Span::raw(" ("));
@@ -577,12 +586,6 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 1, 0)]
             .set_style(Style::default().add_modifier(Modifier::REVERSED));
-        let refs = footer_text[..footer_text.find("r refs").expect("the refs toggle is present")]
-            .chars()
-            .count();
-        for x in refs..refs + "r refs".len() {
-            expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
-        }
         terminal.backend().assert_buffer(&expected);
         let row = terminal.backend().buffer();
         assert!(
@@ -619,10 +622,32 @@ mod tests {
         assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
-        app.update(Action::ToggleSpecialRefs);
+        app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
-        assert!(rendered_row(&terminal).contains("refs/patches"), "r shows special refs");
-        assert!(!footer_is_dim(&terminal, "r refs"), "enabled refs are not dimmed");
+        assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("refs/patches"),
+            "no refs hides special refs"
+        );
+        assert!(footer_is_dim(&terminal, "r no refs"), "no refs is dimmed");
+
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        assert!(rendered_row(&terminal).contains("HEAD"), "all refs shows regular refs");
+        assert!(
+            rendered_row(&terminal).contains("refs/patches"),
+            "all refs shows special refs"
+        );
+        assert!(!footer_is_dim(&terminal, "r all refs"), "all refs is not dimmed");
+
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
+        assert!(rendered_row(&terminal).contains("HEAD"), "refs shows regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("refs/patches"),
+            "refs hides special refs"
+        );
+        assert!(!footer_is_dim(&terminal, "r refs"), "refs is not dimmed");
 
         app.has_hidden_filter = true;
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
@@ -742,7 +767,7 @@ mod tests {
                 show_author_name: true,
                 show_trailers: true,
                 use_mailmap: false,
-                show_special_refs: true,
+                ref_mode: RefMode::All,
                 selected: false,
             },
         );

@@ -329,7 +329,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('n') => Some(Action::ToggleName),
         KeyCode::Char('t') => Some(Action::ToggleTrailers),
         KeyCode::Char('m') => Some(Action::ToggleMailmap),
-        KeyCode::Char('r') => Some(Action::ToggleSpecialRefs),
+        KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char('y') => Some(Action::Copy),
@@ -423,7 +423,7 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
-            Some(Action::ToggleSpecialRefs)
+            Some(Action::ToggleRefs)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),

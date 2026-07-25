@@ -61,6 +61,13 @@ pub(crate) enum State {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RefMode {
+    All,
+    Default,
+    None,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Action {
     Complete,
@@ -79,7 +86,7 @@ pub(crate) enum Action {
     ToggleName,
     ToggleTrailers,
     ToggleMailmap,
-    ToggleSpecialRefs,
+    ToggleRefs,
     ToggleHidden,
     ToggleAlign,
     Cancel,
@@ -108,7 +115,7 @@ pub(crate) struct App {
     pub show_author_name: bool,
     pub show_trailers: bool,
     pub use_mailmap: bool,
-    pub show_special_refs: bool,
+    pub ref_mode: RefMode,
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
     pub align_metadata: bool,
@@ -133,7 +140,7 @@ impl App {
             show_author_name: true,
             show_trailers: true,
             use_mailmap: true,
-            show_special_refs: false,
+            ref_mode: RefMode::Default,
             has_hidden_filter: false,
             show_hidden: false,
             align_metadata: true,
@@ -228,7 +235,13 @@ impl App {
             Action::ToggleName => self.show_author_name = !self.show_author_name,
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
-            Action::ToggleSpecialRefs => self.show_special_refs = !self.show_special_refs,
+            Action::ToggleRefs => {
+                self.ref_mode = match self.ref_mode {
+                    RefMode::All => RefMode::Default,
+                    RefMode::Default => RefMode::None,
+                    RefMode::None => RefMode::All,
+                };
+            }
             Action::ToggleHidden
                 if self.has_hidden_filter && matches!(self.state, State::Complete | State::Cancelled) =>
             {
@@ -634,14 +647,18 @@ mod tests {
         app.update(Action::ToggleName);
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
-        app.update(Action::ToggleSpecialRefs);
+        app.update(Action::ToggleRefs);
         app.update(Action::ToggleAlign);
 
         assert!(!app.show_committer_date);
         assert!(!app.show_author_name);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
-        assert!(app.show_special_refs);
+        assert_eq!(app.ref_mode, RefMode::None);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::All);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
