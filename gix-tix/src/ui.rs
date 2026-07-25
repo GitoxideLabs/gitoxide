@@ -287,11 +287,7 @@ fn metadata_line<'a>(
             } else {
                 format!("{author} ")
             },
-            color(if row.author.is_bot() {
-                Color::LightYellow
-            } else {
-                Color::Green
-            }),
+            color(Color::Green),
         ));
         if show_trailers {
             for (kind, marker) in [
@@ -305,10 +301,7 @@ fn metadata_line<'a>(
                 if actors.peek().is_none() {
                     continue;
                 }
-                spans.push(Span::styled(
-                    marker,
-                    color(Color::LightYellow).add_modifier(Modifier::DIM),
-                ));
+                spans.push(Span::styled(marker, color(Color::Green).add_modifier(Modifier::DIM)));
                 for (index, actor) in actors.enumerate() {
                     if index != 0 {
                         spans.push(Span::raw(", "));
@@ -320,11 +313,7 @@ fn metadata_line<'a>(
                         } else {
                             name.into_owned()
                         },
-                        color(if actor.author.is_bot() {
-                            Color::LightYellow
-                        } else {
-                            Color::Green
-                        }),
+                        color(Color::Green),
                     ));
                 }
                 spans.push(Span::raw(" "));
@@ -479,27 +468,15 @@ mod tests {
             let x = row.find(needle).expect("rendered metadata contains the named actor") as u16;
             buffer[(x, 0)].fg
         };
-        assert_eq!(
-            style_at("[Codex]"),
-            Color::LightYellow,
-            "bot authors use the agent color"
-        );
-        assert_eq!(
-            style_at("Co:"),
-            Color::LightYellow,
-            "attribution markers use the agent color"
-        );
+        assert_eq!(style_at("[Codex]"), Color::Green, "bot authors use the agent color");
+        assert_eq!(style_at("Co:"), Color::Green, "attribution markers use the agent color");
         let marker_x = row.find("Co:").expect("rendered metadata contains a trailer marker") as u16;
         assert!(
             buffer[(marker_x, 0)].modifier.contains(Modifier::DIM),
             "attribution markers are dimmed"
         );
         assert_eq!(style_at("Human"), Color::Green, "human trailer actors are green");
-        assert_eq!(
-            style_at("[Claude]"),
-            Color::LightYellow,
-            "bot co-authors use agent styling"
-        );
+        assert_eq!(style_at("[Claude]"), Color::Green, "bot co-authors use agent styling");
         assert!(
             rendered_line(&terminal, 1).contains("t trailers"),
             "the footer advertises the trailer toggle"
