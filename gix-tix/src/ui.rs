@@ -157,13 +157,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decoratio
     app.set_horizontal_bounds(content.width as usize, max_offset);
 
     let status = match app.state {
-        State::Loading => "loading",
-        State::Cancelling => "cancelling",
-        State::Complete => "complete",
-        State::Cancelled => "cancelled",
+        State::Loading => "",
+        State::Cancelling => " · cancelling",
+        State::Complete => "",
+        State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(format!(
-        "{} commits · {status} · ↑↓/jk move · h/l pan",
+        "{} commits{status} · ↑↓/jk move · h/l pan",
         app.rows.len()
     ))];
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
@@ -538,7 +538,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap))?;
 
-        let footer_text = "1 commits · complete · ↑↓/jk move · h/l pan · [ align · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · d date · n name · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -647,6 +647,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            !rendered_line(&terminal, 1).contains("loading"),
+            "loading is already apparent from the streaming history"
+        );
         assert!(rendered_line(&terminal, 1).contains("Esc cancel"));
 
         app.update(Action::Cancel);
