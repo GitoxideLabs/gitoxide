@@ -14,10 +14,10 @@ use gix::{
 pub(crate) struct Commit<T> {
     pub id: ObjectId,
     pub parent_ids: ParentIds,
-    pub lane: String,
+    pub lane: Range<usize>,
     pub committer_time: gix::date::Time,
     pub author: &'static Author,
-    pub attributions: Box<[Attribution]>,
+    pub attributions: Range<usize>,
     pub title: T,
 }
 
@@ -52,6 +52,21 @@ pub(crate) enum AttributionKind {
 
 pub(crate) type LoadedCommit = Commit<BString>;
 pub(crate) type CommitRow = Commit<Range<usize>>;
+
+#[derive(Debug)]
+pub(crate) struct LoadedCommits {
+    pub rows: Vec<LoadedCommit>,
+    pub attributions: Vec<Attribution>,
+}
+
+impl From<Vec<LoadedCommit>> for LoadedCommits {
+    fn from(rows: Vec<LoadedCommit>) -> Self {
+        LoadedCommits {
+            rows,
+            attributions: Vec::new(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum State {
@@ -107,6 +122,8 @@ pub(crate) enum Effect {
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
     titles: Vec<u8>,
+    lanes: String,
+    attributions: Vec<Attribution>,
     pub selected: Option<usize>,
     pub offset: usize,
     pub state: State,
@@ -133,6 +150,8 @@ impl App {
         App {
             rows: Vec::new(),
             titles: Vec::new(),
+            lanes: String::new(),
+            attributions: Vec::new(),
             selected: None,
             offset: 0,
             state: State::Loading,
@@ -155,12 +174,15 @@ impl App {
         }
     }
 
-    pub(crate) fn extend_commits(&mut self, rows: Vec<LoadedCommit>) {
+    pub(crate) fn extend_commits(&mut self, commits: impl Into<LoadedCommits>) {
+        let LoadedCommits { rows, attributions } = commits.into();
         if self.state != State::Loading || rows.is_empty() {
             return;
         }
         let was_empty = self.rows.is_empty();
         self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
+        let attribution_base = self.attributions.len();
+        self.attributions.extend(attributions);
         self.rows.reserve(rows.len());
         for row in rows {
             let Commit {
@@ -180,7 +202,7 @@ impl App {
                 lane,
                 committer_time,
                 author,
-                attributions,
+                attributions: attribution_base + attributions.start..attribution_base + attributions.end,
                 title: start..self.titles.len(),
             });
         }
@@ -196,6 +218,14 @@ impl App {
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
         self.titles[row.title.clone()].as_bstr()
+    }
+
+    pub(crate) fn lane(&self, row: &CommitRow) -> &str {
+        &self.lanes[row.lane.clone()]
+    }
+
+    pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
+        &self.attributions[row.attributions.clone()]
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
@@ -277,12 +307,13 @@ impl App {
         }
     }
 
-    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, lane_time: Duration) {
+    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, lanes: String, lane_time: Duration) {
         if self.state != State::Computing {
             return;
         }
         let selected = self.selected.map(|index| self.rows[index].id);
         self.rows = rows;
+        self.lanes = lanes;
         self.lane_time = Some(lane_time);
         self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
         self.state = State::Complete;
@@ -292,6 +323,8 @@ impl App {
     pub(crate) fn reload(&mut self, show_hidden: bool) {
         self.rows = Vec::new();
         self.titles = Vec::new();
+        self.lanes = String::new();
+        self.attributions = Vec::new();
         self.selected = None;
         self.offset = 0;
         self.state = State::Loading;
@@ -336,19 +369,26 @@ impl App {
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
     }
+
+    #[cfg(test)]
+    pub(crate) fn set_lane(&mut self, index: usize, lane: &str) {
+        let start = self.lanes.len();
+        self.lanes.push_str(lane);
+        self.rows[index].lane = start..self.lanes.len();
+    }
 }
 
 fn estimate_lane_width(rows: &[CommitRow]) -> usize {
     let mut rows = rows.to_vec();
     let known = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
-    render_lanes(&mut rows, &known);
+    let lanes = render_lanes(&mut rows, &known);
     rows.iter()
-        .map(|row| row.lane.chars().count())
+        .map(|row| lanes[row.lane.clone()].chars().count())
         .max()
         .map_or(0, |width| width.saturating_add(2))
 }
 
-pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Duration) {
+pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, String, Duration) {
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     let mut children = vec![0usize; rows.len()];
     for row in rows.iter() {
@@ -385,15 +425,17 @@ pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Durati
             .collect();
     }
     let start = Instant::now();
-    render_lanes(&mut rows, &positions);
-    (rows, start.elapsed())
+    let lanes = render_lanes(&mut rows, &positions);
+    (rows, lanes, start.elapsed())
 }
 
-fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) {
+fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) -> String {
     let mut columns = Vec::new();
     let mut next = Vec::new();
     let mut parents = Vec::new();
     let mut edges = Vec::new();
+    let mut cells = Vec::new();
+    let mut lanes = String::with_capacity(rows.len().saturating_mul(4));
     for row in rows {
         let current = columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
             columns.push(row.id);
@@ -438,12 +480,20 @@ fn render_lanes(rows: &mut [CommitRow], known: &HashMap<ObjectId, usize>) {
         for (_, _, destination) in &parents {
             edges.push((current, *destination));
         }
-        row.lane = transition(columns.len(), next.len(), current, &edges);
+        row.lane = transition(columns.len(), next.len(), current, &edges, &mut cells, &mut lanes);
         std::mem::swap(&mut columns, &mut next);
     }
+    lanes
 }
 
-fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usize)]) -> String {
+fn transition(
+    before: usize,
+    after: usize,
+    current: usize,
+    edges: &[(usize, usize)],
+    cells: &mut Vec<u8>,
+    out: &mut String,
+) -> Range<usize> {
     const UP: u8 = 1;
     const DOWN: u8 = 2;
     const LEFT: u8 = 4;
@@ -461,7 +511,8 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
     const UP_LEFT: u8 = UP | LEFT;
 
     let width = before.max(after).max(current + 1) * 2 - 1;
-    let mut cells = vec![0u8; width];
+    cells.clear();
+    cells.resize(width, 0);
     for &(from, to) in edges {
         let from = from * 2;
         let to = to * 2;
@@ -482,8 +533,8 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
         }
     }
 
-    let mut out = String::with_capacity(width + 1);
-    for (index, cell) in cells.into_iter().enumerate() {
+    let start = out.len();
+    for (index, cell) in cells.iter().copied().enumerate() {
         out.push(if index == current * 2 {
             '●'
         } else {
@@ -504,7 +555,7 @@ fn transition(before: usize, after: usize, current: usize, edges: &[(usize, usiz
         });
     }
     out.push(' ');
-    out
+    start..out.len()
 }
 
 #[cfg(test)]
@@ -517,13 +568,13 @@ mod tests {
         Commit {
             id: ObjectId::Sha1(bytes),
             parent_ids: ParentIds::new(),
-            lane: String::new(),
+            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: Box::leak(Box::new(Author {
                 name: b"author".as_bstr(),
                 email: b"author@example.com".as_bstr(),
             })),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: format!("commit {n}").into(),
         }
     }
@@ -538,8 +589,8 @@ mod tests {
         let rows = app
             .start_lane_computation()
             .expect("a loading app starts lane computation");
-        let (rows, lane_time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, lane_time);
+        let (rows, lanes, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, lane_time);
     }
 
     #[test]
@@ -564,7 +615,7 @@ mod tests {
             [row(4).id, row(3).id, row(2).id, row(1).id]
         );
         assert_eq!(
-            app.rows.iter().map(|row| row.lane.as_str()).collect::<Vec<_>>(),
+            app.rows.iter().map(|row| app.lane(row)).collect::<Vec<_>>(),
             ["●─┐ ", "● │ ", "├─● ", "● "]
         );
     }
@@ -582,8 +633,8 @@ mod tests {
 
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("selection remains active")].id;
-        let (rows, lane_time) = compute_lanes(rows);
-        app.finish_lane_computation(rows, lane_time);
+        let (rows, lanes, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, lane_time);
 
         assert_eq!(app.state, State::Complete);
         assert_eq!(
@@ -602,7 +653,7 @@ mod tests {
         complete(&mut app);
 
         assert_eq!(
-            app.rows.iter().map(|row| row.lane.as_str()).collect::<Vec<_>>(),
+            app.rows.iter().map(|row| app.lane(row)).collect::<Vec<_>>(),
             ["●─┐ ", "●─┘ ", "● "]
         );
     }
@@ -648,7 +699,7 @@ mod tests {
     #[test]
     fn navigation_is_clamped_and_uses_the_viewport_for_pages() {
         let mut app = App::new(2);
-        app.extend_commits((1..=5).map(row).collect());
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
 
         app.update(Action::PageDown);
         assert_eq!(app.selected, Some(2), "page-down advances by the viewport height");
@@ -664,7 +715,7 @@ mod tests {
     #[test]
     fn half_pages_use_half_the_viewport() {
         let mut app = App::new(4);
-        app.extend_commits((1..=5).map(row).collect());
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
 
         app.update(Action::HalfPageDown);
         assert_eq!(app.selected, Some(2));
@@ -801,6 +852,48 @@ mod tests {
             app.title(&app.rows[1]),
             b"second".as_bstr(),
             "the second span starts at the right offset"
+        );
+    }
+
+    #[test]
+    fn packs_attributions_across_history_batches() {
+        let first_attribution = Attribution {
+            kind: AttributionKind::CoAuthor,
+            author: row(1).author,
+        };
+        let second_attribution = Attribution {
+            kind: AttributionKind::Reviewed,
+            author: row(2).author,
+        };
+        let mut first = row(1);
+        first.attributions = 0..1;
+        let mut second = row(2);
+        second.attributions = 0..1;
+        let mut app = App::new(2);
+
+        app.extend_commits(LoadedCommits {
+            rows: vec![first],
+            attributions: vec![first_attribution],
+        });
+        app.extend_commits(LoadedCommits {
+            rows: vec![second],
+            attributions: vec![second_attribution],
+        });
+
+        assert_eq!(
+            app.attributions,
+            [first_attribution, second_attribution],
+            "all attribution entries share one application-owned buffer"
+        );
+        assert_eq!(
+            app.attributions(&app.rows[0]),
+            [first_attribution],
+            "the first batch retains its attribution range"
+        );
+        assert_eq!(
+            app.attributions(&app.rows[1]),
+            [second_attribution],
+            "later batch ranges are offset into the shared buffer"
         );
     }
 }

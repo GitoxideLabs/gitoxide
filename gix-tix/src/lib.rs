@@ -179,8 +179,8 @@ fn event_loop(
     loop {
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
-                Ok((rows, lane_time)) => {
-                    app.finish_lane_computation(rows, lane_time);
+                Ok((rows, lanes, lane_time)) => {
+                    app.finish_lane_computation(rows, lanes, lane_time);
                     lane_receiver = None;
                     dirty = true;
                     if quit_on_finish {
@@ -296,7 +296,7 @@ fn event_loop(
     }
 }
 
-fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, Duration)> {
+fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, String, Duration)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(app::compute_lanes(rows));

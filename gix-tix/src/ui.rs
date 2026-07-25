@@ -42,8 +42,9 @@ pub(crate) fn draw(
     );
     let rendered_lane_width = visible_rows
         .iter()
-        .filter(|row| !row.lane.is_empty())
-        .map(|row| row.lane.trim_end().chars().count().saturating_add(1))
+        .map(|row| app.lane(row))
+        .filter(|lane| !lane.is_empty())
+        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
         .unwrap_or_default();
     let max_lane_width = if rendered_lane_width == 0 {
@@ -69,6 +70,7 @@ pub(crate) fn draw(
             metadata_line(
                 row,
                 app.title(row),
+                app.attributions(row),
                 decorations,
                 mailmap,
                 MetadataOptions {
@@ -99,7 +101,7 @@ pub(crate) fn draw(
         visible_rows
             .iter()
             .zip(&metadata)
-            .map(|(row, metadata)| row.lane.chars().count().saturating_add(metadata.width()))
+            .map(|(row, metadata)| app.lane(row).chars().count().saturating_add(metadata.width()))
             .max()
             .unwrap_or_default()
             .saturating_sub(content.width as usize)
@@ -111,6 +113,7 @@ pub(crate) fn draw(
 
     let visible_rows = &app.rows[start..end];
     for (index, (row, metadata)) in visible_rows.iter().zip(metadata).enumerate() {
+        let lane = app.lane(row);
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
         let metadata_width = metadata.width();
@@ -127,12 +130,10 @@ pub(crate) fn draw(
         let row_area = Rect::new(content.x, y, content.width, 1);
         if align_metadata {
             frame.render_widget(
-                Paragraph::new(row.lane.as_str())
-                    .style(style)
-                    .scroll((0, graph_offset as u16)),
+                Paragraph::new(lane).style(style).scroll((0, graph_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, graph_offset, selected);
+            color_graph(frame, row_area, lane, graph_offset, selected);
             let aligned = Rect::new(
                 content.x.saturating_add(align_width as u16),
                 y,
@@ -143,20 +144,19 @@ pub(crate) fn draw(
             frame.render_widget(Paragraph::new(metadata).scroll((0, metadata_offset as u16)), aligned);
         } else {
             let mut spans = Vec::with_capacity(metadata.spans.len() + 1);
-            spans.push(Span::styled(row.lane.as_str(), style));
+            spans.push(Span::styled(lane, style));
             spans.extend(metadata.spans);
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
                 row_area,
             );
-            color_graph(frame, row_area, &row.lane, horizontal_offset, selected);
+            color_graph(frame, row_area, lane, horizontal_offset, selected);
         }
         if selected && body.width > 0 {
             let line_width = if align_metadata {
                 align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
             } else {
-                row.lane
-                    .chars()
+                lane.chars()
                     .count()
                     .saturating_add(metadata_width)
                     .saturating_sub(horizontal_offset)
@@ -247,6 +247,7 @@ struct MetadataOptions {
 fn metadata_line<'a>(
     row: &'a CommitRow,
     title: &'a BStr,
+    attributions: &'a [crate::app::Attribution],
     decorations: &'a Decorations,
     mailmap: &'a gix::mailmap::Snapshot,
     options: MetadataOptions,
@@ -318,7 +319,7 @@ fn metadata_line<'a>(
                 (AttributionKind::Tested, "Te: "),
                 (AttributionKind::SignedOff, "So: "),
             ] {
-                let mut actors = row.attributions.iter().filter(|actor| actor.kind == kind).peekable();
+                let mut actors = attributions.iter().filter(|actor| actor.kind == kind).peekable();
                 if actors.peek().is_none() {
                     continue;
                 }
@@ -417,7 +418,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        app::{Action, Attribution, AttributionKind, Author, Commit},
+        app::{Action, Attribution, AttributionKind, Author, Commit, LoadedCommits},
         history::{Decoration, DecorationKind},
     };
 
@@ -436,19 +437,23 @@ mod tests {
         let rows = app
             .start_lane_computation()
             .expect("a loading app starts lane computation");
-        let (rows, lane_time) = crate::app::compute_lanes(rows);
-        app.finish_lane_computation(rows, lane_time);
+        let (rows, lanes, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, lane_time);
     }
 
     #[test]
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
-        app.extend_commits(vec![Commit {
-            id: gix::ObjectId::Sha1([1; 20]),
-            parent_ids: Default::default(),
-            lane: String::new(),
-            committer_time: gix::date::Time::default(),
-            author: author(b"Codex", b"codex@openai.com"),
+        app.extend_commits(LoadedCommits {
+            rows: vec![Commit {
+                id: gix::ObjectId::Sha1([1; 20]),
+                parent_ids: Default::default(),
+                lane: 0..0,
+                committer_time: gix::date::Time::default(),
+                author: author(b"Codex", b"codex@openai.com"),
+                attributions: 0..6,
+                title: "subject".into(),
+            }],
             attributions: vec![
                 Attribution {
                     kind: AttributionKind::CoAuthor,
@@ -474,10 +479,8 @@ mod tests {
                     kind: AttributionKind::SignedOff,
                     author: author(b"Signer", b"signer@example.com"),
                 },
-            ]
-            .into_boxed_slice(),
-            title: "subject".into(),
-        }]);
+            ],
+        });
         app.selected = None;
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
 
@@ -541,10 +544,10 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
-            lane: String::new(),
+            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: "subject".into(),
         }]);
         complete(&mut app);
@@ -700,10 +703,10 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            lane: String::new(),
+            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: "subject".into(),
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
@@ -771,13 +774,13 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
-                    lane: String::new(),
+                    lane: 0..0,
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
-                    attributions: Box::default(),
+                    attributions: 0..0,
                     title: format!("subject {n}").into(),
                 })
-                .collect(),
+                .collect::<Vec<_>>(),
         );
         complete(&mut app);
         app.update(Action::Last);
@@ -807,10 +810,10 @@ mod tests {
         let commit = Commit {
             id,
             parent_ids: Default::default(),
-            lane: "● │ │ │ │ │ │ │ ".into(),
+            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: "subject".into(),
         };
         let decorations = Decorations::from([(
@@ -840,11 +843,13 @@ mod tests {
         )]);
         let mut app = App::new(1);
         app.extend_commits(vec![commit]);
+        app.set_lane(0, "● │ │ │ │ │ │ │ ");
         let row = &app.rows[0];
         let mailmap = gix::mailmap::Snapshot::default();
         let line = metadata_line(
             row,
             app.title(row),
+            app.attributions(row),
             &decorations,
             &mailmap,
             MetadataOptions {
@@ -905,14 +910,14 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            lane: String::new(),
+            lane: 0..0,
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
-            attributions: Box::default(),
+            attributions: 0..0,
             title: format!("{} subject-tail", "a".repeat(50)).into(),
         }]);
         complete(&mut app);
-        app.rows[0].lane = format!("{}{}", "A".repeat(40), "B".repeat(40));
+        app.set_lane(0, &format!("{}{}", "A".repeat(40), "B".repeat(40)));
         let mut terminal = Terminal::new(TestBackend::new(60, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
@@ -948,7 +953,7 @@ mod tests {
         );
 
         app.update(Action::ScrollLeft);
-        app.rows[0].lane = "● ".into();
+        app.set_lane(0, "● ");
         app.update(Action::ToggleAlign);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
