@@ -195,7 +195,7 @@ pub(crate) fn draw(
         app.rows.len()
     ))];
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
-    footer_spans.extend([Span::raw(" · "), toggle("] commit", app.show_commit)]);
+    footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -688,7 +688,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · ] commit · d date · n names · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · d date · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
         for x in 0..11 {
@@ -713,10 +713,10 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 1, 0)]
             .set_style(Style::default().add_modifier(Modifier::REVERSED));
-        let commit = footer_text[..footer_text.find("] commit").expect("the commit toggle is present")]
+        let commit = footer_text[..footer_text.find("o commit").expect("the commit toggle is present")]
             .chars()
             .count();
-        for x in commit..commit + "] commit".len() {
+        for x in commit..commit + "o commit".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
@@ -937,7 +937,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(footer_is_dim(&terminal, "] commit"), "the closed commit pane is dimmed");
+        assert!(footer_is_dim(&terminal, "o commit"), "the closed commit pane is dimmed");
 
         app.update(Action::ToggleCommit);
         terminal.draw(|frame| {
@@ -960,7 +960,7 @@ mod tests {
             "vertical margin leaves the full commit body intact"
         );
         assert!(
-            !footer_is_dim(&terminal, "] commit"),
+            !footer_is_dim(&terminal, "o commit"),
             "the open commit pane is not dimmed"
         );
 

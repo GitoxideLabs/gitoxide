@@ -482,7 +482,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
-        KeyCode::Char(']') => Some(Action::ToggleCommit),
+        KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
@@ -620,6 +620,10 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommit)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
             Some(Action::ToggleCommit)
         );
         assert_eq!(
