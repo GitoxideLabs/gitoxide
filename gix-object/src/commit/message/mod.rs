@@ -127,6 +127,6 @@ pub(crate) fn summary(message: &BStr) -> Cow<'_, BStr> {
 /// Note that we only parse trailers from the bottom of the body.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone, Copy)]
 pub struct BodyRef<'a> {
-    body_without_trailer: &'a BStr,
-    start_of_trailer: &'a [u8],
+    body: &'a BStr,
+    trailer_start: usize,
 }

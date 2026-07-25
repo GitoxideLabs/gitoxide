@@ -12,6 +12,19 @@ pub struct Trailers<'a> {
     pub(crate) cursor: &'a [u8],
 }
 
+/// An iterator over raw message portions and the contiguous trailers following each one.
+pub struct MessageBlocks<'a> {
+    cursor: &'a [u8],
+    trailer_start: usize,
+}
+
+/// A raw message portion and the contiguous trailers following it.
+pub struct MessageBlock<'a> {
+    /// The message bytes, including their original whitespace and line endings.
+    pub message: &'a BStr,
+    trailers: &'a [u8],
+}
+
 /// A trailer as parsed from the commit message body.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -156,6 +169,28 @@ fn unfold_value(value: &[u8]) -> Cow<'_, BStr> {
     Cow::Owned(out)
 }
 
+struct TrailerLine<'a> {
+    token: &'a BStr,
+    separator: usize,
+    len: usize,
+}
+
+fn trailer_at_start(cursor: &[u8]) -> Option<TrailerLine<'_>> {
+    let line = cursor.lines_with_terminator().next()?;
+    let (token, separator) = parse_trailer_line(trim_line_ending(line))?;
+    let mut len = line.len();
+    let mut rest = &cursor[len..];
+    while let Some(next_line) = rest.lines_with_terminator().next() {
+        let next_text = trim_line_ending(next_line);
+        if is_blank_line(next_text) || !next_text.first().is_some_and(u8::is_ascii_whitespace) {
+            break;
+        }
+        len += next_line.len();
+        rest = &rest[next_line.len()..];
+    }
+    Some(TrailerLine { token, separator, len })
+}
+
 /// Find the byte offset at which the trailer block begins in `body`.
 ///
 /// Returns `None` if the trailing paragraph does not satisfy Git's trailer-block
@@ -226,69 +261,95 @@ impl<'a> Iterator for Trailers<'a> {
     type Item = TrailerRef<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        while !self.cursor.is_empty() {
+            if let Some(trailer) = trailer_at_start(self.cursor) {
+                let value = unfold_value(&self.cursor[trailer.separator + 1..trailer.len]);
+                self.cursor = &self.cursor[trailer.len..];
+                return Some(TrailerRef {
+                    token: trailer.token,
+                    value,
+                });
+            }
+            let consumed = self.cursor.lines_with_terminator().next()?.len();
+            self.cursor = &self.cursor[consumed..];
+        }
+        None
+    }
+}
+
+impl<'a> Iterator for MessageBlocks<'a> {
+    type Item = MessageBlock<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.cursor.is_empty() {
             return None;
         }
 
-        while let Some(line) = self.cursor.lines_with_terminator().next() {
-            let line = trim_line_ending(line);
-            let consumed = self.cursor.lines_with_terminator().next().map_or(0, <[u8]>::len);
-            if let Some((token, separator)) = parse_trailer_line(line) {
-                let mut trailer_len = consumed;
-                let mut cursor = &self.cursor[consumed..];
-                while let Some(next_line) = cursor.lines_with_terminator().next() {
-                    let next_text = trim_line_ending(next_line);
-                    if is_blank_line(next_text) || !next_text.first().is_some_and(u8::is_ascii_whitespace) {
-                        break;
-                    }
-                    trailer_len += next_line.len();
-                    cursor = &cursor[next_line.len()..];
-                }
-
-                let value = unfold_value(&self.cursor[separator + 1..trailer_len]);
-                self.cursor = &self.cursor[trailer_len..];
-                return Some(TrailerRef { token, value });
-            }
-            self.cursor = &self.cursor[consumed..];
+        let mut message_len = self.trailer_start;
+        while message_len < self.cursor.len() && trailer_at_start(&self.cursor[message_len..]).is_none() {
+            message_len += self.cursor[message_len..].lines_with_terminator().next()?.len();
         }
 
-        None
+        let trailer_start = message_len;
+        while let Some(trailer) = trailer_at_start(&self.cursor[message_len..]) {
+            message_len += trailer.len;
+        }
+        let block_len = message_len;
+        let block = MessageBlock {
+            message: self.cursor[..trailer_start].as_bstr(),
+            trailers: &self.cursor[trailer_start..block_len],
+        };
+        self.cursor = &self.cursor[block_len..];
+        self.trailer_start = 0;
+        Some(block)
+    }
+}
+
+impl<'a> MessageBlock<'a> {
+    /// Return the continuously parseable trailers immediately following [`message`](MessageBlock::message).
+    pub fn trailers(&self) -> Trailers<'a> {
+        Trailers { cursor: self.trailers }
     }
 }
 
 impl<'a> BodyRef<'a> {
     /// Parse `body` bytes into the trailer and the actual body.
     pub fn from_bytes(body: &'a [u8]) -> Self {
-        trailer_block_start(body).map_or(
-            BodyRef {
-                body_without_trailer: body.as_bstr(),
-                start_of_trailer: &[],
-            },
-            |start| BodyRef {
-                body_without_trailer: body[..start].as_bstr(),
-                start_of_trailer: &body[start..],
-            },
-        )
+        BodyRef {
+            body: body.as_bstr(),
+            trailer_start: trailer_block_start(body).unwrap_or(body.len()),
+        }
     }
 
     /// Returns the body with the trailers stripped.
     ///
     /// You can iterate trailers with the [`trailers()`][BodyRef::trailers()] method.
     pub fn without_trailer(&self) -> &'a BStr {
-        self.body_without_trailer
+        self.body[..self.trailer_start].as_bstr()
     }
 
     /// Return an iterator over the trailers parsed from the last paragraph of the body. Maybe empty.
     pub fn trailers(&self) -> Trailers<'a> {
         Trailers {
-            cursor: self.start_of_trailer,
+            cursor: &self.body[self.trailer_start..],
+        }
+    }
+
+    /// Return the entire body as raw message portions, each followed by a continuously parseable trailer run.
+    ///
+    /// Message bytes aren't trimmed or normalized. Trailer-like lines outside the block accepted by Git's
+    /// trailer heuristic remain part of a message.
+    pub fn message_blocks(&self) -> MessageBlocks<'a> {
+        MessageBlocks {
+            cursor: self.body,
+            trailer_start: self.trailer_start,
         }
     }
 }
 
 impl AsRef<BStr> for BodyRef<'_> {
     fn as_ref(&self) -> &BStr {
-        self.body_without_trailer
+        self.without_trailer()
     }
 }
 
@@ -296,7 +357,7 @@ impl Deref for BodyRef<'_> {
     type Target = BStr;
 
     fn deref(&self) -> &Self::Target {
-        self.body_without_trailer
+        self.without_trailer()
     }
 }
 
