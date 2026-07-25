@@ -58,12 +58,12 @@ fn name_with_args() {
 fn name_with_special_args() {
     let input = "name --arg --bar=~/folder/in/home";
     let prog = Program::from_custom_definition(input);
-    let sh = *SH;
+    let sh = gix_path::env::shell_command();
     let git = *GIT;
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
-        format!(r#""{sh}" "-c" "{git} credential-name --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#)
+        format!(r#"{sh:?} "-c" "{git} credential-name --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#)
     );
 }
 
