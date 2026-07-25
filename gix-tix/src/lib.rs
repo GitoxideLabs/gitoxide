@@ -38,6 +38,12 @@ const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
+struct FillRepository<'a> {
+    path: &'a Path,
+    retained: Option<gix::Repository>,
+    retain: bool,
+}
+
 /// Options for [`run()`].
 #[derive(Clone, Debug, Default)]
 pub struct Options {
@@ -207,6 +213,11 @@ fn event_loop(
     let mut app = App::new(1);
     let mut lane_receiver = None;
     let mut commit_message = None;
+    let mut fill_repository = FillRepository {
+        path: &repository_path,
+        retained: None,
+        retain: false,
+    };
     app.has_hidden_filter = !hide.is_empty();
     let mut decorations = Decorations::new();
     draw(
@@ -215,7 +226,7 @@ fn event_loop(
         &decorations,
         &mailmap,
         &authors,
-        &repository_path,
+        &mut fill_repository,
         &mut commit_message,
     )?;
     let mut last_draw = Instant::now();
@@ -246,7 +257,7 @@ fn event_loop(
                 &decorations,
                 &mailmap,
                 &authors,
-                &repository_path,
+                &mut fill_repository,
                 &mut commit_message,
             )?;
             last_draw = Instant::now();
@@ -289,7 +300,7 @@ fn event_loop(
                 &decorations,
                 &mailmap,
                 &authors,
-                &repository_path,
+                &mut fill_repository,
                 &mut commit_message,
             )?;
             last_draw = Instant::now();
@@ -312,7 +323,14 @@ fn event_loop(
             }
             _ => continue,
         };
-        let Some(action) = action(key) else { continue };
+        let action = action(key);
+        fill_repository.retain = retains_fill_repository(key.kind, action.as_ref());
+        if !fill_repository.retain {
+            fill_repository.retained = None;
+        }
+        let Some(action) = action else {
+            continue;
+        };
         dirty = true;
         urgent = true;
         let effects = app.update(action);
@@ -403,43 +421,56 @@ fn draw(
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
-    repository_path: &Path,
+    fill_repository: &mut FillRepository<'_>,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
 ) -> Result<()> {
     app.viewport_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
-    if app.rows[start..end].iter().any(|row| !row.metadata_loaded) {
-        let mut repository = gix::open(repository_path).context("could not open repository for history view")?;
-        repository.object_cache_size(None);
-        for index in start..end {
-            if app.rows[index].metadata_loaded {
-                continue;
-            }
-            let (metadata, attributions) = history::load_metadata(&repository, app.rows[index].id, authors)
-                .context("could not load visible commit")?;
-            app.set_metadata(index, metadata, attributions);
-        }
-    }
     let selected = app
         .show_commit
         .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
         .flatten();
-    if commit_message.as_ref().map(|(id, _)| *id) != selected {
-        *commit_message = selected
-            .map(|id| load_commit_message(repository_path, id).map(|message| (id, message)))
-            .transpose()?;
+    let message_to_load = selected.filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
+    if selected.is_none() {
+        *commit_message = None;
+    }
+    if app.rows[start..end].iter().any(|row| !row.metadata_loaded) || message_to_load.is_some() {
+        let mut one_shot_repository = None;
+        let repository = if fill_repository.retain {
+            match &mut fill_repository.retained {
+                Some(repository) => repository,
+                slot @ None => slot.insert(open_fill_repository(fill_repository.path)?),
+            }
+        } else {
+            one_shot_repository.insert(open_fill_repository(fill_repository.path)?)
+        };
+        for index in start..end {
+            if app.rows[index].metadata_loaded {
+                continue;
+            }
+            let (metadata, attributions) = history::load_metadata(repository, app.rows[index].id, authors)
+                .context("could not load visible commit")?;
+            app.set_metadata(index, metadata, attributions);
+        }
+        if let Some(id) = message_to_load {
+            *commit_message = Some((id, load_commit_message(repository, id)?));
+        }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
     terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message))?;
     Ok(())
 }
 
-fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BString> {
-    let repo = gix::open_opts(repository_path, gix::open::Options::isolated())
-        .context("could not open repository for commit message")?;
-    let commit = repo.find_commit(id).context("could not load commit message")?;
+fn open_fill_repository(repository_path: &Path) -> Result<gix::Repository> {
+    let mut repository = gix::open(repository_path).context("could not open repository for history view")?;
+    repository.object_cache_size(None);
+    Ok(repository)
+}
+
+fn load_commit_message(repository: &gix::Repository, id: gix::ObjectId) -> Result<BString> {
+    let commit = repository.find_commit(id).context("could not load commit message")?;
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
@@ -512,17 +543,36 @@ fn action(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn repeats_viewport(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::MoveUp
+            | Action::MoveDown
+            | Action::HalfPageUp
+            | Action::HalfPageDown
+            | Action::PageUp
+            | Action::PageDown
+            | Action::First
+            | Action::Last
+    )
+}
+
+fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>) -> bool {
+    kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn loads_commit_messages_from_an_isolated_repository() -> gix_testtools::Result {
+    fn loads_commit_messages_from_an_existing_repository() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let id = gix::open(&fixture)?.rev_parse_single("topic")?.detach();
+        let repository = gix::open(&fixture)?;
+        let id = repository.rev_parse_single("topic")?.detach();
 
         assert!(
-            load_commit_message(&fixture, id)?.starts_with(b"topic\n\nCo-authored-by:"),
+            load_commit_message(&repository, id)?.starts_with(b"topic\n\nCo-authored-by:"),
             "on-demand loading retains the full commit message"
         );
         Ok(())
@@ -678,6 +728,21 @@ mod tests {
             Some(Action::Quit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn retains_the_fill_repository_only_for_repeated_viewport_navigation() {
+        assert!(retains_fill_repository(KeyEventKind::Repeat, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(KeyEventKind::Press, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(KeyEventKind::Release, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ScrollRight)
+        ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ToggleDate)
+        ));
     }
 
     #[test]
