@@ -1,4 +1,4 @@
-use gix::bstr::{BStr, ByteSlice};
+use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Margin, Rect},
@@ -239,27 +239,17 @@ pub(crate) fn draw(
 
 fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
     let parsed = gix::objs::commit::MessageRef::from_bytes(message);
-    let Some(raw_body) = parsed.body else {
+    let Some(body) = parsed.body() else {
         frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
         return;
     };
-    let body = gix::objs::commit::message::BodyRef::from_bytes(raw_body);
-    let trailers: Vec<_> = body.trailers().collect();
-    let trailer_block = &raw_body[body.without_trailer().len()..];
-    let mut top_level_lines = 0;
-    let mut saw_top_level_line = false;
-    let unattached_continuation = trailer_block.lines().any(|line| {
-        if line.iter().all(u8::is_ascii_whitespace) {
-            return false;
-        }
-        if line[0].is_ascii_whitespace() {
-            return !saw_top_level_line;
-        }
-        saw_top_level_line = true;
-        top_level_lines += 1;
-        false
-    });
-    if trailers.is_empty() || top_level_lines != trailers.len() || unattached_continuation || area.width < 3 {
+    let mut body_message = BString::default();
+    let mut trailers = Vec::new();
+    for block in body.message_blocks() {
+        body_message.extend_from_slice(block.message);
+        trailers.extend(block.trailers());
+    }
+    if trailers.is_empty() || area.width < 3 {
         frame.render_widget(Paragraph::new(message.to_str_lossy()).wrap(Wrap { trim: false }), area);
         return;
     }
@@ -275,9 +265,10 @@ fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
     let key_width = key_width as u16;
 
     let mut text = parsed.title.to_str_lossy().into_owned();
-    if !body.without_trailer().is_empty() {
+    let body_message = body_message.trim_end();
+    if !body_message.is_empty() {
         text.push_str("\n\n");
-        text.push_str(&body.without_trailer().to_str_lossy());
+        text.push_str(&body_message.to_str_lossy());
     }
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let mut y = area
@@ -1003,8 +994,22 @@ mod tests {
         terminal.draw(|frame| render_commit_message(frame, frame.area(), message))?;
         assert!(
             rendered_line(&terminal, 2).contains("not a trailer")
-                && rendered_line(&terminal, 4).contains("another note"),
-            "mixed prose in a recognized trailer block is preserved"
+                && rendered_line(&terminal, 3).contains("another note"),
+            "mixed message parts are combined ahead of the trailers"
+        );
+        assert!(
+            rendered_line(&terminal, 4).trim().is_empty(),
+            "the combined message remains separated from its trailers"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 5).find("Alice"),
+            Some(15),
+            "the first trailer moves below all message parts"
+        );
+        assert_eq!(
+            rendered_line(&terminal, 6).find("Bob"),
+            Some(15),
+            "later trailer runs share the aligned value column"
         );
         Ok(())
     }
