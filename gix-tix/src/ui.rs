@@ -575,7 +575,7 @@ mod tests {
                 },
                 Attribution {
                     kind: AttributionKind::Assisted,
-                    author: author(b"Assistant", b"codex@openai.com"),
+                    author: author(b"Codex", b"codex@openai.com"),
                 },
                 Attribution {
                     kind: AttributionKind::Reviewed,
@@ -605,9 +605,9 @@ mod tests {
         let row = rendered_row(&terminal);
         assert!(
             row.contains(
-                "[Codex] Co: Mapped Human, [Claude] As: [Assistant] Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
+                "[Codex] Co: Mapped Human, [Claude] As: * Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
             ),
-            "same-kind trailers share one marker, use mailmap, and render bots with bracketed names"
+            "same-kind trailers share one marker, use mailmap, and collapse the primary author to an asterisk"
         );
         let buffer = terminal.backend().buffer();
         let style_at = |needle: &str| {
