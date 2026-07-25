@@ -59,6 +59,9 @@ impl Repository {
         let fs_caps = self.filesystem_options()?;
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
+        let excludes_file = self.config.effective_excludes_file()?;
+        opts.use_untracked_cache = self.config.use_untracked_cache();
+        opts.untracked_cache_excludes_file = excludes_file.as_deref();
         let worktree_relative_worktree_dirs_storage;
         if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
             let linked_worktrees = self.worktrees()?;

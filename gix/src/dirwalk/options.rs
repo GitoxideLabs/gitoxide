@@ -26,6 +26,8 @@ impl Options {
 impl From<Options> for gix_dir::walk::Options<'static> {
     fn from(v: Options) -> Self {
         gix_dir::walk::Options {
+            use_untracked_cache: false,
+            untracked_cache_excludes_file: None,
             precompose_unicode: v.precompose_unicode,
             ignore_case: v.ignore_case,
             recurse_repositories: v.recurse_repositories,

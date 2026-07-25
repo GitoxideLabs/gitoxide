@@ -16,6 +16,60 @@ pub fn repo(name: &str) -> crate::Result<gix::Repository> {
     )?)
 }
 
+#[test]
+fn untracked_cache_is_used_unless_disabled_by_config() -> crate::Result {
+    let tmp = gix_testtools::tempfile::tempdir()?;
+    let root = tmp.path();
+    gix_testtools::git(root, "init")?;
+    for directory in 0..16 {
+        let directory = root.join(format!("d{directory}"));
+        std::fs::create_dir(&directory)?;
+        std::fs::write(directory.join("tracked"), b"content")?;
+    }
+    gix_testtools::git(root, "add .")?;
+    gix_testtools::git(root, "config core.untrackedCache true")?;
+    gix_testtools::git(root, "update-index --untracked-cache --index-version 2")?;
+    gix_testtools::git(root, "status --porcelain")?;
+
+    let enabled = gix::ThreadSafeRepository::open_opts(root, crate::util::restricted())?.to_thread_local();
+    let disabled = gix::ThreadSafeRepository::open_opts(
+        root,
+        crate::util::restricted().cli_overrides(["core.untrackedCache=false"]),
+    )?
+    .to_thread_local();
+    let kept = gix::ThreadSafeRepository::open_opts(
+        root,
+        crate::util::restricted().cli_overrides(["core.untrackedCache=keep"]),
+    )?
+    .to_thread_local();
+
+    let read_dir_calls = |repo: &gix::Repository| -> crate::Result<u32> {
+        let mut status = repo.status(gix::progress::Discard)?.into_iter(None)?;
+        for item in status.by_ref() {
+            item?;
+        }
+        Ok(status
+            .into_outcome()
+            .expect("iteration was exhausted")
+            .index_worktree
+            .dirwalk
+            .expect("untracked files are enabled")
+            .read_dir_calls)
+    };
+    let with_cache = read_dir_calls(&enabled)?;
+    let with_keep = read_dir_calls(&kept)?;
+    let without_cache = read_dir_calls(&disabled)?;
+    assert!(
+        with_cache < without_cache,
+        "core.untrackedCache=true should reduce directory reads, got {with_cache} with it and {without_cache} without"
+    );
+    assert_eq!(
+        with_keep, with_cache,
+        "Git's `keep` value should retain an existing cache"
+    );
+    Ok(())
+}
+
 mod into_iter {
     use gix::status::{Item, Submodule, tree_index::TrackRenames};
     use gix_diff::Rewrites;

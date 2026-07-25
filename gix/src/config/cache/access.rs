@@ -247,6 +247,19 @@ impl Cache {
         self.trusted_file_path(Core::EXCLUDES_FILE)
     }
 
+    #[cfg(feature = "excludes")]
+    pub(crate) fn effective_excludes_file(&self) -> Result<Option<PathBuf>, config::exclude_stack::Error> {
+        Ok(match self.excludes_file()? {
+            Some(user_path) => Some(user_path),
+            None => self.xdg_config_path("ignore")?,
+        })
+    }
+
+    #[cfg(feature = "dirwalk")]
+    pub(crate) fn use_untracked_cache(&self) -> bool {
+        self.resolved.boolean(Core::UNTRACKED_CACHE).ok().flatten() != Some(false)
+    }
+
     /// A helper to obtain a file from trusted configuration at `section_name`, `subsection_name`, and `key`, which is interpolated
     /// if present.
     pub(crate) fn trusted_file_path(
@@ -393,10 +406,7 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file()? {
-            Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore")?,
-        };
+        let excludes_file = self.effective_excludes_file()?;
         let parse_ignore = self.ignore_pattern_parser()?;
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
