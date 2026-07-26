@@ -47,6 +47,7 @@ const COMMIT_BATCH_SIZE: usize = 1024;
 pub(crate) enum Event {
     Decorations(Decorations),
     Commits(LoadedCommits),
+    HiddenCommits(LoadedCommits),
     Complete,
     Cancelled,
 }
@@ -77,6 +78,9 @@ pub(crate) fn load(
         .context("could not start revision walk")?;
     let mut rows = Vec::with_capacity(COMMIT_BATCH_SIZE);
     let mut attributions = Vec::with_capacity(COMMIT_BATCH_SIZE);
+    let mut visible = HashSet::new();
+    let mut connected = Vec::new();
+    let mut seen_parents = HashSet::new();
     for info in walk {
         if cancelled.load(Ordering::Relaxed) {
             emit(Event::Cancelled);
@@ -106,6 +110,13 @@ pub(crate) fn load(
             has_agent_marker: false,
             signature: SignatureState::Unsigned,
         });
+        visible.insert(info.id);
+        connected.extend(
+            info.parent_ids
+                .iter()
+                .copied()
+                .filter(|parent| seen_parents.insert(*parent)),
+        );
         rows.push(Commit {
             id: info.id,
             parent_ids: info.parent_ids,
@@ -128,6 +139,42 @@ pub(crate) fn load(
     }
     if !rows.is_empty() && !emit(Event::Commits(LoadedCommits { rows, attributions })) {
         return Ok(());
+    }
+    if !hidden_revisions.is_empty() {
+        connected.retain(|id| !visible.contains(id));
+        let mut rows = Vec::with_capacity(connected.len());
+        let mut attributions = Vec::new();
+        let mut authors = gix::features::threading::lock(authors);
+        for id in connected {
+            if cancelled.load(Ordering::Relaxed) {
+                emit(Event::Cancelled);
+                return Ok(());
+            }
+            let object = repo.find_commit(id).context("could not read connected hidden commit")?;
+            let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
+            let Metadata {
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                has_agent_marker,
+                signature,
+            } = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
+            rows.push(Commit {
+                id,
+                parent_ids,
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                metadata_loaded: true,
+                has_agent_marker,
+                signature,
+            });
+        }
+        if !rows.is_empty() && !emit(Event::HiddenCommits(LoadedCommits { rows, attributions })) {
+            return Ok(());
+        }
     }
     emit(Event::Complete);
     Ok(())
@@ -542,7 +589,19 @@ mod tests {
         );
         let expected = String::from_utf8(output.stdout)?.lines().map(str::to_owned).collect();
         assert_eq!(actual, expected, "hidden tips use Git's exclusion semantics");
-        let repo = gix::open(&fixture)?;
+        let repo = crate::open_test_repository(&fixture)?;
+        let connected: Vec<_> = events
+            .iter()
+            .flat_map(|event| match event {
+                Event::HiddenCommits(batch) => batch.rows.iter().map(|row| row.id).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            connected,
+            [repo.rev_parse_single("topic^")?.detach()],
+            "only the excluded parent directly connected to visible history is retained"
+        );
         let revisions = [OsString::from("topic")];
         let hidden = [OsString::from("main")];
         assert_eq!(
