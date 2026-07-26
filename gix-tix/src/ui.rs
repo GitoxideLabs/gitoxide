@@ -190,6 +190,32 @@ pub(crate) fn draw(
                 visible_rows[index].signature,
             );
         }
+        let lane_offset = if align_metadata {
+            graph_offset
+        } else {
+            horizontal_offset
+        };
+        if let (Some(parent), Some(disk)) = (
+            app.junction_parent(start + index),
+            lane.chars().position(|symbol| symbol == '●'),
+        ) && disk >= lane_offset
+        {
+            let number = parent.to_string();
+            let x = disk + 1 - lane_offset;
+            if x < row_area.width as usize {
+                let width = number
+                    .chars()
+                    .count()
+                    .min(lane.chars().count().saturating_sub(disk + 1))
+                    .min(row_area.width as usize - x);
+                if width > 0 {
+                    frame.render_widget(
+                        Paragraph::new(number).style(style),
+                        Rect::new(row_area.x + x as u16, y, width as u16, 1),
+                    );
+                }
+            }
+        }
         if selected && app.show_selection_tail && body.width > 0 {
             let line_width = if align_metadata {
                 align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
@@ -205,6 +231,11 @@ pub(crate) fn draw(
                 .saturating_add(1)
                 .min(body.right().saturating_sub(1));
             frame.buffer_mut()[(marker_x, y)].set_style(style);
+        }
+        if !app.is_row_reachable(start + index) {
+            for x in body.x..body.right() {
+                frame.buffer_mut()[(x, y)].set_style(Style::default().add_modifier(Modifier::DIM));
+            }
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
@@ -1400,6 +1431,88 @@ mod tests {
         assert!(
             !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "the final frame hides the trailing selection marker"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dims_rows_outside_the_shift_reachability_set() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(2);
+        app.extend_commits(
+            (1..=2)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("subject {n}").into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.update(Action::PreviewAuthorCopy(true));
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        assert!(
+            !terminal.backend().buffer()[(10, 0)].modifier.contains(Modifier::DIM),
+            "the anchor row remains bright"
+        );
+        assert!(
+            terminal.backend().buffer()[(10, 1)].modifier.contains(Modifier::DIM),
+            "an unreachable row is dimmed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn shows_the_selected_parent_beside_the_junction_disk() -> Result<(), Box<dyn std::error::Error>> {
+        let commit = |n: u8, parents: &[u8]| Commit {
+            id: gix::ObjectId::Sha1([n; 20]),
+            parent_ids: parents
+                .iter()
+                .map(|parent| gix::ObjectId::Sha1([*parent; 20]))
+                .collect(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: format!("subject {n}").into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(4);
+        app.extend_commits(vec![
+            commit(4, &[3, 2]),
+            commit(3, &[1]),
+            commit(2, &[1]),
+            commit(1, &[]),
+        ]);
+        complete(&mut app);
+        app.update(Action::PreviewAuthorCopy(true));
+        let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let metadata_x = rendered_row(&terminal)
+            .find("0404040")
+            .expect("the junction metadata is visible");
+        assert_eq!(
+            terminal.backend().buffer()[(3, 0)].symbol(),
+            "2",
+            "the initial parent number replaces the connector beside the disk"
+        );
+
+        app.update(Action::ScrollRight);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "1");
+        assert_eq!(
+            rendered_row(&terminal).find("0404040"),
+            Some(metadata_x),
+            "cycling parents does not shift metadata"
         );
         Ok(())
     }
