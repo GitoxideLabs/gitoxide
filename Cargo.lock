@@ -1592,6 +1592,7 @@ dependencies = [
  "gix-zlib",
  "insta",
  "is_ci",
+ "jiff",
  "nonempty",
  "parking_lot",
  "pretty_assertions",
