@@ -53,12 +53,13 @@ impl Attribution {
     pub fn is_agent(&self) -> bool {
         self.author.is_bot()
             || self.kind == AttributionKind::Assisted
-                && self
-                    .author
-                    .name
-                    .get(..4)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"opus"))
-                && self.author.name.get(4).is_none_or(u8::is_ascii_whitespace)
+                && [b"opus".as_slice(), b"gpt".as_slice()].iter().any(|name| {
+                    self.author
+                        .name
+                        .get(..name.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                        && self.author.name.get(name.len()).is_none_or(u8::is_ascii_whitespace)
+                })
     }
 }
 
@@ -840,9 +841,13 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_opus_only_as_an_assisting_agent() {
+    fn recognizes_named_agents_only_when_assisting() {
         let opus = Box::leak(Box::new(Author {
             name: b"Opus 4.7".as_bstr(),
+            email: b"".as_bstr(),
+        }));
+        let gpt = Box::leak(Box::new(Author {
+            name: b"GPT 5.6".as_bstr(),
             email: b"".as_bstr(),
         }));
 
@@ -850,6 +855,13 @@ mod tests {
             Attribution {
                 kind: AttributionKind::Assisted,
                 author: opus,
+            }
+            .is_agent()
+        );
+        assert!(
+            Attribution {
+                kind: AttributionKind::Assisted,
+                author: gpt,
             }
             .is_agent()
         );
