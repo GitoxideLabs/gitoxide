@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Range,
     time::{Duration, Instant},
 };
@@ -199,6 +199,9 @@ pub(crate) struct App {
     pub(crate) show_selection_tail: bool,
     pub inline: bool,
     pub preview_author_copy: bool,
+    reachability_anchor: Option<ObjectId>,
+    junction_parent: Option<usize>,
+    reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
@@ -236,6 +239,9 @@ impl App {
             show_selection_tail: true,
             inline: false,
             preview_author_copy: false,
+            reachability_anchor: None,
+            junction_parent: None,
+            reachable_rows: None,
             copy_feedback: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
@@ -279,6 +285,9 @@ impl App {
         } else if self.follow_tail {
             self.selected = Some(self.rows.len() - 1);
             self.ensure_visible();
+        }
+        if self.reachability_anchor.is_some() {
+            self.compute_reachable_rows();
         }
     }
 
@@ -339,16 +348,20 @@ impl App {
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
-            Action::MoveUp => self.move_selection(1, false),
-            Action::MoveDown => self.move_selection(1, true),
+            Action::MoveUp => self.move_reachable(false),
+            Action::MoveDown => self.move_reachable(true),
             Action::ScrollLeft => {
-                self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
+                if !self.cycle_junction_parent(false) {
+                    self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
+                }
             }
             Action::ScrollRight => {
-                self.horizontal_offset = self
-                    .horizontal_offset
-                    .saturating_add(self.horizontal_page)
-                    .min(self.horizontal_max);
+                if !self.cycle_junction_parent(true) {
+                    self.horizontal_offset = self
+                        .horizontal_offset
+                        .saturating_add(self.horizontal_page)
+                        .min(self.horizontal_max);
+                }
             }
             Action::HalfPageUp => self.move_selection((self.viewport_rows / 2).max(1), false),
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
@@ -411,7 +424,17 @@ impl App {
                     return vec![Effect::VerifySignatures(ids)];
                 }
             }
-            Action::PreviewAuthorCopy(value) => self.preview_author_copy = value,
+            Action::PreviewAuthorCopy(value) => {
+                if value && !self.preview_author_copy {
+                    self.reachability_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+                    self.compute_reachable_rows();
+                } else if !value {
+                    self.reachability_anchor = None;
+                    self.junction_parent = None;
+                    self.reachable_rows = None;
+                }
+                self.preview_author_copy = value;
+            }
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -503,6 +526,9 @@ impl App {
         self.lane_time = Some(lane_time);
         self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
         self.state = State::Complete;
+        if self.reachability_anchor.is_some() {
+            self.compute_reachable_rows();
+        }
         self.ensure_visible();
     }
 
@@ -521,6 +547,10 @@ impl App {
         self.show_hidden = show_hidden;
         self.horizontal_offset = 0;
         self.follow_tail = false;
+        self.preview_author_copy = false;
+        self.reachability_anchor = None;
+        self.junction_parent = None;
+        self.reachable_rows = None;
         self.signature_failures = 0;
         self.signature_verification_running = false;
     }
@@ -554,6 +584,104 @@ impl App {
         }
         self.follow_tail = false;
         self.ensure_visible();
+    }
+
+    fn move_reachable(&mut self, down: bool) {
+        let (Some(selected), Some(reachable)) = (self.selected, self.reachable_rows.as_ref()) else {
+            self.move_selection(1, down);
+            return;
+        };
+        let next = if down {
+            (selected + 1..self.rows.len()).find(|index| reachable.get(*index) == Some(&true))
+        } else {
+            (0..selected).rev().find(|index| reachable.get(*index) == Some(&true))
+        };
+        if let Some(next) = next {
+            self.select(next);
+        }
+    }
+
+    fn cycle_junction_parent(&mut self, forward: bool) -> bool {
+        if self.state != State::Complete {
+            return false;
+        }
+        let Some(parent_count) = self
+            .reachability_anchor
+            .and_then(|anchor| self.rows.iter().find(|row| row.id == anchor))
+            .map(|row| row.parent_ids.len())
+            .filter(|count| *count > 1)
+        else {
+            return false;
+        };
+        let current = self.junction_parent.unwrap_or(1);
+        self.junction_parent = Some(if forward {
+            (current + 1) % parent_count
+        } else {
+            (current + parent_count - 1) % parent_count
+        });
+        self.compute_reachable_rows();
+        true
+    }
+
+    fn compute_reachable_rows(&mut self) {
+        if self.state != State::Complete {
+            self.reachable_rows = None;
+            return;
+        }
+        let Some(anchor) = self.reachability_anchor else {
+            self.reachable_rows = None;
+            return;
+        };
+        let Some(anchor_index) = self.rows.iter().position(|row| row.id == anchor) else {
+            self.reachable_rows = Some(vec![false; self.rows.len()]);
+            return;
+        };
+        let parent_count = self.rows[anchor_index].parent_ids.len();
+        let start = if parent_count > 1 {
+            let parent = self.junction_parent.get_or_insert(1);
+            if *parent >= parent_count {
+                *parent = 1;
+            }
+            self.rows[anchor_index]
+                .parent_ids
+                .get(*parent)
+                .copied()
+                .expect("the selected junction parent exists")
+        } else {
+            self.junction_parent = None;
+            anchor
+        };
+        let mut pending = HashSet::from([start]);
+        let mut reachable: Vec<_> = self
+            .rows
+            .iter()
+            .map(|row| {
+                let reachable = pending.remove(&row.id);
+                if reachable {
+                    pending.extend(row.parent_ids.iter().copied());
+                }
+                reachable
+            })
+            .collect();
+        if start != anchor {
+            reachable[anchor_index] = true;
+        }
+        self.reachable_rows = Some(reachable);
+    }
+
+    pub(crate) fn junction_parent(&self, index: usize) -> Option<usize> {
+        let row = self.rows.get(index)?;
+        if self.reachability_anchor == Some(row.id) {
+            self.junction_parent.map(|parent| parent + 1)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_row_reachable(&self, index: usize) -> bool {
+        self.reachable_rows
+            .as_ref()
+            .is_none_or(|reachable| reachable.get(index).copied().unwrap_or(false))
     }
 
     fn select(&mut self, selected: usize) {
@@ -1130,6 +1258,63 @@ mod tests {
     }
 
     #[test]
+    fn shift_limits_jk_to_the_selected_commits_ancestors() {
+        let mut app = App::new(5);
+        app.extend_commits(vec![
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(5));
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable: Vec<_> = app
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| app.is_row_reachable(*index))
+            .map(|(_, row)| row.id)
+            .collect();
+        assert_eq!(reachable, [id(5), id(3), id(1)]);
+
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[app.selected.expect("an ancestor is selected")].id, id(3));
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[app.selected.expect("an ancestor is selected")].id, id(1));
+
+        app.update(Action::PreviewAuthorCopy(false));
+        app.update(Action::MoveUp);
+        assert_eq!(app.rows[app.selected.expect("normal navigation is restored")].id, id(2));
+    }
+
+    #[test]
+    fn shift_defers_reachability_until_the_graph_is_complete() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![row_with_parents(4, &[3, 2]), row_with_parents(3, &[1])]);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(
+            app.reachable_rows.is_none(),
+            "pressing Shift while traversing does not compute reachability"
+        );
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        assert!(
+            app.reachable_rows.is_none(),
+            "later traversal batches do not recompute reachability"
+        );
+
+        complete(&mut app);
+        assert!(
+            app.reachable_rows.is_some(),
+            "graph completion computes reachability once"
+        );
+        assert_eq!(app.junction_parent(0), Some(2));
+    }
+
+    #[test]
     fn selection_follows_the_oldest_commit_until_the_user_moves() {
         let mut app = App::new(2);
         app.extend_commits(vec![row(1), row(2), row(3)]);
@@ -1267,9 +1452,11 @@ mod tests {
         );
         complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(true)]);
+        drop(app.update(Action::PreviewAuthorCopy(true)));
         app.reload(true);
         assert!(app.rows.is_empty(), "reloading drops rows from the previous view");
         assert!(app.show_hidden);
+        assert!(!app.preview_author_copy, "reloading clears transient Shift state");
         assert_eq!(app.state, State::Loading);
         assert!(
             app.update(Action::ToggleHidden).is_empty(),
@@ -1296,6 +1483,86 @@ mod tests {
             1,
             "completion racing cancellation keeps already displayed commits"
         );
+    }
+
+    #[test]
+    fn shift_starts_with_a_merges_second_parent_rail() {
+        let mut app = App::new(7);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5, 4]),
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(6));
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable: Vec<_> = app
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| app.is_row_reachable(*index))
+            .map(|(_, row)| row.id)
+            .collect();
+        assert_eq!(
+            reachable,
+            [id(6), id(4), id(2), id(1)],
+            "the second parent and its complete ancestry are reachable"
+        );
+    }
+
+    #[test]
+    fn shift_cycles_junction_parents_without_panning() {
+        let mut app = App::new(8);
+        app.extend_commits(vec![
+            row_with_parents(10, &[8, 9, 11]),
+            row_with_parents(8, &[6]),
+            row_with_parents(9, &[7, 6]),
+            row_with_parents(11, &[5]),
+            row_with_parents(7, &[1]),
+            row_with_parents(6, &[1]),
+            row_with_parents(5, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(10));
+        app.set_horizontal_bounds(10, 25);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable = |app: &App| {
+            app.rows
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| app.is_row_reachable(*index))
+                .map(|(_, row)| row.id)
+                .collect::<HashSet<_>>()
+        };
+        assert_eq!(app.junction_parent(0), Some(2));
+        assert_eq!(
+            reachable(&app),
+            HashSet::from([id(10), id(9), id(7), id(6), id(1)]),
+            "the selected rail traverses every parent of its next junction"
+        );
+
+        app.update(Action::ScrollRight);
+        assert_eq!(app.junction_parent(0), Some(3));
+        assert_eq!(reachable(&app), HashSet::from([id(10), id(11), id(5), id(1)]));
+        app.update(Action::ScrollRight);
+        assert_eq!(app.junction_parent(0), Some(1));
+        assert_eq!(reachable(&app), HashSet::from([id(10), id(8), id(6), id(1)]));
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.junction_parent(0), Some(3));
+        assert_eq!(
+            app.horizontal_offset, 0,
+            "junction selection suppresses horizontal panning"
+        );
+
+        app.update(Action::PreviewAuthorCopy(false));
+        app.update(Action::ScrollRight);
+        assert_eq!(app.horizontal_offset, 10, "releasing Shift restores horizontal panning");
     }
 
     #[test]
