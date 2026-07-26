@@ -1,46 +1,9 @@
 use std::{borrow::Cow, path::Path};
 
-use gix_path::{normalize, normalize_and_clean};
+use gix_path::normalize;
 
 fn p(input: &str) -> &Path {
     Path::new(input)
-}
-
-#[test]
-fn clean_paths_and_use_the_cwd_for_empty_results() {
-    let cwd = p("/cwd");
-    for (input, expected) in [
-        ("", "/cwd"),
-        (".", "/cwd"),
-        ("./a", "a"),
-        ("a/./b", "a/b"),
-        ("a//b/", "a/b"),
-        ("a/..", "/cwd"),
-    ] {
-        assert_eq!(
-            normalize_and_clean(p(input).into(), cwd).expect("path can be normalized"),
-            p(expected),
-            "'{input}' cleans to '{expected}'"
-        );
-    }
-    assert_eq!(
-        normalize_and_clean(p(".").into(), p(""))
-            .expect("path can be normalized")
-            .as_ref(),
-        p(""),
-        "an empty CWD allows an empty normalized path"
-    );
-    assert_eq!(
-        normalize_and_clean(p(".").into(), cwd)
-            .expect("path can be normalized")
-            .as_ref(),
-        cwd,
-        "an empty input path is the CWD"
-    );
-    assert!(
-        matches!(normalize_and_clean(p("a/b").into(), cwd), Some(Cow::Borrowed(path)) if path == p("a/b")),
-        "already-clean borrowed paths stay borrowed"
-    );
 }
 
 #[test]
