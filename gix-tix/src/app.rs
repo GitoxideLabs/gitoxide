@@ -176,6 +176,7 @@ pub(crate) enum Effect {
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
+    hidden_rows: HashSet<ObjectId>,
     titles: Vec<u8>,
     graph: Option<Graph>,
     attributions: Vec<Attribution>,
@@ -208,6 +209,7 @@ pub(crate) struct App {
     horizontal_page: usize,
     horizontal_max: usize,
     follow_tail: bool,
+    reload_selection: Option<ObjectId>,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
 }
@@ -216,6 +218,7 @@ impl App {
     pub fn new(viewport_rows: usize) -> Self {
         App {
             rows: Vec::new(),
+            hidden_rows: HashSet::new(),
             titles: Vec::new(),
             graph: None,
             attributions: Vec::new(),
@@ -248,8 +251,16 @@ impl App {
             horizontal_page: 1,
             horizontal_max: 0,
             follow_tail: false,
+            reload_selection: None,
             signature_failures: 0,
             signature_verification_running: false,
+        }
+    }
+
+    pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
+        self.has_hidden_filter = present;
+        if present {
+            self.ref_mode = RefMode::None;
         }
     }
 
@@ -280,15 +291,37 @@ impl App {
         }
         if was_empty {
             self.estimated_lane_width = estimate_lane_width(&self.rows[..self.viewport_rows.min(self.rows.len())]);
-            self.selected = Some(0);
+            self.selected = self.first_selectable();
             self.ensure_visible();
         } else if self.follow_tail {
-            self.selected = Some(self.rows.len() - 1);
+            self.selected = self.last_selectable();
+            self.ensure_visible();
+        }
+        if let Some(index) = self
+            .reload_selection
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+        {
+            if !self.is_row_hidden(index) {
+                self.selected = Some(index);
+            }
+            self.reload_selection = None;
             self.ensure_visible();
         }
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
         }
+    }
+
+    pub(crate) fn extend_hidden_commits(&mut self, commits: impl Into<LoadedCommits>) {
+        let commits = commits.into();
+        self.hidden_rows.extend(commits.rows.iter().map(|row| row.id));
+        self.extend_commits(commits);
+    }
+
+    pub(crate) fn is_row_hidden(&self, index: usize) -> bool {
+        self.rows
+            .get(index)
+            .is_some_and(|row| self.hidden_rows.contains(&row.id))
     }
 
     pub(crate) fn set_metadata(
@@ -367,10 +400,14 @@ impl App {
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
-            Action::First => self.select(0),
-            Action::Last if !self.rows.is_empty() => {
+            Action::First => {
+                if let Some(index) = self.first_selectable() {
+                    self.select(index);
+                }
+            }
+            Action::Last if self.last_selectable().is_some() => {
                 let previous = self.selected;
-                self.selected = Some(self.rows.len() - 1);
+                self.selected = self.last_selectable();
                 if self.selected != previous {
                     self.retry_failed_signatures();
                 }
@@ -413,7 +450,7 @@ impl App {
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
                 let ids: Vec<_> = self.rows[start..end]
                     .iter_mut()
-                    .filter(|row| row.signature == SignatureState::Unverified)
+                    .filter(|row| !self.hidden_rows.contains(&row.id) && row.signature == SignatureState::Unverified)
                     .map(|row| {
                         row.signature = SignatureState::Verifying;
                         row.id
@@ -473,6 +510,7 @@ impl App {
             State::Loading => {
                 self.state = State::Computing;
                 self.follow_tail = false;
+                self.reload_selection = None;
                 Some(self.rows.clone())
             }
             State::Cancelling => {
@@ -533,7 +571,9 @@ impl App {
     }
 
     pub(crate) fn reload(&mut self, show_hidden: bool) {
+        self.reload_selection = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
         self.rows = Vec::new();
+        self.hidden_rows.clear();
         self.titles = Vec::new();
         self.graph = None;
         self.attributions = Vec::new();
@@ -574,11 +614,12 @@ impl App {
 
     fn move_selection(&mut self, distance: usize, down: bool) {
         let Some(selected) = self.selected else { return };
-        self.selected = Some(if down {
+        let target = if down {
             selected.saturating_add(distance).min(self.rows.len() - 1)
         } else {
             selected.saturating_sub(distance)
-        });
+        };
+        self.selected = self.nearest_selectable(target, down);
         if self.selected != Some(selected) {
             self.retry_failed_signatures();
         }
@@ -592,9 +633,12 @@ impl App {
             return;
         };
         let next = if down {
-            (selected + 1..self.rows.len()).find(|index| reachable.get(*index) == Some(&true))
+            (selected + 1..self.rows.len())
+                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
         } else {
-            (0..selected).rev().find(|index| reachable.get(*index) == Some(&true))
+            (0..selected)
+                .rev()
+                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
         };
         if let Some(next) = next {
             self.select(next);
@@ -685,7 +729,7 @@ impl App {
     }
 
     fn select(&mut self, selected: usize) {
-        if !self.rows.is_empty() {
+        if !self.rows.is_empty() && !self.is_row_hidden(selected) {
             let previous = self.selected;
             self.selected = Some(selected.min(self.rows.len() - 1));
             if self.selected != previous {
@@ -693,6 +737,27 @@ impl App {
             }
             self.follow_tail = false;
             self.ensure_visible();
+        }
+    }
+
+    fn first_selectable(&self) -> Option<usize> {
+        (0..self.rows.len()).find(|index| !self.is_row_hidden(*index))
+    }
+
+    fn last_selectable(&self) -> Option<usize> {
+        (0..self.rows.len()).rev().find(|index| !self.is_row_hidden(*index))
+    }
+
+    fn nearest_selectable(&self, target: usize, down: bool) -> Option<usize> {
+        if down {
+            (target..self.rows.len())
+                .find(|index| !self.is_row_hidden(*index))
+                .or_else(|| (0..target).rev().find(|index| !self.is_row_hidden(*index)))
+        } else {
+            (0..=target)
+                .rev()
+                .find(|index| !self.is_row_hidden(*index))
+                .or_else(|| (target + 1..self.rows.len()).find(|index| !self.is_row_hidden(*index)))
         }
     }
 
@@ -1349,6 +1414,30 @@ mod tests {
     }
 
     #[test]
+    fn hidden_boundary_rows_are_not_selectable_or_verifiable() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        app.update(Action::Last);
+        app.extend_hidden_commits(vec![row(4)]);
+        app.rows[3].signature = SignatureState::Unverified;
+
+        assert_eq!(
+            app.selected,
+            Some(2),
+            "following the tail stops at the oldest visible commit"
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected, Some(2), "j cannot enter the hidden boundary");
+        app.update(Action::First);
+        app.update(Action::PageDown);
+        assert_eq!(app.selected, Some(2), "paging skips the hidden boundary");
+        assert!(
+            app.update(Action::VerifySignatures).is_empty(),
+            "hidden signatures are not actionable"
+        );
+    }
+
+    #[test]
     fn half_pages_use_half_the_viewport() {
         let mut app = App::new(4);
         app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
@@ -1444,7 +1533,12 @@ mod tests {
             "the key is inert without hidden revisions"
         );
 
-        app.has_hidden_filter = true;
+        app.configure_hidden_filter(true);
+        assert_eq!(
+            app.ref_mode,
+            RefMode::None,
+            "hidden ancestry hides references by default"
+        );
         app.extend_commits(vec![row(1)]);
         assert!(
             app.update(Action::ToggleHidden).is_empty(),
@@ -1464,6 +1558,33 @@ mod tests {
         );
         complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(false)]);
+    }
+
+    #[test]
+    fn reload_retains_selection_or_falls_back_to_the_top() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        let selected = app.rows[app.selected.expect("a row is selected")].id;
+
+        app.reload(true);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        complete(&mut app);
+        assert_eq!(
+            app.rows[app.selected.expect("the old row remains selected")].id,
+            selected
+        );
+
+        app.reload(false);
+        app.extend_commits(vec![row(3)]);
+        app.extend_hidden_commits(vec![row(2)]);
+        complete(&mut app);
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "a selection which becomes a hidden boundary falls back to the top row"
+        );
     }
 
     #[test]
