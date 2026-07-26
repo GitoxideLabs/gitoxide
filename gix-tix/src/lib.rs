@@ -424,7 +424,21 @@ fn event_loop(
                         gix::features::threading::OwnShared::clone(&authors),
                     );
                 }
-                Effect::Quit => return Ok(None),
+                Effect::Quit => {
+                    if app.inline {
+                        app.show_selection_tail = false;
+                        draw(
+                            terminal,
+                            &mut app,
+                            &decorations,
+                            &mailmap,
+                            &authors,
+                            &mut fill_repository,
+                            &mut commit_message,
+                        )?;
+                    }
+                    return Ok(None);
+                }
             }
         }
         sync_screen(

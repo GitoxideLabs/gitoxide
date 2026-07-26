@@ -169,7 +169,7 @@ pub(crate) fn draw(
             );
             color_graph(frame, row_area, lane, horizontal_offset, selected);
         }
-        if selected && body.width > 0 {
+        if selected && app.show_selection_tail && body.width > 0 {
             let line_width = if align_metadata {
                 align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
             } else {
@@ -1140,6 +1140,18 @@ mod tests {
         );
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
+
+        app.show_selection_tail = false;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let buffer = terminal.backend().buffer();
+        assert!(
+            buffer[(0, 1)].modifier.contains(Modifier::REVERSED),
+            "the final frame keeps the left selection marker"
+        );
+        assert!(
+            !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
+            "the final frame hides the trailing selection marker"
+        );
         Ok(())
     }
 
