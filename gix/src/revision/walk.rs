@@ -85,6 +85,8 @@ pub struct Info<'repo> {
     pub id: gix_hash::ObjectId,
     /// All parent ids we have encountered. Note that these will be at most one if [`Parents::First`][gix_traverse::commit::Parents::First] is enabled.
     pub parent_ids: gix_traverse::commit::ParentIds,
+    /// The generation number if this commit was read from a commit-graph.
+    pub generation: Option<gix_revwalk::graph::Generation>,
     /// The time at which the commit was created. It will only be `Some(_)` if the chosen traversal was
     /// taking dates into consideration.
     pub commit_time: Option<gix_date::SecondsSinceUnixEpoch>,
@@ -129,6 +131,7 @@ impl<'repo> Info<'repo> {
         Info {
             id: info.id,
             parent_ids: info.parent_ids,
+            generation: info.generation,
             commit_time: info.commit_time,
             repo,
         }
@@ -140,6 +143,7 @@ impl<'repo> Info<'repo> {
         gix_traverse::commit::Info {
             id: self.id,
             parent_ids: self.parent_ids,
+            generation: self.generation,
             commit_time: self.commit_time,
         }
     }

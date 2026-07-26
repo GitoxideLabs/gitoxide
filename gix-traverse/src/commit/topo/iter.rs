@@ -137,6 +137,7 @@ where
                 Info {
                     id: pid,
                     parent_ids,
+                    generation: (parent_gen != gix_commitgraph::GENERATION_NUMBER_INFINITY).then_some(parent_gen),
                     commit_time: Some(parent_commit_time),
                 },
             );

@@ -531,9 +531,11 @@ mod init {
                     continue;
                 }
                 let mut parents: ParentIds = Default::default();
+                let generation;
 
                 match super::super::find(self.cache.as_ref(), &self.objects, &oid, &mut state.buf) {
                     Ok(Either::CachedCommit(commit)) => {
+                        generation = Some(commit.generation());
                         if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
                             // drop corrupt caches and try again with ODB
                             self.cache = None;
@@ -554,6 +556,7 @@ mod init {
                         }
                     }
                     Ok(Either::CommitRefIter(commit_iter)) => {
+                        generation = None;
                         for token in commit_iter {
                             match token {
                                 Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
@@ -589,6 +592,7 @@ mod init {
                 return Some(Ok(Info {
                     id: oid,
                     parent_ids: parents,
+                    generation,
                     commit_time: Some(commit_time),
                 }));
             }
@@ -605,9 +609,11 @@ mod init {
                     continue;
                 }
                 let mut parents: ParentIds = Default::default();
+                let generation;
 
                 match super::super::find(self.cache.as_ref(), &self.objects, &oid, &mut state.buf) {
                     Ok(Either::CachedCommit(commit)) => {
+                        generation = Some(commit.generation());
                         if !collect_parents(&mut state.parent_ids, self.cache.as_ref(), commit.iter_parents()) {
                             // drop corrupt caches and try again with ODB
                             self.cache = None;
@@ -623,6 +629,7 @@ mod init {
                         }
                     }
                     Ok(Either::CommitRefIter(commit_iter)) => {
+                        generation = None;
                         for token in commit_iter {
                             match token {
                                 Ok(gix_object::commit::ref_iter::Token::Tree { .. }) => continue,
@@ -650,6 +657,7 @@ mod init {
                 return Some(Ok(Info {
                     id: oid,
                     parent_ids: parents,
+                    generation,
                     commit_time: None,
                 }));
             }

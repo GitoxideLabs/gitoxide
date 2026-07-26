@@ -61,6 +61,8 @@ pub struct Info {
     pub id: gix_hash::ObjectId,
     /// All parent ids we have encountered. Note that these will be at most one if [`Parents::First`] is enabled.
     pub parent_ids: ParentIds,
+    /// The generation number if this commit was read from a commit-graph.
+    pub generation: Option<gix_revwalk::graph::Generation>,
     /// The time at which the commit was created. It will only be `Some(_)` if the chosen traversal was
     /// taking dates into consideration.
     pub commit_time: Option<gix_date::SecondsSinceUnixEpoch>,
