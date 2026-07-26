@@ -265,7 +265,7 @@ impl crate::Repository {
     /// is freshly initialized and doesn't have any commits yet. It could also fail if the
     /// head does not point to a commit.
     pub fn head_tree_id(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
-        Ok(self.head_commit()?.tree_id()?)
+        self.head_commit()?.tree_id().map_err(gix_error::Error::from_error)
     }
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
@@ -283,14 +283,14 @@ impl crate::Repository {
         // feature combination.
         let mut head = self.head().map_err(gix_error::Error::from_error)?;
         match head.peel_to_commit() {
-            Ok(commit) => Ok(commit.tree_id()?),
+            Ok(commit) => Ok(commit.tree_id().map_err(gix_error::Error::from_error)?),
             Err(err) => {
                 let err = err.raise();
                 match err.downcast_any_ref::<crate::head::peel::to_commit::Error>() {
                     Some(crate::head::peel::to_commit::Error::PeelToObject(
                         crate::head::peel::to_object::Error::Unborn { .. },
                     )) => Ok(self.empty_tree().id()),
-                    _ => Err(err.into_error().into()),
+                    _ => Err(err.into_error()),
                 }
             }
         }

@@ -119,13 +119,10 @@ pub mod proxy;
 #[cfg(feature = "index")]
 pub mod open_index {
     /// The error returned by [`Worktree::open_index()`][crate::Worktree::open_index()].
-    // TODO(review): kept concrete due to two separate E0119 collisions on external parents that embed
-    //                this type via `#[from]`: `repository::index_or_load_from_head_or_empty::Error`
+    // TODO(review): kept concrete due to an E0119 collision. `repository::index_or_load_from_head_or_empty::Error`
     //                (`gix/src/repository/mod.rs`, via `OpenIndex`) already embeds the erased
-    //                `object::peel::to_kind::Error` via `PeelToTree`; `status::is_dirty::Error`
-    //                (`gix/src/status/mod.rs`, via `OpenWorktreeIndex`) already embeds the erased
-    //                `status::into_iter::Error` via `CreateStatusIterator`. Erasing `open_index::Error`
-    //                would give either enum a second `From<gix_error::Error>` impl.
+    //                `object::peel::to_kind::Error` via `PeelToTree`. Erasing `open_index::Error`
+    //                would give it a second `From<gix_error::Error>` impl.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {

@@ -49,10 +49,7 @@ impl Repository {
             )
             .map_err(gix_error::Error::from_error)?
             .inner;
-        let filter = gix_filter::Pipeline::new(
-            self.command_context().map_err(gix_error::Error::from_error)?,
-            crate::filter::Pipeline::options(self)?,
-        );
+        let filter = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let filter = gix_merge::blob::Pipeline::new(
             worktree_roots,
             filter,
@@ -112,7 +109,7 @@ impl Repository {
         Ok(gix_merge::tree::Options {
             rewrites,
             blob_merge: self.blob_merge_options()?,
-            blob_merge_command_ctx: self.command_context().map_err(gix_error::Error::from_error)?,
+            blob_merge_command_ctx: self.command_context()?,
             fail_on_conflict: None,
             marker_size_multiplier: 0,
             symlink_conflicts: None,

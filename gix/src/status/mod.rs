@@ -138,20 +138,7 @@ pub mod is_dirty {
     use crate::Repository;
 
     /// The error returned by [Repository::is_dirty()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        StatusPlatform(#[from] crate::status::Error),
-        #[error(transparent)]
-        CreateStatusIterator(#[from] crate::status::into_iter::Error),
-        #[error(transparent)]
-        TreeIndexStatus(#[from] crate::status::tree_index::Error),
-        #[error(transparent)]
-        HeadTreeId(#[from] crate::reference::head_tree_id::Error),
-        #[error(transparent)]
-        OpenWorktreeIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl Repository {
         /// Returns `true` if the repository is dirty.
@@ -173,20 +160,22 @@ pub mod is_dirty {
                 // Run this first as there is a high likelihood to find something, and it's very fast.
                 self.tree_index_status(
                     &head_tree_id,
-                    &*self.index_or_empty()?,
+                    &*self.index_or_empty().map_err(gix_error::Error::from_error)?,
                     None,
                     crate::status::tree_index::TrackRenames::Disabled,
                     |_, _, _| {
                         index_is_dirty = true;
                         Ok::<_, Infallible>(std::ops::ControlFlow::Break(()))
                     },
-                )?;
+                )
+                .map_err(gix_error::Error::from_error)?;
                 if index_is_dirty {
                     return Ok(true);
                 }
             }
             let is_dirty = self
-                .status(gix_features::progress::Discard)?
+                .status(gix_features::progress::Discard)
+                .map_err(gix_error::Error::from_error)?
                 .index_worktree_rewrites(None)
                 .index_worktree_submodules(crate::status::Submodule::AsConfigured { check_dirty: true })
                 .index_worktree_options_mut(|opts| {

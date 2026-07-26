@@ -168,68 +168,23 @@ pub mod diff {
 
 ///
 pub mod stat_options {
-    // TODO(review): kept concrete. `checkout_options::Error` (which must itself stay concrete,
-    //                see its own module below) already embeds the erased
-    //                `crate::filter::pipeline::options::Error` via `FilterPipelineOptions`, so it
-    //                has no spare slot for a second `From<gix_error::Error>`. It also manually
-    //                re-dispatches on `stat_options::Error`'s two variants in
-    //                `gix/src/config/cache/access.rs` (`checkout_options()`, matching
-    //                `ConfigCheckStat`/`ConfigBoolean`) to build its own `ConfigCheckStat`/
-    //                `ConfigBoolean` variants; erasing `stat_options::Error` would make that
-    //                re-dispatch impossible without duplicating the underlying boolean/checkstat
-    //                parsing inline.
     /// The error produced when collecting stat information, and returned by [Repository::stat_options()](crate::Repository::stat_options()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigCheckStat(#[from] super::key::GenericErrorWithValue),
-        #[error(transparent)]
-        ConfigBoolean(#[from] super::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "attributes")]
 pub mod checkout_options {
     /// The error produced when collecting all information needed for checking out files into a worktree.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigCheckStat(#[from] super::key::GenericErrorWithValue),
-        #[error(transparent)]
-        ConfigBoolean(#[from] super::boolean::Error),
-        #[error(transparent)]
-        CheckoutWorkers(#[from] super::checkout::workers::Error),
-        #[error(transparent)]
-        Attributes(#[from] super::attribute_stack::Error),
-        #[error(transparent)]
-        FilterPipelineOptions(#[from] crate::filter::pipeline::options::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "attributes")]
 pub mod command_context {
-    use crate::config;
-
     /// The error produced when collecting all information relevant to spawned commands,
     /// obtained via [Repository::command_context()](crate::Repository::command_context()).
-    // TODO(review): kept concrete because `checkout_options::Error` and `worktree_stream::Error`
-    //                already embed the erased `filter::pipeline::options::Error`; erasing this one
-    //                would give them a second `From<gix::Error>`. `checkout_options` in turn has to
-    //                stay concrete because `cache/access.rs` matches its variants.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Boolean(#[from] config::boolean::Error),
-        #[error(transparent)]
-        ParseBool(#[from] gix_config::value::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -260,12 +215,12 @@ pub mod exclude_stack {
 
 ///
 pub mod attribute_stack {
-    // TODO(review): kept concrete due to an E0119 collision. `checkout_options::Error`
-    //                (`gix/src/config/mod.rs`, `checkout_options` module below) embeds this type
-    //                via `Attributes(#[from] super::attribute_stack::Error)`, and already embeds the
-    //                erased `crate::filter::pipeline::options::Error` via `FilterPipelineOptions`.
-    //                Erasing `attribute_stack::Error` would give `checkout_options::Error` a second
-    //                `From<gix_error::Error>` impl.
+    // TODO(review): kept concrete due to an E0119 collision. `repository::diff_resource_cache::Error`
+    //                (`gix/src/repository/mod.rs`, `diff_resource_cache` module) embeds both this type,
+    //                via `AttributeStack(#[from] config::attribute_stack::Error)`, and the already-erased
+    //                `crate::diff::resource_cache::Error`, via `ResourceCache(#[from] ...)`. Erasing
+    //                `attribute_stack::Error` would give `repository::diff_resource_cache::Error` two
+    //                `From<gix_error::Error>` impls.
     /// The error produced when setting up the attribute stack to query `gitattributes`.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

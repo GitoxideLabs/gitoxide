@@ -225,9 +225,13 @@ pub mod commit_graph_if_enabled {
 #[cfg(feature = "index")]
 pub mod index_from_tree {
     /// The error returned by [Repository::index_from_tree()](crate::Repository::index_from_tree).
-    // TODO(review): kept concrete because `worktree_stream::Error` already embeds the erased
-    //                `filter::pipeline::options::Error` (via `FilterPipeline`); erasing this one would give
-    //                it a second `From<gix::Error>` via `OpenTree`.
+    // TODO(review): kept concrete due to two separate E0119 collisions on external parents that embed
+    //                this type via `#[from]`: `repository::index_or_load_from_head_or_empty::Error`
+    //                (`gix/src/repository/mod.rs`, via `TraverseTree`) already embeds the erased
+    //                `object::peel::to_kind::Error` via `PeelToTree`; `status::tree_index::Error`
+    //                (`gix/src/status/tree_index.rs`, via `IndexFromMTree`) already embeds the erased
+    //                `diff::new_rewrites::Error` via `RewritesConfiguration`. Erasing `index_from_tree::Error`
+    //                would give either enum a second `From<gix_error::Error>` impl.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -325,25 +329,7 @@ pub mod index_or_load_from_head_or_empty {
 #[cfg(feature = "worktree-stream")]
 pub mod worktree_stream {
     /// The error returned by [`Repository::worktree_stream()`](crate::Repository::worktree_stream()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindTree(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        OpenTree(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        AttributesCache(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        FilterPipeline(#[from] crate::filter::pipeline::options::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-        #[error("Needed {id} to be a tree to turn into a workspace stream, got {actual}")]
-        NotATree {
-            id: gix_hash::ObjectId,
-            actual: gix_object::Kind,
-        },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

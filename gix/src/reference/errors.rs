@@ -66,17 +66,7 @@ pub mod head_commit {
 ///
 pub mod head_tree_id {
     /// The error returned by [`Repository::head_tree_id`(…)](crate::Repository::head_tree_id()).
-    // TODO(review): kept concrete because `status::is_dirty::Error` already embeds the erased
-    //                `status::into_iter::Error` (via `CreateStatusIterator`); erasing this one would
-    //                give it a second `From<gix::Error>` via `HeadTreeId`.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        HeadCommit(#[from] crate::reference::head_commit::Error),
-        #[error(transparent)]
-        DecodeCommit(#[from] gix_object::decode::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

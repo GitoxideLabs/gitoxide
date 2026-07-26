@@ -292,16 +292,20 @@ impl Cache {
     pub(crate) fn stat_options(&self) -> Result<gix_index::entry::stat::Options, config::stat_options::Error> {
         use crate::config::tree::gitoxide;
         Ok(gix_index::entry::stat::Options {
-            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)?,
-            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)?,
-            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)?,
+            trust_ctime: boolean(self, "core.trustCTime", &Core::TRUST_C_TIME, true)
+                .map_err(gix_error::Error::from_error)?,
+            use_nsec: boolean(self, "gitoxide.core.useNsec", &gitoxide::Core::USE_NSEC, false)
+                .map_err(gix_error::Error::from_error)?,
+            use_stdev: boolean(self, "gitoxide.core.useStdev", &gitoxide::Core::USE_STDEV, false)
+                .map_err(gix_error::Error::from_error)?,
             check_stat: self
                 .apply_leniency(
                     self.resolved
                         .string(Core::CHECK_STAT)
                         .map(|v| Core::CHECK_STAT.try_into_checkstat(v))
                         .transpose(),
-                )?
+                )
+                .map_err(gix_error::Error::from_error)?
                 .unwrap_or(true),
         })
     }
@@ -338,13 +342,15 @@ impl Cache {
     ) -> Result<gix_worktree_state::checkout::Options, config::checkout_options::Error> {
         use crate::config::tree::gitoxide;
         let git_dir = repo.git_dir();
-        let thread_limit = self.apply_leniency(
-            crate::config::tree::Checkout::WORKERS.try_from_workers(
-                self.resolved
-                    .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
-            ),
-        )?;
-        let capabilities = self.fs_capabilities()?;
+        let thread_limit = self
+            .apply_leniency(
+                crate::config::tree::Checkout::WORKERS.try_from_workers(
+                    self.resolved
+                        .integer_filter("checkout.workers", &mut self.filter_config_section.clone()),
+                ),
+            )
+            .map_err(gix_error::Error::from_error)?;
+        let capabilities = self.fs_capabilities().map_err(gix_error::Error::from_error)?;
         let filters = {
             let mut filters =
                 gix_filter::Pipeline::new(repo.command_context()?, crate::filter::Pipeline::options(repo)?);
@@ -360,29 +366,27 @@ impl Cache {
             "gitoxide.core.filterProcessDelay",
             &gitoxide::Core::FILTER_PROCESS_DELAY,
             true,
-        )? {
+        )
+        .map_err(gix_error::Error::from_error)?
+        {
             gix_filter::driver::apply::Delay::Allow
         } else {
             gix_filter::driver::apply::Delay::Forbid
         };
         Ok(gix_worktree_state::checkout::Options {
             filter_process_delay,
-            validate: self.protect_options()?,
+            validate: self.protect_options().map_err(gix_error::Error::from_error)?,
             filters,
             attributes: self
-                .assemble_attribute_globals(git_dir, attributes_source, self.attributes)?
+                .assemble_attribute_globals(git_dir, attributes_source, self.attributes)
+                .map_err(gix_error::Error::from_error)?
                 .0,
             fs: capabilities,
             thread_limit,
             destination_is_initially_empty: false,
             overwrite_existing: false,
             keep_going: false,
-            stat_options: self.stat_options().map_err(|err| match err {
-                config::stat_options::Error::ConfigCheckStat(err) => {
-                    config::checkout_options::Error::ConfigCheckStat(err)
-                }
-                config::stat_options::Error::ConfigBoolean(err) => config::checkout_options::Error::ConfigBoolean(err),
-            })?,
+            stat_options: self.stat_options()?,
         })
     }
 

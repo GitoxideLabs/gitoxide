@@ -114,16 +114,18 @@ impl crate::Repository {
     pub fn command_context(&self) -> Result<gix_command::Context, config::command_context::Error> {
         use crate::config::{cache::util::ApplyLeniency, tree::gitoxide};
 
-        let pathspec_boolean = |key: &'static config::tree::keys::Boolean| {
+        let pathspec_boolean = |key: &'static config::tree::keys::Boolean| -> Result<Option<bool>, gix_error::Error> {
             key.enrich_error(self.config.resolved.boolean(key))
                 .with_leniency(self.config.lenient_config)
+                .map_err(gix_error::Error::from_error)
         };
 
         Ok(gix_command::Context {
             stderr: {
                 gitoxide::Core::EXTERNAL_COMMAND_STDERR
                     .enrich_error(self.config.resolved.boolean(gitoxide::Core::EXTERNAL_COMMAND_STDERR))
-                    .with_leniency(self.config.lenient_config)?
+                    .with_leniency(self.config.lenient_config)
+                    .map_err(gix_error::Error::from_error)?
                     .unwrap_or(true)
                     .into()
             },
@@ -133,7 +135,8 @@ impl crate::Repository {
                 &self.config.resolved,
                 self.config.lenient_config,
                 self.filter_config_section(),
-            )?
+            )
+            .map_err(gix_error::Error::from_error)?
             .map(|enabled| !enabled),
             ref_namespace: self.refs.namespace.as_ref().map(|ns| ns.as_bstr().to_owned()),
             literal_pathspecs: pathspec_boolean(&gitoxide::Pathspec::LITERAL)?,

@@ -1,5 +1,11 @@
 use crate::{Repository, config::tree};
 
+// TODO(review): kept concrete due to an E0119 collision. `status::iter::Error`
+//                (`gix/src/status/iter/mod.rs`) embeds both this type, via
+//                `TreeIndex(#[from] tree_index::Error)`, and the already-erased
+//                `status::index_worktree::Error`, via `IndexWorktree(#[from] ...)`. Erasing
+//                `tree_index::Error` would give `status::iter::Error` two `From<gix_error::Error>`
+//                impls.
 /// The error returned by [Repository::tree_index_status()].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

@@ -51,7 +51,7 @@ pub mod describe {
                 .shorten()
                 .or_raise(|| gix_error::message("Could not produce an unambiguous shortened id for formatting."))?;
             let mut dirty_suffix = dirty_suffix.into();
-            if dirty_suffix.is_some() && !self.id.repo.is_dirty().map_err(gix_error::Error::from_error)? {
+            if dirty_suffix.is_some() && !self.id.repo.is_dirty()? {
                 dirty_suffix.take();
             }
             let mut format = self.outcome.into_format(prefix.hex_len());

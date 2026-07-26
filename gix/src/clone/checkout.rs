@@ -114,9 +114,7 @@ pub mod main_worktree {
             })?;
             let mut index = gix_index::File::from_state(index, repo.index_path());
 
-            let mut opts = repo
-                .checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)
-                .map_err(gix_error::Error::from_error)?;
+            let mut opts = repo.checkout_options(gix_worktree::stack::state::attributes::Source::IdMapping)?;
             opts.destination_is_initially_empty = true;
 
             let mut files = progress.add_child_with_id("checkout".to_string(), ProgressId::CheckoutFiles.into());

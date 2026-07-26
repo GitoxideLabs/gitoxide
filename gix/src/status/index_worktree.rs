@@ -148,7 +148,7 @@ impl Repository {
                 tracked_file_modifications: gix_status::index_as_worktree::Options {
                     fs: fs_caps,
                     thread_limit: options.thread_limit,
-                    stat: self.stat_options().map_err(gix_error::Error::from_error)?,
+                    stat: self.stat_options()?,
                     fscache,
                 },
                 fscache,
