@@ -2,6 +2,7 @@
 use std::any::Any;
 
 use crate::bstr::BStr;
+use gix_error::ResultExt;
 
 impl crate::Repository {
     /// Produce configuration suitable for `url`, as differentiated by its protocol/scheme, to be passed to a transport instance via
@@ -26,7 +27,7 @@ impl crate::Repository {
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
     ) -> Result<Option<Box<dyn Any>>, crate::config::transport::Error> {
-        let url = gix_url::parse(url.into())?;
+        let url = gix_url::parse(url.into()).or_raise(|| gix_error::message("Invalid URL passed for configuration"))?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
@@ -64,11 +65,12 @@ impl crate::Repository {
                         key_str: impl Into<BString>,
                         key: &'static config::tree::keys::String,
                     ) -> Result<Option<String>, config::transport::Error> {
+                        let key_str = key_str.into();
                         key.try_into_string(v)
-                            .map_err(|err| config::transport::Error::IllformedUtf8 {
-                                source: err,
-                                key: key_str.into(),
+                            .or_raise(|| {
+                                gix_error::message!("Could not decode value at key {key_str:?} as UTF-8 string")
                             })
+                            .map_err(gix_error::Error::from)
                             .map(Some)
                             .with_leniency(lenient)
                     }
@@ -78,11 +80,15 @@ impl crate::Repository {
                     ) -> Result<ProxyAuthMethod, config::transport::Error> {
                         let value = value_and_key
                             .map(|(method, key, key_type)| {
-                                key_type.try_into_proxy_auth_method(method).map_err(|err| {
-                                    config::transport::http::Error::InvalidProxyAuthMethod { source: err, key }
-                                })
+                                key_type
+                                    .try_into_proxy_auth_method(method)
+                                    .or_raise(|| {
+                                        gix_error::message!("The proxy authentication at key `{key}` is invalid")
+                                    })
+                                    .map_err(gix_error::Error::from)
                             })
-                            .transpose()?
+                            .transpose()
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                             .unwrap_or_default();
                         Ok(value)
                     }
@@ -102,13 +108,11 @@ impl crate::Repository {
                         config
                             .string_filter(key_str, &mut filter)
                             .filter(|v| !v.is_empty())
-                            .map(|v| {
-                                key.try_into_ssl_version(v)
-                                    .map_err(crate::config::transport::http::Error::from)
-                            })
+                            .map(|v| key.try_into_ssl_version(v).map_err(gix_error::Error::from_error))
                             .transpose()
                             .with_leniency(lenient)
-                            .map_err(Into::into)
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
+                            .map_err(gix_error::Error::from)
                     }
 
                     fn proxy(
@@ -139,10 +143,7 @@ impl crate::Repository {
                             .strings_filter(key, &mut trusted_only)
                             .map(|values| config::tree::Http::EXTRA_HEADER.try_into_extra_header(values))
                             .transpose()
-                            .map_err(|err| config::transport::Error::IllformedUtf8 {
-                                source: err,
-                                key: key.into(),
-                            })?
+                            .or_raise(|| gix_error::message!("Could not decode value at key {key:?} as UTF-8 string"))?
                             .unwrap_or_default()
                     };
 
@@ -154,18 +155,23 @@ impl crate::Repository {
                                 config.string_filter(key, &mut trusted_only).unwrap_or_default(),
                                 || config.boolean_filter(key, &mut trusted_only).with_leniency(lenient),
                             )
-                            .map_err(config::transport::http::Error::InvalidFollowRedirects)?
+                            .or_raise(|| {
+                                gix_error::message("The follow redirects value 'initial', or boolean true or false")
+                            })
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                     };
 
                     opts.low_speed_time_seconds = config::tree::Http::LOW_SPEED_TIME
                         .try_into_u64(config.integer_filter("http.lowSpeedTime", &mut trusted_only))
                         .with_leniency(lenient)
-                        .map_err(config::transport::http::Error::from)?
+                        .map_err(gix_error::Error::from_error)
+                        .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                         .unwrap_or_default();
                     opts.low_speed_limit_bytes_per_second = config::tree::Http::LOW_SPEED_LIMIT
                         .try_into_u32(config.integer_filter("http.lowSpeedLimit", &mut trusted_only))
                         .with_leniency(lenient)
-                        .map_err(config::transport::http::Error::from)?
+                        .map_err(gix_error::Error::from_error)
+                        .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                         .unwrap_or_default();
                     opts.proxy = proxy(
                         remote_name
@@ -252,25 +258,32 @@ impl crate::Repository {
                         .as_deref()
                         .filter(|url| !url.is_empty())
                         .map(gix_url::parse)
-                        .transpose()?
+                        .transpose()
+                        .or_raise(|| gix_error::message("Invalid URL passed for configuration"))?
                         .filter(|url| url.user().is_some())
                         .map(|url| -> Result<_, config::transport::http::Error> {
                             let (mut cascade, action_with_normalized_url, prompt_opts) =
-                                self.config_snapshot().credential_helpers(url)?;
+                                self.config_snapshot().credential_helpers(url).or_raise(|| {
+                                    gix_error::message(
+                                        "Could not configure the credential helpers for the authenticated proxy url",
+                                    )
+                                })?;
                             Ok((
                                 action_with_normalized_url,
                                 Arc::new(Mutex::new(move |action| cascade.invoke(action, prompt_opts.clone())))
                                     as Arc<Mutex<http::options::AuthenticateFn>>,
                             ))
                         })
-                        .transpose()?;
+                        .transpose()
+                        .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?;
                     opts.connect_timeout = {
                         let key = "gitoxide.http.connectTimeout";
                         debug_assert_eq!(key, gitoxide::Http::CONNECT_TIMEOUT.logical_name());
                         gitoxide::Http::CONNECT_TIMEOUT
                             .try_into_duration(config.integer_filter(key, &mut trusted_only))
-                            .map_err(crate::config::transport::http::Error::from)
-                            .with_leniency(lenient)?
+                            .map_err(gix_error::Error::from_error)
+                            .with_leniency(lenient)
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                     };
                     {
                         let key = "http.userAgent";
@@ -288,9 +301,11 @@ impl crate::Repository {
                             .map(|v| {
                                 config::tree::Http::VERSION
                                     .try_into_http_version(v)
-                                    .map_err(config::transport::http::Error::InvalidHttpVersion)
+                                    .or_raise(|| gix_error::message("The HTTP version must be 'HTTP/2' or 'HTTP/1.1'"))
+                                    .map_err(gix_error::Error::from)
                             })
-                            .transpose()?;
+                            .transpose()
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?;
                     }
 
                     {
@@ -306,7 +321,8 @@ impl crate::Repository {
                         config::tree::Http::SCHANNEL_USE_SSL_CA_INFO
                             .enrich_error(config.boolean_filter(key, &mut trusted_only))
                             .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?
+                            .map_err(gix_error::Error::from_error)
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                             .unwrap_or(true)
                     };
 
@@ -324,7 +340,7 @@ impl crate::Repository {
                             })
                             .transpose()
                             .with_leniency(lenient)
-                            .map_err(|err| config::transport::Error::InterpolatePath { source: err, key })?;
+                            .or_raise(|| gix_error::message!("Could not interpolate path at key {key:?}"))?;
                     }
 
                     {
@@ -368,7 +384,8 @@ impl crate::Repository {
                         let ssl_no_verify = config::tree::gitoxide::Http::SSL_NO_VERIFY
                             .enrich_error(config.boolean_filter(key, &mut trusted_only))
                             .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?
+                            .map_err(gix_error::Error::from_error)
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                             .unwrap_or_default();
 
                         if ssl_no_verify {
@@ -378,7 +395,8 @@ impl crate::Repository {
                             opts.ssl_verify = config::tree::Http::SSL_VERIFY
                                 .enrich_error(config.boolean_filter(key, &mut trusted_only))
                                 .with_leniency(lenient)
-                                .map_err(config::transport::http::Error::from)?
+                                .map_err(gix_error::Error::from_error)
+                                .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?
                                 .unwrap_or(true);
                         }
                     }
@@ -389,7 +407,8 @@ impl crate::Repository {
                         let schannel_check_revoke = config::tree::Http::SCHANNEL_CHECK_REVOKE
                             .enrich_error(config.boolean_filter(key, &mut trusted_only))
                             .with_leniency(lenient)
-                            .map_err(config::transport::http::Error::from)?;
+                            .map_err(gix_error::Error::from_error)
+                            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))?;
                         let backend =
                             gix_protocol::transport::client::blocking_io::http::curl::Options { schannel_check_revoke };
                         opts.backend =

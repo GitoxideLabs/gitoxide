@@ -205,11 +205,11 @@ mod filter {
                         {
                             out.push(
                                 gix_filter::encoding::Encoding::for_label(encoding.trim()).ok_or_else(|| {
-                                    config::encoding::Error {
-                                        key: self.logical_name().into(),
-                                        value: value.into(),
-                                        encoding: encoding.into(),
-                                    }
+                                    gix_error::Error::from_error(gix_error::message!(
+                                        "The encoding named '{encoding}' seen in key '{key}={value}' is unsupported",
+                                        key = self.logical_name(),
+                                        encoding = encoding.as_bstr()
+                                    ))
                                 })?,
                             );
                         }
@@ -390,10 +390,9 @@ mod abbrev {
             let hex_len_str = hex_len_str.as_bstr();
             let max = object_hash.len_in_hex() as u8;
             if hex_len_str.trim().is_empty() {
-                return Err(Error {
-                    value: hex_len_str.into(),
-                    max,
-                });
+                return Err(gix_error::Error::from_error(gix_error::message!(
+                    "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                )));
             }
             if hex_len_str.trim().eq_ignore_ascii_case(b"auto") {
                 Ok(None)
@@ -403,20 +402,21 @@ mod abbrev {
                     Ok(object_hash.len_in_hex().into())
                 } else {
                     let value = gix_config::Integer::try_from(value_bytes)
-                        .map_err(|_| Error {
-                            value: hex_len_str.into(),
-                            max,
+                        .map_err(|_| {
+                            gix_error::Error::from_error(gix_error::message!(
+                                "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                            ))
                         })?
                         .to_decimal()
-                        .ok_or_else(|| Error {
-                            value: hex_len_str.into(),
-                            max,
+                        .ok_or_else(|| {
+                            gix_error::Error::from_error(gix_error::message!(
+                                "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                            ))
                         })?;
                     if value < 4 || value as usize > object_hash.len_in_hex() {
-                        return Err(Error {
-                            value: hex_len_str.into(),
-                            max,
-                        });
+                        return Err(gix_error::Error::from_error(gix_error::message!(
+                            "Invalid value for 'core.abbrev' = '{hex_len_str}'. It must be between 4 and {max}"
+                        )));
                     }
                     Ok(Some(value as usize))
                 }

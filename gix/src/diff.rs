@@ -205,7 +205,7 @@ pub(crate) mod utils {
         attr_stack: gix_worktree::Stack,
         roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform, resource_cache::Error> {
-        let diff_algo = repo.config.diff_algorithm().map_err(gix_error::Error::from_error)?;
+        let diff_algo = repo.config.diff_algorithm()?;
         let diff_cache = gix_diff::blob::Platform::new(
             gix_diff::blob::platform::Options {
                 algorithm: Some(diff_algo),
@@ -217,10 +217,8 @@ pub(crate) mod utils {
                     repo.command_context().map_err(gix_error::Error::from_error)?,
                     crate::filter::Pipeline::options(repo)?,
                 ),
-                repo.config.diff_drivers().map_err(gix_error::Error::from_error)?,
-                repo.config
-                    .diff_pipeline_options()
-                    .map_err(gix_error::Error::from_error)?,
+                repo.config.diff_drivers()?,
+                repo.config.diff_pipeline_options()?,
             ),
             mode,
             attr_stack,

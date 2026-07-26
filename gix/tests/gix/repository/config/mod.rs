@@ -1,4 +1,6 @@
 mod config_snapshot;
+#[cfg(feature = "blob-diff")]
+mod diff_algorithm;
 mod identity;
 mod remote;
 

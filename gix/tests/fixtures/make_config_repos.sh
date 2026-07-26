@@ -223,6 +223,11 @@ git init big-file-threshold
   git config core.bigFileThreshold 42
 )
 
+git init diff-algorithm-patience
+(cd diff-algorithm-patience
+  git config diff.algorithm patience
+)
+
 git init --bare bare-repo
 mkdir bare-link
 (cd bare-link

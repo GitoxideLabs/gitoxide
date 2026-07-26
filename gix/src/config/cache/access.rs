@@ -2,6 +2,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
+use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
 use crate::{
@@ -19,15 +20,22 @@ use crate::{
 impl Cache {
     #[cfg(feature = "blob-diff")]
     pub(crate) fn diff_algorithm(&self) -> Result<gix_diff::blob::Algorithm, config::diff::algorithm::Error> {
-        use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
+        use crate::config::{cache::util::ApplyLeniencyDefault, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
                 let name = self.resolved.string(Diff::ALGORITHM).unwrap_or_else(|| "myers".into());
+                // `try_into_algorithm()`'s error is erased, so we can no longer match its
+                // `Unimplemented` variant here; re-derive the same condition from `name` instead,
+                // matching the one place `try_into_algorithm()` returns that particular error.
+                let is_unimplemented = name.eq_ignore_ascii_case(b"patience");
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
-                    .or_else(|err| match err {
-                        Error::Unimplemented { .. } if self.lenient_config => Ok(gix_diff::blob::Algorithm::Histogram),
-                        err => Err(err),
+                    .or_else(|err| {
+                        if is_unimplemented && self.lenient_config {
+                            Ok(gix_diff::blob::Algorithm::Histogram)
+                        } else {
+                            Err(err)
+                        }
                     })
                     .with_lenient_default(self.lenient_config)
             })
@@ -64,11 +72,14 @@ impl Cache {
                 driver.is_binary = config::tree::Diff::DRIVER_BINARY
                     .try_into_binary(binary)
                     .with_leniency(self.lenient_config)
-                    .map_err(|err| config::diff::drivers::Error {
-                        name: driver.name.clone(),
-                        attribute: "binary",
-                        source: Box::new(err),
-                    })?;
+                    .or_raise(|| {
+                        gix_error::message!(
+                            "Failed to parse value of 'diff.{name}.{attribute}'",
+                            name = driver.name,
+                            attribute = "binary"
+                        )
+                    })
+                    .map_err(gix_error::Error::from)?;
             }
             if let Some(command) = section.value(config::tree::Diff::DRIVER_COMMAND.name) {
                 driver.command = command.into();
@@ -77,20 +88,27 @@ impl Cache {
                 driver.binary_to_text_command = textconv.into();
             }
             if let Some(algorithm) = section.value("algorithm") {
+                // See the comment in `diff_algorithm()` above: re-derive the `Unimplemented`
+                // condition from `algorithm` since `try_into_algorithm()`'s error is now erased.
+                let is_unimplemented = algorithm.eq_ignore_ascii_case(b"patience");
                 driver.algorithm = config::tree::Diff::DRIVER_ALGORITHM
                     .try_into_algorithm(algorithm)
-                    .or_else(|err| match err {
-                        config::diff::algorithm::Error::Unimplemented { .. } if self.lenient_config => {
+                    .or_else(|err| {
+                        if is_unimplemented && self.lenient_config {
                             Ok(gix_diff::blob::Algorithm::Histogram)
+                        } else {
+                            Err(err)
                         }
-                        err => Err(err),
                     })
                     .with_lenient_default(self.lenient_config)
-                    .map_err(|err| config::diff::drivers::Error {
-                        name: driver.name.clone(),
-                        attribute: "algorithm",
-                        source: Box::new(err),
-                    })?
+                    .or_raise(|| {
+                        gix_error::message!(
+                            "Failed to parse value of 'diff.{name}.{attribute}'",
+                            name = driver.name,
+                            attribute = "algorithm"
+                        )
+                    })
+                    .map_err(gix_error::Error::from)?
                     .into();
             }
         }

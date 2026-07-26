@@ -78,7 +78,6 @@ pub type Binary = keys::Any<validate::Binary>;
 mod algorithm {
     use crate::{
         bstr::ByteSlice,
-        config,
         config::{
             diff::algorithm,
             key,
@@ -112,9 +111,13 @@ mod algorithm {
             } else if name.eq_ignore_ascii_case(b"histogram") {
                 gix_diff::blob::Algorithm::Histogram
             } else if name.eq_ignore_ascii_case(b"patience") {
-                return Err(config::diff::algorithm::Error::Unimplemented { name: name.into() });
+                return Err(gix_error::Error::from_error(gix_error::message!(
+                    "The '{name}' algorithm is not yet implemented"
+                )));
             } else {
-                return Err(algorithm::Error::Unknown { name: name.into() });
+                return Err(gix_error::Error::from_error(gix_error::message!(
+                    "Unknown diff algorithm named '{name}'"
+                )));
             };
             Ok(algo)
         }
