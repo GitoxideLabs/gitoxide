@@ -125,13 +125,10 @@ fn half_height(terminal_height: u16) -> u16 {
 
 fn inline_height(screen: Screen, terminal_height: u16, visible_commits: usize) -> Option<u16> {
     let half = half_height(terminal_height);
-    let compact = u16::try_from(visible_commits)
-        .unwrap_or(u16::MAX)
-        .saturating_add(1)
-        .min(half);
+    let compact = u16::try_from(visible_commits).unwrap_or(u16::MAX).saturating_add(3);
     match screen {
         Screen::Always => None,
-        Screen::Half => Some(compact),
+        Screen::Half => Some(compact.min(half)),
         Screen::Auto if visible_commits < half as usize => Some(compact),
         Screen::Auto => None,
     }
@@ -218,6 +215,7 @@ fn event_loop(
         retained: None,
         retain: false,
     };
+    app.inline = started_inline;
     app.has_hidden_filter = !hide.is_empty();
     let mut decorations = Decorations::new();
     draw(
@@ -338,8 +336,10 @@ fn event_loop(
             if app.show_commit {
                 inline_terminal =
                     Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+                app.inline = false;
             } else if let Some(inline) = inline_terminal.take() {
                 leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+                app.inline = true;
             }
         }
         for effect in effects {
@@ -424,7 +424,11 @@ fn draw(
     fill_repository: &mut FillRepository<'_>,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
 ) -> Result<()> {
-    app.viewport_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
+    app.viewport_rows = terminal
+        .get_frame()
+        .area()
+        .height
+        .saturating_sub(1 + 2 * u16::from(app.inline)) as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
@@ -581,19 +585,24 @@ mod tests {
     #[test]
     fn chooses_screen_from_terminal_and_history_height() {
         assert_eq!(
-            inline_height(Screen::Auto, 20, 9),
+            inline_height(Screen::Auto, 20, 7),
             Some(10),
-            "short histories occupy only their rows and footer"
+            "short histories occupy only their rows, spacers, and footer"
+        );
+        assert_eq!(
+            inline_height(Screen::Auto, 20, 8),
+            Some(11),
+            "spacers do not force an otherwise short history into the alternate screen"
         );
         assert_eq!(
             inline_height(Screen::Auto, 20, 10),
             None,
-            "the auto cutoff is strictly less than half the terminal"
+            "the auto cutoff remains half the terminal height"
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 3),
-            Some(4),
-            "half mode shrinks to the rows and footer needed by short histories"
+            Some(6),
+            "half mode shrinks to the rows, spacers, and footer needed by short histories"
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 10),
@@ -602,8 +611,8 @@ mod tests {
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 0),
-            Some(1),
-            "an empty history only needs its footer"
+            Some(3),
+            "an empty history only needs its spacers and footer"
         );
         assert_eq!(
             inline_height(Screen::Always, 20, 0),

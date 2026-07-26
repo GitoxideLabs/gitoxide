@@ -19,7 +19,15 @@ pub(crate) fn draw(
     mailmap: &gix::mailmap::Snapshot,
     commit_message: Option<&BStr>,
 ) {
-    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let [top_spacer, mut body, bottom_spacer, footer] = Layout::vertical([
+        Constraint::Length(u16::from(app.inline)),
+        Constraint::Min(0),
+        Constraint::Length(u16::from(app.inline)),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    frame.render_widget(Clear, top_spacer);
+    frame.render_widget(Clear, bottom_spacer);
     let commit_pane = app.show_commit.then(|| {
         let width = 80.min(body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
@@ -723,6 +731,21 @@ mod tests {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
+
+        app.inline = true;
+        let mut inline_terminal = Terminal::new(TestBackend::new(140, 4))?;
+        inline_terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(
+            rendered_line(&inline_terminal, 0).trim().is_empty(),
+            "inline mode separates the commits from preceding content"
+        );
+        assert!(
+            rendered_line(&inline_terminal, 2).trim().is_empty(),
+            "inline mode separates the commits from the status line"
+        );
+        assert!(rendered_line(&inline_terminal, 3).starts_with("1 commits"));
+        app.inline = false;
+
         let row = terminal.backend().buffer();
         assert!(
             row[(10, 0)].modifier.contains(Modifier::REVERSED),
