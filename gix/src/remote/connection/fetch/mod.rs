@@ -101,6 +101,19 @@ pub use gix_protocol::fetch::ProgressId;
 
 ///
 pub mod prepare {
+    // TODO(review): kept concrete, blocked three independent ways:
+    //                1. `impl gix_protocol::transport::IsSpuriousError for Error` below matches
+    //                   `RefMap`; as a `gix_error::Error` alias this becomes an orphan impl (neither the
+    //                   trait nor `gix_error::Error` are local to this crate) — E0117.
+    //                2. `clone::fetch::Error` (`gix/src/clone/fetch/mod.rs`) embeds this type via
+    //                   `PrepareFetch(#[from] crate::remote::fetch::prepare::Error)`, but has already
+    //                   used its one erased slot via
+    //                   `ParseConfig(#[from] crate::config::overrides::Error)` — E0119.
+    //                3. Callers match on `RefMap(...)`: `gix/src/clone/fetch/mod.rs:301` destructures
+    //                   further into `ref_map::Error::InitRefMap(...)`, but `gix/src/env.rs:115-118`
+    //                   destructures into `ref_map::Error::GatherTransportConfig { .. } |
+    //                   ConfigureCredentials(_)` instead (a different variant) — plus
+    //                   `Error::PrepareFetch` in the `IsSpuriousError` impl on `env::collate::fetch::Error<E>`.
     /// The error returned by [`prepare_fetch()`][super::Connection::prepare_fetch()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

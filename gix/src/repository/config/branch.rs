@@ -274,7 +274,7 @@ impl crate::Repository {
                     .map_err(Into::into)
                     .and_then(|url| {
                         self.remote_at(url)
-                            .map_err(|err| remote::find::existing::Error::Find(remote::find::Error::Init(err)))
+                            .map_err(|err| remote::find::existing::Error::Find(gix_error::Error::from_error(err)))
                     })
                     .into(),
                 remote::Name::Symbol(_) => None,

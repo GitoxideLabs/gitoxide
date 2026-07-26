@@ -9,6 +9,16 @@ use crate::{
     remote::{Connection, connection::ConnectionDetached, fetch},
 };
 
+// TODO(review): kept concrete, blocked three independent ways:
+//                1. `impl gix_protocol::transport::IsSpuriousError for Error` below matches specific
+//                   variants (`Transport`, `Handshake`); as a `gix_error::Error` alias this becomes an
+//                   orphan impl (neither the trait nor `gix_error::Error` are local to this crate) — E0117.
+//                2. `clone::fetch::Error` (`gix/src/clone/fetch/mod.rs`) embeds this type via
+//                   `RefMap(#[from] crate::remote::ref_map::Error)`, but has already used its one erased
+//                   slot via `ParseConfig(#[from] crate::config::overrides::Error)` — E0119.
+//                3. Callers match on specific variants: `gix/src/clone/fetch/mod.rs:301`
+//                   (`ref_map::Error::InitRefMap`) and `gix/src/env.rs:117-118`
+//                   (`GatherTransportConfig { .. }` / `ConfigureCredentials(_)`).
 /// The error returned by [`Connection::ref_map()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

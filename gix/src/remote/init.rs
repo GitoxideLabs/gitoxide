@@ -5,6 +5,11 @@ use crate::{Remote, Repository, config, remote};
 mod error {
     use crate::bstr::BString;
 
+    // TODO(review): kept concrete. Erasing this would give `clone::fetch::Error`
+    //                (`gix/src/clone/fetch/mod.rs`) a second `From<gix_error::Error>` impl: it embeds
+    //                this type via `RemoteInit(#[from] crate::remote::init::Error)`, but has already
+    //                used its one erased slot via `ParseConfig(#[from] crate::config::overrides::Error)`
+    //                (`config::overrides::Error` is already erased) — E0119.
     /// The error returned by [`Repository::remote_at(…)`][crate::Repository::remote_at()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

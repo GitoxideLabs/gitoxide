@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::{collections::BTreeMap, path::PathBuf};
 
+use gix_error::ResultExt;
 use gix_object::Exists;
 use gix_ref::{
     Target, TargetRef,
@@ -154,7 +155,12 @@ pub(crate) fn update(
                                     let is_fast_forward = match dry_run {
                                         fetch::DryRun::No => {
                                             let ancestors = repo
-                                                .find_object(local_id)?
+                                                .find_object(local_id)
+                                                .or_raise(|| {
+                                                    gix_error::message(
+                                                        "Could not find local commit for fast-forward ancestor check",
+                                                    )
+                                                })?
                                                 .try_into_commit()
                                                 .map_err(|_| ())
                                                 .and_then(|c| c.committer().map(|a| a.seconds()).map_err(|_| ()))
@@ -220,11 +226,23 @@ pub(crate) fn update(
                                     PreviousValue::MustExistAndMatch(existing.target().into_owned()),
                                 )
                             }
-                            Err(err) => return Err(err.into()),
+                            Err(err) => {
+                                return Err(err)
+                                    .or_raise(|| {
+                                        gix_error::message("Could not peel symbolic local reference to its ID")
+                                    })
+                                    .map_err(Into::into);
+                            }
                         }
                     }
                     None => {
-                        let name: gix_ref::FullName = name.try_into()?;
+                        let name: Result<gix_ref::FullName, _> = name.try_into();
+                        let name = name
+                            .or_raise(|| {
+                                gix_error::message(
+                                    "A remote reference had a name that wasn't considered valid. Corrupt remote repo or insufficient checks on remote?",
+                                )
+                            })?;
                         let reflog_msg = match name.category() {
                             Some(gix_ref::Category::Tag) => "storing tag",
                             Some(gix_ref::Category::LocalBranch) => "storing head",
@@ -318,13 +336,19 @@ pub(crate) fn update(
         }
     }
 
+    // Every conversion below carries the same context, as this whole block corresponds to the former
+    // `update::Error::EditReferences` variant, which carried `crate::reference::edit::Error` as its
+    // `#[from]` source while attaching this fixed message (it was message-bearing, not `#[error(transparent)]`).
+    const EDIT_REFERENCES_CONTEXT: &str =
+        "Failed to update references to their new position to match their remote locations";
     let edits = match dry_run {
         fetch::DryRun::No => {
             let _span = gix_trace::detail!("apply", edits = edits.len());
             let (file_lock_fail, packed_refs_lock_fail) = repo
                 .config
                 .lock_timeout()
-                .map_err(crate::reference::edit::Error::from)?;
+                .map_err(crate::reference::edit::Error::from)
+                .or_raise(|| gix_error::message(EDIT_REFERENCES_CONTEXT))?;
             repo.refs
                 .transaction()
                 .packed_refs(
@@ -335,9 +359,16 @@ pub(crate) fn update(
                     }
                 )
                 .prepare(edits, file_lock_fail, packed_refs_lock_fail)
-                .map_err(crate::reference::edit::Error::from)?
-                .commit(repo.committer().transpose().map_err(|err| update::Error::EditReferences(crate::reference::edit::Error::ParseCommitterTime(err)))?)
-                .map_err(crate::reference::edit::Error::from)?
+                .map_err(crate::reference::edit::Error::from)
+                .or_raise(|| gix_error::message(EDIT_REFERENCES_CONTEXT))?
+                .commit(
+                    repo.committer()
+                        .transpose()
+                        .map_err(crate::reference::edit::Error::ParseCommitterTime)
+                        .or_raise(|| gix_error::message(EDIT_REFERENCES_CONTEXT))?,
+                )
+                .map_err(crate::reference::edit::Error::from)
+                .or_raise(|| gix_error::message(EDIT_REFERENCES_CONTEXT))?
         }
         fetch::DryRun::Yes => edits,
     };
@@ -402,7 +433,14 @@ fn new_value_by_remote(remote: &Source) -> Result<Target, update::Error> {
             match remote_id {
                 Some(desired_id) => Target::Object(desired_id.to_owned()),
                 // Unborn branches we create as such, with the location they point to on the remote which helps mirroring.
-                None => Target::Symbolic(target.try_into()?),
+                None => {
+                    let name: Result<gix_ref::FullName, _> = target.try_into();
+                    Target::Symbolic(name.or_raise(|| {
+                        gix_error::message(
+                            "A remote reference had a name that wasn't considered valid. Corrupt remote repo or insufficient checks on remote?",
+                        )
+                    })?)
+                }
             }
         } else {
             Target::Object(remote_id.expect("unborn case handled earlier").to_owned())
@@ -422,7 +460,9 @@ fn insert_head(
         let mut cursor = head.try_into_referent();
         while let Some(ref_) = cursor {
             ref_chain.push(ref_.name().to_owned());
-            cursor = ref_.follow().transpose()?;
+            cursor = ref_.follow().transpose().or_raise(|| {
+                gix_error::message("Failed to follow a symbolic reference to assure worktree isn't affected")
+            })?;
         }
         for name in ref_chain {
             out.entry(name).or_default().push(wd.to_owned());
@@ -434,8 +474,13 @@ fn insert_head(
 fn worktree_branches(repo: &Repository) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>, update::Error> {
     let mut map = BTreeMap::new();
     insert_head(repo.head().ok(), &mut map)?;
-    for proxy in repo.worktrees()? {
-        let repo = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+    for proxy in repo
+        .worktrees()
+        .or_raise(|| gix_error::message("Failed to read or iterate worktree dir"))?
+    {
+        let repo = proxy
+            .into_repo_with_possibly_inaccessible_worktree()
+            .or_raise(|| gix_error::message("Could not open worktree repository"))?;
         insert_head(repo.head().ok(), &mut map)?;
     }
     Ok(map)

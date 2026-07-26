@@ -6,15 +6,8 @@ pub mod conversion {
 
 ///
 pub mod find {
-    // TODO(review): kept concrete. Erasing this would give it a second `From<gix_error::Error>` impl
-    //                where it's embedded via `FindObject(#[from] crate::object::find::Error)` in
-    //                `update::Error` (`gix/src/remote/connection/fetch/update_refs/update.rs`), which
-    //                already has one via `FindReference(#[from] crate::reference::find::Error)`
-    //                (`reference::find::Error` is already erased) — E0119.
     /// Indicate that an error occurred when trying to find an object.
-    #[derive(Debug, thiserror::Error)]
-    #[error(transparent)]
-    pub struct Error(#[from] pub gix_object::find::Error);
+    pub type Error = gix_error::Error;
 
     ///
     pub mod existing {

@@ -1,5 +1,18 @@
 use crate::config;
 
+// TODO(review): kept concrete, blocked three independent ways:
+//                1. `impl gix_protocol::transport::IsSpuriousError for Error` below matches specific
+//                   variants (`Fetch`, `Client`); as a `gix_error::Error` alias this becomes an orphan
+//                   impl (neither the trait nor `gix_error::Error` are local to this crate) — E0117.
+//                2. `clone::fetch::Error` (`gix/src/clone/fetch/mod.rs`) embeds this type via
+//                   `Fetch(#[from] crate::remote::fetch::Error)`, but has already used its one erased
+//                   slot via `ParseConfig(#[from] crate::config::overrides::Error)` — E0119.
+//                3. Callers match on specific variants in `gix/src/env.rs`'s `is_corrupted()`:
+//                   `PackThreads`, `PackIndexVersion`, `RemovePackKeepFile { .. }`,
+//                   `Fetch(gix_protocol::fetch::Error::Negotiate(_))`, plus `Error::Fetch` in the
+//                   `IsSpuriousError` impl on `env::collate::fetch::Error<E>` (that enum has no
+//                   `Client` variant — `Error::Client` is matched only in this type's own
+//                   `IsSpuriousError` impl below, already covered by point 1).
 /// The error returned by [`receive()`](super::Prepare::receive()).
 // TODO: remove unused variants
 #[derive(Debug, thiserror::Error)]

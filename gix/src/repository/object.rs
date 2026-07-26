@@ -216,7 +216,9 @@ impl crate::Repository {
                 size: 0,
             }));
         }
-        self.objects.try_header(&id).map_err(Into::into)
+        self.objects
+            .try_header(&id)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))
     }
 
     /// Try to find the object with `id` or return `None` if it wasn't found.
@@ -244,7 +246,11 @@ impl crate::Repository {
         }
 
         let mut buf = self.free_buf();
-        match self.objects.try_find(&id, &mut buf)? {
+        match self
+            .objects
+            .try_find(&id, &mut buf)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))?
+        {
             Some(obj) => {
                 let kind = obj.kind;
                 Ok(Some(Object::from_data(id, kind, buf, self)))

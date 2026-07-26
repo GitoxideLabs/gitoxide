@@ -3,6 +3,13 @@ use std::borrow::Cow;
 use super::Name;
 use crate::bstr::{BStr, BString, ByteSlice, ByteVec};
 
+// TODO(review): kept concrete. Erasing this would give `remote::save::AsError` (`gix/src/remote/save.rs`)
+//                a second `From<gix_error::Error>` impl: it embeds this type via
+//                `Name(#[from] crate::remote::name::Error)`, but has already used its one erased slot
+//                via `Save(#[from] Error)` (`Error` there is already `gix_error::Error`) — E0119.
+//                Separately, this is a struct with `pub` fields (`source`, `name`); no caller currently
+//                reads them (`.source`/`.name`/`Error { .. }` all unused outside this file), but erasure
+//                would still remove that public surface.
 /// The error returned by [validated()].
 #[derive(Debug, thiserror::Error)]
 #[error("remote names must be valid within refspecs for fetching: {name:?}")]
