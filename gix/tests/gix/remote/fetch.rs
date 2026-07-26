@@ -30,26 +30,21 @@ mod blocking_and_async_io {
 
     /// The objects `clone-as-base-with-changes` sends on top of what the client already has:
     /// the new commit, its tree, and the empty blob it adds.
-    pub(crate) const PACK_OBJECTS_WITHOUT_TAG: &[&str] = &[
+    const PACK_OBJECTS_WITHOUT_TAG: &[&str] = &[
         "17f2f33324841332c4f6156b36ecde6e44d1bb23",
         "4d979abcde5cea47b079c38850828956c9382a56",
         "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     ];
 
     /// As above, plus the annotated tag object included when tags are fetched.
-    pub(crate) const PACK_OBJECTS_WITH_TAG: &[&str] = &[
+    const PACK_OBJECTS_WITH_TAG: &[&str] = &[
         "17f2f33324841332c4f6156b36ecde6e44d1bb23",
         "4d979abcde5cea47b079c38850828956c9382a56",
         "978f927e6397113757dfec6332e7d9c7e356ac25",
         "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
     ];
 
-    /// Map SHA-1 hexes through [`hex_to_id`] — which substitutes SHA-256 ids during
-    /// `GIX_TEST_FIXTURE_HASH=sha256` runs — and sort the result.
-    ///
-    /// Sorting must happen *after* the mapping: ids sort by their raw bytes, so a list sorted in
-    /// SHA-1 space is generally not sorted in SHA-256 space.
-    pub(crate) fn expected_pack_object_ids(sha1_hexes: &[&str]) -> Vec<gix::ObjectId> {
+    fn expected_pack_object_ids(sha1_hexes: &[&str]) -> Vec<gix::ObjectId> {
         let mut ids: Vec<_> = sha1_hexes.iter().copied().map(hex_to_id).collect();
         ids.sort();
         ids
@@ -61,7 +56,7 @@ mod blocking_and_async_io {
     /// bytes, which differ between zlib implementations — a `zlib-ng`-linked `git` deflates some
     /// objects a byte smaller than stock zlib — while object ids hash uncompressed content and are
     /// therefore identical on every host.
-    pub(crate) fn pack_object_ids(index_path: Option<&std::path::Path>, hash: gix::hash::Kind) -> Vec<gix::ObjectId> {
+    fn pack_object_ids(index_path: Option<&std::path::Path>, hash: gix::hash::Kind) -> Vec<gix::ObjectId> {
         let index = gix::odb::pack::index::File::at(index_path.expect("pack index was written"), hash)
             .expect("written index can be read back");
         let mut ids: Vec<_> = index.iter().map(|e| e.oid).collect();
