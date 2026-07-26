@@ -357,6 +357,74 @@ mod text {
         }
     }
 
+    #[test]
+    fn adjacent_changes_conflict_while_changes_with_a_gap_merge_cleanly() {
+        let base = b"one\ntwo\nthree\nfour\nfive\n";
+        let ours = b"one\ntwo-ours\nthree\nfour\nfive\n";
+        let adjacent_theirs = b"one\ntwo\nthree-theirs\nfour\nfive\n";
+        let separated_theirs = b"one\ntwo\nthree\nfour-theirs\nfive\n";
+        let labels = text::Labels {
+            ancestor: Some("base".into()),
+            current: Some("current".into()),
+            other: Some("other".into()),
+        };
+        let options = text::Options {
+            conflict: Conflict::Keep {
+                style: ConflictStyle::Merge,
+                marker_size: NonZero::new(7).expect("seven is non-zero"),
+            },
+            ..Default::default()
+        };
+
+        for (name, current, other, expected) in [
+            (
+                "ours then theirs",
+                ours.as_slice(),
+                adjacent_theirs.as_slice(),
+                "one\n<<<<<<< current\ntwo-ours\nthree\n=======\ntwo\nthree-theirs\n>>>>>>> other\nfour\nfive\n",
+            ),
+            (
+                "theirs then ours",
+                adjacent_theirs.as_slice(),
+                ours.as_slice(),
+                "one\n<<<<<<< current\ntwo\nthree-theirs\n=======\ntwo-ours\nthree\n>>>>>>> other\nfour\nfive\n",
+            ),
+        ] {
+            let mut out = Vec::new();
+            let mut input = imara_diff::InternedInput::default();
+            let resolution = builtin_driver::text(&mut out, &mut input, labels, current, base, other, options);
+            assert_eq!(
+                resolution,
+                Resolution::Conflict,
+                "{name}: adjacent changes must conflict because no unchanged base line separates them"
+            );
+            assert_str_eq!(
+                out.as_bstr().to_str_lossy(),
+                expected,
+                "{name}: adjacent changes must be rendered as one conflict"
+            );
+        }
+
+        for (name, current, other) in [
+            ("ours then theirs", ours.as_slice(), separated_theirs.as_slice()),
+            ("theirs then ours", separated_theirs.as_slice(), ours.as_slice()),
+        ] {
+            let mut out = Vec::new();
+            let mut input = imara_diff::InternedInput::default();
+            let resolution = builtin_driver::text(&mut out, &mut input, labels, current, base, other, options);
+            assert_eq!(
+                resolution,
+                Resolution::Complete,
+                "{name}: changes separated by an unchanged base line must merge independently"
+            );
+            assert_str_eq!(
+                out.as_bstr().to_str_lossy(),
+                "one\ntwo-ours\nthree\nfour-theirs\nfive\n",
+                "{name}: a gap between changes must preserve both edits without conflict markers"
+            );
+        }
+    }
+
     mod false_conflict {
         use gix_merge::blob::{Resolution, builtin_driver, builtin_driver::text::Conflict};
         use imara_diff::InternedInput;
