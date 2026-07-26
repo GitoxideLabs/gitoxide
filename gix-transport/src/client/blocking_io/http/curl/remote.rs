@@ -3,7 +3,7 @@ use std::{
     io::{Read, Write},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::Ordering,
         mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
     },
     thread,
@@ -19,7 +19,7 @@ use crate::client::blocking_io::http::{
     self,
     curl::Error,
     curl::curl_is_spurious,
-    options::{FollowRedirects, HttpVersion, ProxyAuthMethod, SslVersion},
+    options::{FollowRedirects, HttpVersion, OwnedOrStaticAtomicBool, ProxyAuthMethod, SslVersion},
     redirect::{self, Action as RedirectAction},
     traits::PostBodyDataKind,
 };
@@ -61,7 +61,7 @@ struct Handler {
     redirected_base_url: SharedRedirectedBaseUrl,
     /// If set, the `progress()` meter aborts the in-flight transfer as soon as
     /// this flag reads `true`. See `http::Options::should_interrupt`.
-    should_interrupt: Option<Arc<AtomicBool>>,
+    should_interrupt: Option<OwnedOrStaticAtomicBool>,
 }
 
 impl Handler {

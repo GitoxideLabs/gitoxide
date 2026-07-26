@@ -3,7 +3,7 @@ use std::{
     borrow::Cow,
     io::{BufRead, Read},
     path::PathBuf,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex},
 };
 
 use base64::Engine;
@@ -17,7 +17,7 @@ use crate::{
         blocking_io::{
             self, ExtendedBufRead, HandleProgress, RequestWriter, SetServiceResponse,
             bufread_ext::ReadlineBufRead,
-            http::options::{HttpVersion, SslVersionRangeInclusive},
+            http::options::{HttpVersion, OwnedOrStaticAtomicBool, SslVersionRangeInclusive},
         },
         capabilities::blocking_recv::Handshake,
     },
@@ -39,9 +39,47 @@ mod traits;
 
 ///
 pub mod options {
+    use std::sync::{Arc, atomic::AtomicBool};
+
     /// A function to authenticate a URL.
     pub type AuthenticateFn =
         dyn FnMut(gix_credentials::helper::Action) -> gix_credentials::protocol::Result + Send + Sync;
+
+    /// A flag that can be shared with the thread that drives a request, which outlives the caller's
+    /// stack frame and thus can't borrow it.
+    ///
+    /// Most applications happen to have a `static` interrupt flag and can pass it as-is, while a
+    /// server with one flag per request uses the reference-counted variant.
+    #[derive(Debug, Clone)]
+    pub enum OwnedOrStaticAtomicBool {
+        /// A flag owned by the caller, shared by reference count.
+        Owned(Arc<AtomicBool>),
+        /// A flag that lives as long as the program.
+        Static(&'static AtomicBool),
+    }
+
+    impl std::ops::Deref for OwnedOrStaticAtomicBool {
+        type Target = AtomicBool;
+
+        fn deref(&self) -> &Self::Target {
+            match self {
+                OwnedOrStaticAtomicBool::Owned(flag) => flag,
+                OwnedOrStaticAtomicBool::Static(flag) => flag,
+            }
+        }
+    }
+
+    impl From<Arc<AtomicBool>> for OwnedOrStaticAtomicBool {
+        fn from(flag: Arc<AtomicBool>) -> Self {
+            OwnedOrStaticAtomicBool::Owned(flag)
+        }
+    }
+
+    impl From<&'static AtomicBool> for OwnedOrStaticAtomicBool {
+        fn from(flag: &'static AtomicBool) -> Self {
+            OwnedOrStaticAtomicBool::Static(flag)
+        }
+    }
 
     /// Possible settings for the `http.followRedirects` configuration option.
     #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -194,7 +232,11 @@ pub struct Options {
     /// can cancel a stalled transfer promptly instead of waiting out
     /// `low_speed_time`. Only the curl backend honors it (via its transfer
     /// meter, which fires even while no bytes move).
-    pub should_interrupt: Option<Arc<AtomicBool>>,
+    ///
+    /// A `&'static AtomicBool` or an `Arc<AtomicBool>` both convert into place
+    /// with `.into()` — the request outlives the call that starts it, so it can't
+    /// borrow the caller's flag.
+    pub should_interrupt: Option<OwnedOrStaticAtomicBool>,
 }
 
 impl Default for Options {

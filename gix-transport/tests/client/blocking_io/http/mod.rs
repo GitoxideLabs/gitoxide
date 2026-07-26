@@ -1278,7 +1278,10 @@ mod interrupt {
         port
     }
 
-    fn client_with_interrupt_flag(port: u16, flag: &Arc<AtomicBool>) -> http::Transport<http::curl::Curl> {
+    fn client_with_interrupt_flag(
+        port: u16,
+        flag: impl Into<http::options::OwnedOrStaticAtomicBool>,
+    ) -> http::Transport<http::curl::Curl> {
         let mut client = http::connect::<http::curl::Curl>(
             format!("http://127.0.0.1:{port}/repo")
                 .try_into()
@@ -1288,7 +1291,7 @@ mod interrupt {
         );
         client
             .configure(&http::Options {
-                should_interrupt: Some(Arc::clone(flag)),
+                should_interrupt: Some(flag.into()),
                 ..Default::default()
             })
             .expect("curl backend accepts http::Options");
@@ -1302,7 +1305,7 @@ mod interrupt {
         // that kind, so the retry would hit the ended pipe and the caller would see a bogus
         // "not a smart protocol" or `UnexpectedEof` error instead of the cancellation.
         let flag = Arc::new(AtomicBool::new(false));
-        let mut client = client_with_interrupt_flag(stalling_server(Duration::from_secs(30)), &flag);
+        let mut client = client_with_interrupt_flag(stalling_server(Duration::from_secs(30)), Arc::clone(&flag));
         {
             let flag = Arc::clone(&flag);
             std::thread::spawn(move || {
@@ -1323,6 +1326,29 @@ mod interrupt {
         assert!(
             format!("{err:?}").contains("Interrupted"),
             "the cancellation must survive all the way to the caller, got {err:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_static_flag_needs_no_reference_count() -> crate::Result {
+        // The flag most applications have is a `static` flipped by a signal handler, which can't be
+        // shared through an `Arc` - `Options` has to take it as-is.
+        static SHOULD_INTERRUPT: AtomicBool = AtomicBool::new(true);
+        let mut client = client_with_interrupt_flag(stalling_server(Duration::from_secs(30)), &SHOULD_INTERRUPT);
+
+        let start = Instant::now();
+        let err = client
+            .handshake(Service::UploadPack, &[])
+            .err()
+            .expect("a transfer interrupted through a static flag must fail");
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the flag is read through the enum just like a reference-counted one"
+        );
+        assert!(
+            format!("{err:?}").contains("Interrupted"),
+            "the cancellation must reach the caller, got {err:?}"
         );
         Ok(())
     }
