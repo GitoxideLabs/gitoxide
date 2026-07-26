@@ -519,9 +519,9 @@ fn estimate_lane_width(rows: &[CommitRow]) -> usize {
     graph
         .render(&rows, 0..rows.len())
         .iter()
-        .map(|lane| lane.chars().count())
+        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
-        .map_or(0, |width| width.saturating_add(2))
+        .unwrap_or_default()
 }
 
 pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Graph, Duration) {
@@ -887,8 +887,8 @@ mod tests {
         ]);
 
         assert_eq!(
-            app.estimated_lane_width, 6,
-            "the provisional alignment leaves two extra cells after two estimated graph lanes"
+            app.estimated_lane_width, 4,
+            "the provisional and rendered graph widths use the same trailing separator"
         );
 
         complete(&mut app);
