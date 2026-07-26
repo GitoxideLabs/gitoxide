@@ -174,7 +174,7 @@ where
             }
 
             let commit = find(w.commit_graph.as_ref(), &w.find, id, &mut w.buf)?;
-            let (_, time) = gen_and_commit_time(commit)?;
+            let (generation, time) = gen_and_commit_time(commit)?;
             let parent_ids = w.collect_all_parents(id)?.into_iter().map(|e| e.0).collect();
 
             w.topo_queue.push(
@@ -182,6 +182,7 @@ where
                 Info {
                     id: *id,
                     parent_ids,
+                    generation: (generation != gix_commitgraph::GENERATION_NUMBER_INFINITY).then_some(generation),
                     commit_time: Some(time),
                 },
             );

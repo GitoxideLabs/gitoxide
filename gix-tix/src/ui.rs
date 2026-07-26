@@ -19,7 +19,15 @@ pub(crate) fn draw(
     mailmap: &gix::mailmap::Snapshot,
     commit_message: Option<&BStr>,
 ) {
-    let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    let [top_spacer, mut body, bottom_spacer, footer] = Layout::vertical([
+        Constraint::Length(u16::from(app.inline)),
+        Constraint::Min(0),
+        Constraint::Length(u16::from(app.inline)),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    frame.render_widget(Clear, top_spacer);
+    frame.render_widget(Clear, bottom_spacer);
     let commit_pane = app.show_commit.then(|| {
         let width = 80.min(body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
@@ -161,7 +169,7 @@ pub(crate) fn draw(
             );
             color_graph(frame, row_area, lane, horizontal_offset, selected);
         }
-        if selected && body.width > 0 {
+        if selected && app.show_selection_tail && body.width > 0 {
             let line_width = if align_metadata {
                 align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
             } else {
@@ -347,6 +355,7 @@ fn metadata_line<'a>(
     mailmap: &'a gix::mailmap::Snapshot,
     options: MetadataOptions,
 ) -> Line<'a> {
+    debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
         show_committer_date,
         show_author_name,
@@ -563,6 +572,7 @@ mod tests {
                 author: author(b"Codex", b"codex@openai.com"),
                 attributions: 0..7,
                 title: "subject".into(),
+                metadata_loaded: true,
             }],
             attributions: vec![
                 Attribution {
@@ -667,6 +677,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         }]);
         complete(&mut app);
         let decorations = Decorations::from([(
@@ -720,6 +731,21 @@ mod tests {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
+
+        app.inline = true;
+        let mut inline_terminal = Terminal::new(TestBackend::new(140, 4))?;
+        inline_terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        assert!(
+            rendered_line(&inline_terminal, 0).trim().is_empty(),
+            "inline mode separates the commits from preceding content"
+        );
+        assert!(
+            rendered_line(&inline_terminal, 2).trim().is_empty(),
+            "inline mode separates the commits from the status line"
+        );
+        assert!(rendered_line(&inline_terminal, 3).starts_with("1 commits"));
+        app.inline = false;
+
         let row = terminal.backend().buffer();
         assert!(
             row[(10, 0)].modifier.contains(Modifier::REVERSED),
@@ -845,6 +871,7 @@ mod tests {
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
+                    metadata_loaded: true,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -933,6 +960,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
@@ -1089,6 +1117,7 @@ mod tests {
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
+                    metadata_loaded: true,
                 })
                 .collect::<Vec<_>>(),
         );
@@ -1111,6 +1140,18 @@ mod tests {
         );
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
+
+        app.show_selection_tail = false;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let buffer = terminal.backend().buffer();
+        assert!(
+            buffer[(0, 1)].modifier.contains(Modifier::REVERSED),
+            "the final frame keeps the left selection marker"
+        );
+        assert!(
+            !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
+            "the final frame hides the trailing selection marker"
+        );
         Ok(())
     }
 
@@ -1124,6 +1165,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
+            metadata_loaded: true,
         };
         let decorations = Decorations::from([(
             id,
@@ -1225,6 +1267,7 @@ mod tests {
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: format!("{} subject-tail", "a".repeat(50)).into(),
+            metadata_loaded: true,
         }]);
         complete(&mut app);
         app.set_lane(0, &format!("{}{}", "A".repeat(40), "B".repeat(40)));

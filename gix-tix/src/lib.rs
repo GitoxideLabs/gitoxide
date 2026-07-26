@@ -31,12 +31,18 @@ use crossterm::{
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use gix::bstr::{BString, ByteSlice};
-use history::{Authors, Decorations, Event};
+use history::{Authors, Decorations, Event, SharedAuthors};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
 
 const EVENT_BATCH_SIZE: usize = 256;
+const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
-type SharedAuthors = gix::features::threading::OwnShared<gix::features::threading::Mutable<Authors>>;
+
+struct FillRepository<'a> {
+    path: &'a Path,
+    retained: Option<gix::Repository>,
+    retain: bool,
+}
 
 /// Options for [`run()`].
 #[derive(Clone, Debug, Default)]
@@ -119,13 +125,10 @@ fn half_height(terminal_height: u16) -> u16 {
 
 fn inline_height(screen: Screen, terminal_height: u16, visible_commits: usize) -> Option<u16> {
     let half = half_height(terminal_height);
-    let compact = u16::try_from(visible_commits)
-        .unwrap_or(u16::MAX)
-        .saturating_add(1)
-        .min(half);
+    let compact = u16::try_from(visible_commits).unwrap_or(u16::MAX).saturating_add(3);
     match screen {
         Screen::Always => None,
-        Screen::Half => Some(compact),
+        Screen::Half => Some(compact.min(half)),
         Screen::Auto if visible_commits < half as usize => Some(compact),
         Screen::Auto => None,
     }
@@ -176,8 +179,57 @@ fn leave_alternate_screen(
     terminal.hide_cursor()
 }
 
-fn should_switch_screen(started_inline: bool, show_commit: bool, in_alternate_screen: bool) -> bool {
-    started_inline && show_commit != in_alternate_screen
+fn should_switch_screen(started_inline: bool, needs_alternate_screen: bool, in_alternate_screen: bool) -> bool {
+    started_inline && needs_alternate_screen != in_alternate_screen
+}
+
+fn history_needs_alternate_screen(screen: Screen, terminal_height: u16, commits: usize) -> bool {
+    screen == Screen::Auto && inline_height(screen, terminal_height, commits).is_none()
+}
+
+fn resize_inline_screen(terminal: &mut ratatui::DefaultTerminal, height: u16) -> std::io::Result<()> {
+    if terminal.get_frame().area().height == height {
+        return Ok(());
+    }
+    let resized = ratatui::Terminal::with_options(
+        CrosstermBackend::new(std::io::stdout()),
+        TerminalOptions {
+            viewport: Viewport::Inline(height),
+        },
+    )?;
+    drop(std::mem::replace(terminal, resized));
+    terminal.hide_cursor()
+}
+
+fn sync_screen(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    screen: Screen,
+    started_inline: bool,
+    history_requires_alternate_screen: bool,
+    resize_inline: bool,
+    inline_terminal: &mut Option<ratatui::DefaultTerminal>,
+) -> Result<()> {
+    let needs_alternate_screen = app.show_commit || history_requires_alternate_screen;
+    if !should_switch_screen(started_inline, needs_alternate_screen, inline_terminal.is_some()) {
+        if started_inline && app.inline && resize_inline {
+            let height = inline_height(screen, terminal::size()?.1, app.rows.len())
+                .expect("an inline history always has an inline height");
+            resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+        }
+        return Ok(());
+    }
+    if needs_alternate_screen {
+        *inline_terminal = Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+        app.inline = false;
+    } else if let Some(inline) = inline_terminal.take() {
+        leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+        app.inline = true;
+        let height = inline_height(screen, terminal::size()?.1, app.rows.len())
+            .expect("an inline history always has an inline height");
+        resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+    }
+    Ok(())
 }
 
 fn event_loop(
@@ -190,10 +242,12 @@ fn event_loop(
     let Options {
         quit_on_finish,
         hide,
-        screen: _,
+        screen,
     } = options;
-    let mailmap = repository.to_thread_local().open_mailmap();
     let repository_path = repository.git_dir().to_owned();
+    let mailmap = gix::open(&repository_path)
+        .context("could not open repository for mailmap")?
+        .open_mailmap();
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let (mut cancelled, mut receiver) = start_history(
         repository,
@@ -205,6 +259,12 @@ fn event_loop(
     let mut app = App::new(1);
     let mut lane_receiver = None;
     let mut commit_message = None;
+    let mut fill_repository = FillRepository {
+        path: &repository_path,
+        retained: None,
+        retain: false,
+    };
+    app.inline = started_inline;
     app.has_hidden_filter = !hide.is_empty();
     let mut decorations = Decorations::new();
     draw(
@@ -212,13 +272,15 @@ fn event_loop(
         &mut app,
         &decorations,
         &mailmap,
-        &repository_path,
+        &authors,
+        &mut fill_repository,
         &mut commit_message,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
     let mut inline_terminal = None;
+    let mut history_requires_alternate_screen = false;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -242,7 +304,8 @@ fn event_loop(
                 &mut app,
                 &decorations,
                 &mailmap,
-                &repository_path,
+                &authors,
+                &mut fill_repository,
                 &mut commit_message,
             )?;
             last_draw = Instant::now();
@@ -251,6 +314,7 @@ fn event_loop(
             continue;
         }
         let mut events = 0;
+        let mut resize_inline = false;
         while events < EVENT_BATCH_SIZE {
             let message = match receiver.try_recv() {
                 Ok(message) => message,
@@ -268,8 +332,16 @@ fn event_loop(
             dirty = true;
             match message? {
                 Event::Decorations(value) => decorations = value,
-                Event::Commits(rows) => app.extend_commits(rows),
+                Event::Commits(rows) => {
+                    app.extend_commits(rows);
+                    if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
+                        history_requires_alternate_screen = true;
+                    }
+                }
                 Event::Complete => {
+                    resize_inline = true;
+                    history_requires_alternate_screen =
+                        history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
                     if let Some(rows) = app.start_lane_computation() {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
@@ -277,6 +349,15 @@ fn event_loop(
                 Event::Cancelled => drop(app.update(Action::Cancelled)),
             }
         }
+        sync_screen(
+            terminal,
+            &mut app,
+            screen,
+            started_inline,
+            history_requires_alternate_screen,
+            resize_inline,
+            &mut inline_terminal,
+        )?;
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing);
         if should_draw(dirty, streaming, last_draw.elapsed()) {
             draw(
@@ -284,7 +365,8 @@ fn event_loop(
                 &mut app,
                 &decorations,
                 &mailmap,
-                &repository_path,
+                &authors,
+                &mut fill_repository,
                 &mut commit_message,
             )?;
             last_draw = Instant::now();
@@ -307,18 +389,17 @@ fn event_loop(
             }
             _ => continue,
         };
-        let Some(action) = action(key) else { continue };
+        let action = action(key);
+        fill_repository.retain = retains_fill_repository(key.kind, action.as_ref());
+        if !fill_repository.retain {
+            fill_repository.retained = None;
+        }
+        let Some(action) = action else {
+            continue;
+        };
         dirty = true;
         urgent = true;
         let effects = app.update(action);
-        if should_switch_screen(started_inline, app.show_commit, inline_terminal.is_some()) {
-            if app.show_commit {
-                inline_terminal =
-                    Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
-            } else if let Some(inline) = inline_terminal.take() {
-                leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
-            }
-        }
         for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -343,9 +424,32 @@ fn event_loop(
                         gix::features::threading::OwnShared::clone(&authors),
                     );
                 }
-                Effect::Quit => return Ok(None),
+                Effect::Quit => {
+                    if app.inline {
+                        app.show_selection_tail = false;
+                        draw(
+                            terminal,
+                            &mut app,
+                            &decorations,
+                            &mailmap,
+                            &authors,
+                            &mut fill_repository,
+                            &mut commit_message,
+                        )?;
+                    }
+                    return Ok(None);
+                }
             }
         }
+        sync_screen(
+            terminal,
+            &mut app,
+            screen,
+            started_inline,
+            history_requires_alternate_screen,
+            false,
+            &mut inline_terminal,
+        )?;
     })();
     let restore = inline_terminal
         .map(|inline| leave_alternate_screen(terminal, inline))
@@ -376,13 +480,12 @@ fn start_history(
     let hidden_revisions = hidden_revisions.to_vec();
     std::thread::spawn(move || {
         let mut repository = repository.to_thread_local();
-        repository.object_cache_size(None);
-        let mut authors = gix::features::threading::lock(&authors);
+        repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
         let result = history::load(
             &repository,
             &revisions,
             &hidden_revisions,
-            &mut authors,
+            &authors,
             &worker_cancelled,
             |event| sender.send(Ok(event)).is_ok(),
         );
@@ -398,27 +501,61 @@ fn draw(
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
-    repository_path: &Path,
+    authors: &SharedAuthors,
+    fill_repository: &mut FillRepository<'_>,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
 ) -> Result<()> {
+    app.viewport_rows = terminal
+        .get_frame()
+        .area()
+        .height
+        .saturating_sub(1 + 2 * u16::from(app.inline)) as usize;
+    app.ensure_visible();
+    let start = app.offset.min(app.rows.len());
+    let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
     let selected = app
         .show_commit
         .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
         .flatten();
-    if commit_message.as_ref().map(|(id, _)| *id) != selected {
-        *commit_message = selected
-            .map(|id| load_commit_message(repository_path, id).map(|message| (id, message)))
-            .transpose()?;
+    let message_to_load = selected.filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
+    if selected.is_none() {
+        *commit_message = None;
+    }
+    if app.rows[start..end].iter().any(|row| !row.metadata_loaded) || message_to_load.is_some() {
+        let mut one_shot_repository = None;
+        let repository = if fill_repository.retain {
+            match &mut fill_repository.retained {
+                Some(repository) => repository,
+                slot @ None => slot.insert(open_fill_repository(fill_repository.path)?),
+            }
+        } else {
+            one_shot_repository.insert(open_fill_repository(fill_repository.path)?)
+        };
+        for index in start..end {
+            if app.rows[index].metadata_loaded {
+                continue;
+            }
+            let (metadata, attributions) = history::load_metadata(repository, app.rows[index].id, authors)
+                .context("could not load visible commit")?;
+            app.set_metadata(index, metadata, attributions);
+        }
+        if let Some(id) = message_to_load {
+            *commit_message = Some((id, load_commit_message(repository, id)?));
+        }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
     terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message))?;
     Ok(())
 }
 
-fn load_commit_message(repository_path: &Path, id: gix::ObjectId) -> Result<BString> {
-    let repo = gix::open_opts(repository_path, gix::open::Options::isolated())
-        .context("could not open repository for commit message")?;
-    let commit = repo.find_commit(id).context("could not load commit message")?;
+fn open_fill_repository(repository_path: &Path) -> Result<gix::Repository> {
+    let mut repository = gix::open(repository_path).context("could not open repository for history view")?;
+    repository.object_cache_size(None);
+    Ok(repository)
+}
+
+fn load_commit_message(repository: &gix::Repository, id: gix::ObjectId) -> Result<BString> {
+    let commit = repository.find_commit(id).context("could not load commit message")?;
     Ok(commit.message_raw_sloppy().to_owned())
 }
 
@@ -473,6 +610,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::HalfPageDown),
         KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::PageDown => Some(Action::PageDown),
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Last),
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') => Some(Action::ToggleDate),
@@ -490,17 +628,36 @@ fn action(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn repeats_viewport(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::MoveUp
+            | Action::MoveDown
+            | Action::HalfPageUp
+            | Action::HalfPageDown
+            | Action::PageUp
+            | Action::PageDown
+            | Action::First
+            | Action::Last
+    )
+}
+
+fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>) -> bool {
+    kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn loads_commit_messages_from_an_isolated_repository() -> gix_testtools::Result {
+    fn loads_commit_messages_from_an_existing_repository() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let id = gix::open(&fixture)?.rev_parse_single("topic")?.detach();
+        let repository = gix::open(&fixture)?;
+        let id = repository.rev_parse_single("topic")?.detach();
 
         assert!(
-            load_commit_message(&fixture, id)?.starts_with(b"topic\n\nCo-authored-by:"),
+            load_commit_message(&repository, id)?.starts_with(b"topic\n\nCo-authored-by:"),
             "on-demand loading retains the full commit message"
         );
         Ok(())
@@ -509,19 +666,24 @@ mod tests {
     #[test]
     fn chooses_screen_from_terminal_and_history_height() {
         assert_eq!(
-            inline_height(Screen::Auto, 20, 9),
+            inline_height(Screen::Auto, 20, 7),
             Some(10),
-            "short histories occupy only their rows and footer"
+            "short histories occupy only their rows, spacers, and footer"
+        );
+        assert_eq!(
+            inline_height(Screen::Auto, 20, 8),
+            Some(11),
+            "spacers do not force an otherwise short history into the alternate screen"
         );
         assert_eq!(
             inline_height(Screen::Auto, 20, 10),
             None,
-            "the auto cutoff is strictly less than half the terminal"
+            "the auto cutoff remains half the terminal height"
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 3),
-            Some(4),
-            "half mode shrinks to the rows and footer needed by short histories"
+            Some(6),
+            "half mode shrinks to the rows, spacers, and footer needed by short histories"
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 10),
@@ -530,8 +692,8 @@ mod tests {
         );
         assert_eq!(
             inline_height(Screen::Half, 21, 0),
-            Some(1),
-            "an empty history only needs its footer"
+            Some(3),
+            "an empty history only needs its spacers and footer"
         );
         assert_eq!(
             inline_height(Screen::Always, 20, 0),
@@ -541,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn switches_screens_only_for_an_inline_commit_pane() {
+    fn switches_screens_for_inline_commit_panes_and_large_histories() {
         assert!(
             should_switch_screen(true, true, false),
             "opening the commit pane from inline mode enters the alternate screen"
@@ -557,6 +719,13 @@ mod tests {
         assert!(
             !should_switch_screen(true, true, true),
             "an already-active alternate screen is not re-entered"
+        );
+        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 7));
+        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 8));
+        assert!(history_needs_alternate_screen(Screen::Auto, 20, 10));
+        assert!(
+            !history_needs_alternate_screen(Screen::Half, 20, usize::MAX),
+            "half-screen mode never switches because history grows"
         );
     }
 
@@ -589,6 +758,11 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE)),
             Some(Action::ScrollRight)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT)),
+            Some(Action::Last),
+            "terminals that report shifted letters in lowercase still map Shift-G to the first commit"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
@@ -651,6 +825,21 @@ mod tests {
             Some(Action::Quit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn retains_the_fill_repository_only_for_repeated_viewport_navigation() {
+        assert!(retains_fill_repository(KeyEventKind::Repeat, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(KeyEventKind::Press, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(KeyEventKind::Release, Some(&Action::MoveDown)));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ScrollRight)
+        ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ToggleDate)
+        ));
     }
 
     #[test]

@@ -18,6 +18,15 @@ pub(crate) struct Commit<T> {
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
+    pub metadata_loaded: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Metadata<T> {
+    pub committer_time: gix::date::Time,
+    pub author: &'static Author,
+    pub attributions: Range<usize>,
+    pub title: T,
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -44,12 +53,13 @@ impl Attribution {
     pub fn is_agent(&self) -> bool {
         self.author.is_bot()
             || self.kind == AttributionKind::Assisted
-                && self
-                    .author
-                    .name
-                    .get(..4)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"opus"))
-                && self.author.name.get(4).is_none_or(u8::is_ascii_whitespace)
+                && [b"opus".as_slice(), b"gpt".as_slice()].iter().any(|name| {
+                    self.author
+                        .name
+                        .get(..name.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                        && self.author.name.get(name.len()).is_none_or(u8::is_ascii_whitespace)
+                })
     }
 }
 
@@ -169,6 +179,8 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
+    pub(crate) show_selection_tail: bool,
+    pub inline: bool,
     pub preview_author_copy: bool,
     pub copy_feedback: Option<CopyKind>,
     pub estimated_lane_width: usize,
@@ -201,6 +213,8 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
+            show_selection_tail: true,
+            inline: false,
             preview_author_copy: false,
             copy_feedback: None,
             estimated_lane_width: 0,
@@ -222,23 +236,16 @@ impl App {
         self.attributions.extend(attributions);
         self.rows.reserve(rows.len());
         for row in rows {
-            let Commit {
-                id,
-                parent_ids,
-                committer_time,
-                author,
-                attributions,
-                title,
-            } = row;
             let start = self.titles.len();
-            self.titles.extend_from_slice(&title);
+            self.titles.extend_from_slice(&row.title);
             self.rows.push(Commit {
-                id,
-                parent_ids,
-                committer_time,
-                author,
-                attributions: attribution_base + attributions.start..attribution_base + attributions.end,
+                id: row.id,
+                parent_ids: row.parent_ids,
+                committer_time: row.committer_time,
+                author: row.author,
+                attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
                 title: start..self.titles.len(),
+                metadata_loaded: row.metadata_loaded,
             });
         }
         if was_empty {
@@ -251,7 +258,35 @@ impl App {
         }
     }
 
+    pub(crate) fn set_metadata(
+        &mut self,
+        index: usize,
+        metadata: Metadata<BString>,
+        new_attributions: Vec<Attribution>,
+    ) {
+        let Some(row) = self.rows.get_mut(index) else { return };
+        if row.metadata_loaded {
+            return;
+        }
+        let Metadata {
+            committer_time,
+            author,
+            attributions,
+            title,
+        } = metadata;
+        let title_start = self.titles.len();
+        self.titles.extend_from_slice(&title);
+        let attribution_start = self.attributions.len();
+        self.attributions.extend(new_attributions);
+        row.committer_time = committer_time;
+        row.author = author;
+        row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
+        row.title = title_start..self.titles.len();
+        row.metadata_loaded = true;
+    }
+
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
+        debug_assert!(row.metadata_loaded, "visible rows have metadata");
         self.titles[row.title.clone()].as_bstr()
     }
 
@@ -269,6 +304,7 @@ impl App {
     }
 
     pub(crate) fn attributions(&self, row: &CommitRow) -> &[Attribution] {
+        debug_assert!(row.metadata_loaded, "visible rows have metadata");
         &self.attributions[row.attributions.clone()]
     }
 
@@ -300,7 +336,9 @@ impl App {
             Action::ToggleName => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
-                let has_visible_attributions = self.rows[start..end].iter().any(|row| !row.attributions.is_empty());
+                let has_visible_attributions = self.rows[start..end]
+                    .iter()
+                    .any(|row| row.metadata_loaded && !row.attributions.is_empty());
                 self.name_mode = match self.name_mode {
                     NameMode::All if has_visible_attributions => NameMode::Author,
                     NameMode::All => NameMode::None,
@@ -339,6 +377,7 @@ impl App {
                 if let Some(author) = self
                     .selected
                     .and_then(|index| self.rows.get(index))
+                    .filter(|row| row.metadata_loaded)
                     .map(|row| row.author)
                 {
                     self.copy_feedback = Some(CopyKind::Author);
@@ -378,7 +417,35 @@ impl App {
             return;
         }
         let selected = self.selected.map(|index| self.rows[index].id);
+        let metadata: HashMap<_, _> = if rows.iter().any(|row| !row.metadata_loaded) {
+            self.rows
+                .iter()
+                .filter(|row| row.metadata_loaded)
+                .map(|row| {
+                    (
+                        row.id,
+                        Metadata {
+                            committer_time: row.committer_time,
+                            author: row.author,
+                            attributions: row.attributions.clone(),
+                            title: row.title.clone(),
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
         self.rows = rows;
+        for row in &mut self.rows {
+            if let Some(metadata) = metadata.get(&row.id) {
+                row.committer_time = metadata.committer_time;
+                row.author = metadata.author;
+                row.attributions = metadata.attributions.clone();
+                row.title = metadata.title.clone();
+                row.metadata_loaded = true;
+            }
+        }
         self.graph = Some(graph);
         self.lane_time = Some(lane_time);
         self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
@@ -455,9 +522,9 @@ fn estimate_lane_width(rows: &[CommitRow]) -> usize {
     graph
         .render(&rows, 0..rows.len())
         .iter()
-        .map(|lane| lane.chars().count())
+        .map(|lane| lane.trim_end().chars().count().saturating_add(1))
         .max()
-        .map_or(0, |width| width.saturating_add(2))
+        .unwrap_or_default()
 }
 
 pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Graph, Duration) {
@@ -763,6 +830,7 @@ mod tests {
             })),
             attributions: 0..0,
             title: format!("commit {n}").into(),
+            metadata_loaded: true,
         }
     }
 
@@ -773,9 +841,13 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_opus_only_as_an_assisting_agent() {
+    fn recognizes_named_agents_only_when_assisting() {
         let opus = Box::leak(Box::new(Author {
             name: b"Opus 4.7".as_bstr(),
+            email: b"".as_bstr(),
+        }));
+        let gpt = Box::leak(Box::new(Author {
+            name: b"GPT 5.6".as_bstr(),
             email: b"".as_bstr(),
         }));
 
@@ -783,6 +855,13 @@ mod tests {
             Attribution {
                 kind: AttributionKind::Assisted,
                 author: opus,
+            }
+            .is_agent()
+        );
+        assert!(
+            Attribution {
+                kind: AttributionKind::Assisted,
+                author: gpt,
             }
             .is_agent()
         );
@@ -822,8 +901,8 @@ mod tests {
         ]);
 
         assert_eq!(
-            app.estimated_lane_width, 6,
-            "the provisional alignment leaves two extra cells after two estimated graph lanes"
+            app.estimated_lane_width, 4,
+            "the provisional and rendered graph widths use the same trailing separator"
         );
 
         complete(&mut app);
@@ -859,6 +938,34 @@ mod tests {
             app.rows[app.selected.expect("selection survives final ordering")].id,
             selected
         );
+    }
+
+    #[test]
+    fn lane_computation_preserves_metadata_loaded_while_it_runs() {
+        let mut deferred = row(1);
+        deferred.metadata_loaded = false;
+        deferred.title.clear();
+        let mut app = App::new(1);
+        app.extend_commits(vec![deferred]);
+        let rows = app
+            .start_lane_computation()
+            .expect("history completion starts lane computation");
+
+        app.set_metadata(
+            0,
+            Metadata {
+                committer_time: gix::date::Time::default(),
+                author: row(1).author,
+                attributions: 0..0,
+                title: "loaded".into(),
+            },
+            Vec::new(),
+        );
+        let (rows, graph, lane_time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, lane_time);
+
+        assert!(app.rows[0].metadata_loaded);
+        assert_eq!(app.title(&app.rows[0]), "loaded");
     }
 
     #[test]

@@ -75,6 +75,7 @@ mod ancestors {
     #[test]
     fn all() -> crate::Result {
         let repo = crate::repo("make_repo_with_fork_and_dates.sh")?.to_thread_local();
+        let has_commit_graph = repo.commit_graph_if_enabled()?.is_some();
         for use_commit_graph in [false, true] {
             let head = repo.head()?.into_peeled_id()?;
             let commits_graph_order = head
@@ -84,6 +85,17 @@ mod ancestors {
                 .map(|c| c.map(gix::revision::walk::Info::detach))
                 .collect::<Result<Vec<_>, _>>()?;
             assert_eq!(commits_graph_order.len(), 4, "need a specific amount of commits");
+            if use_commit_graph && has_commit_graph {
+                assert!(
+                    commits_graph_order.iter().any(|commit| commit.generation.is_some()),
+                    "generation identifies commit-graph-backed commits"
+                );
+            } else {
+                assert!(
+                    commits_graph_order.iter().all(|commit| commit.generation.is_none()),
+                    "ODB commits have no generation"
+                );
+            }
 
             let commits_by_commit_date = head
                 .ancestors()
@@ -97,6 +109,17 @@ mod ancestors {
                 4,
                 "need a specific amount of commits, ordering doesn't affect that"
             );
+            if !use_commit_graph && has_commit_graph {
+                assert!(
+                    commits_by_commit_date.iter().any(|commit| commit.generation.is_some()),
+                    "generation is propagated for every sorting"
+                );
+            } else {
+                assert!(
+                    commits_by_commit_date.iter().all(|commit| commit.generation.is_none()),
+                    "ODB commits have no generation"
+                );
+            }
             assert_ne!(
                 commits_by_commit_date, commits_graph_order,
                 "these are ordered differently"
