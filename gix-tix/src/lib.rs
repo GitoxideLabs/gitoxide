@@ -301,7 +301,7 @@ fn event_loop(
         retain: false,
     };
     app.inline = started_inline;
-    app.has_hidden_filter = !hide.is_empty();
+    app.configure_hidden_filter(!hide.is_empty());
     let mut decorations = Decorations::new();
     draw(
         terminal,
@@ -384,6 +384,12 @@ fn event_loop(
                 Event::Decorations(value) => decorations = value,
                 Event::Commits(rows) => {
                     app.extend_commits(rows);
+                    if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
+                        history_requires_alternate_screen = true;
+                    }
+                }
+                Event::HiddenCommits(rows) => {
+                    app.extend_hidden_commits(rows);
                     if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
                         history_requires_alternate_screen = true;
                     }

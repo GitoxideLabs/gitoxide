@@ -44,9 +44,10 @@ pub(crate) fn draw(
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
     let visible_rows = &app.rows[start..end];
-    let has_verifiable_signatures = visible_rows
-        .iter()
-        .any(|row| matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying));
+    let has_verifiable_signatures = visible_rows.iter().enumerate().any(|(index, row)| {
+        !app.is_row_hidden(start + index)
+            && matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying)
+    });
     let lanes = app.render_lanes(start..end);
     let content = Rect::new(
         body.x.saturating_add(2),
@@ -235,6 +236,14 @@ pub(crate) fn draw(
         if !app.is_row_reachable(start + index) {
             for x in body.x..body.right() {
                 frame.buffer_mut()[(x, y)].set_style(Style::default().add_modifier(Modifier::DIM));
+            }
+        }
+        if app.is_row_hidden(start + index) {
+            for x in body.x..body.right() {
+                frame.buffer_mut()[(x, y)]
+                    .set_fg(Color::Reset)
+                    .set_bg(Color::Reset)
+                    .set_style(Style::default().add_modifier(Modifier::DIM));
             }
         }
     }
@@ -1464,6 +1473,53 @@ mod tests {
         assert!(
             terminal.backend().buffer()[(10, 1)].modifier.contains(Modifier::DIM),
             "an unreachable row is dimmed"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn renders_hidden_boundary_rows_without_colors() -> Result<(), Box<dyn std::error::Error>> {
+        let commit = |n: u8| Commit {
+            id: gix::ObjectId::Sha1([n; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: format!("subject {n}").into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unverified,
+        };
+        let mut app = App::new(2);
+        app.extend_commits(vec![commit(1)]);
+        app.extend_hidden_commits(vec![commit(2)]);
+        complete(&mut app);
+        app.set_lane(0, "● ");
+        app.set_lane(1, "● ");
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let line = rendered_line(&terminal, 1);
+        assert!(line.contains("subject 2"), "the hidden commit keeps its normal content");
+        let visible = rendered_line(&terminal, 0);
+        let visible_hash = visible.find("0101010").expect("the visible hash is present") as u16;
+        assert_ne!(terminal.backend().buffer()[(visible_hash, 0)].fg, Color::Reset);
+        let hash = line.find("0202020").expect("the hidden hash is visible") as u16;
+        assert!(
+            terminal.backend().buffer()[(hash, 1)].modifier.contains(Modifier::BOLD),
+            "non-color styling is retained"
+        );
+        for x in 0..terminal.backend().buffer().area.width {
+            let cell = &terminal.backend().buffer()[(x, 1)];
+            assert_eq!(cell.fg, Color::Reset, "the hidden row has no foreground colors");
+            assert_eq!(cell.bg, Color::Reset, "the hidden row has no background colors");
+            assert!(cell.modifier.contains(Modifier::DIM), "the hidden row is dimmed");
+        }
+        assert_ne!(
+            terminal.backend().buffer()[(0, 1)].symbol(),
+            ">",
+            "the hidden row is not selected"
         );
         Ok(())
     }
