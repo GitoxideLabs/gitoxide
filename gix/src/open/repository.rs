@@ -278,31 +278,19 @@ impl ThreadSafeRepository {
                     .and_then(|p| gix_path::normalize(p.into(), current_dir))
                     .is_some_and(|config_path| config_path.starts_with(git_dir))
             }
+            /// Normalize a worktree path.
+            ///
+            /// If `..` components exhaust `current_dir`, ordinary normalization rejects the path.
+            /// For explicit environment overrides, Git instead ignores the remaining `..` components.
             fn normalize_worktree_path<'a>(
                 path: Cow<'a, Path>,
                 current_dir: &Path,
                 saturate_at_root: bool,
             ) -> Option<Cow<'a, Path>> {
-                match gix_path::normalize(path.clone(), current_dir) {
-                    Some(path) => Some(path),
-                    None if saturate_at_root => {
-                        let mut normalized = if path.is_absolute() {
-                            PathBuf::new()
-                        } else {
-                            current_dir.to_owned()
-                        };
-                        for component in path.components() {
-                            match component {
-                                std::path::Component::CurDir => {}
-                                std::path::Component::ParentDir => {
-                                    normalized.pop();
-                                }
-                                component => normalized.push(component.as_os_str()),
-                            }
-                        }
-                        Some(Cow::Owned(normalized))
-                    }
-                    None => None,
+                if saturate_at_root {
+                    Some(gix_path::normalize_saturating(path, current_dir))
+                } else {
+                    gix_path::normalize(path, current_dir)
                 }
             }
             let worktree_path = config

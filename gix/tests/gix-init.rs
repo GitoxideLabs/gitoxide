@@ -1,5 +1,7 @@
 #![allow(clippy::result_large_err)]
 
+use std::path::Path;
+
 use gix::open::Permissions;
 use gix::{Repository, ThreadSafeRepository};
 use gix_sec::Permission;
@@ -12,6 +14,22 @@ pub fn named_subrepo_opts(
 ) -> std::result::Result<Repository, gix::open::Error> {
     let repo_path = gix_testtools::scripted_fixture_read_only(fixture).unwrap().join(name);
     Ok(ThreadSafeRepository::open_opts(repo_path, opts)?.to_thread_local())
+}
+
+fn discover_with_environment_overrides_isolated(
+    directory: impl AsRef<Path>,
+) -> Result<Repository, gix::discover::Error> {
+    let mut options = gix::open::Options::isolated();
+    options.permissions.env.git_prefix = Permission::Allow;
+    ThreadSafeRepository::discover_with_environment_overrides_opts(
+        directory,
+        Default::default(),
+        gix_sec::trust::Mapping {
+            full: options.clone(),
+            reduced: options,
+        },
+    )
+    .map(|repo| repo.to_thread_local())
 }
 
 mod with_overrides {
@@ -261,8 +279,19 @@ fn git_worktree_overrides_bare() -> gix_testtools::Result {
         .unset("GIT_DIR")
         .set("GIT_WORK_TREE", worktree.path().to_string_lossy());
 
-    let repo =
-        gix::ThreadSafeRepository::discover_with_environment_overrides(fixture.join("bare-repo"))?.to_thread_local();
+    let repo = gix::discover_opts(
+        fixture.join("bare-repo"),
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
+    assert_eq!(
+        repo.workdir(),
+        None,
+        "without environment overrides the bare repository has no worktree"
+    );
+    assert!(repo.is_bare(), "without environment overrides it remains bare");
+
+    let repo = discover_with_environment_overrides_isolated(fixture.join("bare-repo"))?;
 
     assert_eq!(
         repo.workdir(),
@@ -273,6 +302,7 @@ fn git_worktree_overrides_bare() -> gix_testtools::Result {
         !repo.is_bare(),
         "a repository with an explicit GIT_WORK_TREE is not bare according to Git"
     );
+
     #[cfg(feature = "status")]
     {
         std::fs::write(worktree.path().join("untracked"), b"content")?;
@@ -295,16 +325,31 @@ fn git_worktree_over_root_overrides_bare() -> gix_testtools::Result {
     let worktree = gix_testtools::tempfile::TempDir::new()?;
     let current_dir = std::env::current_dir()?;
     let mut relative_worktree = std::path::PathBuf::new();
+    // Use more parent components than `current_dir` has components: the `+2` ensures that
+    // at least one `..` remains after reaching the filesystem root.
     for _ in 0..current_dir.components().count() + 2 {
         relative_worktree.push("..");
     }
+    // The absolute worktree path, without its leading `/`, is appended after those excess `..` components.
+    // Thus Git ignores the excess parents at `/` and then resolves this suffix back to `worktree`.
     relative_worktree.push(worktree.path().strip_prefix("/")?);
     let _env = gix_testtools::Env::new()
         .unset("GIT_DIR")
         .set("GIT_WORK_TREE", relative_worktree.to_string_lossy());
 
-    let repo =
-        gix::ThreadSafeRepository::discover_with_environment_overrides(fixture.join("bare-repo"))?.to_thread_local();
+    let repo = gix::discover_opts(
+        fixture.join("bare-repo"),
+        Default::default(),
+        gix::open::Options::isolated(),
+    )?;
+    assert_eq!(
+        repo.workdir(),
+        None,
+        "without environment overrides the bare repository has no worktree"
+    );
+    assert!(repo.is_bare(), "without environment overrides it remains bare");
+
+    let repo = discover_with_environment_overrides_isolated(fixture.join("bare-repo"))?;
 
     assert_eq!(
         repo.workdir(),
@@ -323,5 +368,28 @@ fn git_worktree_over_root_overrides_bare() -> gix_testtools::Result {
             "status observes files through the over-root worktree path"
         );
     }
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn git_worktree_absolute_over_root_overrides_bare() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let mut absolute_worktree = std::path::PathBuf::from("/");
+    absolute_worktree.push("..");
+    absolute_worktree.push(worktree.path().strip_prefix("/")?);
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_WORK_TREE", absolute_worktree.to_string_lossy());
+
+    let repo = discover_with_environment_overrides_isolated(fixture.join("bare-repo"))?;
+
+    assert_eq!(
+        repo.workdir(),
+        Some(worktree.path()),
+        "an absolute path with `..` beyond the root resolves to the configured worktree"
+    );
     Ok(())
 }
