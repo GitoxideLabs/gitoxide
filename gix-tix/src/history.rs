@@ -96,12 +96,14 @@ pub(crate) fn load(
             author,
             attributions: row_attributions,
             title,
+            has_agent_marker,
             signature,
         } = metadata.unwrap_or_else(|| Metadata {
             committer_time: Default::default(),
             author: &EMPTY_AUTHOR,
             attributions: 0..0,
             title: BString::default(),
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         });
         rows.push(Commit {
@@ -112,6 +114,7 @@ pub(crate) fn load(
             attributions: row_attributions,
             title,
             metadata_loaded,
+            has_agent_marker,
             signature,
         });
         if rows.len() == COMMIT_BATCH_SIZE
@@ -151,6 +154,7 @@ fn decode_metadata<'a>(
     let mut author = None;
     let attribution_start = attributions.len();
     let mut title = None;
+    let mut has_agent_marker = false;
     let mut signature = SignatureState::Unsigned;
     for token in tokens {
         match token.context("could not decode commit")? {
@@ -162,6 +166,7 @@ fn decode_metadata<'a>(
                 committer_time = Some(signature.time().context("could not decode committer time")?);
             }
             Token::Message(message) => {
+                has_agent_marker = contains_agent_marker(message);
                 let message = gix::objs::commit::MessageRef::from_bytes(message);
                 title = Some(message.summary().into_owned());
                 if let Some(body) = message.body() {
@@ -198,8 +203,15 @@ fn decode_metadata<'a>(
         author: author.context("commit has no author")?,
         attributions: attribution_start..attributions.len(),
         title: title.context("commit has no message")?,
+        has_agent_marker,
         signature,
     })
+}
+
+fn contains_agent_marker(message: &[u8]) -> bool {
+    [b"--- agent".as_slice(), b"<!-- agent -->".as_slice()]
+        .iter()
+        .any(|marker| message.windows(marker.len()).any(|window| window == *marker))
 }
 
 pub(crate) fn count_up_to(
@@ -424,6 +436,7 @@ mod tests {
             topic.author.is_bot(),
             "well-known bot email addresses identify bot authors"
         );
+        assert!(topic.has_agent_marker, "history loading recognizes the agent marker");
         assert_eq!(
             attributions[topic.attributions.clone()]
                 .iter()
@@ -446,6 +459,13 @@ mod tests {
             "the committer date is retained"
         );
         Ok(())
+    }
+
+    #[test]
+    fn recognizes_supported_agent_markers() {
+        assert!(contains_agent_marker(b"subject\n\n--- agent\n"));
+        assert!(contains_agent_marker(b"subject\n\n<!-- agent -->\n"));
+        assert!(!contains_agent_marker(b"subject\n\nagent"));
     }
 
     #[test]

@@ -12,6 +12,8 @@ use crate::{
     history::{DecorationKind, Decorations},
 };
 
+const NOTE_COLOR: Color = Color::LightMagenta;
+
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     app: &mut App,
@@ -91,6 +93,7 @@ pub(crate) fn draw(
                 MetadataOptions {
                     show_committer_date,
                     show_author_name,
+                    show_emails: app.show_emails,
                     show_trailers,
                     use_mailmap: app.use_mailmap && !preview_author_copy && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
@@ -236,6 +239,7 @@ pub(crate) fn draw(
         ]);
     }
     footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
+    footer_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
     let (name_label, names_visible) = match app.name_mode {
         NameMode::All => ("n names", true),
         NameMode::Author => ("n name", true),
@@ -370,6 +374,7 @@ fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
 struct MetadataOptions {
     show_committer_date: bool,
     show_author_name: bool,
+    show_emails: bool,
     show_trailers: bool,
     use_mailmap: bool,
     ref_mode: RefMode,
@@ -390,6 +395,7 @@ fn metadata_line<'a>(
     let MetadataOptions {
         show_committer_date,
         show_author_name,
+        show_emails,
         show_trailers,
         use_mailmap,
         ref_mode,
@@ -443,14 +449,17 @@ fn metadata_line<'a>(
         ));
     }
     if show_author_name {
-        let author = author_name(row.author, mailmap, use_mailmap).to_str_lossy();
-        let author_style = if copy_feedback == Some(CopyKind::Author) {
+        let author = author_label(row.author, mailmap, use_mailmap, show_emails && !row.author.is_bot());
+        let mut author_style = if copy_feedback == Some(CopyKind::Author) {
             Style::default()
         } else if preview_author_copy {
             color(Color::Magenta).add_modifier(Modifier::BOLD)
         } else {
             color(Color::Green)
         };
+        if row.author.is_github_noreply() {
+            author_style = author_style.add_modifier(Modifier::ITALIC);
+        }
         spans.push(Span::styled(
             if row.author.is_bot() {
                 format!("[{author}] ")
@@ -460,55 +469,96 @@ fn metadata_line<'a>(
             author_style,
         ));
         if show_trailers {
-            for (kind, marker) in [
-                (AttributionKind::CoAuthor, "Co: "),
-                (AttributionKind::Assisted, "As: "),
-                (AttributionKind::Reviewed, "Re: "),
-                (AttributionKind::Acked, "Ack: "),
-                (AttributionKind::Tested, "Te: "),
-                (AttributionKind::SignedOff, "So: "),
+            type Group = (&'static str, Vec<&'static str>, Vec<(String, Style)>);
+            let mut groups: Vec<Group> = Vec::new();
+            for (kind, marker, grouped_marker) in [
+                (AttributionKind::CoAuthor, "Co: ", "Co"),
+                (AttributionKind::Assisted, "As: ", "A"),
+                (AttributionKind::Reviewed, "Re: ", "Re"),
+                (AttributionKind::Acked, "Ack: ", "Ack"),
+                (AttributionKind::Tested, "Te: ", "Te"),
+                (AttributionKind::SignedOff, "So: ", "So"),
             ] {
-                let mut actors = attributions.iter().filter(|actor| actor.kind == kind).peekable();
-                if actors.peek().is_none() {
+                let actors: Vec<_> = attributions
+                    .iter()
+                    .filter(|actor| actor.kind == kind)
+                    .map(|actor| {
+                        let name = if actor.author == row.author {
+                            "*".to_owned()
+                        } else {
+                            let name =
+                                author_label(actor.author, mailmap, use_mailmap, show_emails && !actor.is_agent());
+                            if actor.is_agent() { format!("[{name}]") } else { name }
+                        };
+                        let style = if actor.author.is_github_noreply() {
+                            color(Color::Green).add_modifier(Modifier::ITALIC)
+                        } else {
+                            color(Color::Green)
+                        };
+                        (name, style)
+                    })
+                    .collect();
+                if actors.is_empty() {
                     continue;
                 }
-                spans.push(Span::styled(marker, color(Color::Green).add_modifier(Modifier::DIM)));
-                for (index, actor) in actors.enumerate() {
+                if let Some((_, markers, _)) = groups
+                    .iter_mut()
+                    .find(|(_, _, displayed_actors)| *displayed_actors == actors)
+                {
+                    markers.push(grouped_marker);
+                } else {
+                    groups.push((marker, vec![grouped_marker], actors));
+                }
+            }
+            for (marker, markers, actors) in groups {
+                spans.push(Span::styled(
+                    if markers.len() == 1 {
+                        marker.to_owned()
+                    } else {
+                        format!("{}: ", markers.join(", "))
+                    },
+                    color(Color::Green).add_modifier(Modifier::DIM),
+                ));
+                for (index, (name, style)) in actors.into_iter().enumerate() {
                     if index != 0 {
                         spans.push(Span::raw(", "));
                     }
-                    let name = if actor.author == row.author {
-                        "*".to_owned()
-                    } else {
-                        let name = author_name(actor.author, mailmap, use_mailmap).to_str_lossy();
-                        if actor.is_agent() {
-                            format!("[{name}]")
-                        } else {
-                            name.into_owned()
-                        }
-                    };
-                    spans.push(Span::styled(name, color(Color::Green)));
+                    spans.push(Span::styled(name, style));
                 }
                 spans.push(Span::raw(" "));
             }
         }
     }
-    spans.push(Span::raw(title.to_str_lossy()));
+    if row.has_agent_marker {
+        spans.push(Span::styled("[A] ", color(NOTE_COLOR)));
+    }
+    if !show_emails {
+        spans.push(Span::raw(title.to_str_lossy()));
+    }
     Line::from(spans)
 }
 
-fn author_name<'a>(author: &'a crate::app::Author, mailmap: &'a gix::mailmap::Snapshot, use_mailmap: bool) -> &'a BStr {
-    if use_mailmap {
-        mailmap
-            .try_resolve_ref(gix::actor::SignatureRef {
+fn author_label(
+    author: &crate::app::Author,
+    mailmap: &gix::mailmap::Snapshot,
+    use_mailmap: bool,
+    show_email: bool,
+) -> String {
+    let resolved = use_mailmap
+        .then(|| {
+            mailmap.try_resolve_ref(gix::actor::SignatureRef {
                 name: author.name,
                 email: author.email,
                 time: "",
             })
-            .and_then(|resolved| resolved.name)
-            .unwrap_or(author.name)
+        })
+        .flatten();
+    let name = resolved.as_ref().and_then(|actor| actor.name).unwrap_or(author.name);
+    if show_email {
+        let email = resolved.as_ref().and_then(|actor| actor.email).unwrap_or(author.email);
+        format!("{} <{}>", name.to_str_lossy(), email.to_str_lossy())
     } else {
-        author.name
+        name.to_str_lossy().into_owned()
     }
 }
 
@@ -616,18 +666,23 @@ mod tests {
                 parent_ids: Default::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"Codex", b"codex@openai.com"),
-                attributions: 0..7,
+                attributions: 0..8,
                 title: "subject".into(),
                 metadata_loaded: true,
+                has_agent_marker: false,
                 signature: SignatureState::Unsigned,
             }],
             attributions: vec![
                 Attribution {
                     kind: AttributionKind::CoAuthor,
-                    author: author(b"Human", b"human@example.com"),
+                    author: author(b"Claude", b"noreply@anthropic.com"),
                 },
                 Attribution {
                     kind: AttributionKind::CoAuthor,
+                    author: author(b"Codex", b"codex@openai.com"),
+                },
+                Attribution {
+                    kind: AttributionKind::Assisted,
                     author: author(b"Claude", b"noreply@anthropic.com"),
                 },
                 Attribution {
@@ -636,7 +691,7 @@ mod tests {
                 },
                 Attribution {
                     kind: AttributionKind::Reviewed,
-                    author: author(b"Reviewer", b"reviewer@example.com"),
+                    author: author(b"Human", b"human@example.com"),
                 },
                 Attribution {
                     kind: AttributionKind::Acked,
@@ -661,10 +716,8 @@ mod tests {
 
         let row = rendered_row(&terminal);
         assert!(
-            row.contains(
-                "[Codex] Co: Mapped Human, [Claude] As: * Re: Reviewer Ack: Acknowledger Te: Tester So: Signer subject"
-            ),
-            "same-kind trailers share one marker, use mailmap, and collapse the primary author to an asterisk"
+            row.contains("[Codex] Co, A: [Claude], * Re: Mapped Human Ack: Acknowledger Te: Tester So: Signer subject"),
+            "attributions with identical displayed actors share their markers"
         );
         let buffer = terminal.backend().buffer();
         let style_at = |needle: &str| {
@@ -672,8 +725,12 @@ mod tests {
             buffer[(x, 0)].fg
         };
         assert_eq!(style_at("[Codex]"), Color::Green, "bot authors use the agent color");
-        assert_eq!(style_at("Co:"), Color::Green, "attribution markers use the agent color");
-        let marker_x = row.find("Co:").expect("rendered metadata contains a trailer marker") as u16;
+        assert_eq!(
+            style_at("Co, A:"),
+            Color::Green,
+            "grouped attribution markers use the agent color"
+        );
+        let marker_x = row.find("Co, A:").expect("rendered metadata contains a trailer marker") as u16;
         assert!(
             buffer[(marker_x, 0)].modifier.contains(Modifier::DIM),
             "attribution markers are dimmed"
@@ -695,21 +752,98 @@ mod tests {
         let row = rendered_row(&terminal);
         assert!(row.contains("Codex"), "the first n keeps the primary actor");
         assert!(
-            !row.contains("Reviewer"),
+            !row.contains("Mapped Human"),
             "the first n hides trailer actors while trailers are enabled"
         );
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("Codex"), "the second n hides the primary actor");
-        assert!(!row.contains("Reviewer"), "the second n keeps trailer actors hidden");
+        assert!(
+            !row.contains("Mapped Human"),
+            "the second n keeps trailer actors hidden"
+        );
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
         assert!(
-            rendered_row(&terminal).contains("Co: Human, [Claude]"),
+            rendered_row(&terminal).contains("Re: Human"),
             "m restores original trailer actor names"
         );
+
+        app.update(Action::ToggleEmail);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let row = rendered_row(&terminal);
+        assert!(row.contains("Human <human@example.com>"));
+        assert!(!row.contains("codex@openai.com"));
+        assert!(!row.contains("noreply@anthropic.com"));
+        Ok(())
+    }
+
+    #[test]
+    fn toggles_full_actor_and_comment() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "unique comment".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        app.selected = None;
+        let mut terminal = Terminal::new(TestBackend::new(100, 2))?;
+
+        app.update(Action::ToggleEmail);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(rendered_row(&terminal).contains("author <author@example.com>"));
+        assert!(!rendered_row(&terminal).contains("unique comment"));
+
+        app.update(Action::ToggleEmail);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(!rendered_row(&terminal).contains("<author@example.com>"));
+        assert!(rendered_row(&terminal).contains("unique comment"));
+        Ok(())
+    }
+
+    #[test]
+    fn italicizes_github_noreply_actors() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.extend_commits(LoadedCommits {
+            rows: vec![Commit {
+                id: gix::ObjectId::Sha1([1; 20]),
+                parent_ids: Default::default(),
+                committer_time: gix::date::Time::default(),
+                author: author(b"Author", b"1+author@users.noreply.github.com"),
+                attributions: 0..1,
+                title: "subject".into(),
+                metadata_loaded: true,
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
+            }],
+            attributions: vec![Attribution {
+                kind: AttributionKind::Reviewed,
+                author: author(b"Reviewer", b"reviewer@USERS.NOREPLY.GITHUB.COM"),
+            }],
+        });
+        app.selected = None;
+        app.update(Action::ToggleEmail);
+        let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let row = rendered_row(&terminal);
+        for actor in [
+            "Author <1+author@users.noreply.github.com>",
+            "Reviewer <reviewer@USERS.NOREPLY.GITHUB.COM>",
+        ] {
+            let start = row.find(actor).expect("the full actor is rendered") as u16;
+            for x in start..start + actor.len() as u16 {
+                assert!(terminal.backend().buffer()[(x, 0)].modifier.contains(Modifier::ITALIC));
+            }
+        }
         Ok(())
     }
 
@@ -725,6 +859,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -743,13 +878,13 @@ mod tests {
         )]);
         let mailmap =
             gix::mailmap::Snapshot::from_bytes(b"mapped author <mapped@example.com> author <author@example.com>\n");
-        let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(150, 2))?;
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · d date · n names · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
-        let mut expected = Buffer::with_lines([format!("{selected_line:<140}"), format!("{footer_text:<140}")]);
+        let mut expected = Buffer::with_lines([format!("{selected_line:<150}"), format!("{footer_text:<150}")]);
         for x in 0..11 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
@@ -778,6 +913,12 @@ mod tests {
             .chars()
             .count();
         for x in commit..commit + "o commit".len() {
+            expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
+        }
+        let email = footer_text[..footer_text.find("e emails").expect("the email toggle is present")]
+            .chars()
+            .count();
+        for x in email..email + "e emails".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
@@ -922,6 +1063,7 @@ mod tests {
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
+                    has_agent_marker: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -1020,6 +1162,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
@@ -1063,6 +1206,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
@@ -1221,6 +1365,7 @@ mod tests {
                     attributions: 0..0,
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
+                    has_agent_marker: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -1270,6 +1415,7 @@ mod tests {
             attributions: 0..0,
             title: "subject".into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         };
         let decorations = Decorations::from([(
@@ -1311,6 +1457,7 @@ mod tests {
             MetadataOptions {
                 show_committer_date: true,
                 show_author_name: true,
+                show_emails: false,
                 show_trailers: true,
                 use_mailmap: false,
                 ref_mode: RefMode::All,
@@ -1373,6 +1520,7 @@ mod tests {
             attributions: 0..0,
             title: format!("{} subject-tail", "a".repeat(50)).into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
