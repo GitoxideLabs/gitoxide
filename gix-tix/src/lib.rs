@@ -23,8 +23,9 @@ use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
     event::{
-        self, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
-        ModifierKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableFocusChange, EnableFocusChange, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     style::Print,
@@ -91,24 +92,20 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
     }
     .context("could not initialize terminal")?;
     let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
-    let keyboard_setup = if enhanced_keyboard {
-        execute!(
-            terminal.backend_mut(),
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-            )
-        )
-    } else {
-        Ok(())
-    };
+    let keyboard_setup = enable_input(terminal.backend_mut(), enhanced_keyboard);
     let result = keyboard_setup
         .context("could not enable enhanced keyboard events")
-        .and_then(|()| event_loop(&mut terminal, repository, revisions, options, inline_height.is_some()));
-    let keyboard_restore = enhanced_keyboard
-        .then(|| execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags))
-        .transpose();
+        .and_then(|()| {
+            event_loop(
+                &mut terminal,
+                repository,
+                revisions,
+                options,
+                inline_height.is_some(),
+                enhanced_keyboard,
+            )
+        });
+    let keyboard_restore = disable_input(terminal.backend_mut(), enhanced_keyboard);
     let restore = restore_terminal(&mut terminal, inline_height.is_some());
     let lane_time = result?;
     keyboard_restore.context("could not restore keyboard events")?;
@@ -117,6 +114,28 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         eprintln!("lane computation: {:.3}s", lane_time.as_secs_f64());
     }
     Ok(())
+}
+
+fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
+    execute!(backend, EnableFocusChange)?;
+    if enhanced_keyboard {
+        execute!(
+            backend,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        )?;
+    }
+    Ok(())
+}
+
+fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
+    if enhanced_keyboard {
+        execute!(backend, PopKeyboardEnhancementFlags)?;
+    }
+    execute!(backend, DisableFocusChange)
 }
 
 fn half_height(terminal_height: u16) -> u16 {
@@ -164,18 +183,27 @@ fn restore_terminal(terminal: &mut ratatui::DefaultTerminal, inline: bool) -> Re
     Ok(())
 }
 
-fn enter_alternate_screen(terminal: &mut ratatui::DefaultTerminal) -> std::io::Result<ratatui::DefaultTerminal> {
+fn enter_alternate_screen(
+    terminal: &mut ratatui::DefaultTerminal,
+    enhanced_keyboard: bool,
+) -> std::io::Result<ratatui::DefaultTerminal> {
+    disable_input(terminal.backend_mut(), enhanced_keyboard)?;
     let alternate = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    Ok(std::mem::replace(terminal, alternate))
+    let inline = std::mem::replace(terminal, alternate);
+    enable_input(terminal.backend_mut(), enhanced_keyboard)?;
+    Ok(inline)
 }
 
 fn leave_alternate_screen(
     terminal: &mut ratatui::DefaultTerminal,
     inline: ratatui::DefaultTerminal,
+    enhanced_keyboard: bool,
 ) -> std::io::Result<()> {
+    disable_input(terminal.backend_mut(), enhanced_keyboard)?;
     drop(std::mem::replace(terminal, inline));
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    enable_input(terminal.backend_mut(), enhanced_keyboard)?;
     terminal.hide_cursor()
 }
 
@@ -201,6 +229,10 @@ fn resize_inline_screen(terminal: &mut ratatui::DefaultTerminal, height: u16) ->
     terminal.hide_cursor()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "screen transitions need the complete terminal state"
+)]
 fn sync_screen(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -209,6 +241,7 @@ fn sync_screen(
     history_requires_alternate_screen: bool,
     resize_inline: bool,
     inline_terminal: &mut Option<ratatui::DefaultTerminal>,
+    enhanced_keyboard: bool,
 ) -> Result<()> {
     let needs_alternate_screen = app.show_commit || history_requires_alternate_screen;
     if !should_switch_screen(started_inline, needs_alternate_screen, inline_terminal.is_some()) {
@@ -220,10 +253,11 @@ fn sync_screen(
         return Ok(());
     }
     if needs_alternate_screen {
-        *inline_terminal = Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+        *inline_terminal =
+            Some(enter_alternate_screen(terminal, enhanced_keyboard).context("could not enter the alternate screen")?);
         app.inline = false;
     } else if let Some(inline) = inline_terminal.take() {
-        leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+        leave_alternate_screen(terminal, inline, enhanced_keyboard).context("could not leave the alternate screen")?;
         app.inline = true;
         let height = inline_height(screen, terminal::size()?.1, app.rows.len())
             .expect("an inline history always has an inline height");
@@ -238,6 +272,7 @@ fn event_loop(
     revisions: Vec<OsString>,
     options: Options,
     started_inline: bool,
+    enhanced_keyboard: bool,
 ) -> Result<Option<Duration>> {
     let Options {
         quit_on_finish,
@@ -282,6 +317,7 @@ fn event_loop(
     let mut urgent = false;
     let mut inline_terminal = None;
     let mut history_requires_alternate_screen = false;
+    let mut focused = true;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(result) = verification_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -371,6 +407,7 @@ fn event_loop(
             history_requires_alternate_screen,
             resize_inline,
             &mut inline_terminal,
+            enhanced_keyboard,
         )?;
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
             || verification_receiver.is_some();
@@ -397,6 +434,17 @@ fn event_loop(
         };
         let key = match terminal_event {
             TerminalEvent::Key(key) => key,
+            TerminalEvent::FocusLost => {
+                focused = false;
+                drop(app.update(Action::PreviewAuthorCopy(false)));
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            TerminalEvent::FocusGained => {
+                focused = true;
+                continue;
+            }
             TerminalEvent::Resize(_, _) => {
                 dirty = true;
                 urgent = true;
@@ -404,6 +452,9 @@ fn event_loop(
             }
             _ => continue,
         };
+        if !focused {
+            continue;
+        }
         let action = action(key);
         fill_repository.retain = retains_fill_repository(key.kind, action.as_ref());
         if !fill_repository.retain {
@@ -467,10 +518,11 @@ fn event_loop(
             history_requires_alternate_screen,
             false,
             &mut inline_terminal,
+            enhanced_keyboard,
         )?;
     })();
     let restore = inline_terminal
-        .map(|inline| leave_alternate_screen(terminal, inline))
+        .map(|inline| leave_alternate_screen(terminal, inline, enhanced_keyboard))
         .transpose();
     let outcome = result?;
     restore.context("could not restore the inline terminal")?;
