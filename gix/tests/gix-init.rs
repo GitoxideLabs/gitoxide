@@ -272,31 +272,38 @@ fn git_worktree_and_strict_config() -> gix_testtools::Result {
 
 #[test]
 #[serial]
-fn git_worktree_overrides_bare() -> gix_testtools::Result {
-    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+fn git_worktree_overrides_core_worktree_and_bare() -> gix_testtools::Result {
+    use std::io::Write;
+
+    let bare = gix_testtools::tempfile::TempDir::new()?;
+    gix::init_bare(bare.path())?;
     let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let configured_worktree = gix_testtools::tempfile::TempDir::new()?;
+    writeln!(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(bare.path().join("config"))?,
+        "\n[core]\n\tworktree = {wt_path}",
+        wt_path = configured_worktree.path().to_string_lossy().replace('\\', "/")
+    )?;
     let _env = gix_testtools::Env::new()
         .unset("GIT_DIR")
         .set("GIT_WORK_TREE", worktree.path().to_string_lossy());
 
-    let repo = gix::discover_opts(
-        fixture.join("bare-repo"),
-        Default::default(),
-        gix::open::Options::isolated(),
-    )?;
+    let repo = gix::discover_opts(bare.path(), Default::default(), gix::open::Options::isolated())?;
     assert_eq!(
         repo.workdir(),
         None,
-        "without environment overrides the bare repository has no worktree"
+        "without environment overrides the bare repository has no worktree even if configured"
     );
     assert!(repo.is_bare(), "without environment overrides it remains bare");
 
-    let repo = discover_with_environment_overrides_isolated(fixture.join("bare-repo"))?;
+    let repo = discover_with_environment_overrides_isolated(bare.path())?;
 
     assert_eq!(
         repo.workdir(),
         Some(worktree.path()),
-        "GIT_WORK_TREE overrides core.bare just like it does in Git"
+        "GIT_WORK_TREE overrides core.worktree and core.bare just like it does in Git"
     );
     assert!(
         !repo.is_bare(),
@@ -314,6 +321,26 @@ fn git_worktree_overrides_bare() -> gix_testtools::Result {
             "status observes files in the explicit worktree"
         );
     }
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn git_worktree_overrides_discovered_worktree() -> gix_testtools::Result {
+    let repository = gix_testtools::tempfile::TempDir::new()?;
+    gix::init(repository.path())?;
+    let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_WORK_TREE", worktree.path().to_string_lossy());
+
+    let repo = discover_with_environment_overrides_isolated(repository.path())?;
+
+    assert_eq!(
+        repo.workdir(),
+        Some(worktree.path()),
+        "GIT_WORK_TREE takes precedence over the worktree found during discovery"
+    );
     Ok(())
 }
 

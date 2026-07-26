@@ -256,124 +256,80 @@ impl ThreadSafeRepository {
             cli_config_overrides,
         )?;
 
-        // core.worktree might be used to overwrite the worktree directory
-        let worktree_dir_override_from_configuration = {
-            fn assure_config_is_from_current_repo(
-                section: &gix_config::file::Metadata,
-                git_dir: &Path,
-                current_dir: &Path,
-                filter_config_section: &mut fn(&Metadata) -> bool,
-            ) -> bool {
-                if !filter_config_section(section) {
-                    return false;
-                }
-                if section.source == gix_config::Source::EnvOverride {
-                    return true;
-                }
-                // ignore worktree settings that aren't from our repository. This can happen
-                // with worktrees of submodules for instance.
-                section
-                    .path
-                    .as_deref()
-                    .and_then(|p| gix_path::normalize(p.into(), current_dir))
-                    .is_some_and(|config_path| config_path.starts_with(git_dir))
-            }
-            /// Normalize a worktree path.
-            ///
-            /// If `..` components exhaust `current_dir`, ordinary normalization rejects the path.
-            /// For explicit environment overrides, Git instead ignores the remaining `..` components.
-            fn normalize_worktree_path<'a>(
-                path: Cow<'a, Path>,
-                current_dir: &Path,
-                saturate_at_root: bool,
-            ) -> Option<Cow<'a, Path>> {
-                if saturate_at_root {
-                    Some(gix_path::normalize_saturating(path, current_dir))
-                } else {
-                    gix_path::normalize(path, current_dir)
-                }
-            }
-            let worktree_path = config
-                .resolved
-                .raw_value_with_section_filter(Core::WORKTREE, |section| {
-                    assure_config_is_from_current_repo(section, &git_dir, current_dir, &mut filter_config_section)
-                })
-                .ok()
-                .map(|(value, section)| (gix_config::Path::from(value), section.meta().source));
-            let worktree_overrides_bare = worktree_path
-                .as_ref()
-                .is_some_and(|(_, source)| *source == gix_config::Source::EnvOverride);
-            if let Some((wt, key_source)) =
-                worktree_path.filter(|_| !config.is_bare_but_assume_bare_if_unconfigured() || worktree_overrides_bare)
-            {
-                let wt_clone = wt.clone();
-                let wt_path = wt
-                    .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
-                    .map_err(|err| config::Error::PathInterpolation {
-                        path: wt_clone.value,
-                        source: err,
-                    })?;
-                let wt_path = match key_source {
-                    gix_config::Source::Env
-                    | gix_config::Source::Cli
-                    | gix_config::Source::Api
-                    | gix_config::Source::EnvOverride => wt_path,
-                    _ => worktree_dir_from_repository_config(&git_dir, wt_path, current_dir),
-                };
-                worktree_dir =
-                    normalize_worktree_path(wt_path.into(), current_dir, worktree_overrides_bare).map(Cow::into_owned);
-                #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
-                if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
-                    gix_trace::warn!(
-                        "The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading",
-                        worktree_path.display()
-                    );
-                }
-                if worktree_overrides_bare {
-                    config.is_bare = Some(false);
-                }
-            } else if !config.lenient_config
-                && !config.is_bare_but_assume_bare_if_unconfigured()
-                && config
-                    .resolved
-                    .boolean_filter(Core::WORKTREE, |section| {
-                        assure_config_is_from_current_repo(section, &git_dir, current_dir, &mut filter_config_section)
-                    })
-                    .map_err(|err| {
-                        Error::from(config::Error::ConfigTypedString(
-                            config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
-                        ))
-                    })?
-                    .is_some()
-            {
-                return Err(Error::from(config::Error::ConfigTypedString(
-                    config::key::GenericErrorWithValue::from(&Core::WORKTREE),
-                )));
-            }
-            !config.is_bare_but_assume_bare_if_unconfigured()
-        };
+        // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
+        let configured_worktree = config
+            .resolved
+            .raw_value_with_section_filter(Core::WORKTREE, |section| {
+                is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
+            })
+            .ok()
+            .map(|(value, section)| (gix_config::Path::from(value), section.meta().source));
+        let worktree_from_environment = configured_worktree
+            .as_ref()
+            .is_some_and(|(_, source)| *source == gix_config::Source::EnvOverride);
+        let may_use_configured_worktree = config.is_bare == Some(false) || worktree_from_environment;
 
-        {
-            let looks_like_standard_git_dir =
-                || refs.git_dir().file_name() == Some(OsStr::new(gix_discover::DOT_GIT_DIR));
-            match worktree_dir {
-                None if !config.is_bare_but_assume_bare_if_unconfigured() && looks_like_standard_git_dir() => {
-                    worktree_dir = Some(git_dir.parent().expect("parent is always available").to_owned());
-                }
-                // We may assume that the presence of a worktree-dir means it's not bare, but only if there
-                // is no configuration saying otherwise.
-                // Thus, if we are here and the common-dir config claims it's bare, and we have inferred a worktree anyway,
-                // forget about it.
-                Some(_)
-                    if !worktree_dir_override_from_configuration
-                        && refs.git_dir().ancestors().nth(1).and_then(|p| p.file_name())
-                            != Some("worktrees".as_ref())
-                        && config.is_bare.unwrap_or_default() =>
-                {
-                    worktree_dir = None;
-                }
-                None | Some(_) => {}
+        if let Some((worktree, source)) = configured_worktree.filter(|_| may_use_configured_worktree) {
+            let original = worktree.clone();
+            let worktree = worktree
+                .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
+                .map_err(|err| config::Error::PathInterpolation {
+                    path: original.value,
+                    source: err,
+                })?;
+            let worktree = match source {
+                gix_config::Source::Env
+                | gix_config::Source::Cli
+                | gix_config::Source::Api
+                | gix_config::Source::EnvOverride => worktree,
+                _ => worktree_dir_from_repository_config(&git_dir, worktree, current_dir),
+            };
+            worktree_dir = if worktree_from_environment {
+                Some(gix_path::normalize_saturating(worktree.into(), current_dir).into_owned())
+            } else {
+                gix_path::normalize(worktree.into(), current_dir).map(Cow::into_owned)
+            };
+            #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
+            if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
+                gix_trace::warn!(
+                    "The configured worktree path '{}' is not a directory or doesn't exist - `core.worktree` may be misleading",
+                    worktree_path.display()
+                );
             }
+            if worktree_from_environment {
+                config.is_bare = Some(false);
+            }
+        } else if !config.lenient_config
+            && config.is_bare == Some(false)
+            && config
+                .resolved
+                .boolean_filter(Core::WORKTREE, |section| {
+                    is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
+                })
+                .map_err(|err| {
+                    Error::from(config::Error::ConfigTypedString(
+                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
+                    ))
+                })?
+                .is_some()
+        {
+            return Err(Error::from(config::Error::ConfigTypedString(
+                config::key::GenericErrorWithValue::from(&Core::WORKTREE),
+            )));
+        }
+
+        // Without an explicit path, a non-bare `.git` directory implies its parent as worktree.
+        if worktree_dir.is_none()
+            && config.is_bare == Some(false)
+            && refs.git_dir().file_name() == Some(OsStr::new(gix_discover::DOT_GIT_DIR))
+        {
+            worktree_dir = Some(git_dir.parent().expect("parent is always available").to_owned());
+        }
+        let is_linked_worktree = refs.git_dir().parent().and_then(Path::file_name) == Some("worktrees".as_ref());
+        if config.is_bare == Some(true) && !is_linked_worktree {
+            // Linked worktrees may inherit core.bare=true from their common repository; all other
+            // worktrees are suppressed by an explicit bare configuration.
+            worktree_dir = None;
         }
 
         // TODO: Testing - it's hard to get non-ownership reliably and without root.
@@ -531,6 +487,31 @@ impl ThreadSafeRepository {
             modules: gix_fs::SharedFileSnapshotMut::new().into(),
         })
     }
+}
+
+/// Return whether `section` may provide `core.worktree` while opening `git_dir`.
+///
+/// The section must pass the caller's trust filter. `GIT_WORK_TREE` has no configuration-file
+/// path and is accepted directly; all other values must come from within this repository to keep
+/// a parent repository's `core.worktree` from leaking into submodules.
+fn is_eligible_worktree_config_section(
+    section: &Metadata,
+    git_dir: &Path,
+    current_dir: &Path,
+    filter_config_section: &mut fn(&Metadata) -> bool,
+) -> bool {
+    if !filter_config_section(section) {
+        return false;
+    }
+    if section.source == gix_config::Source::EnvOverride {
+        return true;
+    }
+    // Ignore worktree settings from another repository, as can happen while opening submodules.
+    section
+        .path
+        .as_deref()
+        .and_then(|path| gix_path::normalize(path.into(), current_dir))
+        .is_some_and(|config_path| config_path.starts_with(git_dir))
 }
 
 /// Return the worktree directory implied by the `core.worktree` value `wt_path` from repository-owned
