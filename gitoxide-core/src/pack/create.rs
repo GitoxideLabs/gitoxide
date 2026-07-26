@@ -360,14 +360,5 @@ struct Statistics {
 }
 
 pub mod input_iteration {
-    use gix::{hash, traverse};
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error("input objects couldn't be iterated completely")]
-        Iteration(#[from] traverse::commit::simple::Error),
-        #[error("An error occurred while reading hashes from standard input")]
-        InputLinesIo(#[from] std::io::Error),
-        #[error("Could not decode hex hash provided on standard input")]
-        HashDecode(#[from] hash::decode::Error),
-    }
+    pub type Error = gix::Error;
 }
