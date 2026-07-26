@@ -179,8 +179,57 @@ fn leave_alternate_screen(
     terminal.hide_cursor()
 }
 
-fn should_switch_screen(started_inline: bool, show_commit: bool, in_alternate_screen: bool) -> bool {
-    started_inline && show_commit != in_alternate_screen
+fn should_switch_screen(started_inline: bool, needs_alternate_screen: bool, in_alternate_screen: bool) -> bool {
+    started_inline && needs_alternate_screen != in_alternate_screen
+}
+
+fn history_needs_alternate_screen(screen: Screen, terminal_height: u16, commits: usize) -> bool {
+    screen == Screen::Auto && inline_height(screen, terminal_height, commits).is_none()
+}
+
+fn resize_inline_screen(terminal: &mut ratatui::DefaultTerminal, height: u16) -> std::io::Result<()> {
+    if terminal.get_frame().area().height == height {
+        return Ok(());
+    }
+    let resized = ratatui::Terminal::with_options(
+        CrosstermBackend::new(std::io::stdout()),
+        TerminalOptions {
+            viewport: Viewport::Inline(height),
+        },
+    )?;
+    drop(std::mem::replace(terminal, resized));
+    terminal.hide_cursor()
+}
+
+fn sync_screen(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut App,
+    screen: Screen,
+    started_inline: bool,
+    history_requires_alternate_screen: bool,
+    resize_inline: bool,
+    inline_terminal: &mut Option<ratatui::DefaultTerminal>,
+) -> Result<()> {
+    let needs_alternate_screen = app.show_commit || history_requires_alternate_screen;
+    if !should_switch_screen(started_inline, needs_alternate_screen, inline_terminal.is_some()) {
+        if started_inline && app.inline && resize_inline {
+            let height = inline_height(screen, terminal::size()?.1, app.rows.len())
+                .expect("an inline history always has an inline height");
+            resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+        }
+        return Ok(());
+    }
+    if needs_alternate_screen {
+        *inline_terminal = Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
+        app.inline = false;
+    } else if let Some(inline) = inline_terminal.take() {
+        leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
+        app.inline = true;
+        let height = inline_height(screen, terminal::size()?.1, app.rows.len())
+            .expect("an inline history always has an inline height");
+        resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+    }
+    Ok(())
 }
 
 fn event_loop(
@@ -193,7 +242,7 @@ fn event_loop(
     let Options {
         quit_on_finish,
         hide,
-        screen: _,
+        screen,
     } = options;
     let repository_path = repository.git_dir().to_owned();
     let mailmap = gix::open(&repository_path)
@@ -231,6 +280,7 @@ fn event_loop(
     let mut dirty = false;
     let mut urgent = false;
     let mut inline_terminal = None;
+    let mut history_requires_alternate_screen = false;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
@@ -264,6 +314,7 @@ fn event_loop(
             continue;
         }
         let mut events = 0;
+        let mut resize_inline = false;
         while events < EVENT_BATCH_SIZE {
             let message = match receiver.try_recv() {
                 Ok(message) => message,
@@ -281,8 +332,16 @@ fn event_loop(
             dirty = true;
             match message? {
                 Event::Decorations(value) => decorations = value,
-                Event::Commits(rows) => app.extend_commits(rows),
+                Event::Commits(rows) => {
+                    app.extend_commits(rows);
+                    if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
+                        history_requires_alternate_screen = true;
+                    }
+                }
                 Event::Complete => {
+                    resize_inline = true;
+                    history_requires_alternate_screen =
+                        history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
                     if let Some(rows) = app.start_lane_computation() {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
@@ -290,6 +349,15 @@ fn event_loop(
                 Event::Cancelled => drop(app.update(Action::Cancelled)),
             }
         }
+        sync_screen(
+            terminal,
+            &mut app,
+            screen,
+            started_inline,
+            history_requires_alternate_screen,
+            resize_inline,
+            &mut inline_terminal,
+        )?;
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing);
         if should_draw(dirty, streaming, last_draw.elapsed()) {
             draw(
@@ -332,16 +400,6 @@ fn event_loop(
         dirty = true;
         urgent = true;
         let effects = app.update(action);
-        if should_switch_screen(started_inline, app.show_commit, inline_terminal.is_some()) {
-            if app.show_commit {
-                inline_terminal =
-                    Some(enter_alternate_screen(terminal).context("could not enter the alternate screen")?);
-                app.inline = false;
-            } else if let Some(inline) = inline_terminal.take() {
-                leave_alternate_screen(terminal, inline).context("could not leave the alternate screen")?;
-                app.inline = true;
-            }
-        }
         for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -369,6 +427,15 @@ fn event_loop(
                 Effect::Quit => return Ok(None),
             }
         }
+        sync_screen(
+            terminal,
+            &mut app,
+            screen,
+            started_inline,
+            history_requires_alternate_screen,
+            false,
+            &mut inline_terminal,
+        )?;
     })();
     let restore = inline_terminal
         .map(|inline| leave_alternate_screen(terminal, inline))
@@ -622,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn switches_screens_only_for_an_inline_commit_pane() {
+    fn switches_screens_for_inline_commit_panes_and_large_histories() {
         assert!(
             should_switch_screen(true, true, false),
             "opening the commit pane from inline mode enters the alternate screen"
@@ -638,6 +705,13 @@ mod tests {
         assert!(
             !should_switch_screen(true, true, true),
             "an already-active alternate screen is not re-entered"
+        );
+        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 7));
+        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 8));
+        assert!(history_needs_alternate_screen(Screen::Auto, 20, 10));
+        assert!(
+            !history_needs_alternate_screen(Screen::Half, 20, usize::MAX),
+            "half-screen mode never switches because history grows"
         );
     }
 
