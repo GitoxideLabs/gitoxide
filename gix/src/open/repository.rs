@@ -257,7 +257,7 @@ impl ThreadSafeRepository {
         )?;
 
         // core.worktree might be used to overwrite the worktree directory
-        let worktree_dir_override_from_configuration = if !config.is_bare_but_assume_bare_if_unconfigured() {
+        let worktree_dir_override_from_configuration = {
             fn assure_config_is_from_current_repo(
                 section: &gix_config::file::Metadata,
                 git_dir: &Path,
@@ -267,6 +267,9 @@ impl ThreadSafeRepository {
                 if !filter_config_section(section) {
                     return false;
                 }
+                if section.source == gix_config::Source::EnvOverride {
+                    return true;
+                }
                 // ignore worktree settings that aren't from our repository. This can happen
                 // with worktrees of submodules for instance.
                 section
@@ -275,6 +278,33 @@ impl ThreadSafeRepository {
                     .and_then(|p| gix_path::normalize(p.into(), current_dir))
                     .is_some_and(|config_path| config_path.starts_with(git_dir))
             }
+            fn normalize_worktree_path<'a>(
+                path: Cow<'a, Path>,
+                current_dir: &Path,
+                saturate_at_root: bool,
+            ) -> Option<Cow<'a, Path>> {
+                match gix_path::normalize(path.clone(), current_dir) {
+                    Some(path) => Some(path),
+                    None if saturate_at_root => {
+                        let mut normalized = if path.is_absolute() {
+                            PathBuf::new()
+                        } else {
+                            current_dir.to_owned()
+                        };
+                        for component in path.components() {
+                            match component {
+                                std::path::Component::CurDir => {}
+                                std::path::Component::ParentDir => {
+                                    normalized.pop();
+                                }
+                                component => normalized.push(component.as_os_str()),
+                            }
+                        }
+                        Some(Cow::Owned(normalized))
+                    }
+                    None => None,
+                }
+            }
             let worktree_path = config
                 .resolved
                 .raw_value_with_section_filter(Core::WORKTREE, |section| {
@@ -282,7 +312,12 @@ impl ThreadSafeRepository {
                 })
                 .ok()
                 .map(|(value, section)| (gix_config::Path::from(value), section.meta().source));
-            if let Some((wt, key_source)) = worktree_path {
+            let worktree_overrides_bare = worktree_path
+                .as_ref()
+                .is_some_and(|(_, source)| *source == gix_config::Source::EnvOverride);
+            if let Some((wt, key_source)) =
+                worktree_path.filter(|_| !config.is_bare_but_assume_bare_if_unconfigured() || worktree_overrides_bare)
+            {
                 let wt_clone = wt.clone();
                 let wt_path = wt
                     .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
@@ -297,7 +332,8 @@ impl ThreadSafeRepository {
                     | gix_config::Source::EnvOverride => wt_path,
                     _ => worktree_dir_from_repository_config(&git_dir, wt_path, current_dir),
                 };
-                worktree_dir = gix_path::normalize(wt_path.into(), current_dir).map(Cow::into_owned);
+                worktree_dir =
+                    normalize_worktree_path(wt_path.into(), current_dir, worktree_overrides_bare).map(Cow::into_owned);
                 #[allow(unused_variables, reason = "Used when tracing is enabled at compile time.")]
                 if let Some(worktree_path) = worktree_dir.as_deref().filter(|wtd| !wtd.is_dir()) {
                     gix_trace::warn!(
@@ -305,7 +341,11 @@ impl ThreadSafeRepository {
                         worktree_path.display()
                     );
                 }
+                if worktree_overrides_bare {
+                    config.is_bare = Some(false);
+                }
             } else if !config.lenient_config
+                && !config.is_bare_but_assume_bare_if_unconfigured()
                 && config
                     .resolved
                     .boolean_filter(Core::WORKTREE, |section| {
@@ -322,9 +362,7 @@ impl ThreadSafeRepository {
                     config::key::GenericErrorWithValue::from(&Core::WORKTREE),
                 )));
             }
-            true
-        } else {
-            false
+            !config.is_bare_but_assume_bare_if_unconfigured()
         };
 
         {

@@ -251,3 +251,77 @@ fn git_worktree_and_strict_config() -> gix_testtools::Result {
     )?;
     Ok(())
 }
+
+#[test]
+#[serial]
+fn git_worktree_overrides_bare() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_WORK_TREE", worktree.path().to_string_lossy());
+
+    let repo =
+        gix::ThreadSafeRepository::discover_with_environment_overrides(fixture.join("bare-repo"))?.to_thread_local();
+
+    assert_eq!(
+        repo.workdir(),
+        Some(worktree.path()),
+        "GIT_WORK_TREE overrides core.bare just like it does in Git"
+    );
+    assert!(
+        !repo.is_bare(),
+        "a repository with an explicit GIT_WORK_TREE is not bare according to Git"
+    );
+    #[cfg(feature = "status")]
+    {
+        std::fs::write(worktree.path().join("untracked"), b"content")?;
+        assert_eq!(
+            repo.status(gix::progress::Discard)?
+                .into_index_worktree_iter(None)?
+                .count(),
+            1,
+            "status observes files in the explicit worktree"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn git_worktree_over_root_overrides_bare() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let current_dir = std::env::current_dir()?;
+    let mut relative_worktree = std::path::PathBuf::new();
+    for _ in 0..current_dir.components().count() + 2 {
+        relative_worktree.push("..");
+    }
+    relative_worktree.push(worktree.path().strip_prefix("/")?);
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_WORK_TREE", relative_worktree.to_string_lossy());
+
+    let repo =
+        gix::ThreadSafeRepository::discover_with_environment_overrides(fixture.join("bare-repo"))?.to_thread_local();
+
+    assert_eq!(
+        repo.workdir(),
+        Some(worktree.path()),
+        "parent components beyond the root saturate there, just like they do in Git"
+    );
+    assert!(!repo.is_bare(), "the explicit worktree makes the repository non-bare");
+    #[cfg(feature = "status")]
+    {
+        std::fs::write(worktree.path().join("untracked"), b"content")?;
+        assert_eq!(
+            repo.status(gix::progress::Discard)?
+                .into_index_worktree_iter(None)?
+                .count(),
+            1,
+            "status observes files through the over-root worktree path"
+        );
+    }
+    Ok(())
+}
