@@ -297,11 +297,7 @@ fn write_cursor<'repo>(cursor: &mut Cursor<'_, 'repo>) -> Result<Id<'repo>, writ
                     )));
                 }
             }
-            Ok(cursor
-                .repo
-                .write_object(tree)
-                .map_err(gix_error::Error::from_error)?
-                .detach())
+            Ok(cursor.repo.write_object(tree)?.detach())
         })
         .map(|id| id.attach(cursor.repo))
 }

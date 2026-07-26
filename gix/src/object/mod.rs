@@ -1,5 +1,6 @@
 //!
 #![allow(clippy::empty_docs)]
+use gix_error::OptionExt;
 use gix_hash::ObjectId;
 pub use gix_object::Kind;
 
@@ -22,6 +23,13 @@ pub mod tree;
 
 ///
 pub mod try_into {
+    // TODO(review): kept concrete. Its public fields (`actual`, `expected`, `id`) are read via
+    //                struct-pattern destructuring at `crate::object::commit::Error::ObjectKind`'s
+    //                construction site (`gix/src/object/commit.rs`, `Err(crate::object::try_into::Error
+    //                { actual, expected, .. }) => ...`) and in
+    //                `gix/src/revision/spec/parse/delegate/navigate.rs`
+    //                (`let object::try_into::Error { actual, expected, id } = err;`). Erasing would
+    //                delete those fields out from under both readers.
     #[derive(thiserror::Error, Debug)]
     #[expect(missing_docs)]
     #[error("Object named {id} was supposed to be of kind {expected}, but was kind {actual}.")]
@@ -172,13 +180,18 @@ impl<'repo> Object<'repo> {
 
     /// Obtain a fully parsed commit whose fields reference our data buffer.
     pub fn try_to_commit_ref(&self) -> Result<gix_object::CommitRef<'_>, conversion::Error> {
-        gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()?
+        let commit = gix_object::Data::new(&self.data, self.kind, self.id.kind())
+            .decode()
+            .map_err(gix_error::Error::from_error)?
             .into_commit()
-            .ok_or(conversion::Error::UnexpectedType {
-                expected: gix_object::Kind::Commit,
-                actual: self.kind,
-            })
+            .ok_or_raise(|| {
+                gix_error::message!(
+                    "Expected object type {}, but got {}",
+                    gix_object::Kind::Commit,
+                    self.kind
+                )
+            })?;
+        Ok(commit)
     }
 
     /// Obtain an iterator over commit tokens like in [`to_commit_iter()`][Object::try_to_commit_ref_iter()].
@@ -229,13 +242,14 @@ impl<'repo> Object<'repo> {
 
     /// Obtain a fully parsed tag object whose fields reference our data buffer.
     pub fn try_to_tag_ref(&self) -> Result<gix_object::TagRef<'_>, conversion::Error> {
-        gix_object::Data::new(&self.data, self.kind, self.id.kind())
-            .decode()?
+        let tag = gix_object::Data::new(&self.data, self.kind, self.id.kind())
+            .decode()
+            .map_err(gix_error::Error::from_error)?
             .into_tag()
-            .ok_or(conversion::Error::UnexpectedType {
-                expected: gix_object::Kind::Tag,
-                actual: self.kind,
-            })
+            .ok_or_raise(|| {
+                gix_error::message!("Expected object type {}, but got {}", gix_object::Kind::Tag, self.kind)
+            })?;
+        Ok(tag)
     }
 
     /// Return the attached id of this object.

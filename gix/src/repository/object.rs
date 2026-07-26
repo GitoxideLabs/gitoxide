@@ -24,7 +24,7 @@ impl crate::Repository {
         &self,
         id: impl Into<ObjectId>,
     ) -> Result<object::tree::Editor<'_>, crate::repository::edit_tree::Error> {
-        let tree = self.find_tree(id).map_err(gix_error::Error::from_error)?;
+        let tree = self.find_tree(id)?;
         tree.edit()
     }
 }
@@ -85,7 +85,10 @@ impl crate::Repository {
         &self,
         id: impl Into<ObjectId>,
     ) -> Result<Commit<'_>, object::find::existing::with_conversion::Error> {
-        Ok(self.find_object(id)?.try_into_commit()?)
+        self.find_object(id)
+            .map_err(gix_error::Error::from_error)?
+            .try_into_commit()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Find a tree with `id` or fail if there was no object or the object wasn't a tree.
@@ -105,12 +108,18 @@ impl crate::Repository {
         &self,
         id: impl Into<ObjectId>,
     ) -> Result<Tree<'_>, object::find::existing::with_conversion::Error> {
-        Ok(self.find_object(id)?.try_into_tree()?)
+        self.find_object(id)
+            .map_err(gix_error::Error::from_error)?
+            .try_into_tree()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Find an annotated tag with `id` or fail if there was no object or the object wasn't a tag.
     pub fn find_tag(&self, id: impl Into<ObjectId>) -> Result<Tag<'_>, object::find::existing::with_conversion::Error> {
-        Ok(self.find_object(id)?.try_into_tag()?)
+        self.find_object(id)
+            .map_err(gix_error::Error::from_error)?
+            .try_into_tag()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Find a blob with `id` or fail if there was no object or the object wasn't a blob.
@@ -118,7 +127,10 @@ impl crate::Repository {
         &self,
         id: impl Into<ObjectId>,
     ) -> Result<Blob<'_>, object::find::existing::with_conversion::Error> {
-        Ok(self.find_object(id)?.try_into_blob()?)
+        self.find_object(id)
+            .map_err(gix_error::Error::from_error)?
+            .try_into_blob()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Obtain information about an object without fully decoding it, or fail if the object doesn't exist.
@@ -250,16 +262,13 @@ impl crate::Repository {
     /// we avoid writing duplicate objects using slow disks that will eventually have to be garbage collected.
     pub fn write_object(&self, object: impl gix_object::WriteTo) -> Result<Id<'_>, object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        object
-            .write_to(buf.deref_mut())
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync + 'static>)?;
+        object.write_to(buf.deref_mut()).map_err(gix_error::Error::from_error)?;
 
         self.write_object_inner(&buf, object.kind())
     }
 
     fn write_object_inner(&self, buf: &[u8], kind: gix_object::Kind) -> Result<Id<'_>, object::write::Error> {
-        let oid = gix_object::compute_hash(self.object_hash(), kind, buf)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        let oid = gix_object::compute_hash(self.object_hash(), kind, buf).map_err(gix_error::Error::from_error)?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }
@@ -267,7 +276,7 @@ impl crate::Repository {
         self.objects
             .write_buf_with_known_id(kind, buf, oid)
             .map(|oid| oid.attach(self))
-            .map_err(Into::into)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))
     }
 
     /// Write a blob from the given `bytes`.
@@ -290,13 +299,13 @@ impl crate::Repository {
     pub fn write_blob(&self, bytes: impl AsRef<[u8]>) -> Result<Id<'_>, object::write::Error> {
         let bytes = bytes.as_ref();
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, bytes)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(gix_error::Error::from_error)?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }
         self.objects
             .write_buf_with_known_id(gix_object::Kind::Blob, bytes, oid)
-            .map_err(Into::into)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))
             .map(|oid| oid.attach(self))
     }
 
@@ -308,22 +317,21 @@ impl crate::Repository {
     /// If that is prohibitive, use the object database directly.
     pub fn write_blob_stream(&self, mut bytes: impl std::io::Read) -> Result<Id<'_>, object::write::Error> {
         let mut buf = self.empty_reusable_buffer();
-        std::io::copy(&mut bytes, buf.deref_mut())
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+        std::io::copy(&mut bytes, buf.deref_mut()).map_err(gix_error::Error::from_error)?;
 
         self.write_blob_stream_inner(&buf)
     }
 
     fn write_blob_stream_inner(&self, buf: &[u8]) -> Result<Id<'_>, object::write::Error> {
         let oid = gix_object::compute_hash(self.object_hash(), gix_object::Kind::Blob, buf)
-            .map_err(|err| Box::new(err) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(gix_error::Error::from_error)?;
         if self.objects.exists(&oid) {
             return Ok(oid.attach(self));
         }
 
         self.objects
             .write_buf_with_known_id(gix_object::Kind::Blob, buf, oid)
-            .map_err(Into::into)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))
             .map(|oid| oid.attach(self))
     }
 }
@@ -355,7 +363,7 @@ impl crate::Repository {
             message: message.as_ref().into(),
             pgp_signature: None,
         };
-        let tag_id = self.write_object(&tag).map_err(gix_error::Error::from_error)?;
+        let tag_id = self.write_object(&tag)?;
         self.tag_reference(name, tag_id, constraint)
             .map_err(gix_error::Error::from_error)
     }
@@ -412,7 +420,7 @@ impl crate::Repository {
             extra_headers: Default::default(),
         };
 
-        let commit_id = self.write_object(&commit).map_err(gix_error::Error::from_error)?;
+        let commit_id = self.write_object(&commit)?;
         self.edit_references_as(
             Some(RefEdit {
                 change: Change::Update {
@@ -531,7 +539,7 @@ impl crate::Repository {
             parents: parents.into_iter().map(Into::into).collect(),
             extra_headers: Default::default(),
         };
-        let id = self.write_object(commit).map_err(gix_error::Error::from_error)?;
+        let id = self.write_object(commit)?;
         Ok(id.object().map_err(gix_error::Error::from_error)?.into_commit())
     }
 

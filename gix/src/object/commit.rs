@@ -3,6 +3,11 @@ use crate::{Commit, ObjectDetached, Tree, bstr, bstr::BStr};
 mod error {
     use crate::object;
 
+    // TODO(review): kept concrete. Erasing this would give it a second `From<gix_error::Error>` impl
+    //                where it's embedded via `CommitTree(#[from] crate::object::commit::Error)` in
+    //                `submodule::head_id::Error` (`gix/src/submodule/errors.rs`), which already has one
+    //                via `HeadCommit(#[from] crate::reference::head_commit::Error)`
+    //                (`reference::head_commit::Error` is already erased) — E0119.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {

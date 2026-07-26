@@ -282,8 +282,7 @@ impl Repository {
             .ok_or_else(|| gix_error::Error::from_error(gix_error::message("No commit was provided as merge-base")))?;
         let Some(second) = merge_bases.pop() else {
             let tree_id = self
-                .find_commit(first)
-                .map_err(gix_error::Error::from_error)?
+                .find_commit(first)?
                 .tree_id()
                 .map_err(gix_error::Error::from_error)?;
             let commit_id = first.attach(self);

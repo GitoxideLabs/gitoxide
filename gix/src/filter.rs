@@ -226,9 +226,7 @@ impl Pipeline<'_> {
                     path.display()
                 )))
             })?;
-            let id = repo
-                .write_blob(gix_path::into_bstr(target).as_ref())
-                .map_err(gix_error::Error::from_error)?;
+            let id = repo.write_blob(gix_path::into_bstr(target).as_ref())?;
             (id, gix_object::tree::EntryKind::Link)
         } else if md.is_file() {
             use gix_filter::pipeline::convert::ToGitOutcome;
@@ -241,13 +239,9 @@ impl Pipeline<'_> {
             })?;
             let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
             let id = match file_for_git {
-                ToGitOutcome::Unchanged(mut file) => repo
-                    .write_blob_stream(&mut file)
-                    .map_err(gix_error::Error::from_error)?,
-                ToGitOutcome::Buffer(buf) => repo.write_blob(buf).map_err(gix_error::Error::from_error)?,
-                ToGitOutcome::Process(mut read) => repo
-                    .write_blob_stream(&mut read)
-                    .map_err(gix_error::Error::from_error)?,
+                ToGitOutcome::Unchanged(mut file) => repo.write_blob_stream(&mut file)?,
+                ToGitOutcome::Buffer(buf) => repo.write_blob(buf)?,
+                ToGitOutcome::Process(mut read) => repo.write_blob_stream(&mut read)?,
             };
 
             let kind = if gix_fs::is_executable(&md) {

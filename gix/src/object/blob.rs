@@ -25,6 +25,10 @@ pub mod diff {
         use crate::bstr::BStr;
 
         /// The error returned by [Platform::lines()](super::Platform::lines()).
+        // TODO(review): kept concrete. Generic over the caller-supplied hunk-processing error `E`;
+        //                a type alias to `gix_error::Error` can't carry that type parameter, and doing
+        //                so would erase the caller's own error type inside `ProcessHunk(E)`, which is
+        //                the entire point of this type being generic.
         #[derive(Debug, thiserror::Error)]
         #[expect(missing_docs)]
         pub enum Error<E>

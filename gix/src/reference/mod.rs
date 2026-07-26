@@ -228,7 +228,6 @@ impl<'repo> Reference<'repo> {
             .object()
             .map_err(gix_error::Error::from_error)?
             .peel_to_kind(kind)
-            .map_err(gix_error::Error::from_error)
     }
 
     /// Follow all symbolic references we point to up to the first object, which is typically (but not always) a tag,
