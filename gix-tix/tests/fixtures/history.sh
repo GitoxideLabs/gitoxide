@@ -25,7 +25,9 @@ echo topic >topic
 git add topic
 GIT_AUTHOR_DATE="2000-01-04T00:00:00 +0000" GIT_COMMITTER_DATE="2000-01-04T00:00:00 +0000" \
   git commit -q --author="Codex <Codex@OpenAI.com>" -m topic \
-    -m "Co-authored-by: Human Coauthor <human@example.com>
+    -m "--- agent
+
+Co-authored-by: Human Coauthor <human@example.com>
 Co-authored-by: Claude <noreply@anthropic.com>
 Assisted-by: Opus 4.7
 rEvIeWeD-bY: Reviewer <reviewer@example.com>

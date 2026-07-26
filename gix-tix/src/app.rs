@@ -19,6 +19,7 @@ pub(crate) struct Commit<T> {
     pub attributions: Range<usize>,
     pub title: T,
     pub metadata_loaded: bool,
+    pub has_agent_marker: bool,
     pub signature: SignatureState,
 }
 
@@ -28,6 +29,7 @@ pub(crate) struct Metadata<T> {
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
+    pub has_agent_marker: bool,
     pub signature: SignatureState,
 }
 
@@ -53,6 +55,13 @@ impl Author {
             .iter()
             .any(|candidate| self.email.eq_ignore_ascii_case(candidate))
     }
+
+    pub fn is_github_noreply(&self) -> bool {
+        let suffix = b"@users.noreply.github.com";
+        self.email
+            .get(self.email.len().saturating_sub(suffix.len())..)
+            .is_some_and(|email| email.eq_ignore_ascii_case(suffix))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,15 +72,7 @@ pub(crate) struct Attribution {
 
 impl Attribution {
     pub fn is_agent(&self) -> bool {
-        self.author.is_bot()
-            || self.kind == AttributionKind::Assisted
-                && [b"opus".as_slice(), b"gpt".as_slice()].iter().any(|name| {
-                    self.author
-                        .name
-                        .get(..name.len())
-                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
-                        && self.author.name.get(name.len()).is_none_or(u8::is_ascii_whitespace)
-                })
+        self.author.is_bot() || self.kind == AttributionKind::Assisted
     }
 }
 
@@ -147,6 +148,7 @@ pub(crate) enum Action {
     Last,
     ToggleDate,
     ToggleName,
+    ToggleEmail,
     ToggleTrailers,
     ToggleMailmap,
     ToggleRefs,
@@ -186,6 +188,7 @@ pub(crate) struct App {
     pub lane_time: Option<Duration>,
     pub show_committer_date: bool,
     pub name_mode: NameMode,
+    pub show_emails: bool,
     pub show_trailers: bool,
     pub use_mailmap: bool,
     pub ref_mode: RefMode,
@@ -222,6 +225,7 @@ impl App {
             lane_time: None,
             show_committer_date: true,
             name_mode: NameMode::All,
+            show_emails: false,
             show_trailers: true,
             use_mailmap: true,
             ref_mode: RefMode::Default,
@@ -264,6 +268,7 @@ impl App {
                 attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
                 title: start..self.titles.len(),
                 metadata_loaded: row.metadata_loaded,
+                has_agent_marker: row.has_agent_marker,
                 signature: row.signature,
             });
         }
@@ -292,6 +297,7 @@ impl App {
             author,
             attributions,
             title,
+            has_agent_marker,
             signature,
         } = metadata;
         let title_start = self.titles.len();
@@ -303,6 +309,7 @@ impl App {
         row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
         row.title = title_start..self.titles.len();
         row.metadata_loaded = true;
+        row.has_agent_marker = has_agent_marker;
         row.signature = signature;
     }
 
@@ -358,6 +365,7 @@ impl App {
                 self.ensure_visible();
             }
             Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
+            Action::ToggleEmail => self.show_emails = !self.show_emails,
             Action::ToggleName => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
@@ -470,6 +478,7 @@ impl App {
                             author: row.author,
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
+                            has_agent_marker: row.has_agent_marker,
                             signature: row.signature,
                         },
                     )
@@ -486,6 +495,7 @@ impl App {
                 row.attributions = metadata.attributions.clone();
                 row.title = metadata.title.clone();
                 row.metadata_loaded = true;
+                row.has_agent_marker = metadata.has_agent_marker;
                 row.signature = metadata.signature;
             }
         }
@@ -909,6 +919,7 @@ mod tests {
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            has_agent_marker: false,
             signature: SignatureState::Unsigned,
         }
     }
@@ -920,34 +931,23 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_named_agents_only_when_assisting() {
-        let opus = Box::leak(Box::new(Author {
-            name: b"Opus 4.7".as_bstr(),
-            email: b"".as_bstr(),
-        }));
-        let gpt = Box::leak(Box::new(Author {
-            name: b"GPT 5.6".as_bstr(),
+    fn recognizes_all_assistants_as_agents() {
+        let assistant = Box::leak(Box::new(Author {
+            name: b"Anything".as_bstr(),
             email: b"".as_bstr(),
         }));
 
         assert!(
             Attribution {
                 kind: AttributionKind::Assisted,
-                author: opus,
-            }
-            .is_agent()
-        );
-        assert!(
-            Attribution {
-                kind: AttributionKind::Assisted,
-                author: gpt,
+                author: assistant,
             }
             .is_agent()
         );
         assert!(
             !Attribution {
                 kind: AttributionKind::Reviewed,
-                author: opus,
+                author: assistant,
             }
             .is_agent()
         );
@@ -1037,6 +1037,7 @@ mod tests {
                 author: row(1).author,
                 attributions: 0..0,
                 title: "loaded".into(),
+                has_agent_marker: false,
                 signature: SignatureState::Unsigned,
             },
             Vec::new(),
@@ -1196,6 +1197,7 @@ mod tests {
         assert!(app.show_trailers, "trailer attribution is visible by default");
 
         app.update(Action::ToggleDate);
+        app.update(Action::ToggleEmail);
         app.update(Action::ToggleName);
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
@@ -1204,6 +1206,7 @@ mod tests {
         app.update(Action::ToggleCommit);
 
         assert!(!app.show_committer_date);
+        assert!(app.show_emails);
         assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
