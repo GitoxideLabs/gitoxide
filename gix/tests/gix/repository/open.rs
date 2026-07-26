@@ -37,6 +37,24 @@ fn discover_with_git_dir_environment_override_sets_trust() -> crate::Result {
 }
 
 #[test]
+fn core_worktree_cli_override_does_not_override_bare() -> crate::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?;
+    let worktree = gix_testtools::tempfile::TempDir::new()?;
+    let repo = gix::open_opts(
+        fixture.join("bare-repo"),
+        gix::open::Options::isolated().cli_overrides([format!("core.worktree={}", worktree.path().display())]),
+    )?;
+
+    assert_eq!(
+        repo.workdir(),
+        None,
+        "core.worktree from -c does not override core.bare in Git"
+    );
+    assert!(repo.is_bare(), "the CLI override leaves the bare repository bare");
+    Ok(())
+}
+
+#[test]
 fn on_root_with_decomposed_unicode() -> crate::Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
 

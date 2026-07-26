@@ -260,6 +260,15 @@ pub fn to_windows_separators<'a>(path: impl Into<Cow<'a, BStr>>) -> Cow<'a, BStr
 /// can be exhausted by paths like `../../r`, `None` will be returned to indicate the inability to
 /// produce a logically consistent path.
 pub fn normalize<'a>(path: Cow<'a, Path>, current_dir: &Path) -> Option<Cow<'a, Path>> {
+    normalize_inner(path, current_dir, false)
+}
+
+/// Like [`normalize()`], but treats `..` components beyond the filesystem root as no-ops.
+pub fn normalize_saturating<'a>(path: Cow<'a, Path>, current_dir: &Path) -> Cow<'a, Path> {
+    normalize_inner(path, current_dir, true).expect("saturating normalization always produces a path")
+}
+
+fn normalize_inner<'a>(path: Cow<'a, Path>, current_dir: &Path, saturate_at_root: bool) -> Option<Cow<'a, Path>> {
     use std::path::Component::ParentDir;
 
     if !path.components().any(|c| matches!(c, ParentDir)) {
@@ -275,7 +284,7 @@ pub fn normalize<'a>(path: Cow<'a, Path>, current_dir: &Path) -> Option<Cow<'a, 
             if path.as_os_str().is_empty() || path_was_dot {
                 path.push(current_dir_opt.take()?);
             }
-            if !path.pop() {
+            if !path.pop() && !saturate_at_root {
                 return None;
             }
         } else {
