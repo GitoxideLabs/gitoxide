@@ -121,7 +121,9 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>, crate::config::set_value::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Parameter(_)) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionRequired);
+            return Err(gix_error::Error::from_error(gix_error::message(
+                "The key needs a subsection parameter to be valid.",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -129,8 +131,12 @@ impl<'repo> SnapshotMut<'repo> {
         let current = match section.parent() {
             Some(parent) => self
                 .config
-                .set_raw_value_by(parent.name(), section.name(), key.name(), value)?,
-            None => self.config.set_raw_value_by(section.name(), None, key.name(), value)?,
+                .set_raw_value_by(parent.name(), section.name(), key.name(), value)
+                .map_err(gix_error::Error::from_error)?,
+            None => self
+                .config
+                .set_raw_value_by(section.name(), None, key.name(), value)
+                .map_err(gix_error::Error::from_error)?,
         };
         Ok(current)
     }
@@ -144,7 +150,9 @@ impl<'repo> SnapshotMut<'repo> {
         new_value: impl gix_utils::AsBStr,
     ) -> Result<Option<BString>, crate::config::set_value::Error> {
         if let Some(crate::config::tree::SubSectionRequirement::Never) = key.subsection_requirement() {
-            return Err(crate::config::set_value::Error::SubSectionForbidden);
+            return Err(gix_error::Error::from_error(gix_error::message(
+                "The key must not be used with a subsection",
+            )));
         }
         let value = new_value.as_bstr();
         key.validate(value)?;
@@ -156,7 +164,8 @@ impl<'repo> SnapshotMut<'repo> {
             .expect("statically known keys can always be parsed");
         let current = self
             .config
-            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)?;
+            .set_raw_value_by(key.section_name, key.subsection_name, key.value_name, value)
+            .map_err(gix_error::Error::from_error)?;
         Ok(current)
     }
 

@@ -132,7 +132,9 @@ impl<T: Validate> Key for Any<T> {
     }
 
     fn validate(&self, value: &BStr) -> Result<(), config::tree::key::validate::Error> {
-        Ok(self.validate.validate(value)?)
+        self.validate
+            .validate(value)
+            .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))
     }
 
     fn section(&self) -> &dyn Section {

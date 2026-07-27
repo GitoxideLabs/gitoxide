@@ -235,24 +235,8 @@ mod submodule_status {
         }
     }
 
-    // TODO(review): no structural blocker found. This type lives in a private `mod submodule_status`
-    //                and is reachable only via `impl gix_status::index_as_worktree::traits::
-    //                SubmoduleStatus for BuiltinSubmoduleStatus { type Error = Error; .. }` below; since
-    //                the trait is implemented for the local `BuiltinSubmoduleStatus`, not for this
-    //                error type itself, that isn't an orphan risk — only the associated `Error` type
-    //                would become `gix_error::Error`. No `#[from]` parent embeds this type (it isn't
-    //                reachable outside this file to be named in one); it isn't generic. A search of
-    //                `gix/tests`, `gitoxide-core`, `src` and `examples` found no match on any variant.
     /// The error returned submodule status checks.
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        SubmoduleStatus(#[from] crate::submodule::status::Error),
-        #[error(transparent)]
-        IgnoreConfig(#[from] crate::submodule::config::Error),
-        #[error(transparent)]
-        DiffSubmoduleIgnoreConfig(#[from] config::key::GenericErrorWithValue),
-    }
+    pub type Error = gix_error::Error;
 
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
@@ -287,18 +271,19 @@ mod submodule_status {
                         .string(config::tree::Diff::IGNORE_SUBMODULES)
                         .map(|value| config::tree::Diff::IGNORE_SUBMODULES.try_into_ignore(value))
                         .transpose()
-                        .with_leniency(repo.config.lenient_config)?;
+                        .with_leniency(repo.config.lenient_config)
+                        .map_err(gix_error::Error::from_error)?;
                     if let Some(ignore) = global_ignore {
                         (ignore, check_dirty)
                     } else {
                         // If no global ignore is set, use the submodule's ignore setting.
-                        let ignore = sm.ignore()?.unwrap_or_default();
+                        let ignore = sm.ignore().map_err(gix_error::Error::from_error)?.unwrap_or_default();
                         (ignore, check_dirty)
                     }
                 }
                 Submodule::Given { ignore, check_dirty } => (ignore, check_dirty),
             };
-            let status = sm.status(ignore, check_dirty)?;
+            let status = sm.status(ignore, check_dirty).map_err(gix_error::Error::from_error)?;
             Ok(status.is_dirty().and_then(|dirty| dirty.then_some(status)))
         }
     }

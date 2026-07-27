@@ -55,27 +55,8 @@ pub mod section {
 
 ///
 pub mod set_value {
-    // TODO(review): no structural blocker found. No `#[from]` parent embeds this type anywhere in
-    //                `gix/src`; it isn't generic; it has no foreign-trait impl. Its `SubSectionRequired`
-    //                and `SubSectionForbidden` variants are only ever constructed, at
-    //                `gix/src/config/snapshot/access.rs`, never matched by a caller, and
-    //                a search of `gix/tests`, `gitoxide-core`, `src` and `examples` for
-    //                `set_value::Error` found nothing. Its `Validate` variant embeds
-    //                `config::tree::key::validate::Error` (also concrete, also not erased), so this
-    //                enum has no erased member of its own today either.
     /// The error produced when calling [`SnapshotMut::set(_subsection)?_value()`][crate::config::SnapshotMut::set_value()]
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        SetRaw(#[from] gix_config::file::set_raw_value::Error),
-        #[error(transparent)]
-        Validate(#[from] crate::config::tree::key::validate::Error),
-        #[error("The key needs a subsection parameter to be valid.")]
-        SubSectionRequired,
-        #[error("The key must not be used with a subsection")]
-        SubSectionForbidden,
-    }
+    pub type Error = gix_error::Error;
 }
 
 // TODO(review): kept concrete. Callers match its variants directly: `gix/tests/gix/repository/

@@ -3,32 +3,8 @@ pub use error::Error;
 use crate::config::Snapshot;
 
 mod error {
-    use crate::bstr::BString;
-
-    // TODO(review): no structural blocker found. Its two `#[from]` parents —
-    //                `env::collate::fetch::Error::CredentialHelperConfig` (`gix/src/env.rs`) and
-    //                `remote::ref_map::Error::ConfigureCredentials`
-    //                (`gix/src/remote/connection/ref_map.rs`) — have no other erased member, so
-    //                there is no E0119 collision. It isn't generic and has no foreign-trait impl.
-    //                `env::collate::fetch::Error::is_corrupted()` matches
-    //                `ref_map::Error::ConfigureCredentials(_)` but discards the payload without
-    //                reading this type's own variants, and a search of `gix/tests`, `gitoxide-core`,
-    //                `src` and `examples` found no match on `InvalidUseHttpPath`, `CoreAskpass` or
-    //                `BooleanConfig`.
     /// The error returned by [`Snapshot::credential_helpers()`][super::Snapshot::credential_helpers()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not parse 'useHttpPath' key in section {section}")]
-        InvalidUseHttpPath {
-            section: BString,
-            source: gix_config::value::Error,
-        },
-        #[error("core.askpass could not be read")]
-        CoreAskpass(#[from] gix_config::path::interpolate::Error),
-        #[error(transparent)]
-        BooleanConfig(#[from] crate::config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 impl Snapshot<'_> {
@@ -59,6 +35,8 @@ impl Snapshot<'_> {
 }
 
 pub(super) mod function {
+    use gix_error::ResultExt;
+
     use crate::{
         bstr::{ByteSlice, ByteVec},
         config::{
@@ -178,9 +156,11 @@ pub(super) mod function {
                         .value(use_http_path_key.name)
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
-                                .map_err(|err| Error::InvalidUseHttpPath {
-                                    source: err,
-                                    section: section.header().to_bstring(),
+                                .or_raise(|| {
+                                    gix_error::message!(
+                                        "Could not parse 'useHttpPath' key in section {section}",
+                                        section = section.header().to_bstring()
+                                    )
                                 })
                                 .map(|b| b.0)
                         })
@@ -194,7 +174,8 @@ pub(super) mod function {
                             protect_protocol_key
                                 .enrich_error(gix_config::Boolean::try_from(value).map(|value| Some(value.0)))
                         })
-                        .transpose()?
+                        .transpose()
+                        .map_err(gix_error::Error::from_error)?
                         .flatten()
                     {
                         context_options.protect_protocol = toggle;
@@ -213,10 +194,12 @@ pub(super) mod function {
                 is_lenient_config,
                 environment,
             )
-            .ignore_empty()?,
+            .ignore_empty()
+            .or_raise(|| gix_error::message("core.askpass could not be read"))?,
             mode: Credentials::TERMINAL_PROMPT
                 .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
-                .with_leniency(is_lenient_config)?
+                .with_leniency(is_lenient_config)
+                .map_err(gix_error::Error::from_error)?
                 .and_then(|val| (!val).then_some(gix_prompt::Mode::Disable))
                 .unwrap_or_default(),
         }
@@ -234,7 +217,8 @@ pub(super) mod function {
                 query_user_only: url.scheme == gix_url::Scheme::Ssh,
                 stderr: Credentials::HELPER_STDERR
                     .enrich_error(config.boolean(Credentials::HELPER_STDERR))
-                    .with_leniency(is_lenient_config)?
+                    .with_leniency(is_lenient_config)
+                    .map_err(gix_error::Error::from_error)?
                     .unwrap_or(true),
             },
             action,

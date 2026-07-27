@@ -2,6 +2,7 @@ use crate::{
     bstr::{BStr, BString, ByteVec},
     config::tree::key::validate_assignment,
 };
+use gix_error::ResultExt;
 
 /// Provide information about a configuration section.
 pub trait Section {
@@ -162,10 +163,11 @@ pub trait Key: std::fmt::Debug {
     /// Return an assignment with the keys full name to `value`, suitable for [configuration overrides][crate::open::Options::config_overrides()].
     /// Note that this will fail if the key requires a subsection name.
     fn validated_assignment(&self, value: &BStr) -> Result<BString, validate_assignment::Error> {
-        self.validate(value)?;
+        self.validate(value)
+            .or_raise(|| gix_error::message("Failed to validate the value to be assigned to this key"))?;
         let mut key = self
             .full_name(None)
-            .map_err(|message| validate_assignment::Error::Name { message })?;
+            .map_err(|message| gix_error::Error::from_error(gix_error::message!("{message}")))?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)
@@ -188,10 +190,11 @@ pub trait Key: std::fmt::Debug {
         value: &BStr,
         subsection: &BStr,
     ) -> Result<BString, crate::config::tree::key::validate_assignment::Error> {
-        self.validate(value)?;
+        self.validate(value)
+            .or_raise(|| gix_error::message("Failed to validate the value to be assigned to this key"))?;
         let mut key = self
             .full_name(Some(subsection))
-            .map_err(|message| validate_assignment::Error::Name { message })?;
+            .map_err(|message| gix_error::Error::from_error(gix_error::message!("{message}")))?;
         key.push(b'=');
         key.push_str(value);
         Ok(key)
