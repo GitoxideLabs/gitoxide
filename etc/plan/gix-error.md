@@ -25,13 +25,13 @@ Finish the migration from `thiserror`-based error enums to `gix-error` / `Exn`, 
 - [ ] Make `cargo nextest run --workspace` complete without `--exclude gix-error`.
   Evidence: `.github/workflows/ci.yml` still excludes `gix-error`, in three places (`ci.yml:304,364,450`). The adjacent comment claims `gix-error` "is tested individually," but no dedicated job for it was found in any `.github/workflows/*.yml` file at this commit — worth confirming with Byron whether the exclusion is a migration artifact or a deliberate, permanent split.
 - [ ] Replace `thiserror` with `gix-error` everywhere.
-  Evidence: no longer the actual target. Only `gix` still depends on `thiserror` (42 `thiserror::Error` derives across 27 files); of the other crates, 16 depend on `gix-error` (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`), while the plumbing crates covered by the maintainer's revert kept hand-written concrete `Display`/`Error` impls with no `gix-error` dependency at all. See "Migration Rules" for the three-tier strategy this reflects.
+  Evidence: no longer the actual target. Only `gix` still depends on `thiserror` (42 `thiserror::Error` derives across 27 files); of the other crates, 14 adopt `gix-error`'s types in their own public error surface (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`), while the plumbing crates covered by the maintainer's revert kept hand-written concrete `Display`/`Error` impls with no `gix-error` dependency at all. (A raw `gix-error` dependency-key count across the workspace runs to 16; that also counts `gix` itself and `gix-error`'s own self-referential dev-dependency, neither of which is an adopter.) See "Migration Rules" for the three-tier strategy this reflects.
 - [x] Keep `NotARepository` distinct from generic open failures.
   Evidence: `gix::open::Error::NotARepository` exists (`gix/src/open/mod.rs`) and is constructed in `gix/src/open/repository.rs`.
 - [ ] Use `gix_error::Error` in tests when that simplifies `Exn`-heavy paths.
   Evidence: only 3 files workspace-wide use `gix_error::Error` under a `tests/` path. Not moot: `Exn` is not rare in `gix` — it appears 33 times across 7 files, concentrated in the revision-spec parsing delegate layer (see "Migration Rules" for the breakdown) — so real `Exn`-heavy production surface exists; simplifying test paths this way remains open.
 - [x] Make validation failures identifiable as `gix_error::ValidationError` in crates that adopt `gix-error`.
-  Evidence: `gix-error` exports `ValidationError`; adopted directly by `gix-date`, `gix-quote`, `gix-bitmap`, `gix-chunk`, `gix-pack` and `gix-revision`, plus used at the `gix` boundary via `or_raise`/`message`. Note `gix-validate` itself is a plumbing crate with hand-written concrete errors (no `gix-error` dependency) — its own failures propagate as their own concrete types (e.g. `gix_validate::reference::name::Error`, re-exported verbatim by `gix-ref`), not literally as `ValidationError`.
+  Evidence: `gix-error` exports `ValidationError`; adopted directly by `gix-actor`, `gix-bitmap`, `gix-chunk`, `gix-date`, `gix-mailmap`, `gix-pack`, `gix-quote` and `gix-revision`, plus used at the `gix` boundary via `or_raise`/`message`. Note `gix-validate` itself is a plumbing crate with hand-written concrete errors (no `gix-error` dependency) — its own failures propagate as their own concrete types (e.g. `gix_validate::reference::name::Error`, re-exported verbatim by `gix-ref`), not literally as `ValidationError`.
 
 ## Current Snapshot
 
@@ -45,6 +45,8 @@ Result on 2026-07-27, on the `gix-error-batch1` branch:
 
 - 67 crates are done
 - 1 crate is still pending: `gix` — 42 `thiserror::Error` derives across 27 files, every one carrying a `TODO(review)` note explaining why it stays concrete (see "Migration Rules")
+
+Diff size, measured against this branch's merge-base (the "Merge pull request #2738 from GitoxideLabs/improvements" merge, 2026-07-22): the branch as a whole is +9561/−3538 (net +6023) — the line count went up, not down. Restricted to `gix/src` and `gitoxide-core/src`, the two directories the maintainer's "redeemed on the caller side" question is actually about, it's net −318. Much of the gap is the 42 `TODO(review)` notes (see "Migration Rules") explaining why each type stays concrete — they alone add roughly 260 lines of new comments to `gix/src`; moving that reasoning out of the source and into this file would recover most of it.
 
 ## Linked Upstream PRs
 
@@ -65,7 +67,7 @@ Result on 2026-07-27, on the `gix-error-batch1` branch:
 Acting on that, `gix-fs`, `gix-attributes`, `gix-pathspec`, `gix-lock`, `gix-shallow`, `gix-prompt`, `gix-url` and `gix-path` had their `Exn` conversions reverted back to hand-written error types (the `revert!: keep the plumbing crates' error types concrete` commit, 2026-07-22). The migration is now three-tier:
 
 - **Plumbing crates** — drop `thiserror`, keep concrete enums with hand-written `Display`/`Error` impls. No `gix-error` dependency at all.
-- **`gix-error` adopters** — take a `gix-error` dependency directly and use its types (e.g. `gix_error::ValidationError`) in their own public error surface, short of the full erasure below. 16 crates do this (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`); `gix` is among them too, on top of anchoring the boundary tier next.
+- **`gix-error` adopters** — take a `gix-error` dependency directly and use its types (e.g. `gix_error::ValidationError`) in their own public error surface, short of the full erasure below. 14 crates do this (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`): `gix-actor`, `gix-archive`, `gix-bitmap`, `gix-blame`, `gix-chunk`, `gix-commitgraph`, `gix-date`, `gix-mailmap`, `gix-pack`, `gix-quote`, `gix-refspec`, `gix-revision`, `gix-revwalk` and `gix-worktree-stream`. (A raw dependency-key count of `gix-error` across the workspace runs to 16 — the other two are `gix-error` itself, which defines these types rather than adopting them, and `gix`, which anchors the boundary tier next.)
 - **The `gix` boundary** — erase to `pub type Error = gix_error::Error;` where callers don't need to match variants. `Exn` itself is not rare in `gix` — it appears 33 times across 7 files (`lib.rs`, `repository/reference.rs`, `config/tree/keys.rs`, `revision/spec/parse/mod.rs`, and `revision/spec/parse/delegate/{mod,navigate,revision}.rs`), with the revision-spec delegate layer alone holding roughly 14 function signatures returning `Result<_, Exn>` — core parsing plumbing, not config/test downcasting.
 
 Rules:
@@ -77,12 +79,14 @@ Rules:
 
 ### Why a type stays concrete in `gix`
 
-All 42 types still concrete in `gix` (2026-07-27) fall into exactly one of four buckets, each recorded in that type's own `TODO(review)` comment:
+All 42 types still concrete in `gix` (2026-07-27) are covered by four buckets, each recorded in that type's own `TODO(review)` comment; most cite exactly one, but a type can be blocked more than one independent way at once:
 
 1. **Callers match variants.** Code matches on variants or reads fields directly; erasing breaks the call site.
 2. **E0119, spent slot.** A parent enum already embeds a different erased type via one `#[from]`; erasing this type too would give the parent a second `From<gix_error::Error>` impl. Order-dependent, not permanent — erasing the *hub* enum that's holding the slot deletes it and frees everything it was pinning, so a blocker here can evaporate later in the campaign.
 3. **Generic.** The type carries a type parameter (e.g. a caller-supplied source error `E`) that a `pub type` alias can't carry.
 4. **E0117, orphan rule.** A local `impl <ForeignTrait> for Error` (e.g. `gix_transport::IsSpuriousError`, re-exported through `gix_protocol::transport`) becomes foreign-trait-on-foreign-type once `Error` is an alias to the equally-foreign `gix_error::Error`.
+
+Thirteen of the 42 cite more than one bucket, and the reasons stack rather than replace each other. Five cite three: `gix/src/remote/connect.rs:16`, `gix/src/remote/connection/ref_map.rs:12`, `gix/src/remote/connection/fetch/error.rs:3` and `gix/src/remote/connection/fetch/mod.rs:104` all open "kept concrete, blocked three independent ways" over buckets 4, 2 and 1; `gix/src/env.rs:54` (`env::collate::fetch::Error<E>`) makes the same three-way case in prose rather than a numbered list, over buckets 3, 4 and 1. Eight more cite two, each signaled by a `Separately, …` clause except one argued in two unconnected sentences: `gix/src/config/mod.rs:62` and `gix/src/config/mod.rs:268` are two different types in the same file, over buckets 1+2 and 3+4 respectively; `gix/src/open/mod.rs:43`, `gix/src/reference/errors.rs:95`, `gix/src/remote/errors.rs:10` and `gix/src/status/iter/mod.rs:240` each cite buckets 1+2, as do `gix/src/submodule/errors.rs:27` and `gix/src/submodule/errors.rs:74`, two different types in the same file. The remaining 29 cite exactly one.
 
 ### The double-wrap trap
 
