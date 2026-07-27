@@ -25,7 +25,7 @@ Finish the migration from `thiserror`-based error enums to `gix-error` / `Exn`, 
 - [ ] Make `cargo nextest run --workspace` complete without `--exclude gix-error`.
   Evidence: `.github/workflows/ci.yml` still excludes `gix-error`, in three places (`ci.yml:304,364,450`). The adjacent comment claims `gix-error` "is tested individually," but no dedicated job for it was found in any `.github/workflows/*.yml` file at this commit — worth confirming with Byron whether the exclusion is a migration artifact or a deliberate, permanent split.
 - [ ] Replace `thiserror` with `gix-error` everywhere.
-  Evidence: no longer the actual target. Only `gix` still depends on `thiserror` (42 `thiserror::Error` derives across 27 files); every other crate that dropped `thiserror` moved to hand-written concrete `Display`/`Error` impls, not to `gix-error`. See "Migration Rules" for the two-tier strategy this reflects.
+  Evidence: no longer the actual target. Only `gix` still depends on `thiserror` (42 `thiserror::Error` derives across 27 files); of the other crates, 16 depend on `gix-error` (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`), while the plumbing crates covered by the maintainer's revert kept hand-written concrete `Display`/`Error` impls with no `gix-error` dependency at all. See "Migration Rules" for the three-tier strategy this reflects.
 - [x] Keep `NotARepository` distinct from generic open failures.
   Evidence: `gix::open::Error::NotARepository` exists (`gix/src/open/mod.rs`) and is constructed in `gix/src/open/repository.rs`.
 - [ ] Use `gix_error::Error` in tests when that simplifies `Exn`-heavy paths.
@@ -62,9 +62,10 @@ Result on 2026-07-27, on the `gix-error-batch1` branch:
 
 **Decision, acted on 2026-07-22:** the maintainer overruled the original "erase to `Exn` everywhere" approach, in review feedback on [GitoxideLabs/gitoxide#2716](https://github.com/GitoxideLabs/gitoxide/pull/2716) — summarized: in the plumbing crates, keep the original expanded, hand-implemented error types for now instead of bringing in `gix-error::Exn`, and focus the erasure effort on `gix` itself and its usage of `gix::Error` with direct error forwarding.
 
-Acting on that, `gix-fs`, `gix-attributes`, `gix-pathspec`, `gix-lock`, `gix-shallow`, `gix-prompt`, `gix-url` and `gix-path` had their `Exn` conversions reverted back to hand-written error types (the `revert!: keep the plumbing crates' error types concrete` commit, 2026-07-22). The migration is now two-tier:
+Acting on that, `gix-fs`, `gix-attributes`, `gix-pathspec`, `gix-lock`, `gix-shallow`, `gix-prompt`, `gix-url` and `gix-path` had their `Exn` conversions reverted back to hand-written error types (the `revert!: keep the plumbing crates' error types concrete` commit, 2026-07-22). The migration is now three-tier:
 
 - **Plumbing crates** — drop `thiserror`, keep concrete enums with hand-written `Display`/`Error` impls. No `gix-error` dependency at all.
+- **`gix-error` adopters** — take a `gix-error` dependency directly and use its types (e.g. `gix_error::ValidationError`) in their own public error surface, short of the full erasure below. 16 crates do this (`gix-date` most completely — its entire public error is `pub use gix_error::ValidationError as Error;`, `gix-date/src/lib.rs:36`); `gix` is among them too, on top of anchoring the boundary tier next.
 - **The `gix` boundary** — erase to `pub type Error = gix_error::Error;` where callers don't need to match variants. `Exn` itself is not rare in `gix` — it appears 33 times across 7 files (`lib.rs`, `repository/reference.rs`, `config/tree/keys.rs`, `revision/spec/parse/mod.rs`, and `revision/spec/parse/delegate/{mod,navigate,revision}.rs`), with the revision-spec delegate layer alone holding roughly 14 function signatures returning `Result<_, Exn>` — core parsing plumbing, not config/test downcasting.
 
 Rules:
@@ -208,4 +209,4 @@ Detection method: for each `from_error` / `or_raise` / `ok_or_raise` call site, 
 - [x] The `gix` boundary still returns `gix_error::Error` where type erasure is desired.
   101 `pub type Error = gix_error::Error;` aliases in `gix/src` at this commit.
 - [x] Validation-heavy crates still expose typed validation failures where callers need them.
-  Holds under the two-tier strategy: plumbing crates (e.g. `gix-validate`) keep their own typed concrete errors; crates that do adopt `gix-error` use `gix_error::ValidationError` for validation-only paths.
+  Holds under the three-tier strategy: plumbing crates (e.g. `gix-validate`) keep their own typed concrete errors; crates that do adopt `gix-error` use `gix_error::ValidationError` for validation-only paths.
