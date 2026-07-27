@@ -1,0 +1,123 @@
+# Cartesian tree-merge status quo
+
+Model: 14 atomic states, 105 unordered pairs, 210 directional merges.
+States: add-free-a, add-free-b, delete-occupied, delete-source, file-to-dir, keep, modify-occupied, modify-source, rename-and-file-to-dir, rename-free-a, rename-free-b, rename-modify-free-a, replace-modify-occupied, replace-occupied.
+Assumptions: one merge base; regular non-executable text files; exact renames; one operation per side;
+no attributes, copies, symlinks, submodules, recursive merge bases, or rename-similarity ambiguity.
+The clean oracle covers identical side trees and path-disjoint deltas, including file/directory prefixes.
+Payload retention checks whether unique changed content survives somewhere in conflicted or clean output.
+Git results come from `git merge-tree --write-tree`, which uses merge-ORT.
+The gix ours policy combines tree `ResolveWith::Ours` with text `ResolveWithOurs`, as the manual baseline does.
+Git's `-Xours` is not equivalent: it favors content and symlink conflicts but does not force all tree conflicts.
+The ours policy is directional, so both directions are checked independently rather than required to be identical.
+Exact-tree inverse differences include directional conflict-marker ordering; shape, conflict, and payload
+symmetry distinguish those presentation differences from structural or content loss.
+
+Git/gix exact tree agreement: 210/210
+Git/gix path-and-mode agreement: 210/210
+Git/gix unresolved-conflict agreement: 210/210
+Git/gix unique-payload agreement: 240/240
+Git unresolved directional merges: 86/210
+gix unresolved directional merges: 86/210
+Git inverse exact-tree symmetry: 89/105
+gix inverse exact-tree symmetry: 89/105
+Git inverse path-and-mode symmetry: 105/105
+gix inverse path-and-mode symmetry: 105/105
+Git inverse conflict symmetry: 105/105
+gix inverse conflict symmetry: 105/105
+Git inverse payload symmetry: 105/105
+gix inverse payload symmetry: 105/105
+Git unique-payload retention: 240/240
+gix unique-payload retention: 240/240
+Unambiguous clean-oracle pairs: 53/105
+Git clean-oracle passes: 53/53
+gix clean-oracle passes: 53/53
+gix ours unresolved directional merges: 0/210
+gix ours unchanged default-clean merges: 124/124
+gix ours current-side payload retention: 120/120
+gix ours conflict provenance retained: 86/86
+gix ours clean-oracle passes: 53/53
+
+## Git/gix differences (0)
+- none
+
+## Git inverse exact-tree differences (16)
+- modify-source + modify-source
+- modify-source + rename-modify-free-a
+- rename-free-a + add-free-a
+- rename-free-b + add-free-b
+- rename-modify-free-a + rename-modify-free-a
+- rename-modify-free-a + add-free-a
+- add-free-a + add-free-a
+- add-free-b + add-free-b
+- modify-occupied + modify-occupied
+- modify-occupied + replace-occupied
+- modify-occupied + replace-modify-occupied
+- replace-occupied + replace-modify-occupied
+- replace-modify-occupied + replace-modify-occupied
+- file-to-dir + file-to-dir
+- file-to-dir + rename-and-file-to-dir
+- rename-and-file-to-dir + rename-and-file-to-dir
+
+## gix inverse exact-tree differences (16)
+- modify-source + modify-source
+- modify-source + rename-modify-free-a
+- rename-free-a + add-free-a
+- rename-free-b + add-free-b
+- rename-modify-free-a + rename-modify-free-a
+- rename-modify-free-a + add-free-a
+- add-free-a + add-free-a
+- add-free-b + add-free-b
+- modify-occupied + modify-occupied
+- modify-occupied + replace-occupied
+- modify-occupied + replace-modify-occupied
+- replace-occupied + replace-modify-occupied
+- replace-modify-occupied + replace-modify-occupied
+- file-to-dir + file-to-dir
+- file-to-dir + rename-and-file-to-dir
+- rename-and-file-to-dir + rename-and-file-to-dir
+
+## Git inverse path-and-mode differences (0)
+- none
+
+## gix inverse path-and-mode differences (0)
+- none
+
+## Git inverse conflict differences (0)
+- none
+
+## gix inverse conflict differences (0)
+- none
+
+## Git inverse payload differences (0)
+- none
+
+## gix inverse payload differences (0)
+- none
+
+## Git clean-oracle failures (0)
+- none
+
+## gix clean-oracle failures (0)
+- none
+
+## Git payload losses (0)
+- none
+
+## gix payload losses (0)
+- none
+
+## gix ours unresolved merges (0)
+- none
+
+## gix ours changes to default-clean merges (0)
+- none
+
+## gix ours current-side payload losses (0)
+- none
+
+## gix ours forgotten conflict provenance (0)
+- none
+
+## gix ours clean-oracle failures (0)
+- none

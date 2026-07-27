@@ -36,6 +36,22 @@ use crate::tree::{
 ///
 /// The algorithm is implemented so that the result is the same no matter how the sides are ordered.
 ///
+/// ### Algorithm
+///
+/// 1. Diff the ancestor against each side, including rename detection, to obtain two flat lists of tracked changes.
+/// 2. Build a path tree for each list. Its nodes point back to list entries and make same-path, tree/non-tree,
+///    and renamed-directory interactions discoverable.
+/// 3. Start an editor at the ancestor tree and process pending changes from one list against the other list's path tree.
+///    A change can be applied directly, paired with another change and merged, consumed only as part of a conflict, or
+///    transformed into a deferred change at a rewritten or unique path.
+/// 4. Append deferred changes as pending work, then swap the two side-lists and repeat until neither side has pending
+///    changes. Swapping the roles is part of keeping the result independent of the original side ordering.
+///
+/// Each tracked change therefore records both whether it still needs processing and whether its effect is actually
+/// represented in the editor. This is why "processed without application" is distinct from "applied": a forced
+/// ancestor resolution may consume a deletion while retaining the ancestor entry, and later path conflicts must not
+/// behave as if that deletion had removed it.
+///
 /// ### Differences to Merge-ORT
 ///
 /// Merge-ORT (Git) defines the desired outcomes where are merely mimicked here. The algorithms are different, and it's
@@ -163,7 +179,7 @@ where
         EraseLeaf,
     }
 
-    'outer: while their_changes.iter().rev().any(|c| !c.was_written) {
+    'outer: while their_changes.iter().rev().any(TrackedChange::is_pending) {
         let mut segment_start = 0;
         let mut last_seen_len = their_changes.len();
 
@@ -175,11 +191,11 @@ where
                 // on *our* side so that it's clear that we passed a renamed directory (by identity).
                 let TrackedChange {
                     inner: theirs,
-                    was_written,
                     needs_tree_insertion,
                     rewritten_location,
+                    ..
                 } = &their_changes[theirs_idx];
-                if theirs.entry_mode().is_tree() || *was_written {
+                if theirs.entry_mode().is_tree() || !their_changes[theirs_idx].is_pending() {
                     continue;
                 }
 
@@ -187,18 +203,45 @@ where
                     their_tree.insert(theirs, theirs_idx);
                 }
 
-                match our_tree
+                let candidate = our_tree
                     .check_conflict(
                         rewritten_location
                             .as_ref()
                             .map_or_else(|| theirs.source_location(), |t| t.0.as_bstr()),
                     )
-                    .filter(|ours| {
-                        ours.change_idx()
-                            .zip(needs_tree_insertion.flatten())
-                            .is_none_or(|(ours_idx, ignore_idx)| ours_idx != ignore_idx)
-                            && our_tree.is_not_same_change_in_possible_conflict(theirs, ours, our_changes)
-                    }) {
+                    .or_else(|| match theirs {
+                        Change::Rewrite {
+                            source_location,
+                            location,
+                            ..
+                        } if source_location != location => {
+                            our_tree.check_conflict(location.as_bstr()).filter(|candidate| {
+                                candidate
+                                    .change_idx()
+                                    .is_some_and(|idx| matches!(our_changes[idx].inner, Change::Rewrite { .. }))
+                            })
+                        }
+                        _ => None,
+                    });
+                match candidate.filter(|ours| {
+                    ours.change_idx()
+                        .zip(needs_tree_insertion.flatten())
+                        .is_none_or(|(ours_idx, ignore_idx)| ours_idx != ignore_idx)
+                        && ours.change_idx().is_none_or(|ours_idx| {
+                            let ours = &mut our_changes[ours_idx];
+                            if ours.inner == *theirs {
+                                // Identical changes aren't a conflict. Applying `theirs` below also consumes
+                                // our source removal, which must not be applied a second time: a later deletion
+                                // or rewrite could otherwise erase descendants added in the meantime.
+                                if matches!(theirs, Change::Deletion { .. } | Change::Rewrite { .. }) {
+                                    ours.mark_applied();
+                                }
+                                false
+                            } else {
+                                !(ours.was_applied() && matches!(ours.inner, Change::Deletion { .. }))
+                            }
+                        })
+                }) {
                     None => {
                         if let Some((rewritten_location, ours_idx)) = rewritten_location {
                             // `no_entry` to the index because that's not a conflict at all,
@@ -215,7 +258,7 @@ where
                             editor.remove(to_components(theirs.location()))?;
                         }
                         apply_change(&mut editor, theirs, rewritten_location.as_ref().map(|t| &t.0))?;
-                        their_changes[theirs_idx].was_written = true;
+                        their_changes[theirs_idx].mark_applied();
                     }
                     Some(candidate) => {
                         use crate::tree::utils::to_components_bstring_ref as toc;
@@ -230,7 +273,7 @@ where
                                 let location_after_passed_rename =
                                     rewrite_location_with_renamed_directory(theirs.location(), &ours.inner);
                                 if let Some(new_location) = location_after_passed_rename {
-                                    their_tree.remove_existing_leaf(theirs.location());
+                                    their_tree.remove_existing_change(theirs.location());
                                     push_deferred_with_rewrite(
                                         (theirs.clone(), Some(change_idx)),
                                         Some((new_location, change_idx)),
@@ -238,9 +281,9 @@ where
                                     );
                                 } else {
                                     apply_change(&mut editor, theirs, None)?;
-                                    their_changes[theirs_idx].was_written = true;
+                                    their_changes[theirs_idx].mark_applied();
                                 }
-                                their_changes[theirs_idx].was_written = true;
+                                their_changes[theirs_idx].mark_processed();
                                 continue;
                             }
                             PossibleConflict::TreeToNonTree { change_idx: Some(idx) }
@@ -272,10 +315,10 @@ where
                                 let conflict = Conflict::unknown((&ours.inner, theirs, Original, outer_side));
                                 if let Some(ResolveWith::Ours) = tree_conflicts {
                                     apply_our_resolution(&ours.inner, theirs, outer_side, &mut editor)?;
-                                    *match outer_side {
-                                        Original => &mut ours.was_written,
-                                        Swapped => &mut their_changes[theirs_idx].was_written,
-                                    } = true;
+                                    match outer_side {
+                                        Original => ours.mark_applied(),
+                                        Swapped => their_changes[theirs_idx].mark_applied(),
+                                    }
                                 }
                                 if should_fail_on_conflict(conflict) {
                                     break 'outer;
@@ -318,7 +361,7 @@ where
                                         ),
                                     ],
                                 );
-                                their_changes[theirs_idx].was_written = true;
+                                their_changes[theirs_idx].mark_processed();
                                 if should_fail_on_conflict(conflict) {
                                     break 'outer;
                                 }
@@ -327,7 +370,7 @@ where
                                 let location = theirs.location();
                                 let (mode, id) = theirs.entry_mode_and_id();
                                 editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
-                                their_changes[theirs_idx].was_written = true;
+                                their_changes[theirs_idx].mark_applied();
                             } else {
                                 gix_trace::debug!(
                                     "Couldn't figure out how to handle {match_kind:?} theirs: {theirs:#?} candidate: {candidate:#?}"
@@ -336,6 +379,8 @@ where
                             continue;
                         };
 
+                        let mut ours_change_applied = false;
+                        let mut theirs_change_applied = false;
                         let ours = &our_changes[ours_idx].inner;
                         match (ours, theirs) {
                             (
@@ -429,7 +474,7 @@ where
 
                                     editor.remove(toc(our_location))?;
                                     pick_our_tree(side, our_tree, their_tree)
-                                        .remove_existing_leaf(our_location.as_bstr());
+                                        .remove_existing_change(our_location.as_bstr());
                                     let final_location = their_rewritten_location.clone();
                                     let new_change = Change::Addition {
                                         location: their_rewritten_location.unwrap_or_else(|| their_location.to_owned()),
@@ -643,7 +688,7 @@ where
                                                 relation: None,
                                             };
                                             editor.upsert(toc(location), our_mode.kind(), our_id)?;
-                                            tree_with_rename.remove_existing_leaf(location.as_bstr());
+                                            tree_with_rename.remove_existing_change(location.as_bstr());
                                             push_deferred(
                                                 (new_change, None),
                                                 pick_our_changes_mut(logical_side, their_changes, our_changes),
@@ -731,7 +776,7 @@ where
                                                 label_of_side_to_be_moved,
                                             )?;
                                             editor.remove(toc(location))?;
-                                            our_tree.remove_existing_leaf(location.as_bstr());
+                                            our_tree.remove_existing_change(location.as_bstr());
 
                                             let new_change = Change::Addition {
                                                 location: renamed_path.clone(),
@@ -813,6 +858,17 @@ where
                                         entries,
                                     ))
                                 };
+                                let deletion_was_applied = match tree_conflicts {
+                                    None => deletion_replaced_by_directory,
+                                    Some(ResolveWith::Ours) => side.to_global(outer_side).is_swapped(),
+                                    Some(ResolveWith::Ancestor) => false,
+                                };
+                                if deletion_was_applied {
+                                    match side {
+                                        Original => theirs_change_applied = true,
+                                        Swapped => ours_change_applied = true,
+                                    }
+                                }
                                 if should_break {
                                     break 'outer;
                                 }
@@ -840,6 +896,153 @@ where
                                         // we have already taken care of the 'root' of this -
                                         // everything that follows can safely be ignored
                                     }
+                                }
+                            }
+                            (
+                                Change::Rewrite {
+                                    source_location: our_source_location,
+                                    entry_mode: our_mode,
+                                    id: our_id,
+                                    location,
+                                    ..
+                                },
+                                Change::Rewrite {
+                                    source_location: their_source_location,
+                                    entry_mode: their_mode,
+                                    id: their_id,
+                                    location: their_location,
+                                    ..
+                                },
+                            ) if our_source_location != their_source_location
+                                && location == their_location
+                                && !involves_submodule(our_mode, their_mode)
+                                && merge_modes(*our_mode, *their_mode).is_some() =>
+                            {
+                                match tree_conflicts {
+                                    None => {
+                                        let merged_mode = merge_modes(*our_mode, *their_mode)
+                                            .expect("the match guard assures compatible modes");
+                                        let (merged_blob_id, resolution) = perform_blob_merge(
+                                            labels,
+                                            objects,
+                                            blob_merge,
+                                            &mut diff_state.buf1,
+                                            &mut write_blob_to_odb,
+                                            (location, *our_id, merged_mode),
+                                            (location, *their_id, merged_mode),
+                                            (location, our_id.kind().null(), merged_mode),
+                                            (0, outer_side),
+                                            &options,
+                                        )?;
+                                        editor.remove(toc(our_source_location))?;
+                                        editor.remove(toc(their_source_location))?;
+                                        our_tree.remove_change(our_source_location.as_bstr());
+                                        their_tree.remove_change(their_source_location.as_bstr());
+                                        editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                        if should_fail_on_conflict(Conflict::with_resolution(
+                                            Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
+                                                merged_blob: ContentMerge {
+                                                    resolution,
+                                                    merged_blob_id,
+                                                },
+                                            },
+                                            (ours, theirs, Original, outer_side),
+                                            [None, index_entry(our_mode, our_id), index_entry(their_mode, their_id)],
+                                        )) {
+                                            break 'outer;
+                                        }
+                                    }
+                                    Some(resolve) => {
+                                        if matches!(resolve, ResolveWith::Ours) {
+                                            let (source, mode, id, tree) = match outer_side {
+                                                Original => (our_source_location, our_mode, our_id, &mut *our_tree),
+                                                Swapped => {
+                                                    (their_source_location, their_mode, their_id, &mut *their_tree)
+                                                }
+                                            };
+                                            editor.remove(toc(source))?;
+                                            tree.remove_change(source.as_bstr());
+                                            editor.upsert(toc(location), mode.kind(), *id)?;
+                                        }
+                                        if should_fail_on_conflict(Conflict::unknown((
+                                            ours, theirs, Original, outer_side,
+                                        ))) {
+                                            break 'outer;
+                                        }
+                                    }
+                                }
+                            }
+                            (
+                                Change::Rewrite {
+                                    source_location,
+                                    entry_mode: our_mode,
+                                    id: our_id,
+                                    location,
+                                    ..
+                                },
+                                Change::Addition {
+                                    id: their_id,
+                                    entry_mode: their_mode,
+                                    location: add_location,
+                                    ..
+                                },
+                            )
+                            | (
+                                Change::Addition {
+                                    id: their_id,
+                                    entry_mode: their_mode,
+                                    location: add_location,
+                                    ..
+                                },
+                                Change::Rewrite {
+                                    source_location,
+                                    entry_mode: our_mode,
+                                    id: our_id,
+                                    location,
+                                    ..
+                                },
+                            ) if add_location
+                                .strip_prefix(source_location.as_bytes())
+                                .is_some_and(|suffix| suffix.starts_with(b"/")) =>
+                            {
+                                // The rewrite moves the file out of the way while the other side replaces it
+                                // with a directory. The child is unrelated to the rewritten blob, so keep both
+                                // instead of merging their contents at the rewrite destination. The preceding
+                                // deletion/rewrite pairing already recorded the rename/delete conflict.
+                                let side = if matches!(ours, Change::Rewrite { .. }) {
+                                    Original
+                                } else {
+                                    Swapped
+                                };
+                                match tree_conflicts {
+                                    None => {
+                                        editor.remove(toc(source_location))?;
+                                        pick_our_tree(side, our_tree, their_tree)
+                                            .remove_change(source_location.as_bstr());
+                                        editor.upsert(toc(location), our_mode.kind(), *our_id)?;
+                                        editor.upsert(toc(add_location), their_mode.kind(), *their_id)?;
+                                        ours_change_applied = true;
+                                        theirs_change_applied = true;
+                                    }
+                                    Some(ResolveWith::Ours) => match side.to_global(outer_side) {
+                                        Original => {
+                                            editor.remove(toc(source_location))?;
+                                            editor.upsert(toc(location), our_mode.kind(), *our_id)?;
+                                            match side {
+                                                Original => ours_change_applied = true,
+                                                Swapped => theirs_change_applied = true,
+                                            }
+                                        }
+                                        Swapped => {
+                                            editor.remove(toc(source_location))?;
+                                            editor.upsert(toc(add_location), their_mode.kind(), *their_id)?;
+                                            match side {
+                                                Original => theirs_change_applied = true,
+                                                Swapped => ours_change_applied = true,
+                                            }
+                                        }
+                                    },
+                                    Some(ResolveWith::Ancestor) => {}
                                 }
                             }
                             (
@@ -872,7 +1075,7 @@ where
                                         (our_location, *our_id, *our_mode),
                                         (their_location, *their_id, *their_mode),
                                         (source_location, *source_id, *source_entry_mode),
-                                        (1, outer_side),
+                                        (u8::from(our_location != their_location), outer_side),
                                         &options,
                                     )?;
                                     (id, Some(resolution))
@@ -883,8 +1086,8 @@ where
 
                                 if matches!(tree_conflicts, None | Some(ResolveWith::Ours)) {
                                     editor.remove(toc(source_location))?;
-                                    our_tree.remove_existing_leaf(source_location.as_bstr());
-                                    their_tree.remove_existing_leaf(source_location.as_bstr());
+                                    our_tree.remove_existing_change(source_location.as_bstr());
+                                    their_tree.remove_existing_change(source_location.as_bstr());
                                 }
 
                                 let their_location =
@@ -996,10 +1199,10 @@ where
                                     }
                                 }
                                 if let Some(addition) = our_addition {
-                                    push_deferred((addition, Some(ours_idx)), our_changes);
+                                    push_deferred((addition, Some(theirs_idx)), our_changes);
                                 }
                                 if let Some(addition) = their_addition {
-                                    push_deferred((addition, Some(theirs_idx)), their_changes);
+                                    push_deferred((addition, Some(ours_idx)), their_changes);
                                 }
                             }
                             (
@@ -1032,7 +1235,11 @@ where
                                     None | Some(ResolveWith::Ours) => {
                                         editor.remove(toc(source_location))?;
                                         pick_our_tree(side, our_tree, their_tree)
-                                            .remove_existing_leaf(source_location.as_bstr());
+                                            .remove_existing_change(source_location.as_bstr());
+                                        match side {
+                                            Original => ours_change_applied = true,
+                                            Swapped => theirs_change_applied = true,
+                                        }
                                     }
                                     Some(ResolveWith::Ancestor) => {}
                                 }
@@ -1135,7 +1342,7 @@ where
                                     };
 
                                     editor.remove(toc(source_location))?;
-                                    pick_our_tree(side, our_tree, their_tree).remove_leaf(source_location.as_bstr());
+                                    pick_our_tree(side, our_tree, their_tree).remove_change(source_location.as_bstr());
 
                                     if let Some(resolution) = resolution {
                                         if should_fail_on_conflict(Conflict::with_resolution(
@@ -1164,7 +1371,7 @@ where
                                     if remove_rename_source {
                                         editor.remove(toc(source_location))?;
                                         pick_our_tree(side, our_tree, their_tree)
-                                            .remove_leaf(source_location.as_bstr());
+                                            .remove_change(source_location.as_bstr());
                                     }
 
                                     let (
@@ -1198,7 +1405,7 @@ where
                                     let upsert_rename_destination = tree_conflicts.is_none() || ours_is_rename;
                                     if upsert_rename_destination {
                                         editor.upsert(toc(location), our_mode.kind(), our_id)?;
-                                        tree_with_rename.remove_existing_leaf(location.as_bstr());
+                                        tree_with_rename.remove_existing_change(location.as_bstr());
                                     }
 
                                     let conflict = Conflict::without_resolution(
@@ -1235,8 +1442,12 @@ where
                                 }
                             }
                             _unknown => {
+                                // Ancestor resolution may retain the entry represented by a written deletion,
+                                // so an addition below it can legitimately match from a different path.
                                 debug_assert!(
                                     match_kind.is_none()
+                                        || (our_changes[ours_idx].was_processed_without_application()
+                                            && matches!(ours, Change::Deletion { .. }))
                                         || (ours.location() == theirs.location()
                                             || ours.source_location() == theirs.source_location()),
                                     "BUG: right now it's not known to be possible to match changes from different paths: {match_kind:?} {candidate:?}"
@@ -1249,8 +1460,16 @@ where
                                 }
                             }
                         }
-                        their_changes[theirs_idx].was_written = true;
-                        our_changes[ours_idx].was_written = true;
+                        if theirs_change_applied {
+                            their_changes[theirs_idx].mark_applied();
+                        } else {
+                            their_changes[theirs_idx].mark_processed();
+                        }
+                        if ours_change_applied {
+                            our_changes[ours_idx].mark_applied();
+                        } else {
+                            our_changes[ours_idx].mark_processed();
+                        }
                     }
                 }
             }
@@ -1334,12 +1553,7 @@ fn push_deferred_with_rewrite(
     new_location: Option<(BString, usize)>,
     changes: &mut ChangeList,
 ) {
-    changes.push(TrackedChange {
-        inner: change,
-        was_written: false,
-        needs_tree_insertion: Some(ours_idx),
-        rewritten_location: new_location,
-    });
+    changes.push(TrackedChange::new(change, Some(ours_idx), new_location));
 }
 
 fn pick_our_tree<'a>(side: ConflictMapping, ours: &'a mut TreeNodes, theirs: &'a mut TreeNodes) -> &'a mut TreeNodes {

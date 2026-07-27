@@ -52,6 +52,8 @@ function oid () {
     a4ae6e4709228b5da6001cb9d1cfa7736851e2a6) echo c3ae6188533b9bea9ad1049892c6b5488fffe5cfc518b30ba21b64a124bc7afe ;;
     b414108e81e5091fe0974a1858b4d0d22b107f70) echo f5f52958fe19d6073227d52208826e0d189bfdb9d0c428984244075155e57c71 ;;
     d0549c3d3c96a464289f3b820b7d96aedc58924b) echo 7960eaf2c5f3ac192aa208323a78bf4b0f2fb21d79813af79a78674698689442 ;;
+    d5f7fc3f74f7dec08280f370a975b112e8f60818) echo ffc23e0956239fed93c95c4cf3d3152a887825f756309251d71bb16f261afabd ;;
+    df967b96a579e45a18b8251732d16804b2e56a55) echo abed979e3cd3667c5a295c2641f8319f950860c65cc168eebd1571c51bb4f6fc ;;
     e29fa63dae4ccf0788897a7025da868083178fdf) echo 577603f537e595c5324b5987646cb9073d159a4f0c9e73f820d2ee83c8926acf ;;
     e33f5e94470d3b5fa0220ff6a9cabb78a3f72fa3) echo 72a7259eef0664ef8dae2039c11c61ec4dd039f94eee87a21c6ee1c637b7cca0 ;;
     e69de29bb2d1d6434b8b29ae775ad8c2e48c5391) echo 473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813 ;;
@@ -161,6 +163,25 @@ git init non-tree-to-tree
   mkdir -p a/sub
   touch a/sub/b a/sub/c a/d a/e
   git add a && git commit -m "mv 'a' to 'a/sub/b', populate 'a/' with empty files"
+)
+
+git init deleted-file-added-dir
+(cd deleted-file-added-dir
+  echo original >to-be-deleted
+  git add to-be-deleted && git commit -m "init"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm to-be-deleted
+  git commit -m "delete file"
+
+  git checkout B
+  git rm to-be-deleted
+  mkdir to-be-deleted
+  touch to-be-deleted/a
+  git add to-be-deleted/a && git commit -m "replace file with directory"
 )
 
 git init tree-to-non-tree
@@ -321,6 +342,209 @@ git init rename-delete
   git add foo
   git mv foo olddir/bar
   git commit -m "Modify foo & rename foo -> olddir/bar"
+)
+
+git init rename-change-matrix
+(cd rename-change-matrix
+  # Each top-level directory is one independent rename interaction:
+  #
+  # * modify-source:
+  #   A renames `file` to `renamed`; B modifies `file`.
+  #   The modification follows the rename and the result is clean at `renamed`.
+  # * delete-source:
+  #   A renames `file` to `renamed`; B deletes `file`.
+  #   This is a rename/delete conflict, with A's renamed file retained.
+  # * add-destination:
+  #   A renames `file` to `target`; B adds an unrelated `target`.
+  #   Both additions occupy the rename destination, producing an add/add conflict.
+  # * modify-destination:
+  #   A replaces the existing `target` by renaming `source` onto it; B modifies the old `target`.
+  #   The merge remains tied to the destination path: the base is the old `target`, A replaces all
+  #   of it with `source`, and B appends to the old `target`. Those edits conflict, preserving the
+  #   complete A and B versions inside conflict markers.
+  # * delete-destination:
+  #   A replaces the existing `target` by renaming `source` onto it; B deletes the old `target`.
+  #   The deletion conflicts with A's replacement, which remains at `target`.
+  # * different-renames:
+  #   A and B both modify `file`, then rename it to different destinations.
+  #   Both destinations contain the one merged result, with a content conflict for the two appends.
+  #   Its configured marker size is 10; the rename/rename conflict adds one, yielding 11.
+  # * directory-old:
+  #   A renames the directory; B adds a child below its old name.
+  #   The child follows the directory rename and the result is clean below `directory-renamed`.
+  #
+  # Distinct repeated words keep rename similarity pairing local to each case.
+  mkdir -p modify-source delete-source add-destination modify-destination delete-destination \
+    different-renames directory-old
+  write_lines alpha alpha alpha alpha alpha >modify-source/file
+  write_lines bravo bravo bravo bravo bravo >delete-source/file
+  write_lines charlie charlie charlie charlie charlie >add-destination/file
+  write_lines delta-source delta-source delta-source delta-source delta-source >modify-destination/source
+  write_lines delta-target delta-target delta-target delta-target delta-target >modify-destination/target
+  write_lines echo-source echo-source echo-source echo-source echo-source >delete-destination/source
+  write_lines echo-target echo-target echo-target echo-target echo-target >delete-destination/target
+  write_lines golf golf golf golf golf >different-renames/file
+  write_lines juliet juliet juliet juliet juliet >directory-old/file
+  echo 'different-renames/* conflict-marker-size=10' >.gitattributes
+  git add . && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv modify-source/file modify-source/renamed
+  git mv delete-source/file delete-source/renamed
+  git mv add-destination/file add-destination/target
+  git rm modify-destination/target
+  git mv modify-destination/source modify-destination/target
+  git rm delete-destination/target
+  git mv delete-destination/source delete-destination/target
+  echo changed-by-A >>different-renames/file
+  git mv different-renames/file different-renames/ours
+  git mv directory-old directory-renamed
+  git commit -am "rename one side of each matrix entry"
+
+  git checkout B
+  echo changed-by-B >>modify-source/file
+  git rm delete-source/file
+  echo added-by-B >add-destination/target
+  echo changed-by-B >>modify-destination/target
+  git rm delete-destination/target
+  echo changed-by-B >>different-renames/file
+  git mv different-renames/file different-renames/theirs
+  echo added-by-B >directory-old/added
+  git add . && git commit -m "apply the other change in each matrix entry"
+
+)
+
+git init same-rename-with-content
+(cd same-rename-with-content
+  # Both sides modify the same source and rename it to the same destination.
+  # The two appends conflict, but the rename itself agrees. The result should therefore be
+  # exactly one content merge at `target`, never a second merge of an already-merged blob.
+  write_lines foxtrot foxtrot foxtrot foxtrot foxtrot >file
+  git add file && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  echo changed-by-A >>file
+  git mv file target
+  git commit -am "A renames and changes file"
+
+  git checkout B
+  echo changed-by-B >>file
+  git mv file target
+  git commit -am "B renames and changes file"
+
+  # Both sides agree on the rename, so this is an ordinary content conflict using the
+  # configured marker size. These branches provide the merged blob for gix's index shape.
+  git checkout -b expected main
+  git rm file
+  write_lines \
+    foxtrot foxtrot foxtrot foxtrot foxtrot \
+    '<<<<<<< A' \
+    changed-by-A \
+    ======= \
+    changed-by-B \
+    '>>>>>>> B' >target
+  git add target && git commit -m "single content merge at shared rename destination"
+
+  git checkout -b expected-reversed main
+  git rm file
+  write_lines \
+    foxtrot foxtrot foxtrot foxtrot foxtrot \
+    '<<<<<<< B' \
+    changed-by-B \
+    ======= \
+    changed-by-A \
+    '>>>>>>> A' >target
+  git add target && git commit -m "single reversed content merge at shared rename destination"
+)
+
+git init same-rename-and-file-to-directory
+(cd same-rename-and-file-to-directory
+  # Both sides perform the same compound operation:
+  #
+  # * rename `source` to `moved`;
+  # * replace the old `source` path with a directory;
+  # * add different content at `source/child`.
+  #
+  # The identical rewrite must be applied only once. Applying it again after merging the
+  # children would recursively remove `source` and silently discard both payloads.
+  write_lines source source source source source >source
+  git add source && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv source moved
+  mkdir source
+  echo changed-by-A >source/child
+  git add . && git commit -m "A renames source and adds a child at its old path"
+
+  git checkout B
+  git mv source moved
+  mkdir source
+  echo changed-by-B >source/child
+  git add . && git commit -m "B renames source and adds a child at its old path"
+)
+
+git init renames-to-same-destination
+(cd renames-to-same-destination
+  # The sides rename different source files onto the same destination:
+  #
+  # * A: `one` -> `target`
+  # * B: `two` -> `target`
+  #
+  # Neither rename should silently win. A normal merge removes both sources and records the
+  # two destination contents as an add/add conflict. Forced ancestor resolution keeps `one`
+  # and `two`; forced ours applies only the rename belonging to the selected first side.
+  write_lines one one one one one >one
+  write_lines two two two two two >two
+  git add . && git commit -m "base"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git mv one target
+  git commit -m "rename one to target"
+
+  git checkout B
+  git mv two target
+  git commit -m "rename two to target"
+)
+
+git init deleted-file-added-dir-with-rename
+(cd deleted-file-added-dir-with-rename
+  # Regression for a deletion that is processed but not applied:
+  #
+  # * A deletes the file `x`.
+  # * B renames that file to `renamed`, then creates the directory entry `x/a`.
+  #
+  # With ancestor conflict resolution, A's deletion must not count as applied merely because
+  # the rename/delete conflict was handled. The ancestor file `x` remains, so `x/a` cannot
+  # turn it into a directory.
+  echo base >x
+  git add x
+  git commit -m "add x"
+
+  git branch A
+  git branch B
+
+  git checkout A
+  git rm x
+  git commit -m "delete x"
+
+  git checkout B
+  git mv x renamed
+  mkdir x
+  echo added >x/a
+  git add x/a
+  git commit -m "rename x and add x/a"
 )
 
 git init rename-add
@@ -1229,6 +1453,7 @@ git init type-change-to-symlink
 
 
 baseline non-tree-to-tree A-B A B
+baseline deleted-file-added-dir A-B A B
 baseline tree-to-non-tree A-B A B
 baseline tree-to-non-tree-with-rename A-B A B
 baseline non-tree-to-tree-with-rename A-B A B
@@ -1250,6 +1475,11 @@ baseline simple side-1-unrelated-diff3 side1 unrelated
 baseline rename-delete A-B A B
 baseline rename-delete A-similar A A
 baseline rename-delete B-similar B B
+baseline rename-change-matrix A-B A B
+baseline same-rename-with-content A-B A B
+baseline same-rename-and-file-to-directory A-B A B
+baseline renames-to-same-destination A-B A B
+baseline deleted-file-added-dir-with-rename A-B A B
 baseline rename-add A-B A B
 baseline rename-add A-B-diff3 A B
 baseline rename-add-symlink A-B A B
@@ -1386,6 +1616,161 @@ EOF
   # It is not able to 'get foo back', it can't track that currently.
   make_resolve_tree ancestor A B
   make_resolve_tree ancestor B A
+)
+
+(cd deleted-file-added-dir-with-rename
+  rm .git/index
+  # Unlike Git, we don't retain the base stage at the rename destination.
+  git update-index --index-info <<EOF
+100644 blob $(oid df967b96a579e45a18b8251732d16804b2e56a55) 3	renamed
+100644 blob $(oid d5f7fc3f74f7dec08280f370a975b112e8f60818)	x/a
+EOF
+  make_conflict_index deleted-file-added-dir-with-rename-A-B
+
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(oid df967b96a579e45a18b8251732d16804b2e56a55) 2	renamed
+100644 blob $(oid d5f7fc3f74f7dec08280f370a975b112e8f60818)	x/a
+EOF
+  make_conflict_index deleted-file-added-dir-with-rename-A-B-reversed
+
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(oid df967b96a579e45a18b8251732d16804b2e56a55)	x
+EOF
+  make_resolve_tree ancestor A B
+  make_resolve_tree ancestor B A
+)
+
+(cd same-rename-and-file-to-directory
+  # Forced ours keeps the agreed rename and resolves the added child's content in favor
+  # of the current side. Use each complete side tree as the directional expectation.
+  git read-tree A
+  make_resolve_tree ours A B
+
+  git read-tree B
+  make_resolve_tree ours B A
+)
+
+(cd rename-change-matrix
+  # `different-renames` needs Git's content-conflicted blob at both rename destinations.
+  # The first NUL-delimited field is the merged tree written by `git merge-tree`.
+  IFS= read -r -d '' merged_tree_id <A-B.merge-info
+  different_merged_id=$(git rev-parse "$merged_tree_id:different-renames/ours")
+  IFS= read -r -d '' merged_reversed_tree_id <A-B-reversed.merge-info
+  different_merged_reversed_id=$(git rev-parse "$merged_reversed_tree_id:different-renames/theirs")
+
+  # Expected A/B index, grouped by the matrix above. It differs from Git only in two places,
+  # neither of which alters the merged tree:
+  #
+  # * delete-source: only A's renamed side remains. Git also places the source's base blob at
+  #   stage 1 of the renamed path; gix doesn't invent that path for the base entry.
+  # * directory-old: gix considers the added child relocated by the directory rename and records
+  #   it at stage 0. Git reports a "file location" conflict and records the relocated child at
+  #   stage 3, even though its diagnostic also suggests the same destination.
+  #
+  # The other matrix entries match Git's index:
+  # * add-destination: A's rename and B's addition occupy stages 2 and 3 at `target`.
+  # * delete-destination: the old target is stage 1 and A's replacement is stage 2.
+  # * different-renames: retain the base source and put the merged conflict blob at both destinations.
+  # * modify-destination: the old destination and both replacements occupy stages 1, 2, and 3.
+  # * modify-source: the edit follows the rename and resolves cleanly at stage 0.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:.gitattributes)	.gitattributes
+100644 blob $(git rev-parse A:add-destination/target) 2	add-destination/target
+100644 blob $(git rev-parse B:add-destination/target) 3	add-destination/target
+100644 blob $(git rev-parse main:delete-destination/target) 1	delete-destination/target
+100644 blob $(git rev-parse A:delete-destination/target) 2	delete-destination/target
+100644 blob $(git rev-parse A:delete-source/renamed) 2	delete-source/renamed
+100644 blob $(git rev-parse main:different-renames/file) 1	different-renames/file
+100644 blob $different_merged_id 2	different-renames/ours
+100644 blob $different_merged_id 3	different-renames/theirs
+100644 blob $(git rev-parse B:directory-old/added)	directory-renamed/added
+100644 blob $(git rev-parse A:directory-renamed/file)	directory-renamed/file
+100644 blob $(git rev-parse main:modify-destination/target) 1	modify-destination/target
+100644 blob $(git rev-parse A:modify-destination/target) 2	modify-destination/target
+100644 blob $(git rev-parse B:modify-destination/target) 3	modify-destination/target
+100644 blob $(git rev-parse B:modify-source/file)	modify-source/renamed
+EOF
+  make_conflict_index rename-change-matrix-A-B
+
+  # The reversed index has the same shape, with stages 2 and 3 exchanged and directional
+  # content-conflict labels reversed.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:.gitattributes)	.gitattributes
+100644 blob $(git rev-parse B:add-destination/target) 2	add-destination/target
+100644 blob $(git rev-parse A:add-destination/target) 3	add-destination/target
+100644 blob $(git rev-parse main:delete-destination/target) 1	delete-destination/target
+100644 blob $(git rev-parse A:delete-destination/target) 3	delete-destination/target
+100644 blob $(git rev-parse A:delete-source/renamed) 3	delete-source/renamed
+100644 blob $(git rev-parse main:different-renames/file) 1	different-renames/file
+100644 blob $different_merged_reversed_id 3	different-renames/ours
+100644 blob $different_merged_reversed_id 2	different-renames/theirs
+100644 blob $(git rev-parse B:directory-old/added)	directory-renamed/added
+100644 blob $(git rev-parse A:directory-renamed/file)	directory-renamed/file
+100644 blob $(git rev-parse main:modify-destination/target) 1	modify-destination/target
+100644 blob $(git rev-parse B:modify-destination/target) 2	modify-destination/target
+100644 blob $(git rev-parse A:modify-destination/target) 3	modify-destination/target
+100644 blob $(git rev-parse B:modify-source/file)	modify-source/renamed
+EOF
+  make_conflict_index rename-change-matrix-A-B-reversed
+)
+
+(cd same-rename-with-content
+  # The merged tree matches Git, but the conflict index differs. Git puts the base and the
+  # original A and B blobs at stages 1, 2, and 3 of `target`. gix instead keeps the base at
+  # its original path `file` and puts the already-merged conflict blob into both destination
+  # stages. The structured conflict still retains the original side entries.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:file) 1	file
+100644 blob $(git rev-parse expected:target) 2	target
+100644 blob $(git rev-parse expected:target) 3	target
+EOF
+  make_conflict_index same-rename-with-content-A-B
+
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:file) 1	file
+100644 blob $(git rev-parse expected-reversed:target) 2	target
+100644 blob $(git rev-parse expected-reversed:target) 3	target
+EOF
+  make_conflict_index same-rename-with-content-A-B-reversed
+)
+
+(cd renames-to-same-destination
+  # Git leaves this unresolved as an add/add at `target`, with A at stage 2 and B at stage 3
+  # and neither original path in the index. The following trees instead record gix's explicit
+  # conflict-resolution modes.
+  #
+  # Ancestor resolution applies neither rename, so both original files remain in both directions.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:one)	one
+100644 blob $(git rev-parse main:two)	two
+EOF
+  make_resolve_tree ancestor A B
+  make_resolve_tree ancestor B A
+
+  # "Ours" for A/B applies A's `one` -> `target` and leaves B's source `two` untouched,
+  # unlike Git's unresolved index described above.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse A:target)	target
+100644 blob $(git rev-parse main:two)	two
+EOF
+  make_resolve_tree ours A B
+
+  # Reversing the merge makes B ours: apply `two` -> `target` and leave `one` untouched,
+  # again replacing Git's unresolved add/add with a resolved tree.
+  rm .git/index
+  git update-index --index-info <<EOF
+100644 blob $(git rev-parse main:one)	one
+100644 blob $(git rev-parse B:target)	target
+EOF
+  make_resolve_tree ours B A
 )
 
 (cd rename-rename-plus-content

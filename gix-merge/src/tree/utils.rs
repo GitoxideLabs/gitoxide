@@ -170,7 +170,11 @@ where
             other: other.as_ref().map(|n| n.as_bstr()),
         }
     };
-    let prep = blob_merge.prepare_merge(objects, with_extra_markers(options, extra_markers))?;
+    let mut prep = blob_merge.prepare_merge(objects, options.blob_merge)?;
+    if let crate::blob::builtin_driver::text::Conflict::Keep { marker_size, .. } = &mut prep.options.text.conflict {
+        *marker_size =
+            marker_size.saturating_add(extra_markers.saturating_add(options.marker_size_multiplier.saturating_mul(2)));
+    }
     let (pick, resolution) = prep.merge(buf, labels, &options.blob_merge_command_ctx)?;
 
     let merged_blob_id = prep
@@ -180,22 +184,17 @@ where
     Ok((merged_blob_id, resolution))
 }
 
-fn with_extra_markers(opts: &Options, extra_makers: u8) -> crate::blob::platform::merge::Options {
-    let mut out = opts.blob_merge;
-    if let crate::blob::builtin_driver::text::Conflict::Keep { marker_size, .. } = &mut out.text.conflict {
-        *marker_size =
-            marker_size.saturating_add(extra_makers.saturating_add(opts.marker_size_multiplier.saturating_mul(2)));
-    }
-    out
-}
-
-/// A way to attach metadata to each change.
+/// A change from one side's base-to-side diff, together with its merge scheduling metadata.
+///
+/// Tree merge keeps each side's changes in a flat [`ChangeList`] and builds a path-based
+/// [`TreeNodes`] index whose entries point back into that list. The [`ChangeState`] remains
+/// on the list entry so a change can be found structurally even after it no longer needs to
+/// be scheduled.
 #[derive(Debug)]
 pub struct TrackedChange {
     /// The actual change
     pub inner: Change,
-    /// If `true`, this change counts as written to the tree using a [`tree::Editor`].
-    pub was_written: bool,
+    state: ChangeState,
     /// If `Some(ours_idx_to_ignore)`, this change must be placed into the tree before handling it.
     /// This makes sure that new changes aren't visible too early, which would mean the algorithm
     /// knows things too early which can be misleading.
@@ -207,6 +206,83 @@ pub struct TrackedChange {
     /// the changed path.
     /// The second tuple entry `change_idx` is the change-idx we passed over, which refers to the other side that interfered.
     pub rewritten_location: Option<(BString, usize)>,
+}
+
+/// The lifecycle of a [`TrackedChange`] while reconciling the two side-diffs.
+///
+/// The merge starts with an editor for the ancestor tree. It repeatedly takes a pending
+/// change from one side, looks for a path or rename interaction in the other side's
+/// [`TreeNodes`], and either applies the result to the editor or only records/resolves a
+/// conflict. These outcomes must remain distinguishable:
+///
+/// | State | Process again? | Change effect represented in the editor? |
+/// |-------|----------------|------------------------------------------|
+/// | [`Pending`](ChangeState::Pending) | yes | no |
+/// | [`Processed`](ChangeState::Processed) | no | no |
+/// | [`Applied`](ChangeState::Applied) | no | yes |
+///
+/// Valid transitions are `Pending -> Processed`, `Pending -> Applied`, and
+/// `Processed -> Applied`. In particular, [`TrackedChange::mark_processed()`] never
+/// downgrades an already-applied change, while [`TrackedChange::mark_applied()`] may
+/// upgrade a processed one.
+///
+/// This distinction matters for forced tree-conflict resolution. For example, resolving
+/// with the ancestor can process a deletion without removing the ancestor entry. A later
+/// addition below that path must still see the retained entry; treating "processed" as
+/// "applied" would incorrectly suppress that tree/non-tree conflict.
+#[derive(Debug, Clone, Copy)]
+enum ChangeState {
+    /// The change still has to be compared with the other side and handled.
+    Pending,
+    /// The change was handled, but its side-effect was not applied to the editor.
+    Processed,
+    /// The change was handled and its effect is represented in the editor.
+    ///
+    /// Tree changes begin in this state: they are structural matching nodes, while their
+    /// effective contents are represented by the leaf changes that the algorithm schedules.
+    Applied,
+}
+
+impl TrackedChange {
+    pub(super) fn new(
+        inner: Change,
+        needs_tree_insertion: Option<Option<usize>>,
+        rewritten_location: Option<(BString, usize)>,
+    ) -> Self {
+        TrackedChange {
+            inner,
+            state: ChangeState::Pending,
+            needs_tree_insertion,
+            rewritten_location,
+        }
+    }
+
+    /// Return whether this change still needs to be scheduled by the merge loop.
+    pub(super) fn is_pending(&self) -> bool {
+        matches!(self.state, ChangeState::Pending)
+    }
+
+    /// Return whether this change's effect is represented in the output editor.
+    pub(super) fn was_applied(&self) -> bool {
+        matches!(self.state, ChangeState::Applied)
+    }
+
+    /// Return whether this change was consumed without affecting the output editor.
+    pub(super) fn was_processed_without_application(&self) -> bool {
+        matches!(self.state, ChangeState::Processed)
+    }
+
+    /// Stop scheduling this change without downgrading it if it was already applied.
+    pub(super) fn mark_processed(&mut self) {
+        if matches!(self.state, ChangeState::Pending) {
+            self.state = ChangeState::Processed;
+        }
+    }
+
+    /// Record that this change's effect is represented in the output editor.
+    pub(super) fn mark_applied(&mut self) {
+        self.state = ChangeState::Applied;
+    }
 }
 
 pub type ChangeList = Vec<TrackedChange>;
@@ -222,27 +298,31 @@ pub fn track(change: ChangeRef<'_>, changes: &mut ChangeList) {
         return;
     }
     let is_tree = change.entry_mode().is_tree();
-    changes.push(TrackedChange {
-        inner: match change.into_owned() {
-            Change::Rewrite {
-                id,
-                entry_mode,
-                location,
-                relation,
-                copy,
-                ..
-            } if copy => Change::Addition {
-                location,
-                relation,
-                entry_mode,
-                id,
-            },
-            other => other,
+    let inner = match change.into_owned() {
+        Change::Rewrite {
+            id,
+            entry_mode,
+            location,
+            relation,
+            copy,
+            ..
+        } if copy => Change::Addition {
+            location,
+            relation,
+            entry_mode,
+            id,
         },
-        was_written: is_tree,
-        needs_tree_insertion: None,
-        rewritten_location: None,
-    });
+        other => other,
+    };
+    let mut tracked = TrackedChange::new(inner, None, None);
+    if is_tree {
+        // Tree changes are structural nodes used to detect directory renames and tree/non-tree
+        // conflicts, not work items of their own. Git has no empty directories, so descendant
+        // leaf changes carry every observable editor update (`apply_change()` is a no-op for
+        // trees). Mark the tree applied to keep it available for matching without scheduling it.
+        tracked.mark_applied();
+    }
+    changes.push(tracked);
 }
 
 /// Unconditionally apply `change` to `editor`.
@@ -322,6 +402,10 @@ pub enum PossibleConflict {
 }
 
 impl PossibleConflict {
+    /// Return the index into the [`ChangeList`] from which this conflict tree was built.
+    ///
+    /// This is `None` for structural tree/non-tree conflicts if there is no change at the
+    /// conflicting path itself, only one or more changes below it.
     pub(super) fn change_idx(&self) -> Option<usize> {
         match self {
             PossibleConflict::TreeToNonTree { change_idx, .. } | PossibleConflict::NonTreeToTree { change_idx, .. } => {
@@ -346,6 +430,8 @@ struct TreeNode {
     /// The index to a change, which is always set if this is a leaf node (with no children), and if there are children and this
     /// is a rewritten tree.
     change_idx: Option<usize>,
+    /// Prefer non-tree changes if multiple changes occupy the same path.
+    change_is_tree: bool,
     /// Keep track of where the location of this node is derived from.
     location: ChangeLocation,
 }
@@ -394,6 +480,7 @@ impl TreeNodes {
                         let new_node = TreeNode {
                             children: Default::default(),
                             change_idx: is_last.then_some(change_idx),
+                            change_is_tree: is_last && change.entry_mode().is_tree(),
                             location: location_hint,
                         };
                         cursor.children.insert(component.to_owned(), next_index);
@@ -403,11 +490,15 @@ impl TreeNodes {
                     }
                     Some(index) => {
                         cursor = &mut self.0[index];
-                        if is_last && !cursor.is_leaf_node() {
+                        if is_last {
                             // NOTE: we might encounter the same path multiple times in rare conditions.
-                            //       At least we avoid overwriting existing intermediate changes, for good measure.
-                            if cursor.change_idx.is_none() {
+                            //       Prefer a non-tree change as it describes the actual leaf collision.
+                            if (cursor.change_idx.is_none() && !cursor.is_leaf_node())
+                                || (cursor.change_is_tree && !change.entry_mode().is_tree())
+                            {
                                 cursor.change_idx = Some(change_idx);
+                                cursor.change_is_tree = change.entry_mode().is_tree();
+                                cursor.location = location_hint;
                             }
                         }
                     }
@@ -471,48 +562,36 @@ impl TreeNodes {
         .into()
     }
 
-    /// Compare both changes and return `true` if they are *not* exactly the same.
-    /// One two changes are the same, they will have the same effect.
-    /// Since this is called after [`Self::check_conflict`], *our* change will not be applied,
-    /// only theirs, which naturally avoids double-application
-    /// (which shouldn't have side effects, but let's not risk it)
-    pub fn is_not_same_change_in_possible_conflict(
-        &self,
-        theirs: &Change,
-        conflict: &PossibleConflict,
-        our_changes: &ChangeListRef,
-    ) -> bool {
-        conflict
-            .change_idx()
-            .is_none_or(|idx| our_changes[idx].inner != *theirs)
+    pub fn remove_existing_change(&mut self, location: &BStr) {
+        self.remove_change_inner(location, true);
     }
 
-    pub fn remove_existing_leaf(&mut self, location: &BStr) {
-        self.remove_leaf_inner(location, true);
+    pub fn remove_change(&mut self, location: &BStr) {
+        self.remove_change_inner(location, false);
     }
 
-    pub fn remove_leaf(&mut self, location: &BStr) {
-        self.remove_leaf_inner(location, false);
-    }
-
-    fn remove_leaf_inner(&mut self, location: &BStr, must_exist: bool) {
+    fn remove_change_inner(&mut self, location: &BStr, must_exist: bool) {
         let mut components = to_components(location).peekable();
-        let mut cursor = &mut self.0[0];
+        let mut cursor_idx = 0;
         while let Some(component) = components.next() {
-            match cursor.children.get(component).copied() {
-                None => debug_assert!(!must_exist, "didn't find '{location}' for removal"),
+            match self.0[cursor_idx].children.get(component).copied() {
+                None => {
+                    debug_assert!(!must_exist, "didn't find '{location}' for removal");
+                    // The remaining components cannot belong to this path once a prefix is absent.
+                    return;
+                }
                 Some(existing_idx) => {
                     let is_last = components.peek().is_none();
                     if is_last {
-                        cursor.children.remove(component);
-                        cursor = &mut self.0[existing_idx];
-                        debug_assert!(
-                            cursor.is_leaf_node(),
-                            "BUG: we should really only try to remove leaf nodes: {cursor:?}"
-                        );
-                        cursor.change_idx = None;
+                        if self.0[existing_idx].is_leaf_node() {
+                            self.0[cursor_idx].children.remove(component);
+                        }
+                        let node = &mut self.0[existing_idx];
+                        debug_assert!(!must_exist || node.change_idx.is_some(), "no change at '{location}'");
+                        node.change_idx = None;
+                        node.change_is_tree = false;
                     } else {
-                        cursor = &mut self.0[existing_idx];
+                        cursor_idx = existing_idx;
                     }
                 }
             }
@@ -543,6 +622,7 @@ impl TreeNodes {
             "BUG: we thought we wouldn't do that current.location is related?"
         );
         cursor.change_idx = Some(new_change_idx);
+        cursor.change_is_tree = new_change.entry_mode().is_tree();
         cursor.location = ChangeLocation::CurrentLocation;
     }
 }
@@ -608,5 +688,29 @@ impl Conflict {
             }),
         ];
         Conflict::maybe_resolved(Err(ResolutionFailure::Unknown), changes, entries)
+    }
+}
+
+#[cfg(test)]
+mod tree_nodes_tests {
+    use super::*;
+
+    #[test]
+    fn removing_an_absent_nested_change_does_not_remove_a_matching_root_suffix() {
+        let mut tree = TreeNodes::new();
+        tree.0[0].children.insert("b".into(), 1);
+        tree.0.push(TreeNode {
+            change_idx: Some(42),
+            ..Default::default()
+        });
+
+        tree.remove_change("a/b".into());
+        assert!(
+            matches!(
+                tree.check_conflict("b".into()),
+                Some(PossibleConflict::Match { change_idx: 42 })
+            ),
+            "a missing `a` prefix must stop removal before an unrelated root-level `b`"
+        );
     }
 }
