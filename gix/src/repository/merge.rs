@@ -50,17 +50,11 @@ impl Repository {
             .map_err(gix_error::Error::from_error)?
             .inner;
         let filter = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
-        let filter = gix_merge::blob::Pipeline::new(
-            worktree_roots,
-            filter,
-            self.config
-                .merge_pipeline_options()
-                .map_err(gix_error::Error::from_error)?,
-        );
+        let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, self.config.merge_pipeline_options()?);
         let options = gix_merge::blob::platform::Options {
             default_driver: self.config.resolved.string(tree::Merge::DEFAULT),
         };
-        let drivers = self.config.merge_drivers().map_err(gix_error::Error::from_error)?;
+        let drivers = self.config.merge_drivers()?;
         Ok(gix_merge::blob::Platform::new(filter, mode, attrs, drivers, options))
     }
 
@@ -71,7 +65,7 @@ impl Repository {
             is_virtual_ancestor: false,
             resolve_binary_with: None,
             text: gix_merge::blob::builtin_driver::text::Options {
-                diff_algorithm: self.diff_algorithm().map_err(gix_error::Error::from_error)?,
+                diff_algorithm: self.diff_algorithm()?,
                 conflict: text::Conflict::Keep {
                     style: self
                         .config

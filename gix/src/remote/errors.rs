@@ -8,10 +8,12 @@ pub mod find {
         use crate::bstr::BString;
 
         // TODO(review): kept concrete. Matched at `gix/tests/gix/repository/remote.rs:229`:
-        //                `gix::remote::find::existing::Error::NotFound { .. }`. Its two `#[from]`
-        //                parents — `env::collate::fetch::Error::FindExistingRemote`
-        //                (`gix/src/env.rs`) and `remote::find::for_fetch::Error::FindExisting`
-        //                (below) — have no other erased member.
+        //                `gix::remote::find::existing::Error::NotFound { .. }`. Separately,
+        //                `env::collate::fetch::Error::FindExistingRemote` (`gix/src/env.rs`)
+        //                already has an erased slot via `CredentialHelperConfig` (feature
+        //                `credentials`, on by default), so this type is now doubly blocked from
+        //                erasure there. Its other `#[from]` parent, `remote::find::for_fetch::
+        //                Error::FindExisting` (below), still has no other erased member.
         /// The error returned by [`Repository::find_remote(…)`](crate::Repository::find_remote()).
         #[derive(Debug, thiserror::Error)]
         #[expect(missing_docs)]

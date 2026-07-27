@@ -225,10 +225,7 @@ pub mod describe {
         ///
         /// Prefer to use the [`Self::try_resolve_with_cache()`] method when processing more than one commit at a time.
         pub fn try_resolve(&self) -> Result<Option<Resolution<'repo>>, Error> {
-            let cache = self
-                .repo
-                .commit_graph_if_enabled()
-                .map_err(gix_error::Error::from_error)?;
+            let cache = self.repo.commit_graph_if_enabled()?;
             self.try_resolve_with_cache(cache.as_ref())
         }
 

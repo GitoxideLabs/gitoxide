@@ -28,7 +28,7 @@ impl Repository {
         } = options;
         let diff_algorithm = match diff_algorithm {
             Some(diff_algorithm) => diff_algorithm,
-            None => self.diff_algorithm().map_err(gix_error::Error::from_error)?,
+            None => self.diff_algorithm()?,
         };
 
         let options = gix_blame::Options {

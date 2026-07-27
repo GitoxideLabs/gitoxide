@@ -55,9 +55,8 @@ impl<'repo> Pipeline<'repo> {
     /// Extract options from `repo` that are needed to properly drive a standard git filter pipeline.
     pub fn options(repo: &'repo Repository) -> Result<gix_filter::pipeline::Options, pipeline::options::Error> {
         let config = &repo.config.resolved;
-        let encodings = Core::CHECK_ROUND_TRIP_ENCODING
-            .try_into_encodings(config.string("core.checkRoundtripEncoding"))
-            .map_err(gix_error::Error::from_error)?;
+        let encodings =
+            Core::CHECK_ROUND_TRIP_ENCODING.try_into_encodings(config.string("core.checkRoundtripEncoding"))?;
         let safe_crlf = config
             .string("core.safecrlf")
             .map(|value| Core::SAFE_CRLF.try_into_safecrlf(value))

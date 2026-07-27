@@ -70,8 +70,7 @@ where
             .map_err(gix_error::Error::from_error)?
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
-        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)
-            .map_err(gix_error::Error::from_error)?;
+        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
