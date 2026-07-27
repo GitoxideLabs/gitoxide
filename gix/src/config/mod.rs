@@ -203,28 +203,8 @@ pub mod command_context {
 
 ///
 pub mod exclude_stack {
-    use crate::config;
-    use std::path::PathBuf;
-
-    // TODO(review): kept concrete due to an E0119 collision. `gix::dirwalk::Error`
-    //                (`gix/src/dirwalk/mod.rs`) embeds both this type, via
-    //                `Excludes(#[from] config::exclude_stack::Error)`, and the already-erased
-    //                `crate::pathspec::init::Error`, via `Pathspec(#[from] ...)`. Erasing
-    //                `exclude_stack::Error` would give `dirwalk::Error` two `From<gix_error::Error>`
-    //                impls.
     /// The error produced when setting up a stack to query `gitignore` information.
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not read repository exclude")]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        EnvironmentPermission(#[from] gix_sec::permission::Error<PathBuf>),
-        #[error("The value for `core.excludesFile` could not be read from configuration")]
-        ExcludesFilePathInterpolation(#[from] gix_config::path::interpolate::Error),
-        #[error(transparent)]
-        ParsePreciousEnabled(#[from] config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

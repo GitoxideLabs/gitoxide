@@ -169,13 +169,11 @@ pub mod excludes {
         /// [`Worktree::attributes()`][crate::Worktree::attributes()] for accessing both attributes and excludes.
         pub fn excludes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'_>, Error> {
             let index = self.index().map_err(gix_error::Error::from_error)?;
-            self.parent
-                .excludes(
-                    &index,
-                    overrides,
-                    gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-                )
-                .map_err(gix_error::Error::from_error)
+            self.parent.excludes(
+                &index,
+                overrides,
+                gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            )
         }
     }
 }

@@ -5,6 +5,8 @@ use crate::{
     PathspecDetached, Repository, bstr::BString, dirwalk, util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
+#[cfg_attr(not(feature = "parallel"), expect(unused_imports))]
+use gix_error::ResultExt;
 
 /// An entry of the directory walk as returned by the [iterator](Iter).
 pub struct Item {
@@ -41,25 +43,8 @@ pub struct Outcome {
     pub dirwalk: gix_dir::walk::Outcome,
 }
 
-// TODO(review): no structural blocker found. No `#[from]` parent embeds this type; it isn't
-//                generic; it has no foreign-trait impl. Its only external reference is the return
-//                type of `Repository::dirwalk_iter()` (`gix/src/repository/dirwalk.rs`); a search of
-//                `gix/tests`, `gitoxide-core`, `src` and `examples` found no match on any of its
-//                three variants.
 /// The error returned by [Repository::dirwalk_iter()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error("Failed to spawn producer thread")]
-    #[cfg(feature = "parallel")]
-    SpawnThread(#[from] std::io::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    Dirwalk(#[from] dirwalk::Error),
-    #[error(transparent)]
-    #[cfg(not(feature = "parallel"))]
-    DetachPathSpec(#[from] std::io::Error),
-}
+pub type Error = gix_error::Error;
 
 /// Lifecycle
 impl Iter {
@@ -86,7 +71,7 @@ impl Iter {
                             index,
                             excludes: out.excludes.detach(),
                             pathspec: out.pathspec.detach().map_err(|err| {
-                                dirwalk::Error::Walk(gix_dir::walk::Error::ReadDir {
+                                gix_error::Error::from_error(gix_dir::walk::Error::ReadDir {
                                     path: repo.git_dir().to_owned(),
                                     source: err,
                                 })
@@ -95,7 +80,8 @@ impl Iter {
                             dirwalk: out.dirwalk,
                         })
                     }
-                })?;
+                })
+                .or_raise(|| gix_error::message("Failed to spawn producer thread"))?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, handle)),
@@ -110,7 +96,7 @@ impl Iter {
             let out = Outcome {
                 index,
                 excludes: out.excludes.detach(),
-                pathspec: out.pathspec.detach()?,
+                pathspec: out.pathspec.detach().map_err(gix_error::Error::from_error)?,
                 traversal_root: out.traversal_root,
                 dirwalk: out.dirwalk,
             };

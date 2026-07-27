@@ -410,14 +410,18 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file()? {
+        let excludes_file = match self
+            .excludes_file()
+            .or_raise(|| gix_error::message("The value for `core.excludesFile` could not be read from configuration"))?
+        {
             Some(user_path) => Some(user_path),
-            None => self.xdg_config_path("ignore")?,
+            None => self.xdg_config_path("ignore").map_err(gix_error::Error::from_error)?,
         };
-        let parse_ignore = self.ignore_pattern_parser()?;
+        let parse_ignore = self.ignore_pattern_parser().map_err(gix_error::Error::from_error)?;
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
-            gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)?,
+            gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)
+                .or_raise(|| gix_error::message("Could not read repository exclude"))?,
             None,
             source,
             parse_ignore,

@@ -39,10 +39,9 @@ impl Repository {
                 self.options.permissions.attributes,
             )
             .map_err(gix_error::Error::from_error)?;
-        let ignore = self
-            .config
-            .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)
-            .map_err(gix_error::Error::from_error)?;
+        let ignore =
+            self.config
+                .assemble_exclude_globals(self.common_dir(), exclude_overrides, ignore_source, &mut buf)?;
         let state = gix_worktree::stack::State::AttributesAndIgnoreStack { attributes, ignore };
         let attribute_list = state.id_mappings_from_index(index, index.path_backing(), case);
         Ok(AttributeStack::new(

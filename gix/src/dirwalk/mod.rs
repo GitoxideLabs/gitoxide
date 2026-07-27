@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use gix_dir::walk::{CollapsedEntriesEmissionMode, EmissionMode, ForDeletionMode};
 
-use crate::{AttributeStack, Pathspec, config};
+use crate::{AttributeStack, Pathspec};
 
 mod options;
 
@@ -38,32 +38,8 @@ pub struct Iter {
     out: Option<iter::Outcome>,
 }
 
-// TODO(review): no structural blocker found. Its only `#[from]` parent, `dirwalk::iter::Error::
-//                Dirwalk` (`gix/src/dirwalk/iter.rs`, `cfg(not(feature = "parallel"))`), has no
-//                other erased member. It isn't generic and has no foreign-trait impl. `MissingWorkDir`
-//                and `Walk(..)` are only ever constructed, in `Repository::dirwalk()`
-//                (`gix/src/repository/dirwalk.rs`) and `Iter::new()` (`gix/src/dirwalk/iter.rs`,
-//                `cfg(feature = "parallel")`) respectively, and a search of `gix/tests`,
-//                `gitoxide-core`, `src` and `examples` found no caller matching any of its variants.
 /// The error returned by [dirwalk()](crate::Repository::dirwalk()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Walk(#[from] gix_dir::walk::Error),
-    #[error("A working tree is required to perform a directory walk")]
-    MissingWorkDir,
-    #[error(transparent)]
-    Excludes(#[from] config::exclude_stack::Error),
-    #[error(transparent)]
-    Pathspec(#[from] crate::pathspec::init::Error),
-    #[error(transparent)]
-    Prefix(#[from] gix_path::realpath::Error),
-    #[error(transparent)]
-    FilesystemOptions(#[from] config::boolean::Error),
-    #[error("Could not list worktrees to assure they are no candidates for deletion")]
-    ListWorktrees(#[from] std::io::Error),
-}
+pub type Error = gix_error::Error;
 
 /// The outcome of the [dirwalk()](crate::Repository::dirwalk).
 pub struct Outcome<'repo> {

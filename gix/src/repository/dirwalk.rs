@@ -7,6 +7,7 @@ use crate::{
     util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
+use gix_error::{OptionExt, ResultExt};
 
 impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
@@ -40,7 +41,9 @@ impl Repository {
         delegate: &mut dyn gix_dir::walk::Delegate,
     ) -> Result<dirwalk::Outcome<'_>, dirwalk::Error> {
         let _span = gix_trace::coarse!("gix::dirwalk");
-        let workdir = self.workdir().ok_or(dirwalk::Error::MissingWorkDir)?;
+        let workdir = self
+            .workdir()
+            .ok_or_raise(|| gix_error::message("A working tree is required to perform a directory walk"))?;
         let mut excludes = self.excludes(
             index,
             None,
@@ -55,19 +58,23 @@ impl Repository {
         )?;
 
         let git_dir_realpath =
-            crate::path::realpath_opts(self.git_dir(), self.current_dir(), crate::path::realpath::MAX_SYMLINKS)?;
-        let fs_caps = self.filesystem_options()?;
+            crate::path::realpath_opts(self.git_dir(), self.current_dir(), crate::path::realpath::MAX_SYMLINKS)
+                .map_err(gix_error::Error::from_error)?;
+        let fs_caps = self.filesystem_options().map_err(gix_error::Error::from_error)?;
         let accelerate_lookup = fs_caps.ignore_case.then(|| index.prepare_icase_backing());
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;
         if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
-            let linked_worktrees = self.worktrees()?;
+            let linked_worktrees = self.worktrees().or_raise(|| {
+                gix_error::message("Could not list worktrees to assure they are no candidates for deletion")
+            })?;
             if !linked_worktrees.is_empty() {
                 let real_workdir = gix_path::realpath_opts(
                     workdir,
                     self.options.current_dir_or_empty(),
                     gix_path::realpath::MAX_SYMLINKS,
-                )?;
+                )
+                .map_err(gix_error::Error::from_error)?;
                 worktree_relative_worktree_dirs_storage = linked_worktrees
                     .into_iter()
                     .filter_map(|proxy| proxy.base().ok())
@@ -104,7 +111,8 @@ impl Repository {
             },
             opts,
             delegate,
-        )?;
+        )
+        .map_err(gix_error::Error::from_error)?;
 
         Ok(dirwalk::Outcome {
             dirwalk: outcome,
