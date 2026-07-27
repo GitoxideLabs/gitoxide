@@ -16,9 +16,10 @@ use crate::{
 //                2. `clone::fetch::Error` (`gix/src/clone/fetch/mod.rs`) embeds this type via
 //                   `RefMap(#[from] crate::remote::ref_map::Error)`, but has already used its one erased
 //                   slot via `ParseConfig(#[from] crate::config::overrides::Error)` — E0119.
-//                3. Callers match on specific variants: `gix/src/clone/fetch/mod.rs:301`
-//                   (`ref_map::Error::InitRefMap`) and `gix/src/env.rs:117-118`
-//                   (`GatherTransportConfig { .. }` / `ConfigureCredentials(_)`).
+//                3. Callers match on specific variants: `PrepareFetch::fetch_only()`
+//                   (`gix/src/clone/fetch/mod.rs`) matches `ref_map::Error::InitRefMap`, and
+//                   `env::collate::fetch::Error::is_corrupted()` (`gix/src/env.rs`) matches
+//                   `GatherTransportConfig { .. }` / `ConfigureCredentials(_)`.
 /// The error returned by [`Connection::ref_map()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

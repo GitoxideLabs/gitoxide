@@ -6,6 +6,9 @@ use std::{
 
 use gix_discover::DOT_GIT_DIR;
 
+// TODO(review): kept concrete. Its `DirectoryExists` variant's `path` field is read at
+//                `gix/tests/gix/clone.rs:746`, which matches `gix::clone::Error::Init(gix::init::
+//                Error::Init(gix::create::Error::DirectoryExists { ref path }))`.
 /// The error used in [`into()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

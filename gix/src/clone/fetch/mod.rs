@@ -4,6 +4,8 @@ use crate::{
 };
 use gix_ref::Category;
 
+// TODO(review): kept concrete. Callers match its variants directly: `gix/tests/gix/clone.rs:204`
+//                matches `gix::clone::fetch::Error::Fetch(gix::remote::fetch::Error::Fetch(..))`.
 /// The error returned by [`PrepareFetch::fetch_only()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

@@ -63,6 +63,14 @@ impl Default for Submodule {
     }
 }
 
+// TODO(review): kept concrete due to an E0119 collision. `submodule::status::Error`
+//                (`gix/src/submodule/mod.rs`) embeds both this type, via
+//                `StatusPlatform(#[from] crate::status::Error)`, and the already-erased
+//                `status::into_iter::Error`, via `StatusIter(#[from] ...)`. Erasing `status::Error`
+//                would give `submodule::status::Error` two `From<gix_error::Error>` impls. (The
+//                other former blocker, `status::is_dirty::Error::StatusPlatform`, no longer applies:
+//                `is_dirty::Error` is itself now `gix_error::Error`, so it can no longer embed
+//                anything via `#[from]`.)
 /// The error returned by [status()](Repository::status).
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

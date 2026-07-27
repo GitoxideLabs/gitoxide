@@ -55,6 +55,14 @@ pub mod section {
 
 ///
 pub mod set_value {
+    // TODO(review): no structural blocker found. No `#[from]` parent embeds this type anywhere in
+    //                `gix/src`; it isn't generic; it has no foreign-trait impl. Its `SubSectionRequired`
+    //                and `SubSectionForbidden` variants are only ever constructed, at
+    //                `gix/src/config/snapshot/access.rs`, never matched by a caller, and
+    //                a search of `gix/tests`, `gitoxide-core`, `src` and `examples` for
+    //                `set_value::Error` found nothing. Its `Validate` variant embeds
+    //                `config::tree::key::validate::Error` (also concrete, also not erased), so this
+    //                enum has no erased member of its own today either.
     /// The error produced when calling [`SnapshotMut::set(_subsection)?_value()`][crate::config::SnapshotMut::set_value()]
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -70,6 +78,12 @@ pub mod set_value {
     }
 }
 
+// TODO(review): kept concrete. Callers match its variants directly: `gix/tests/gix/repository/
+//                open.rs:358` (`PathInterpolation { .. }`), `:458` (`ObjectFormatRequiresV1`), `:477`
+//                (`UnsupportedRepositoryFormatVersion { version: 2 }`), and `gix/tests/gix/id.rs:47`
+//                (`CoreAbbrev(_)`). Separately, one parent already has an erased slot filled and
+//                would gain a second if this type were erased too: `clone::fetch::Error::ApplyConfig`
+//                (`gix/src/clone/fetch/mod.rs`, erased slot `ParseConfig`).
 /// The error returned when failing to initialize the repository configuration.
 ///
 /// This configuration is on the critical path when opening a repository.
@@ -290,6 +304,16 @@ pub mod key {
             _ => panic!("BUG: invalid suffix kind - add a case for it here"),
         }
     }
+    // TODO(review): kept concrete. Generic over the caller-supplied source error `E` and the const
+    //                `PREFIX`/`SUFFIX` parameters that select this key's message wording (see
+    //                `prefix()`/`suffix()` above); a `pub type Error = gix_error::Error` alias can't
+    //                carry any of them, and doing so would collapse the ~14 differently-worded
+    //                aliases built on top of it (`boolean::Error`, `GenericErrorWithValue`,
+    //                `time::Error`, …) into one indistinguishable type, losing both the per-key
+    //                message and the caller's original `source`. The `impl<T, E, const PREFIX: char,
+    //                const SUFFIX: char> From<&'static T> for Error<E, PREFIX, SUFFIX>` below would
+    //                also become an orphan impl (`std::convert::From` on `gix_error::Error`, both
+    //                foreign to this crate) if the parameters were dropped to force an alias — E0117.
     /// A generic error suitable to produce decent messages for all kinds of configuration errors with config-key granularity.
     ///
     /// This error is meant to be reusable and help produce uniform error messages related to parsing any configuration key.

@@ -24,6 +24,11 @@ pub mod fetch_recurse {
 
 ///
 pub mod open {
+    // TODO(review): kept concrete. Matched at `gix/tests/gix/submodule.rs:343-344` and `:800-801`:
+    //                `Error::GitDir(git_dir_try_old_form::Error::InvalidGitDirFileTarget { .. })` /
+    //                `::GitDir(..)`. Separately, `submodule::status::Error::OpenRepository`
+    //                (`gix/src/submodule/mod.rs`) already has an erased slot via `StatusIter`, so
+    //                this type is doubly blocked from erasure there.
     /// The error returned by [Submodule::open()](crate::Submodule::open()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -41,6 +46,11 @@ pub mod open {
 
 ///
 pub mod git_dir_try_old_form {
+    // TODO(review): kept concrete. Callers destructure its `InvalidGitDirFileTarget { gitdir_file,
+    //                target, source }` variant at `gix/tests/gix/submodule.rs:325`, `:334`, `:344`,
+    //                `:358`, `:398` and `:412`; `:793` matches its `GitDir(..)` variant. Its two
+    //                `#[from]` parents — `open::Error::GitDir` (above) and `state::Error::
+    //                GitDirTryOldForm` (below) — have no other erased member.
     /// The error returned by [Submodule::git_dir_try_old_form()](crate::Submodule::git_dir_try_old_form()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -61,6 +71,10 @@ pub mod git_dir_try_old_form {
 
 ///
 pub mod state {
+    // TODO(review): kept concrete. Matched at `gix/tests/gix/submodule.rs:333`, `:411` and `:808`:
+    //                `Error::GitDirTryOldForm(..)`. Separately, `submodule::status::Error::State`
+    //                (`gix/src/submodule/mod.rs`) already has an erased slot via `StatusIter`, so
+    //                this type is doubly blocked from erasure there.
     /// The error returned by [Submodule::state()](crate::Submodule::state()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

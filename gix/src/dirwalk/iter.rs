@@ -41,6 +41,11 @@ pub struct Outcome {
     pub dirwalk: gix_dir::walk::Outcome,
 }
 
+// TODO(review): no structural blocker found. No `#[from]` parent embeds this type; it isn't
+//                generic; it has no foreign-trait impl. Its only external reference is the return
+//                type of `Repository::dirwalk_iter()` (`gix/src/repository/dirwalk.rs`); a search of
+//                `gix/tests`, `gitoxide-core`, `src` and `examples` found no match on any of its
+//                three variants.
 /// The error returned by [Repository::dirwalk_iter()].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

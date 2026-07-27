@@ -13,6 +13,17 @@ mod error {
     use super::connect;
     use crate::{bstr::BString, config, remote};
 
+    // TODO(review): kept concrete, blocked three independent ways:
+    //                1. `impl gix_protocol::transport::IsSpuriousError for Error` below matches
+    //                   `Connect`; as a `gix_error::Error` alias this becomes an orphan impl (neither
+    //                   the trait nor `gix_error::Error` are local to this crate) — E0117. This trait
+    //                   also carries design meaning: it decides whether a connection failure is
+    //                   worth retrying.
+    //                2. `clone::fetch::Error` (`gix/src/clone/fetch/mod.rs`) embeds this type via
+    //                   `Connect(#[from] crate::remote::connect::Error)`, but has already used its
+    //                   one erased slot via `ParseConfig(#[from] crate::config::overrides::Error)`
+    //                   — E0119.
+    //                3. Callers match on `ProtocolDenied { .. }`: `gix/tests/gix/remote/connect.rs:16`.
     /// The error returned by [connect()][crate::Remote::connect()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

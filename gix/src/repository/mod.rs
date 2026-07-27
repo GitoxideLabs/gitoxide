@@ -265,6 +265,10 @@ pub mod upstream_branch_and_remote_name_for_tracking_branch {
 
 ///
 pub mod normalize_path {
+    // TODO(review): kept concrete. Callers match its variants directly:
+    //                `gix/tests/repository.rs:74` matches `Error::OutsideOfRepository { .. }`, and
+    //                `:99` matches `Error::AbsolutePathOutsideOfRepository { .. }`. No `#[from]`
+    //                parents embed this type.
     /// The error returned by [Repository::normalize_path()](crate::Repository::normalize_path()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

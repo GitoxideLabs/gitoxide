@@ -235,6 +235,14 @@ mod submodule_status {
         }
     }
 
+    // TODO(review): no structural blocker found. This type lives in a private `mod submodule_status`
+    //                and is reachable only via `impl gix_status::index_as_worktree::traits::
+    //                SubmoduleStatus for BuiltinSubmoduleStatus { type Error = Error; .. }` below; since
+    //                the trait is implemented for the local `BuiltinSubmoduleStatus`, not for this
+    //                error type itself, that isn't an orphan risk — only the associated `Error` type
+    //                would become `gix_error::Error`. No `#[from]` parent embeds this type (it isn't
+    //                reachable outside this file to be named in one); it isn't generic. A search of
+    //                `gix/tests`, `gitoxide-core`, `src` and `examples` found no match on any variant.
     /// The error returned submodule status checks.
     #[derive(Debug, thiserror::Error)]
     pub enum Error {

@@ -51,6 +51,18 @@ pub mod collate {
 
     ///
     pub mod fetch {
+        // TODO(review): kept concrete. Generic over the caller-supplied error `E` (default
+        //                `std::convert::Infallible`); a `pub type Error = gix_error::Error` alias
+        //                can't carry that parameter, and doing so would erase the caller's own error
+        //                carried by `Other(E)`, which is the entire point of this type being generic —
+        //                exercised at `gix/tests/gix/remote/fetch.rs:228` (`Error<std::io::Error>`)
+        //                and `:245` (`Error::Other`). The `impl<E> crate::protocol::transport::
+        //                IsSpuriousError for Error<E>` below would also become an orphan impl (that
+        //                trait is `gix_transport`'s (`gix-transport/src/lib.rs:67`), merely re-exported
+        //                through `gix_protocol::transport` and then as `crate::protocol`) on a foreign
+        //                type if forced into a non-generic alias — E0117. `is_corrupted()` below also
+        //                matches specific variants directly, e.g. `Open(open::Error::
+        //                NotARepository { .. } | ...::Config(_))`.
         /// An error which combines all possible errors when opening a repository, finding remotes and using them to fetch.
         ///
         /// It can be used to detect if the repository is likely be corrupted in some way, or if the fetch failed spuriously

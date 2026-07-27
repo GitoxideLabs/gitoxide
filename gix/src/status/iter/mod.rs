@@ -238,6 +238,12 @@ where
     }
 }
 
+// TODO(review): kept concrete. Matched in `status::index_worktree::Iter::next()`
+//                (`gix/src/status/index_worktree.rs`):
+//                `Error::IndexWorktree(err) => err` and `Error::TreeIndex(_) => { .. }`. Separately,
+//                `submodule::status::Error::NextStatusItem` (`gix/src/submodule/mod.rs`) already
+//                has an erased slot via `StatusIter`, so this type is doubly blocked from erasure
+//                there.
 /// The error returned for each item returned by [`Iter`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

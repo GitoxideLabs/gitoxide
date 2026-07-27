@@ -7,6 +7,12 @@ use crate::{
 mod error {
     use crate::{object, reference};
 
+    // TODO(review): no structural blocker found. Its two `#[from]` parents — `into_id::Error::Peel`
+    //                and `to_object::Error::Peel` (both in `gix/src/head/peel.rs`) — have no other
+    //                erased member. It isn't generic and has no foreign-trait impl. Its only
+    //                construction site is in `Head::peel_to_object()`
+    //                (`Error::FindExistingObject(err)`), and a search of `gix/tests`,
+    //                `gitoxide-core`, `src` and `examples` found no caller matching either variant.
     /// The error returned by [`Head::peel_to_id()`](super::Head::try_peel_to_id()) and
     /// [`Head::into_fully_peeled_id()`](super::Head::try_into_peeled_id()).
     #[derive(Debug, thiserror::Error)]
@@ -25,6 +31,13 @@ pub use error::Error;
 pub mod into_id {
     use crate::object;
 
+    // TODO(review): no structural blocker found. No `#[from]` parent embeds this type; it isn't
+    //                generic; it has no foreign-trait impl. Its `Unborn` variant is only ever
+    //                constructed, in `Head::into_peeled_id()` (`gix/src/head/peel.rs`), and a search
+    //                of `gix/tests`, `gitoxide-core`, `src` and `examples` found no caller matching
+    //                any of its variants. It embeds both `head::peel::Error` (via `Peel`) and
+    //                `object::try_into::Error` (via `ObjectKind`, matched and concrete already), so
+    //                erasing `head::peel::Error` alone would stay collision-free here.
     /// The error returned by [`Head::into_peeled_id()`](super::Head::into_peeled_id()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -42,6 +55,10 @@ pub mod into_id {
 pub mod to_commit {
     use crate::object;
 
+    // TODO(review): kept concrete. Matched in `Repository::head_tree_id_or_empty()`
+    //                (`gix/src/repository/reference.rs`), via
+    //                `err.downcast_any_ref::<head::peel::to_commit::Error>()` then
+    //                `Some(to_commit::Error::PeelToObject(to_object::Error::Unborn { .. }))`.
     /// The error returned by [`Head::peel_to_commit()`](super::Head::peel_to_commit()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
@@ -55,6 +72,9 @@ pub mod to_commit {
 
 ///
 pub mod to_object {
+    // TODO(review): kept concrete. Matched (nested inside a `to_commit::Error` match) in
+    //                `Repository::head_tree_id_or_empty()` (`gix/src/repository/reference.rs`):
+    //                `to_commit::Error::PeelToObject(to_object::Error::Unborn { .. })`.
     /// The error returned by [`Head::peel_to_object()`](super::Head::peel_to_object()).
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

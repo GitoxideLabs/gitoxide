@@ -4,12 +4,14 @@ use gix_utils::AsBStr;
 /// The error returned by [`Remote::save_to()`].
 pub type Error = gix_error::Error;
 
+// TODO(review): kept concrete due to an E0119 collision. `clone::fetch::Error`
+//                (`gix/src/clone/fetch/mod.rs`) embeds this type via
+//                `SaveConfig(#[from] crate::remote::save::AsError)`, and already embeds the
+//                erased `config::overrides::Error`, via `ParseConfig(#[from] ...)`. Erasing
+//                `AsError` would give `clone::fetch::Error` two `From<gix_error::Error>` impls.
 /// The error returned by [`Remote::save_as_to()`].
 ///
 /// Note that this type should rather be in the `as` module, but cannot be as it's part of the Rust syntax.
-// Note that this stays an enum: `clone::fetch::Error` already embeds the erased
-// `config::overrides::Error`, so erasing this one too would derive `From<gix_error::Error>` twice
-// for that type.
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
 pub enum AsError {

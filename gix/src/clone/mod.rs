@@ -46,6 +46,9 @@ pub struct PrepareFetch {
     remove_worktree_on_drop: bool,
 }
 
+// TODO(review): kept concrete. Callers match its variants directly: `gix/tests/gix/clone.rs:746`
+//                matches `gix::clone::Error::Init(gix::init::Error::Init(gix::create::Error::
+//                DirectoryExists { ref path }))`.
 /// The error returned by [`PrepareFetch::new()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]

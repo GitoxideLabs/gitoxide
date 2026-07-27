@@ -5,6 +5,16 @@ use crate::config::Snapshot;
 mod error {
     use crate::bstr::BString;
 
+    // TODO(review): no structural blocker found. Its two `#[from]` parents —
+    //                `env::collate::fetch::Error::CredentialHelperConfig` (`gix/src/env.rs`) and
+    //                `remote::ref_map::Error::ConfigureCredentials`
+    //                (`gix/src/remote/connection/ref_map.rs`) — have no other erased member, so
+    //                there is no E0119 collision. It isn't generic and has no foreign-trait impl.
+    //                `env::collate::fetch::Error::is_corrupted()` matches
+    //                `ref_map::Error::ConfigureCredentials(_)` but discards the payload without
+    //                reading this type's own variants, and a search of `gix/tests`, `gitoxide-core`,
+    //                `src` and `examples` found no match on `InvalidUseHttpPath`, `CoreAskpass` or
+    //                `BooleanConfig`.
     /// The error returned by [`Snapshot::credential_helpers()`][super::Snapshot::credential_helpers()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

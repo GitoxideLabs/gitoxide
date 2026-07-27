@@ -405,6 +405,11 @@ pub mod status {
     use super::{Status, head_id, index_id, open, state};
     use crate::Submodule;
 
+    // TODO(review): kept concrete. Matched at `gix/tests/gix/submodule.rs:356-358` and `:410-412`:
+    //                `Error::State(state::Error::GitDirTryOldForm(git_dir_try_old_form::Error::
+    //                InvalidGitDirFileTarget { .. }))`. Its sole `#[from]` parent,
+    //                `status::index_worktree::submodule_status::Error::SubmoduleStatus`
+    //                (`gix/src/status/index_worktree.rs`), has no other erased member.
     /// The error returned by [Submodule::status()].
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]

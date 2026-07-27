@@ -20,6 +20,9 @@ use crate::{
 /// We use `main` instead of `master`.
 pub const DEFAULT_BRANCH_NAME: &str = "main";
 
+// TODO(review): kept concrete. Callers match its variants directly: `gix/tests/gix/init.rs:118`
+//                and `:142` destructure `InvalidBranchName { name, source }` (reading both fields),
+//                and `gix/tests/gix/clone.rs:746` matches `gix::init::Error::Init(..)`.
 /// The error returned by [`crate::init()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
