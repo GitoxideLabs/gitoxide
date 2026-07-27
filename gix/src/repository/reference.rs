@@ -210,10 +210,7 @@ impl crate::Repository {
     /// Also note that the returned id is likely to point to a commit, but could also
     /// point to a tree or blob. It won't, however, point to a tag as these are always peeled.
     pub fn head_id(&self) -> Result<crate::Id<'_>, reference::head_id::Error> {
-        self.head()
-            .map_err(gix_error::Error::from_error)?
-            .into_peeled_id()
-            .map_err(gix_error::Error::from_error)
+        self.head().map_err(gix_error::Error::from_error)?.into_peeled_id()
     }
 
     /// Return the name to the symbolic reference `HEAD` points to, or `None` if the head is detached.

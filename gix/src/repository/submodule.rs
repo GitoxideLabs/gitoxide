@@ -71,8 +71,7 @@ impl Repository {
                     None => match self
                         .head()
                         .map_err(gix_error::Error::from_error)?
-                        .try_peel_to_id()
-                        .map_err(gix_error::Error::from_error)?
+                        .try_peel_to_id()?
                         .map(|id| -> Result<Option<_>, submodule::modules::Error> {
                             Ok(id
                                 .object()

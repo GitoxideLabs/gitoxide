@@ -34,9 +34,7 @@ pub mod peel {
     // TODO(review): kept concrete. Matched in `update()`
     //                (`gix/src/remote/connection/fetch/update_refs/mod.rs`) to detect unborn refs:
     //                `Error::ToId(gix_ref::peel::to_id::Error::
-    //                FollowToObject(gix_ref::peel::to_object::Error::Follow(_)))`. Its sole parent,
-    //                `head::peel::Error::PeelReference` (`gix/src/head/peel.rs`), has no erased
-    //                member.
+    //                FollowToObject(gix_ref::peel::to_object::Error::Follow(_)))`.
     /// The error returned by [`Reference::peel_to_id()`](crate::Reference::peel_to_id()) and
     /// [`Reference::into_fully_peeled_id()`](crate::Reference::into_fully_peeled_id()).
     #[derive(Debug, thiserror::Error)]
