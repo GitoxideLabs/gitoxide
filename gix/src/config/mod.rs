@@ -462,10 +462,9 @@ pub mod ssl_version {
 ///
 pub mod transport {
     /// The error produced when configuring a transport for a particular protocol.
-    ///
-    /// Note that `InvalidInteger` and `ConfigValue`, two of the former variants of this now-erased
-    /// type, were never constructed anywhere in the workspace and carried no message-preservation
-    /// obligation.
+    // `InvalidInteger` and `ConfigValue`, two of the former variants of this now-erased
+    // type, were never constructed anywhere in the workspace and carried no message-preservation
+    // obligation.
     pub type Error = gix_error::Error;
 
     ///
