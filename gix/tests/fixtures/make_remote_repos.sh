@@ -312,7 +312,7 @@ EOF
 git clone --shared base credential-helpers
 (cd credential-helpers
     export GIT_TERMINAL_PROMPT=0
-    git=$(which git)
+    git=$(command -v git)
     function baseline() {
       local url=${1:?need url}
       {
