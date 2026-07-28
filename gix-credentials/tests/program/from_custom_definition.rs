@@ -22,7 +22,7 @@ const SH_BASENAME: &str = if cfg!(windows) { "sh.exe" } else { "sh" };
 #[test]
 fn empty() {
     let prog = Program::from_custom_definition("");
-    let git = *GIT;
+    let git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(std::path::Path::new(*GIT)));
     assert!(matches!(&prog.kind, Kind::ExternalName { name_and_args } if name_and_args.is_empty()));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
@@ -46,7 +46,7 @@ fn simple_script_in_path() {
 fn name_with_args() {
     let input = "name --arg --bar=\"a b\"";
     let prog = Program::from_custom_definition(input);
-    let git = *GIT;
+    let git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(std::path::Path::new(*GIT)));
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
@@ -59,11 +59,14 @@ fn name_with_special_args() {
     let input = "name --arg --bar=~/folder/in/home";
     let prog = Program::from_custom_definition(input);
     let sh = gix_path::env::shell_command();
-    let git = *GIT;
+    let git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(std::path::Path::new(*GIT)));
+    let quoted_git = gix_quote::single(git.as_ref());
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),
-        format!(r#"{sh:?} "-c" "{git} credential-name --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#)
+        format!(
+            r#"{sh:?} "-c" "{quoted_git} credential-name --arg --bar=~/folder/in/home \"$@\"" "{SH_BASENAME}" "store""#
+        )
     );
 }
 
@@ -71,7 +74,7 @@ fn name_with_special_args() {
 fn name() {
     let input = "name";
     let prog = Program::from_custom_definition(input);
-    let git = *GIT;
+    let git = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(std::path::Path::new(*GIT)));
     assert!(matches!(&prog.kind, Kind::ExternalName{name_and_args} if name_and_args == input));
     assert_eq!(
         format!("{:?}", prog.to_command(&helper::Action::Store("egal".into()))),

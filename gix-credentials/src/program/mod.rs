@@ -1,8 +1,27 @@
-use std::process::{Command, Stdio};
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use bstr::{BString, ByteSlice, ByteVec};
 
 use crate::{Program, helper};
+
+/// Correctly quotes `git_progarm`, while assuming `name_and_args` are good to be put into a script.
+fn external_name_command(
+    git_program: &Path,
+    name_and_args: &bstr::BStr,
+    action: &helper::Action,
+) -> std::process::Command {
+    let git_program = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(git_program));
+    let mut args = gix_quote::single(git_program.as_ref());
+    args.push_str(" credential-");
+    args.push_str(name_and_args);
+    gix_command::prepare(gix_path::from_bstr(args.as_bstr()).into_owned())
+        .arg(action.as_arg(true))
+        .command_may_be_shell_script_allow_manual_argument_splitting()
+        .into()
+}
 
 /// The kind of helper program to use.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -75,16 +94,7 @@ impl Program {
                 cmd.arg("credential").arg(action.as_arg(false));
                 cmd
             }
-            Kind::ExternalName { name_and_args } => {
-                let mut args = name_and_args.clone();
-                args.insert_str(0, "credential-");
-                args.insert_str(0, " ");
-                args.insert_str(0, git_program.to_string_lossy().as_ref());
-                gix_command::prepare(gix_path::from_bstr(args.as_bstr()).into_owned())
-                    .arg(action.as_arg(true))
-                    .command_may_be_shell_script_allow_manual_argument_splitting()
-                    .into()
-            }
+            Kind::ExternalName { name_and_args } => external_name_command(git_program, name_and_args.as_bstr(), action),
             Kind::ExternalShellScript(for_shell)
             | Kind::ExternalPath {
                 path_and_args: for_shell,
@@ -146,3 +156,34 @@ impl Program {
 ///
 pub mod main;
 pub use main::function::main;
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::OsStr, path::Path};
+
+    use crate::helper;
+
+    #[test]
+    fn git_program_with_spaces_is_quoted_in_external_name_shell_scripts() {
+        let cmd = super::external_name_command(
+            Path::new(r"C:\Program Files\Git\mingw64\bin\git.exe"),
+            "manager --config=~/credentials".into(),
+            &helper::Action::Get(Default::default()),
+        );
+        let script = cmd
+            .get_args()
+            .skip_while(|arg| *arg != OsStr::new("-c"))
+            .nth(1)
+            .expect("a shell invocation has its script after the '-c' argument");
+
+        assert_eq!(
+            script,
+            OsStr::new(if cfg!(windows) {
+                r#"'C:/Program Files/Git/mingw64/bin/git.exe' credential-manager --config=~/credentials "$@""#
+            } else {
+                r#"'C:\Program Files\Git\mingw64\bin\git.exe' credential-manager --config=~/credentials "$@""#
+            }),
+            "the Git executable is a single shell token even when its path contains spaces"
+        );
+    }
+}
