@@ -27,6 +27,9 @@ mod state;
 mod submodule;
 mod worktree;
 
+#[cfg(feature = "worktree-mutation")]
+mod reset;
+
 #[cfg(feature = "revision")]
 mod revision {
     use crate::util::hex_to_id_sha1_only;

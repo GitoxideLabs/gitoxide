@@ -69,6 +69,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
 * [ ] strict hash verification (validate that objects actually have the hashes they claim to have)
 * **workflow composition**
     * [ ] checkout, switch, restore and reset orchestration over refs, index and worktree mutation
+        * [x] hard-reset (`Repository::reset_hard`) — soft/mixed, hooks, sparse and submodules still open
     * [ ] merge workflow orchestration
         * [ ] persist and resume conflicted merges with [`MERGE_HEAD`](https://git-scm.com/docs/gitrepository-layout), [`MERGE_MSG`](https://git-scm.com/docs/git-merge) and [`MERGE_MODE`](https://github.com/git/git/blob/ce74208c2fa13943fffa58f168ac27a76d0eb789/path.c#L1585) compatible state
     * [ ] rebase workflow orchestration

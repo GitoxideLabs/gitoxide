@@ -23,6 +23,9 @@ mod cache;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
 mod config;
+/// Hard-reset orchestration over refs, index and worktree (`git reset --hard`).
+#[cfg(feature = "worktree-mutation")]
+pub mod reset;
 
 ///
 #[cfg(feature = "blob-diff")]
