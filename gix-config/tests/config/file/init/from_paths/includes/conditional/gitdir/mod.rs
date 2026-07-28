@@ -89,14 +89,13 @@ fn dot_slash_path_is_replaced_with_directory_containing_the_including_config_fil
 #[serial]
 fn dot_slash_from_environment_causes_error() -> crate::Result {
     let env = GitEnv::repo_name("worktree")?;
+    // Only slashes can be used as matches, even on Windows.
+    let git_dir = env.git_dir().to_string_lossy().replace('\\', "/");
 
     {
         let _environment = Env::new()
             .set("GIT_CONFIG_COUNT", "1")
-            .set(
-                "GIT_CONFIG_KEY_0",
-                format!("includeIf.gitdir:{}.path", escape_backslashes(env.git_dir())),
-            )
+            .set("GIT_CONFIG_KEY_0", format!("includeIf.gitdir:{git_dir}.path"))
             .set("GIT_CONFIG_VALUE_0", "./include.path");
 
         let res = gix_config::File::from_env(env.to_init_options());
@@ -133,10 +132,7 @@ fn dot_slash_from_environment_causes_error() -> crate::Result {
     {
         let _environment = Env::new()
             .set("GIT_CONFIG_COUNT", "1")
-            .set(
-                "GIT_CONFIG_KEY_0",
-                format!("includeIf.gitdir:{}.path", escape_backslashes(env.git_dir())),
-            )
+            .set("GIT_CONFIG_KEY_0", format!("includeIf.gitdir:{git_dir}.path"))
             .set("GIT_CONFIG_VALUE_0", absolute_path);
 
         let res = gix_config::File::from_env(env.to_init_options());

@@ -24,6 +24,90 @@ mod blocking_io {
     const EXISTING_CONTENT: &[u8] = b"Pre-existing user content.\n";
     const EXISTING_HEAD_CONTENT: &[u8] = b"ref: refs/heads/pre-existing\n";
 
+    #[test]
+    #[serial_test::serial]
+    fn inherited_core_symlinks_false_is_respected() -> crate::Result {
+        use gix_sec::Permission;
+
+        let fixture = gix_testtools::scripted_fixture_read_only("make_clone_with_symlink.sh")?;
+        let destination = gix_testtools::tempfile::TempDir::new()?;
+        let global = destination.path().join("global.config");
+        std::fs::write(
+            &global,
+            "[core]
+                symlinks = false",
+        )?;
+        let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global.display().to_string());
+
+        let mut permissions = gix::open::Permissions::isolated();
+        permissions.config.user = true;
+        permissions.env.git_prefix = Permission::Allow;
+        let mut capabilities = gix_fs::Capabilities {
+            symlink: true,
+            ..Default::default()
+        };
+        let mut prepare = gix::clone::PrepareFetch::new(
+            fixture.join("source.git"),
+            destination.path().join("clone"),
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                fs_capabilities: Some(capabilities),
+                ..Default::default()
+            },
+            gix::open::Options::isolated().permissions(permissions),
+        )?;
+        let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+
+        let link = repo.workdir().expect("worktree repository").join("link");
+        assert!(
+            !std::fs::symlink_metadata(&link)?.file_type().is_symlink(),
+            "inherited core.symlinks=false must disable symlink checkout even if the probe supports them"
+        );
+        assert_eq!(
+            std::fs::read(link)?,
+            b"target",
+            "the link target is written as a plain file"
+        );
+        assert_eq!(
+            gix::open_opts(repo.git_dir(), gix::open::Options::isolated())?
+                .config_snapshot()
+                .boolean(gix::config::tree::Core::SYMLINKS),
+            None,
+            "a successful probe must not persist core.symlinks=true and mask inherited configuration"
+        );
+
+        capabilities.symlink = false;
+        let mut prepare = gix::clone::PrepareFetch::new(
+            fixture.join("source.git"),
+            destination.path().join("probe-disables-symlinks"),
+            gix::create::Kind::WithWorktree,
+            gix::create::Options {
+                fs_capabilities: Some(capabilities),
+                ..Default::default()
+            },
+            gix::open::Options::isolated()
+                .permissions(permissions)
+                .config_overrides(["core.symlinks=true"]),
+        )?;
+        let (mut checkout, _) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
+        let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
+        assert!(
+            !std::fs::symlink_metadata(repo.workdir().expect("worktree repository").join("link"))?
+                .file_type()
+                .is_symlink(),
+            "a failed symlink probe must override configuration that enables symlinks"
+        );
+        assert_eq!(
+            gix::open_opts(repo.git_dir(), gix::open::Options::isolated())?
+                .config_snapshot()
+                .boolean(gix::config::tree::Core::SYMLINKS),
+            Some(false),
+            "a failed probe is persisted like Git"
+        );
+        Ok(())
+    }
+
     fn shallow_ids(repo: &gix::Repository, expected: &'static str) -> crate::Result<Vec<gix::ObjectId>> {
         let commits = repo.shallow_commits()?.expect(expected);
         // `gix_shallow::read` returns these sorted by id; the expected side is sorted via `sorted(...)`.

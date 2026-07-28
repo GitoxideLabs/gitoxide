@@ -4,6 +4,7 @@ mod incubate;
 pub(crate) use incubate::StageOne;
 
 mod init;
+pub(crate) use init::load;
 
 impl std::fmt::Debug for Cache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
