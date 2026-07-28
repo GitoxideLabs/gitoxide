@@ -108,7 +108,7 @@ git init base
   git branch -D tmp
 )
 
-git clone --shared --depth 2 file://$PWD/base base.shallow
+git clone --shared --depth 2 "file://$PWD/base" base.shallow
 
 
 git clone --shared base clone
