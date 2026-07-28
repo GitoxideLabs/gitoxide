@@ -159,6 +159,34 @@ fn from_nested_dir() -> crate::Result {
 }
 
 #[test]
+#[cfg(unix)]
+fn from_symlinked_nested_dir_follows_target_ancestors() -> crate::Result {
+    use std::os::unix::fs::symlink;
+
+    let root = gix_testtools::tempfile::TempDir::new()?;
+    gix_testtools::git(root.path(), "init foo")?;
+
+    let worktree = root.path().join("foo");
+    std::fs::create_dir(worktree.join("subdir"))?;
+    let link = root.path().join("link");
+    symlink("foo/subdir", &link)?;
+
+    let (path, trust) = gix_discover::upwards(&link)?;
+    assert_eq!(
+        path.kind(),
+        Kind::WorkTree { linked_git_dir: None },
+        "discovery through the symlink finds the target's worktree"
+    );
+    assert_eq!(
+        gix_path::realpath(path.as_ref())?,
+        gix_path::realpath(&worktree)?,
+        "parent traversal follows the symlink target instead of the symlink's parent"
+    );
+    assert_eq!(trust, expected_trust());
+    Ok(())
+}
+
+#[test]
 fn from_dir_with_dot_dot() -> crate::Result {
     // This would be neater if we could just change the actual working directory,
     // but Rust tests run in parallel by default so we'd interfere with other tests.

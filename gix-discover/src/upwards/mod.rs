@@ -4,7 +4,12 @@ pub use types::{Error, Options, TrustPolicy};
 mod util;
 
 pub(crate) mod function {
-    use std::{borrow::Cow, ffi::OsStr, path::Path};
+    use std::{
+        borrow::Cow,
+        cell::OnceCell,
+        ffi::OsStr,
+        path::{Path, PathBuf},
+    };
 
     use gix_sec::Trust;
 
@@ -17,6 +22,17 @@ pub(crate) mod function {
         is_git,
         upwards::util::{find_ceiling_height, shorten_path_with_cwd},
     };
+
+    fn resolved_directory_for_parent_traversal(directory: &Path, cwd: &Path) -> Option<PathBuf> {
+        let resolved = gix_path::realpath_opts(directory, cwd, gix_path::realpath::MAX_SYMLINKS).ok()?;
+        let absolute_directory = if directory.is_absolute() {
+            Cow::Borrowed(directory)
+        } else {
+            Cow::Owned(cwd.join(directory))
+        };
+        let absolute_directory = gix_path::normalize_and_clean(absolute_directory, cwd)?;
+        (absolute_directory.as_ref() != resolved).then_some(resolved)
+    }
 
     /// Find the location of the git repository directly in `directory` or in any of its parent directories and provide
     /// an associated Trust level by looking at the git directory's ownership, and control discovery using `options`.
@@ -60,6 +76,7 @@ pub(crate) mod function {
         if !dir_metadata.is_dir() {
             return Err(Error::InaccessibleDirectory { path: dir.into_owned() });
         }
+        let resolved_dir_for_parent_traversal = OnceCell::<Option<PathBuf>>::new();
         let mut dir_made_absolute = !directory.is_absolute()
             && cwd
                 .as_ref()
@@ -79,7 +96,13 @@ pub(crate) mod function {
         };
 
         let max_height = if !ceiling_dirs.is_empty() {
-            let max_height = find_ceiling_height(&dir, &ceiling_dirs, cwd.as_ref());
+            let resolved_dir = resolved_dir_for_parent_traversal
+                .get_or_init(|| resolved_directory_for_parent_traversal(dir.as_ref(), cwd.as_ref()));
+            let max_height = find_ceiling_height(
+                resolved_dir.as_deref().unwrap_or(dir.as_ref()),
+                &ceiling_dirs,
+                cwd.as_ref(),
+            );
             if max_height.is_none() && match_ceiling_dir_or_error {
                 return Err(Error::NoMatchingCeilingDir);
             }
@@ -174,6 +197,16 @@ pub(crate) mod function {
                     }
                 }
             }
+            // Keep the caller's path if it directly identifies a repository. Once we ascend, use
+            // physical parents so a symlink to `repo/nested` continues at `repo`, just like Git.
+            if current_height == 1 {
+                if let Some(resolved_dir) = resolved_dir_for_parent_traversal
+                    .get_or_init(|| resolved_directory_for_parent_traversal(dir.as_ref(), cwd.as_ref()))
+                {
+                    cursor.clone_from(resolved_dir);
+                    dir_made_absolute |= !directory.is_absolute();
+                }
+            }
             if cursor.as_os_str().is_empty() || cursor.as_os_str() == OsStr::new(".") {
                 cursor = cwd.to_path_buf();
                 dir_made_absolute = true;
@@ -189,7 +222,8 @@ pub(crate) mod function {
                 } else {
                     dir_made_absolute = true;
                     debug_assert!(!cursor.as_os_str().is_empty());
-                    // TODO: realpath or normalize? No test runs into this.
+                    // Symlinks in the starting directory were resolved before parent traversal,
+                    // so only lexical normalization remains here.
                     cursor = gix_path::normalize(cursor.clone().into(), cwd.as_ref())
                         .ok_or_else(|| Error::InvalidInput {
                             directory: cursor.clone(),
