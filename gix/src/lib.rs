@@ -428,6 +428,30 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
     ThreadSafeRepository::open_opts(directory, options).map(Into::into)
 }
 
+/// Load configuration available without an existing repository, using the configuration-related portions of `options`.
+///
+/// `git_dir` supplies context for `includeIf.gitdir` conditions and must exist if includes are enabled. Without it,
+/// these conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
+pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File, config::Error> {
+    let environment = options.permissions.env;
+    let git_install_dir = path::install_dir().ok();
+    let home = gix_path::env::home_dir().and_then(|home| environment.home.check_opt(home));
+    config::cache::load(
+        None,
+        &mut Vec::new(),
+        git_dir,
+        None,
+        git_install_dir.as_deref(),
+        home.as_deref(),
+        environment,
+        options.permissions.config,
+        options.lossy_config,
+        options.lenient_config,
+        &options.api_config_overrides,
+        &options.cli_config_overrides,
+    )
+}
+
 ///
 pub mod create;
 

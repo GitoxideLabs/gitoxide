@@ -32,6 +32,94 @@ fn discover_with_environment_overrides_isolated(
     .map(|repo| repo.to_thread_local())
 }
 
+#[test]
+#[serial]
+fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result {
+    let temp = gix_testtools::tempfile::TempDir::new()?;
+    let _cwd = gix_testtools::set_current_dir(temp.path())?;
+
+    let repo_path = std::env::current_dir()?.join("project");
+    let git_dir = repo_path.join(".git");
+    let included = temp.path().join("included.config");
+    let global = temp.path().join("global.config");
+    std::fs::write(
+        &included,
+        "[marker]
+            included = true",
+    )?;
+    std::fs::write(
+        &global,
+        format!(
+            "[marker]
+                global = true
+            [includeIf \"gitdir:{git_dir}\"]
+                path = {included}
+            [includeIf \"gitdir:**/unrelated/.git\"]
+                path = {included}",
+            git_dir = git_dir.display().to_string().replace('\\', "/"),
+            included = included.display().to_string().replace('\\', "/"),
+        ),
+    )?;
+    let _env = gix_testtools::Env::new().set("GIT_CONFIG_GLOBAL", global.display().to_string());
+
+    let mut permissions = gix::open::Permissions::isolated();
+    permissions.config.user = true;
+    permissions.config.includes = true;
+    permissions.env.git_prefix = Permission::Allow;
+    let options = gix::open::Options::isolated()
+        .permissions(permissions)
+        .cli_overrides(["marker.precedence=cli"])
+        .config_overrides(["marker.precedence=api"]);
+
+    let repo = gix::ThreadSafeRepository::init_opts(
+        &repo_path,
+        gix::create::Kind::WithWorktree,
+        Default::default(),
+        options.clone(),
+    )?
+    .to_thread_local();
+    let repo = repo.config_snapshot();
+
+    let globals = gix::config(Some(std::path::Path::new("project/.git")), &options)?;
+    assert_eq!(globals.boolean("marker.global")?, Some(true), "global files are loaded");
+    assert_eq!(
+        globals.boolean("marker.included")?,
+        Some(true),
+        "git-dir conditional includes use the provided repository path"
+    );
+    assert_eq!(
+        globals.string("marker.precedence").expect("API override is present"),
+        "api",
+        "API overrides retain repository-opening precedence"
+    );
+
+    let globals_without_repo = gix::config(None, &options)?;
+    assert_eq!(
+        globals_without_repo.boolean("marker.global")?,
+        Some(true),
+        "global files are loaded without repository context"
+    );
+    assert_eq!(
+        globals_without_repo.boolean("marker.included")?,
+        None,
+        "git-dir conditional includes aren't loaded without repository context"
+    );
+
+    for key in ["marker.global", "marker.included"] {
+        assert_eq!(
+            globals.boolean(key)?,
+            repo.try_boolean(key)?,
+            "{key} is loaded identically before and during repository opening"
+        );
+    }
+    assert_eq!(
+        globals.string("marker.precedence"),
+        repo.string("marker.precedence"),
+        "overrides are loaded identically before and during repository opening"
+    );
+    Ok(())
+}
+
 mod with_overrides {
     use crate::named_subrepo_opts;
     use gix_sec::Permission;
