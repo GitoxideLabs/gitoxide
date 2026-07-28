@@ -8,7 +8,9 @@ mod ui;
 
 use std::{
     ffi::OsString,
+    io::{self, Write},
     path::{Path, PathBuf},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -18,7 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use app::{Action, App, CommitRow, Effect, State};
+use app::{Action, App, ChangeKind, Changes, CommitRow, ComparedParent, Effect, PathChange, State};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
@@ -28,21 +30,185 @@ use crossterm::{
         PushKeyboardEnhancementFlags,
     },
     execute,
-    style::Print,
+    style::{Print, ResetColor},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use gix::bstr::{BString, ByteSlice};
+use gix::{
+    bstr::{BString, ByteSlice},
+    prelude::TreeDiffChangeExt,
+};
 use history::{Authors, Decorations, Event, SharedAuthors};
-use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend};
+use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const REPEAT_IDLE: Duration = Duration::from_millis(75);
+const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 
 struct FillRepository<'a> {
     path: &'a Path,
     retained: Option<gix::Repository>,
     retain: bool,
+}
+
+type LineCounts = Option<(u32, u32)>;
+type LineDiffResult = (usize, gix::object::tree::diff::ChangeDetached, Result<LineCounts>);
+
+struct LineDiffJob {
+    index: usize,
+    change: gix::object::tree::diff::ChangeDetached,
+}
+
+struct LineDiffPool {
+    jobs: Option<mpsc::Sender<LineDiffJob>>,
+    results: mpsc::Receiver<LineDiffResult>,
+    workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl LineDiffPool {
+    fn new(repository_path: &Path, parallelism: usize) -> Result<Self> {
+        let repository = gix::open(repository_path)
+            .context("could not open repository for parallel line diffs")?
+            .into_sync();
+        let mut worker_state = Vec::with_capacity(parallelism);
+        for _ in 0..parallelism {
+            let mut repository = repository.to_thread_local();
+            repository.object_cache_size(OBJECT_CACHE_SIZE);
+            let resource_cache = repository
+                .diff_resource_cache_for_tree_diff()
+                .context("could not initialize parallel line diffs")?;
+            worker_state.push((repository, resource_cache));
+        }
+
+        let (jobs, job_receiver) = mpsc::channel::<LineDiffJob>();
+        let job_receiver =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(job_receiver));
+        let (result_sender, results) = mpsc::channel();
+        let workers = worker_state
+            .into_iter()
+            .map(|(repository, mut resource_cache)| {
+                let job_receiver = gix::features::threading::OwnShared::clone(&job_receiver);
+                let result_sender = result_sender.clone();
+                std::thread::spawn(move || {
+                    loop {
+                        let Ok(job) = gix::features::threading::lock(&job_receiver).recv() else {
+                            break;
+                        };
+                        let result = job
+                            .change
+                            .attach(&repository, &repository)
+                            .diff(&mut resource_cache)
+                            .context("could not prepare line diff")
+                            .and_then(|mut diff| {
+                                diff.line_counts()
+                                    .context("could not count changed lines")
+                                    .map(|counts| counts.map(|counts| (counts.insertions, counts.removals)))
+                            });
+                        resource_cache.clear_resource_cache_keep_allocation();
+                        if result_sender.send((job.index, job.change, result)).is_err() {
+                            break;
+                        }
+                    }
+                })
+            })
+            .collect();
+        Ok(LineDiffPool {
+            jobs: Some(jobs),
+            results,
+            workers,
+        })
+    }
+
+    fn line_counts(
+        &mut self,
+        changes: Vec<gix::object::tree::diff::ChangeDetached>,
+    ) -> Result<Vec<(gix::object::tree::diff::ChangeDetached, LineCounts)>> {
+        let len = changes.len();
+        let jobs = self.jobs.as_ref().context("line diff pool is shutting down")?;
+        for (index, change) in changes.into_iter().enumerate() {
+            jobs.send(LineDiffJob { index, change })
+                .context("line diff workers stopped unexpectedly")?;
+        }
+
+        let mut out: Vec<_> = std::iter::repeat_with(|| None).take(len).collect();
+        let mut first_error = None;
+        for _ in 0..len {
+            let (index, change, result) = self.results.recv().context("line diff workers stopped unexpectedly")?;
+            match result {
+                Ok(lines) => {
+                    *out.get_mut(index)
+                        .context("line diff worker returned an invalid result index")? = Some((change, lines));
+                }
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+        out.into_iter()
+            .map(|entry| entry.context("line diff worker omitted a result"))
+            .collect()
+    }
+}
+
+impl Drop for LineDiffPool {
+    fn drop(&mut self) {
+        drop(self.jobs.take());
+        for worker in self.workers.drain(..) {
+            drop(worker.join());
+        }
+    }
+}
+
+fn sync_line_diff_pool(
+    pool: &mut Option<LineDiffPool>,
+    visible: bool,
+    repository_path: &Path,
+    parallelism: usize,
+) -> Result<()> {
+    if visible && pool.is_none() {
+        *pool = Some(LineDiffPool::new(repository_path, parallelism.max(1))?);
+    } else if !visible {
+        *pool = None;
+    }
+    Ok(())
+}
+
+enum FileDiff {
+    External(gix::diff::blob::platform::prepare_diff_command::Command),
+    Pager { command: Command, diff: BuiltInDiff },
+    BuiltIn(BuiltInDiff),
+}
+
+pub(crate) struct BuiltInDiff {
+    title: BString,
+    lines: Vec<BString>,
+    max_width: usize,
+}
+
+impl BuiltInDiff {
+    fn new(title: BString, lines: Vec<BString>) -> Self {
+        let max_width = lines
+            .iter()
+            .map(|line| Line::from(line.to_str_lossy()).width())
+            .max()
+            .unwrap_or_default();
+        BuiltInDiff {
+            title,
+            lines,
+            max_width,
+        }
+    }
+
+    fn write_to(&self, mut out: impl Write) -> io::Result<()> {
+        for line in &self.lines {
+            out.write_all(line)?;
+            out.write_all(b"\n")?;
+        }
+        Ok(())
+    }
 }
 
 /// Options for [`run()`].
@@ -211,8 +377,23 @@ fn should_switch_screen(started_inline: bool, needs_alternate_screen: bool, in_a
     started_inline && needs_alternate_screen != in_alternate_screen
 }
 
+fn configure_initial_screen(app: &mut App, inline: bool) {
+    app.inline = inline;
+    if inline {
+        app.show_changes = false;
+    }
+}
+
 fn history_needs_alternate_screen(screen: Screen, terminal_height: u16, commits: usize) -> bool {
     screen == Screen::Auto && inline_height(screen, terminal_height, commits).is_none()
+}
+
+fn needs_alternate_screen(
+    show_panel: bool,
+    history_requires_alternate_screen: bool,
+    current_inline_height: Option<u16>,
+) -> bool {
+    show_panel || history_requires_alternate_screen || current_inline_height.is_none()
 }
 
 fn resize_inline_screen(terminal: &mut ratatui::DefaultTerminal, height: u16) -> std::io::Result<()> {
@@ -243,11 +424,14 @@ fn sync_screen(
     inline_terminal: &mut Option<ratatui::DefaultTerminal>,
     enhanced_keyboard: bool,
 ) -> Result<()> {
-    let needs_alternate_screen = app.show_commit || history_requires_alternate_screen;
+    let inline_height = inline_height(screen, terminal::size()?.1, app.rows.len());
+    let needs_alternate_screen = needs_alternate_screen(
+        app.show_commit || app.show_changes,
+        history_requires_alternate_screen,
+        inline_height,
+    );
     if !should_switch_screen(started_inline, needs_alternate_screen, inline_terminal.is_some()) {
-        if started_inline && app.inline && resize_inline {
-            let height = inline_height(screen, terminal::size()?.1, app.rows.len())
-                .expect("an inline history always has an inline height");
+        if let (true, Some(height)) = (started_inline && app.inline && resize_inline, inline_height) {
             resize_inline_screen(terminal, height).context("could not resize the inline history")?;
         }
         return Ok(());
@@ -259,9 +443,9 @@ fn sync_screen(
     } else if let Some(inline) = inline_terminal.take() {
         leave_alternate_screen(terminal, inline, enhanced_keyboard).context("could not leave the alternate screen")?;
         app.inline = true;
-        let height = inline_height(screen, terminal::size()?.1, app.rows.len())
-            .expect("an inline history always has an inline height");
-        resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+        if let Some(height) = inline_height {
+            resize_inline_screen(terminal, height).context("could not resize the inline history")?;
+        }
     }
     Ok(())
 }
@@ -295,13 +479,22 @@ fn event_loop(
     let mut lane_receiver = None;
     let mut verification_receiver = None;
     let mut commit_message = None;
+    let mut changes = None;
+    let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
+    let mut line_diff_pool = None;
     let mut fill_repository = FillRepository {
         path: &repository_path,
         retained: None,
         retain: false,
     };
-    app.inline = started_inline;
+    configure_initial_screen(&mut app, started_inline);
     app.configure_hidden_filter(!hide.is_empty());
+    sync_line_diff_pool(
+        &mut line_diff_pool,
+        app.show_changes,
+        &repository_path,
+        line_diff_parallelism,
+    )?;
     let mut decorations = Decorations::new();
     draw(
         terminal,
@@ -311,6 +504,8 @@ fn event_loop(
         &authors,
         &mut fill_repository,
         &mut commit_message,
+        &mut changes,
+        &mut line_diff_pool,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
@@ -318,7 +513,19 @@ fn event_loop(
     let mut inline_terminal = None;
     let mut history_requires_alternate_screen = false;
     let mut focused = true;
+    let mut repeat_deadline: Option<Instant> = None;
     let result: Result<Option<Duration>> = (|| loop {
+        if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            repeat_deadline = None;
+            if app.changes_suppressed {
+                app.changes_suppressed = false;
+                dirty = true;
+                urgent = true;
+            } else {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+            }
+        }
         if let Some(result) = verification_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok(results) => {
@@ -357,10 +564,16 @@ fn event_loop(
                 &authors,
                 &mut fill_repository,
                 &mut commit_message,
+                &mut changes,
+                &mut line_diff_pool,
             )?;
             last_draw = Instant::now();
             dirty = false;
             urgent = false;
+            if repeat_deadline.is_none() {
+                fill_repository.retain = false;
+                fill_repository.retained = None;
+            }
             continue;
         }
         let mut events = 0;
@@ -426,11 +639,14 @@ fn event_loop(
                 &authors,
                 &mut fill_repository,
                 &mut commit_message,
+                &mut changes,
+                &mut line_diff_pool,
             )?;
             last_draw = Instant::now();
             dirty = false;
         }
-        let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed()) {
+        let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed(), repeat_timeout) {
             Some(timeout) if event::poll(timeout)? => Some(event::read()?),
             Some(_) => None,
             None => Some(event::read()?),
@@ -442,6 +658,8 @@ fn event_loop(
             TerminalEvent::Key(key) => key,
             TerminalEvent::FocusLost => {
                 focused = false;
+                app.changes_suppressed = false;
+                repeat_deadline = None;
                 drop(app.update(Action::PreviewAuthorCopy(false)));
                 dirty = true;
                 urgent = true;
@@ -462,16 +680,40 @@ fn event_loop(
             continue;
         }
         let action = action(key);
-        fill_repository.retain = retains_fill_repository(key.kind, action.as_ref());
-        if !fill_repository.retain {
+        let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focused);
+        if repeats_history {
+            fill_repository.retain = true;
+            repeat_deadline = Some(Instant::now() + REPEAT_IDLE);
+        } else if key.kind != KeyEventKind::Repeat {
+            fill_repository.retain = false;
             fill_repository.retained = None;
+        }
+        if repeats_history && app.show_changes {
+            app.changes_suppressed = true;
+        } else if key.kind != KeyEventKind::Repeat && app.changes_suppressed {
+            app.changes_suppressed = false;
+            repeat_deadline = None;
+            dirty = true;
+            urgent = true;
         }
         let Some(action) = action else {
             continue;
         };
+        if action == Action::ToggleChangesFocus && !changes_focusable(changes.as_ref().map(|(_, _, changes)| changes)) {
+            continue;
+        }
         dirty = true;
         urgent = true;
+        let toggles_changes = action == Action::ToggleChanges;
         let effects = app.update(action);
+        if toggles_changes {
+            sync_line_diff_pool(
+                &mut line_diff_pool,
+                app.show_changes,
+                &repository_path,
+                line_diff_parallelism,
+            )?;
+        }
         for effect in effects {
             match effect {
                 Effect::Cancel => cancelled.store(true, Ordering::Relaxed),
@@ -496,24 +738,31 @@ fn event_loop(
                         gix::features::threading::OwnShared::clone(&authors),
                     );
                 }
+                Effect::OpenDiff(index) => {
+                    let result = changes
+                        .as_ref()
+                        .and_then(|(_, _, changes)| changes.diffs.get(index).zip(changes.paths.get(index)))
+                        .context("selected path no longer has diff resources")
+                        .and_then(|(change, path)| prepare_file_diff(&repository_path, change, path))
+                        .and_then(|diff| match diff {
+                            FileDiff::External(command) => {
+                                run_external_diff(terminal, command, enhanced_keyboard).map(|()| false)
+                            }
+                            FileDiff::Pager { command, diff } => {
+                                run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false)
+                            }
+                            FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff),
+                        });
+                    match result {
+                        Ok(true) => app.focus_history(),
+                        Err(err) => app.diff_error = Some(format!("{err:#}")),
+                        Ok(false) => {}
+                    }
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(repository_path.clone(), ids));
                 }
-                Effect::Quit => {
-                    if app.inline {
-                        app.show_selection_tail = false;
-                        draw(
-                            terminal,
-                            &mut app,
-                            &decorations,
-                            &mailmap,
-                            &authors,
-                            &mut fill_repository,
-                            &mut commit_message,
-                        )?;
-                    }
-                    return Ok(None);
-                }
+                Effect::Quit => return Ok(None),
             }
         }
         sync_screen(
@@ -532,7 +781,32 @@ fn event_loop(
         .transpose();
     let outcome = result?;
     restore.context("could not restore the inline terminal")?;
+    if outcome.is_none() && started_inline {
+        prepare_inline_exit(&mut app);
+        sync_line_diff_pool(&mut line_diff_pool, false, &repository_path, line_diff_parallelism)?;
+        draw(
+            terminal,
+            &mut app,
+            &decorations,
+            &mailmap,
+            &authors,
+            &mut fill_repository,
+            &mut commit_message,
+            &mut changes,
+            &mut line_diff_pool,
+        )?;
+    }
     Ok(outcome)
+}
+
+fn prepare_inline_exit(app: &mut App) {
+    app.inline = true;
+    app.show_commit = false;
+    app.show_changes = false;
+    app.changes_suppressed = false;
+    app.changes_focused = false;
+    app.reset_changes_view();
+    app.show_selection_tail = false;
 }
 
 fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, app::Graph, Duration)> {
@@ -608,6 +882,7 @@ fn start_history(
     (cancelled, receiver)
 }
 
+#[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
     app: &mut App,
@@ -616,24 +891,50 @@ fn draw(
     authors: &SharedAuthors,
     fill_repository: &mut FillRepository<'_>,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
+    changes: &mut Option<(gix::ObjectId, usize, Changes)>,
+    line_diff_pool: &mut Option<LineDiffPool>,
 ) -> Result<()> {
     app.viewport_rows = terminal
         .get_frame()
         .area()
         .height
         .saturating_sub(1 + 2 * u16::from(app.inline)) as usize;
+    if !history_is_ready_to_draw(app.state, app.rows.len()) {
+        return Ok(());
+    }
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
-    let selected = app
-        .show_commit
+    let changes_visible = app.changes_visible();
+    let selected = (app.show_commit || changes_visible)
         .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
         .flatten();
-    let message_to_load = selected.filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
-    if selected.is_none() {
+    let message_to_load = app
+        .show_commit
+        .then_some(selected)
+        .flatten()
+        .filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
+    if changes_visible && selected.is_some() && changes.as_ref().map(|(cached, _, _)| *cached) != selected {
+        app.changes_parent = 0;
+    }
+    let changes_to_load = changes_visible.then_some(selected).flatten().filter(|id| {
+        changes
+            .as_ref()
+            .is_none_or(|(cached, parent, _)| cached != id || *parent != app.changes_parent)
+    });
+    if changes_to_load.is_some() {
+        app.reset_changes_view();
+    }
+    if !app.show_commit || selected.is_none() {
         *commit_message = None;
     }
-    if app.rows[start..end].iter().any(|row| !row.metadata_loaded) || message_to_load.is_some() {
+    if !app.show_changes || app.selected.is_none() {
+        *changes = None;
+    }
+    if app.rows[start..end].iter().any(|row| !row.metadata_loaded)
+        || message_to_load.is_some()
+        || changes_to_load.is_some()
+    {
         let mut one_shot_repository = None;
         let repository = if fill_repository.retain {
             match &mut fill_repository.retained {
@@ -654,9 +955,25 @@ fn draw(
         if let Some(id) = message_to_load {
             *commit_message = Some((id, load_commit_message(repository, id)?));
         }
+        if let Some(id) = changes_to_load {
+            repository.object_cache_size(OBJECT_CACHE_SIZE);
+            let loaded = load_changes(
+                repository,
+                id,
+                app.changes_parent,
+                line_diff_pool
+                    .as_mut()
+                    .context("line diff pool is missing while the changes pane is visible")?,
+            );
+            repository.object_cache_size(None);
+            let loaded = loaded?;
+            app.changes_parent = loaded.parent.map_or(0, |parent| parent.index);
+            *changes = Some((id, app.changes_parent, loaded));
+        }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
-    terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message))?;
+    let changes = changes.as_ref().map(|(_, _, changes)| changes);
+    terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message, changes))?;
     Ok(())
 }
 
@@ -666,9 +983,424 @@ fn open_fill_repository(repository_path: &Path) -> Result<gix::Repository> {
     Ok(repository)
 }
 
+fn prepare_file_diff(
+    repository_path: &Path,
+    change: &gix::object::tree::diff::ChangeDetached,
+    path: &PathChange,
+) -> Result<FileDiff> {
+    let mut repository = gix::open(repository_path).context("could not open repository for file diff")?;
+    repository.object_cache_size(OBJECT_CACHE_SIZE);
+    prepare_file_diff_with_repository(&repository, change, path)
+}
+
+fn prepare_file_diff_with_repository(
+    repository: &gix::Repository,
+    change: &gix::object::tree::diff::ChangeDetached,
+    path: &PathChange,
+) -> Result<FileDiff> {
+    let global_command = repository
+        .config_snapshot()
+        .trusted_program(gix::config::tree::Diff::EXTERNAL)
+        .map(gix::path::os_string_into_bstring)
+        .transpose()
+        .context("external diff command is not representable on this platform")?;
+    let mut resources = repository
+        .diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+            Default::default(),
+        )
+        .context("could not initialize file diff")?;
+    resources.options.skip_internal_diff_if_external_is_configured = true;
+    change
+        .attach(repository, repository)
+        .diff(&mut resources)
+        .context("could not prepare selected file")?;
+    let prepared = resources.prepare_diff().context("could not prepare selected diff")?;
+    match prepared.operation {
+        gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
+            let command = command.to_owned();
+            prepare_external_diff(repository, &resources, command)
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::InternalDiff { algorithm } => {
+            if let Some(command) = global_command {
+                return prepare_external_diff(repository, &resources, command);
+            }
+            let input = prepared.interned_input();
+            let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
+            let rendered = gix::diff::blob::UnifiedDiff::new(
+                &diff,
+                &input,
+                gix::diff::blob::unified_diff::ConsumeBinaryHunk::new(BString::default(), "\n"),
+                gix::diff::blob::unified_diff::ContextSize::symmetrical(3),
+            )
+            .consume()
+            .context("could not render selected diff")?;
+            prepare_pager(repository, built_in_diff(path, change, Some(rendered), false))
+        }
+        gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
+            prepare_pager(repository, built_in_diff(path, change, None, true))
+        }
+    }
+}
+
+fn prepare_pager(repository: &gix::Repository, diff: BuiltInDiff) -> Result<FileDiff> {
+    let Some(program) = repository.config_snapshot().trusted_program("core.pager") else {
+        return Ok(FileDiff::BuiltIn(diff));
+    };
+    if program.is_empty() || program == "cat" {
+        return Ok(FileDiff::BuiltIn(diff));
+    }
+    let command = gix::command::prepare(program)
+        .command_may_be_shell_script_disallow_manual_argument_splitting()
+        .with_context(
+            repository
+                .command_context()
+                .context("could not prepare pager environment")?,
+        )
+        .env("GIT_PAGER_IN_USE", "true")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .into();
+    Ok(FileDiff::Pager { command, diff })
+}
+
+fn prepare_external_diff(
+    repository: &gix::Repository,
+    resources: &gix::diff::blob::Platform,
+    command: BString,
+) -> Result<FileDiff> {
+    Ok(FileDiff::External(
+        resources
+            .prepare_diff_command(
+                command,
+                repository
+                    .command_context()
+                    .context("could not prepare external diff environment")?,
+                0,
+                1,
+            )
+            .context("could not prepare external diff command")?,
+    ))
+}
+
+fn built_in_diff(
+    path: &PathChange,
+    change: &gix::object::tree::diff::ChangeDetached,
+    rendered: Option<BString>,
+    binary: bool,
+) -> BuiltInDiff {
+    use gix::object::tree::diff::ChangeDetached;
+
+    let (old_path, new_path, old_mode, new_mode) = match change {
+        ChangeDetached::Addition { entry_mode, .. } => (None, Some(path.path.as_bstr()), None, Some(*entry_mode)),
+        ChangeDetached::Deletion { entry_mode, .. } => (Some(path.path.as_bstr()), None, Some(*entry_mode), None),
+        ChangeDetached::Modification {
+            previous_entry_mode,
+            entry_mode,
+            ..
+        } => (
+            Some(path.path.as_bstr()),
+            Some(path.path.as_bstr()),
+            Some(*previous_entry_mode),
+            Some(*entry_mode),
+        ),
+        ChangeDetached::Rewrite {
+            source_entry_mode,
+            entry_mode,
+            ..
+        } => (
+            path.source.as_ref().map(|path| path.as_bstr()),
+            Some(path.path.as_bstr()),
+            Some(*source_entry_mode),
+            Some(*entry_mode),
+        ),
+    };
+    let display_path = |path: Option<&gix::bstr::BStr>, prefix: &str| -> BString {
+        path.map_or_else(
+            || "/dev/null".into(),
+            |path| format!("{prefix}{}", path.to_str_lossy()).into(),
+        )
+    };
+    let mut lines = vec![
+        format!("--- {}", display_path(old_path, "a/").to_str_lossy()).into(),
+        format!("+++ {}", display_path(new_path, "b/").to_str_lossy()).into(),
+    ];
+    if old_mode != new_mode {
+        if let Some(mode) = old_mode {
+            lines.push(format!("old mode {}", mode.kind().as_octal_str()).into());
+        }
+        if let Some(mode) = new_mode {
+            lines.push(format!("new mode {}", mode.kind().as_octal_str()).into());
+        }
+    }
+    if binary {
+        lines.push("Binary files differ".into());
+    } else if let Some(rendered) = rendered {
+        lines.extend(rendered.lines().map(BString::from));
+    }
+    BuiltInDiff::new(
+        format!("{} {}", path.kind.letter(), path.path.to_str_lossy()).into(),
+        lines,
+    )
+}
+
+fn run_external_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut command: gix::diff::blob::platform::prepare_diff_command::Command,
+    enhanced_keyboard: bool,
+) -> Result<()> {
+    with_suspended_terminal(terminal, enhanced_keyboard, || {
+        let status = command.status().context("could not launch external diff")?;
+        external_diff_status(status)
+    })
+}
+
+fn run_pager(
+    terminal: &mut ratatui::DefaultTerminal,
+    mut command: Command,
+    diff: &BuiltInDiff,
+    enhanced_keyboard: bool,
+) -> Result<()> {
+    with_suspended_terminal(terminal, enhanced_keyboard, || {
+        let start = Instant::now();
+        let mut child = command.spawn().context("could not launch diff pager")?;
+        let write_result = child.stdin.take().map_or_else(
+            || Err(io::Error::other("pager stdin was not piped")),
+            |mut stdin| diff.write_to(&mut stdin),
+        );
+        let status = child.wait().context("could not wait for diff pager");
+        pager_write_result(write_result)?;
+        pager_status(status?)?;
+        if pager_needs_acknowledgement(start.elapsed()) {
+            wait_for_keypress()?;
+        }
+        Ok(())
+    })
+}
+
+fn wait_for_keypress() -> Result<()> {
+    terminal::enable_raw_mode().context("could not read pager acknowledgement")?;
+    loop {
+        if matches!(
+            event::read().context("could not read pager acknowledgement")?,
+            TerminalEvent::Key(KeyEvent {
+                kind: KeyEventKind::Press,
+                ..
+            })
+        ) {
+            return Ok(());
+        }
+    }
+}
+
+fn with_suspended_terminal<T>(
+    terminal: &mut ratatui::DefaultTerminal,
+    enhanced_keyboard: bool,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let suspend = disable_input(terminal.backend_mut(), enhanced_keyboard)
+        .and_then(|()| terminal.show_cursor())
+        .and_then(|()| terminal::disable_raw_mode())
+        .and_then(|()| {
+            execute!(
+                terminal.backend_mut(),
+                ResetColor,
+                cursor::MoveTo(0, 0),
+                Clear(ClearType::All)
+            )
+        });
+    if let Err(err) = suspend {
+        let _ = terminal::enable_raw_mode();
+        let _ = enable_input(terminal.backend_mut(), enhanced_keyboard);
+        let _ = terminal.hide_cursor();
+        return Err(err).context("could not suspend terminal for external program");
+    }
+
+    let result = operation();
+    let restore = terminal::enable_raw_mode()
+        .and_then(|()| enable_input(terminal.backend_mut(), enhanced_keyboard))
+        .and_then(|()| terminal.hide_cursor())
+        .and_then(|()| terminal.clear());
+    let value = result?;
+    restore.context("could not restore terminal after external program")?;
+    Ok(value)
+}
+
+fn external_diff_status(status: ExitStatus) -> Result<()> {
+    if status.success() || status.code() == Some(1) {
+        Ok(())
+    } else {
+        anyhow::bail!("external diff exited with {status}")
+    }
+}
+
+fn pager_write_result(result: io::Result<()>) -> Result<()> {
+    match result {
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result.context("could not write diff to pager"),
+    }
+}
+
+fn pager_status(status: ExitStatus) -> Result<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("diff pager exited with {status}")
+    }
+}
+
+fn pager_needs_acknowledgement(elapsed: Duration) -> bool {
+    elapsed <= IMMEDIATE_PAGER_EXIT
+}
+
+fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff) -> Result<bool> {
+    let mut offset = 0usize;
+    let mut horizontal_offset = 0usize;
+    let mut focused = true;
+    loop {
+        let size = terminal.size().context("could not determine diff viewport")?;
+        let page = usize::from(size.height.saturating_sub(2)).max(1);
+        let max = diff.lines.len().saturating_sub(page);
+        let horizontal_page = usize::from(size.width).max(1);
+        let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
+        offset = offset.min(max);
+        horizontal_offset = horizontal_offset.min(horizontal_max);
+        terminal
+            .draw(|frame| ui::draw_file_diff(frame, diff, offset, horizontal_offset))
+            .context("could not draw file diff")?;
+        let event = event::read().context("could not read file diff input")?;
+        let key = match event {
+            TerminalEvent::FocusLost => {
+                focused = false;
+                continue;
+            }
+            TerminalEvent::FocusGained => {
+                focused = true;
+                continue;
+            }
+            TerminalEvent::Resize(_, _) => continue,
+            TerminalEvent::Key(key) if focused && key.kind != KeyEventKind::Release => key,
+            _ => continue,
+        };
+        match action(key) {
+            Some(Action::OpenDiff) => return Ok(false),
+            Some(Action::ForceQuit | Action::Quit | Action::Cancel) => return Ok(true),
+            Some(Action::MoveUp) => offset = offset.saturating_sub(1),
+            Some(Action::MoveDown) => offset = offset.saturating_add(1).min(max),
+            Some(Action::PageUp) => offset = offset.saturating_sub(page),
+            Some(Action::PageDown) => offset = offset.saturating_add(page).min(max),
+            Some(Action::HalfPageUp) => offset = offset.saturating_sub((page / 2).max(1)),
+            Some(Action::HalfPageDown) => offset = offset.saturating_add((page / 2).max(1)).min(max),
+            Some(Action::First) => offset = 0,
+            Some(Action::Last) => offset = max,
+            Some(Action::ScrollLeft) => horizontal_offset = horizontal_offset.saturating_sub(horizontal_page),
+            Some(Action::ScrollRight) => {
+                horizontal_offset = horizontal_offset.saturating_add(horizontal_page).min(horizontal_max);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn load_commit_message(repository: &gix::Repository, id: gix::ObjectId) -> Result<BString> {
     let commit = repository.find_commit(id).context("could not load commit message")?;
     Ok(commit.message_raw_sloppy().to_owned())
+}
+
+fn load_changes(
+    repository: &gix::Repository,
+    id: gix::ObjectId,
+    requested_parent: usize,
+    line_diff_pool: &mut LineDiffPool,
+) -> Result<Changes> {
+    let commit = repository.find_commit(id).context("could not load changed paths")?;
+    let parents: Vec<_> = commit.parent_ids().collect();
+    let parent_index = requested_parent.checked_rem(parents.len()).unwrap_or_default();
+    let parent = parents.get(parent_index).copied();
+    let new_tree = commit.tree().context("could not load changed commit tree")?;
+    let old_tree = match parent {
+        Some(parent) => Some(
+            parent
+                .object()
+                .context("could not load parent commit")?
+                .try_into_commit()
+                .context("parent is not a commit")?
+                .tree()
+                .context("could not load parent commit tree")?,
+        ),
+        None => None,
+    };
+    let changes = repository
+        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
+        .context("could not diff commit trees")?;
+    let mut out = Changes {
+        parent: (parents.len() > 1).then(|| ComparedParent {
+            index: parent_index,
+            total: parents.len(),
+            id: parent.expect("a merge has parents").detach(),
+        }),
+        ..Changes::default()
+    };
+    let mut diffs = Vec::new();
+    for change in changes {
+        use gix::object::tree::diff::ChangeDetached;
+        let (kind, source, path, is_tree) = match &change {
+            ChangeDetached::Addition {
+                entry_mode, location, ..
+            } => (ChangeKind::Added, None, location.clone(), entry_mode.is_tree()),
+            ChangeDetached::Deletion {
+                entry_mode, location, ..
+            } => (ChangeKind::Deleted, None, location.clone(), entry_mode.is_tree()),
+            ChangeDetached::Modification {
+                previous_entry_mode,
+                entry_mode,
+                location,
+                ..
+            } => (
+                if previous_entry_mode.kind() == entry_mode.kind() {
+                    ChangeKind::Modified
+                } else {
+                    ChangeKind::TypeChanged
+                },
+                None,
+                location.clone(),
+                previous_entry_mode.is_tree() && entry_mode.is_tree(),
+            ),
+            ChangeDetached::Rewrite {
+                source_location,
+                source_entry_mode,
+                entry_mode,
+                location,
+                copy,
+                ..
+            } => (
+                if *copy { ChangeKind::Copied } else { ChangeKind::Renamed },
+                Some(source_location.clone()),
+                location.clone(),
+                source_entry_mode.is_tree() || entry_mode.is_tree(),
+            ),
+        };
+        if is_tree {
+            continue;
+        }
+        out.paths.push(PathChange {
+            kind,
+            source,
+            path,
+            lines: None,
+        });
+        diffs.push(change);
+    }
+    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
+        path.lines = lines;
+        if let Some((insertions, removals)) = lines {
+            out.lines_added += u64::from(insertions);
+            out.lines_removed += u64::from(removals);
+        }
+        out.diffs.push(change);
+    }
+    Ok(out)
 }
 
 fn actor_bytes(author: &app::Author) -> Vec<u8> {
@@ -684,8 +1416,18 @@ fn should_draw(dirty: bool, streaming: bool, since_draw: Duration) -> bool {
     dirty && (!streaming || since_draw >= FRAME_INTERVAL)
 }
 
-fn poll_timeout(streaming: bool, events: usize, dirty: bool, since_draw: Duration) -> Option<Duration> {
-    streaming.then(|| {
+fn history_is_ready_to_draw(state: State, commits: usize) -> bool {
+    commits != 0 || state != State::Loading
+}
+
+fn poll_timeout(
+    streaming: bool,
+    events: usize,
+    dirty: bool,
+    since_draw: Duration,
+    wake_after: Option<Duration>,
+) -> Option<Duration> {
+    let frame_timeout = streaming.then(|| {
         if events == EVENT_BATCH_SIZE {
             Duration::ZERO
         } else if dirty {
@@ -693,7 +1435,12 @@ fn poll_timeout(streaming: bool, events: usize, dirty: bool, since_draw: Duratio
         } else {
             FRAME_INTERVAL
         }
-    })
+    });
+    match (frame_timeout, wake_after) {
+        (Some(frame), Some(wake_after)) => Some(frame.min(wake_after)),
+        (Some(frame), None) => Some(frame),
+        (None, wake_after) => wake_after,
+    }
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
@@ -709,7 +1456,11 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
             Some(Action::PreviewAuthorCopy(key.kind != KeyEventKind::Release))
         }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Quit),
+        KeyCode::Tab => Some(Action::ToggleChangesFocus),
+        KeyCode::Enter => Some(Action::OpenDiff),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
+        KeyCode::Char('c') => Some(Action::ToggleChanges),
+        KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -742,6 +1493,10 @@ fn action(key: KeyEvent) -> Option<Action> {
     }
 }
 
+fn changes_focusable(changes: Option<&Changes>) -> bool {
+    changes.is_some_and(Changes::is_visible)
+}
+
 fn repeats_viewport(action: &Action) -> bool {
     matches!(
         action,
@@ -756,8 +1511,8 @@ fn repeats_viewport(action: &Action) -> bool {
     )
 }
 
-fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>) -> bool {
-    kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
+fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>, changes_focused: bool) -> bool {
+    !changes_focused && kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
 }
 
 #[cfg(test)]
@@ -778,6 +1533,210 @@ mod tests {
         assert!(
             load_commit_message(&repository, id)?.starts_with(b"topic\n\n--- agent\n\nCo-authored-by:"),
             "on-demand loading retains the full commit message"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn loads_changes_against_each_merge_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let repository = gix::open_opts(&fixture, gix::open::Options::isolated())?;
+        let mut line_diff_pool = None;
+        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, 2)?;
+        assert_eq!(
+            line_diff_pool.as_ref().map(|pool| pool.workers.len()),
+            Some(2),
+            "showing changes creates the requested worker pool"
+        );
+        sync_line_diff_pool(&mut line_diff_pool, false, &fixture, 2)?;
+        assert!(line_diff_pool.is_none(), "hiding changes destroys the worker pool");
+        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, 2)?;
+        let line_diff_pool = line_diff_pool
+            .as_mut()
+            .expect("showing changes recreates the worker pool");
+
+        let root = load_changes(
+            &repository,
+            repository.rev_parse_single("v1^{}")?.detach(),
+            0,
+            line_diff_pool,
+        )?;
+        assert_eq!(
+            root.paths,
+            [PathChange {
+                kind: ChangeKind::Added,
+                source: None,
+                path: "root".into(),
+                lines: Some((1, 0)),
+            }],
+            "root commits are compared to the empty tree"
+        );
+        assert_eq!((root.parent, root.lines_added, root.lines_removed), (None, 1, 0));
+        assert_eq!(root.diffs.len(), 1, "the original change is retained for file diffs");
+        match prepare_file_diff_with_repository(&repository, &root.diffs[0], &root.paths[0])? {
+            FileDiff::BuiltIn(diff) => {
+                assert_eq!(diff.title, "A root");
+                assert!(diff.lines.iter().any(|line| line == "+root"));
+            }
+            FileDiff::External(_) => unreachable!("isolated repositories have no external diff"),
+            FileDiff::Pager { .. } => unreachable!("isolated repositories have no pager"),
+        }
+
+        let external_repository = gix::open_opts(
+            &fixture,
+            gix::open::Options::isolated().config_overrides(["diff.external=test --flag"]),
+        )?;
+        match prepare_file_diff_with_repository(&external_repository, &root.diffs[0], &root.paths[0])? {
+            FileDiff::External(command) => assert!(
+                command
+                    .get_args()
+                    .any(|arg| arg.to_string_lossy().contains("test --flag")),
+                "the configured helper is prepared with shell semantics"
+            ),
+            FileDiff::BuiltIn(_) => unreachable!("configured external diffs take precedence"),
+            FileDiff::Pager { .. } => unreachable!("configured external diffs take precedence"),
+        }
+
+        let pager_repository = gix::open_opts(
+            &fixture,
+            gix::open::Options::isolated().config_overrides(["core.pager=delta --dark"]),
+        )?;
+        match prepare_file_diff_with_repository(&pager_repository, &root.diffs[0], &root.paths[0])? {
+            FileDiff::Pager { command, diff } => {
+                assert!(
+                    command
+                        .get_args()
+                        .any(|arg| arg.to_string_lossy().contains("delta --dark")),
+                    "the configured pager is prepared with shell semantics"
+                );
+                let mut patch = Vec::new();
+                diff.write_to(&mut patch)?;
+                assert!(patch.starts_with(b"--- /dev/null\n+++ b/root\n"));
+                assert!(patch.ends_with(b"\n"), "pagers receive a complete final line");
+            }
+            FileDiff::BuiltIn(_) | FileDiff::External(_) => {
+                unreachable!("configured pagers receive built-in diffs")
+            }
+        }
+
+        for setting in ["core.pager=", "core.pager=cat"] {
+            let repository = gix::open_opts(&fixture, gix::open::Options::isolated().config_overrides([setting]))?;
+            assert!(
+                matches!(
+                    prepare_file_diff_with_repository(&repository, &root.diffs[0], &root.paths[0])?,
+                    FileDiff::BuiltIn(_)
+                ),
+                "disabled pagers retain the built-in viewer"
+            );
+        }
+
+        let topic = load_changes(
+            &repository,
+            repository.rev_parse_single("topic")?.detach(),
+            0,
+            line_diff_pool,
+        )?;
+        assert_eq!(
+            topic.paths,
+            [
+                PathChange {
+                    kind: ChangeKind::Added,
+                    source: None,
+                    path: "topic".into(),
+                    lines: Some((1, 0)),
+                },
+                PathChange {
+                    kind: ChangeKind::Added,
+                    source: None,
+                    path: "topic-extra".into(),
+                    lines: Some((1, 0)),
+                }
+            ],
+            "parallel line diffs retain tree-diff order and status"
+        );
+        assert_eq!((topic.lines_added, topic.lines_removed), (2, 0));
+
+        let merge = repository.rev_parse_single("main")?.detach();
+        let first_parent = load_changes(&repository, merge, 0, line_diff_pool)?;
+        assert_eq!(
+            first_parent.parent,
+            Some(ComparedParent {
+                index: 0,
+                total: 2,
+                id: repository.rev_parse_single("main^1")?.detach(),
+            })
+        );
+        assert_eq!(
+            first_parent.paths,
+            [PathChange {
+                kind: ChangeKind::Added,
+                source: None,
+                path: "merged".into(),
+                lines: Some((1, 0)),
+            }],
+            "the default merge diff compares the result to its first parent"
+        );
+
+        let second_parent = load_changes(&repository, merge, 1, line_diff_pool)?;
+        assert_eq!(
+            second_parent.parent,
+            Some(ComparedParent {
+                index: 1,
+                total: 2,
+                id: repository.rev_parse_single("main^2")?.detach(),
+            })
+        );
+        assert_eq!(
+            second_parent.paths,
+            [PathChange {
+                kind: ChangeKind::Added,
+                source: None,
+                path: "main".into(),
+                lines: Some((1, 0)),
+            }],
+            "later parents can be selected independently"
+        );
+        assert_eq!(
+            load_changes(&repository, merge, 2, line_diff_pool)?.parent,
+            first_parent.parent,
+            "parent selection wraps around"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn streams_diff_bytes_and_accepts_early_pager_exit() -> gix_testtools::Result {
+        let diff = BuiltInDiff::new(
+            "M file".into(),
+            vec![BString::from("--- a/file"), BString::from(vec![b'+', 0xff])],
+        );
+        let mut patch = Vec::new();
+
+        diff.write_to(&mut patch)?;
+
+        assert_eq!(patch, b"--- a/file\n+\xff\n", "patch bytes reach the pager unchanged");
+        pager_write_result(Err(io::Error::new(io::ErrorKind::BrokenPipe, "pager quit")))
+            .expect("an early pager exit is normal");
+        assert!(
+            pager_write_result(Err(io::Error::other("write failed"))).is_err(),
+            "other write failures remain visible"
+        );
+        #[cfg(unix)]
+        assert!(
+            pager_status(std::os::unix::process::ExitStatusExt::from_raw(1 << 8)).is_err(),
+            "a failing pager remains visible"
+        );
+        assert!(
+            pager_needs_acknowledgement(Duration::ZERO),
+            "an immediately closing pager leaves its output visible"
+        );
+        assert!(
+            pager_needs_acknowledgement(Duration::from_millis(250)),
+            "the threshold is inclusive"
+        );
+        assert!(
+            !pager_needs_acknowledgement(Duration::from_millis(251)),
+            "longer-running pagers restore tix immediately"
         );
         Ok(())
     }
@@ -823,6 +1782,18 @@ mod tests {
 
     #[test]
     fn switches_screens_for_inline_commit_panes_and_large_histories() {
+        let mut inline = App::new(1);
+        configure_initial_screen(&mut inline, true);
+        assert!(inline.inline);
+        assert!(!inline.show_changes, "inline startup hides the default changes view");
+        let mut alternate = App::new(1);
+        configure_initial_screen(&mut alternate, false);
+        assert!(!alternate.inline);
+        assert!(
+            alternate.show_changes,
+            "alternate-screen startup keeps the default changes view"
+        );
+
         assert!(
             should_switch_screen(true, true, false),
             "opening the commit pane from inline mode enters the alternate screen"
@@ -843,6 +1814,14 @@ mod tests {
         assert!(!history_needs_alternate_screen(Screen::Auto, 20, 8));
         assert!(history_needs_alternate_screen(Screen::Auto, 20, 10));
         assert!(
+            needs_alternate_screen(false, false, None),
+            "current terminal geometry overrides a stale history-fit flag"
+        );
+        assert!(
+            !needs_alternate_screen(false, false, Some(11)),
+            "a fitting current layout may return to inline mode"
+        );
+        assert!(
             !history_needs_alternate_screen(Screen::Half, 20, usize::MAX),
             "half-screen mode never switches because history grows"
         );
@@ -850,6 +1829,14 @@ mod tests {
 
     #[test]
     fn maps_navigation_and_control_c() {
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+            Some(Action::ToggleChangesFocus)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Some(Action::OpenDiff)
+        );
         assert_eq!(
             action(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)),
             Some(Action::PageUp)
@@ -928,6 +1915,14 @@ mod tests {
             Some(Action::ToggleCommit)
         );
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Some(Action::CycleChangesParent)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE)),
+            Some(Action::ToggleChanges)
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
             Some(Action::CopyAuthor)
         );
@@ -949,24 +1944,77 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(Action::Quit)
+            Some(Action::ForceQuit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
     }
 
     #[test]
+    fn only_visible_changes_can_take_focus() {
+        assert!(!changes_focusable(None));
+        assert!(!changes_focusable(Some(&Changes::default())));
+        let changes = Changes {
+            paths: vec![PathChange {
+                kind: ChangeKind::Modified,
+                source: None,
+                path: "file".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        assert!(changes_focusable(Some(&changes)));
+    }
+
+    #[test]
     fn retains_the_fill_repository_only_for_repeated_viewport_navigation() {
-        assert!(retains_fill_repository(KeyEventKind::Repeat, Some(&Action::MoveDown)));
-        assert!(!retains_fill_repository(KeyEventKind::Press, Some(&Action::MoveDown)));
-        assert!(!retains_fill_repository(KeyEventKind::Release, Some(&Action::MoveDown)));
-        assert!(!retains_fill_repository(
+        assert!(retains_fill_repository(
             KeyEventKind::Repeat,
-            Some(&Action::ScrollRight)
+            Some(&Action::MoveDown),
+            false
         ));
         assert!(!retains_fill_repository(
             KeyEventKind::Repeat,
-            Some(&Action::ToggleDate)
+            Some(&Action::MoveDown),
+            true
         ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Press,
+            Some(&Action::MoveDown),
+            false
+        ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Release,
+            Some(&Action::MoveDown),
+            false
+        ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ScrollRight),
+            false
+        ));
+        assert!(!retains_fill_repository(
+            KeyEventKind::Repeat,
+            Some(&Action::ToggleDate),
+            false
+        ));
+    }
+
+    #[test]
+    fn prepares_a_reduced_selection_after_leaving_the_alternate_screen() {
+        let mut app = App::new(1);
+        app.show_commit = true;
+        app.show_changes = true;
+        app.changes_focused = true;
+
+        prepare_inline_exit(&mut app);
+
+        assert!(app.inline, "the final frame is drawn into the restored inline screen");
+        assert!(
+            !app.show_commit && !app.show_changes,
+            "alternate-screen panels are omitted from the final frame"
+        );
+        assert!(!app.changes_focused, "the hidden panel no longer owns focus");
+        assert!(!app.show_selection_tail, "only the left selection marker remains");
     }
 
     #[test]
@@ -986,6 +2034,18 @@ mod tests {
     #[test]
     fn rendering_is_reactive_and_capped_while_streaming() {
         assert!(
+            !history_is_ready_to_draw(State::Loading, 0),
+            "the initial empty frame remains outside terminal scrollback"
+        );
+        assert!(
+            history_is_ready_to_draw(State::Loading, 1),
+            "the first commit makes loading history renderable"
+        );
+        assert!(
+            history_is_ready_to_draw(State::Computing, 0),
+            "an empty completed traversal remains renderable"
+        );
+        assert!(
             !should_draw(false, false, Duration::MAX),
             "clean frames are never redrawn"
         );
@@ -1002,19 +2062,29 @@ mod tests {
             "streaming frames draw at the deadline"
         );
         assert_eq!(
-            poll_timeout(false, 0, false, Duration::ZERO),
+            poll_timeout(false, 0, false, Duration::ZERO, None),
             None,
             "idle waits reactively for terminal input"
         );
         assert_eq!(
-            poll_timeout(true, EVENT_BATCH_SIZE, true, Duration::ZERO),
+            poll_timeout(true, EVENT_BATCH_SIZE, true, Duration::ZERO, None),
             Some(Duration::ZERO),
             "saturated history batches keep processing"
         );
         assert_eq!(
-            poll_timeout(true, 1, true, Duration::from_millis(10)),
+            poll_timeout(true, 1, true, Duration::from_millis(10), None),
             Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
             "dirty streaming frames wait only until their deadline"
+        );
+        assert_eq!(
+            poll_timeout(false, 0, false, Duration::ZERO, Some(REPEAT_IDLE)),
+            Some(REPEAT_IDLE),
+            "repeat-idle restoration wakes an otherwise idle event loop"
+        );
+        assert_eq!(
+            poll_timeout(true, 1, true, Duration::from_millis(10), Some(REPEAT_IDLE)),
+            Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
+            "the earlier frame deadline takes precedence over repeat-idle restoration"
         );
     }
 }
