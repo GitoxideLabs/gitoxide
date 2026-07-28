@@ -316,8 +316,8 @@ git clone --shared base credential-helpers
     function baseline() {
       local url=${1:?need url}
       {
-        echo $url
-        echo url=$url | GIT_TRACE=1 $git credential fill 2>&1 | grep -E '^[a-z]+:' || :
+        echo "$url"
+        echo "url=$url" | GIT_TRACE=1 "$git" credential fill 2>&1 | grep -E '^[a-z]+:' || :
       } >> baseline.git
     }
 
