@@ -71,21 +71,12 @@ fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result
         .cli_overrides(["marker.precedence=cli"])
         .config_overrides(["marker.precedence=api"]);
 
-    let repo = gix::ThreadSafeRepository::init_opts(
-        &repo_path,
-        gix::create::Kind::WithWorktree,
-        Default::default(),
-        options.clone(),
-    )?
-    .to_thread_local();
-    let repo = repo.config_snapshot();
-
     let globals = gix::config(Some(std::path::Path::new("project/.git")), &options)?;
     assert_eq!(globals.boolean("marker.global")?, Some(true), "global files are loaded");
     assert_eq!(
         globals.boolean("marker.included")?,
         Some(true),
-        "git-dir conditional includes use the provided repository path"
+        "git-dir conditional includes use the provided future repository path"
     );
     assert_eq!(
         globals.string("marker.precedence").expect("API override is present"),
@@ -104,6 +95,11 @@ fn globals_from_open_options_match_repository_opening() -> gix_testtools::Result
         None,
         "git-dir conditional includes aren't loaded without repository context"
     );
+
+    let repo =
+        gix::ThreadSafeRepository::init_opts(&repo_path, gix::create::Kind::WithWorktree, Default::default(), options)?
+            .to_thread_local();
+    let repo = repo.config_snapshot();
 
     for key in ["marker.global", "marker.included"] {
         assert_eq!(

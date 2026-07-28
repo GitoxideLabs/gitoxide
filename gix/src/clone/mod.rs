@@ -51,6 +51,8 @@ pub struct PrepareFetch {
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
+    Config(#[from] crate::config::Error),
+    #[error(transparent)]
     Init(#[from] crate::init::Error),
     #[error(transparent)]
     CommitterOrFallback(#[from] crate::config::commit_signature::Error),
@@ -108,10 +110,25 @@ impl PrepareFetch {
         path: &std::path::Path,
         kind: crate::create::Kind,
         mut create_opts: crate::create::Options,
-        open_opts: crate::open::Options,
+        mut open_opts: crate::open::Options,
     ) -> Result<Self, Error> {
         if create_opts.destination_must_be_empty.is_none() {
             create_opts.destination_must_be_empty = Some(true);
+        }
+
+        let git_dir = match kind {
+            crate::create::Kind::WithWorktree => path.join(gix_discover::DOT_GIT_DIR),
+            crate::create::Kind::Bare => path.to_owned(),
+        };
+        let config = crate::config(Some(&git_dir), &open_opts)?;
+        if crate::config::cache::util::config_bool_opt(
+            &config,
+            &crate::config::tree::Core::SYMLINKS,
+            "core.symlinks",
+            open_opts.lenient_config,
+        )? == Some(false)
+        {
+            open_opts.api_config_overrides.push("core.symlinks=false".into());
         }
 
         // Capture this before init_opts creates `.git`, otherwise the check below would see our own files.

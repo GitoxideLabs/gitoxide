@@ -170,12 +170,20 @@ fn default_object_hash() -> Option<gix_hash::Kind> {
 pub fn into(
     directory: impl Into<PathBuf>,
     kind: Kind,
+    options: Options,
+) -> Result<gix_discover::repository::Path, Error> {
+    into_with_capabilities(directory, kind, options).map(|(path, _)| path)
+}
+
+pub(crate) fn into_with_capabilities(
+    directory: impl Into<PathBuf>,
+    kind: Kind,
     Options {
         fs_capabilities,
         destination_must_be_empty,
         object_hash,
     }: Options,
-) -> Result<gix_discover::repository::Path, Error> {
+) -> Result<(gix_discover::repository::Path, gix_fs::Capabilities), Error> {
     let mut dot_git = directory.into();
     let bare = matches!(kind, Kind::Bare);
 
@@ -261,7 +269,9 @@ pub fn into(
             core.push("filemode", bool(caps.executable_bit))?;
             core.push("bare", bool(bare))?;
             core.push("logallrefupdates", bool(!bare))?;
-            core.push("symlinks", bool(caps.symlink))?;
+            if !caps.symlink {
+                core.push("symlinks", bool(false))?;
+            }
             core.push("ignorecase", bool(caps.ignore_case))?;
             core.push("precomposeunicode", bool(caps.precompose_unicode))?;
 
@@ -289,16 +299,19 @@ pub fn into(
         caps
     };
 
-    Ok(gix_discover::repository::Path::from_dot_git_dir(
-        dot_git,
-        if bare {
-            gix_discover::repository::Kind::PossiblyBare
-        } else {
-            gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
-        },
-        &gix_fs::current_dir(caps.precompose_unicode)?,
-    )
-    .expect("by now the `dot_git` dir is valid as we have accessed it"))
+    Ok((
+        gix_discover::repository::Path::from_dot_git_dir(
+            dot_git,
+            if bare {
+                gix_discover::repository::Kind::PossiblyBare
+            } else {
+                gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
+            },
+            &gix_fs::current_dir(caps.precompose_unicode)?,
+        )
+        .expect("by now the `dot_git` dir is valid as we have accessed it"),
+        caps,
+    ))
 }
 
 fn bool(v: bool) -> &'static str {

@@ -430,8 +430,8 @@ pub fn open_opts(directory: impl Into<std::path::PathBuf>, options: open::Option
 
 /// Load configuration available without an existing repository, using the configuration-related portions of `options`.
 ///
-/// `git_dir` supplies context for `includeIf.gitdir` conditions and must exist if includes are enabled. Without it,
-/// these conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
+/// `git_dir` supplies context for `includeIf.gitdir` conditions and does not have to exist. Without it, these
+/// conditions aren't matched. Repository-local and branch-dependent configuration isn't available at this stage.
 pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Result<config::File, config::Error> {
     let environment = options.permissions.env;
     let git_install_dir = path::install_dir().ok();

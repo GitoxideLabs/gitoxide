@@ -68,7 +68,10 @@ impl ThreadSafeRepository {
         create_options: crate::create::Options,
         mut open_options: crate::open::Options,
     ) -> Result<Self, Error> {
-        let path = crate::create::into(directory.as_ref(), kind, create_options)?;
+        let (path, capabilities) = crate::create::into_with_capabilities(directory.as_ref(), kind, create_options)?;
+        if !capabilities.symlink {
+            open_options.api_config_overrides.push("core.symlinks=false".into());
+        }
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
         open_options.git_dir_trust = Some(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
