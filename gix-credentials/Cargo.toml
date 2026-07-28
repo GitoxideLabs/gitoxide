@@ -22,6 +22,7 @@ serde = ["dep:serde", "bstr/serde", "gix-sec/serde"]
 gix-sec = { version = "^0.14.2", path = "../gix-sec" }
 gix-url = { version = "^0.37.0", path = "../gix-url" }
 gix-path = { version = "^0.12.3", path = "../gix-path" }
+gix-quote = { version = "^0.7.2", path = "../gix-quote" }
 gix-command = { version = "^0.9.1", path = "../gix-command" }
 gix-config-value = { version = "^0.19.0", path = "../gix-config-value" }
 gix-prompt = { version = "^0.16.0", path = "../gix-prompt" }
@@ -37,7 +38,6 @@ bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 document-features = { version = "0.2.1", optional = true }
 
 [dev-dependencies]
-gix-quote = { path = "../gix-quote" }
 gix-sec = { path = "../gix-sec" }
 gix-testtools = { path = "../tests/tools" }
 
