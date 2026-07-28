@@ -4,15 +4,56 @@ use ratatui::{
     layout::{Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
 use crate::{
-    app::{App, AttributionKind, CommitRow, CopyKind, NameMode, RefMode, SignatureState, State},
+    BuiltInDiff,
+    app::{App, AttributionKind, ChangeKind, Changes, CommitRow, CopyKind, NameMode, RefMode, SignatureState, State},
     history::{DecorationKind, Decorations},
 };
 
+const COMPARED_PARENT_COLOR: Color = Color::Cyan;
 const NOTE_COLOR: Color = Color::LightMagenta;
+
+pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: usize, horizontal_offset: usize) {
+    let [header, body, footer] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
+    frame.render_widget(Clear, frame.area());
+    frame.render_widget(
+        Paragraph::new(diff.title.to_str_lossy()).style(Style::default().add_modifier(Modifier::BOLD)),
+        header,
+    );
+    let lines = diff
+        .lines
+        .iter()
+        .map(|line| {
+            let style = if line.starts_with(b"@@") {
+                Style::default().fg(Color::Cyan)
+            } else if line.starts_with(b"+") {
+                Style::default().fg(Color::Green)
+            } else if line.starts_with(b"-") {
+                Style::default().fg(Color::Red)
+            } else if line.starts_with(b"Binary ") {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            Line::styled(line.to_str_lossy(), style)
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(Text::from(lines)).scroll((
+            u16::try_from(offset).unwrap_or(u16::MAX),
+            u16::try_from(horizontal_offset).unwrap_or(u16::MAX),
+        )),
+        body,
+    );
+    frame.render_widget(
+        Paragraph::new("↑↓/jk move · h/l pan · Enter/q/Esc back").style(Style::default().add_modifier(Modifier::DIM)),
+        footer,
+    );
+}
 
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
@@ -20,6 +61,7 @@ pub(crate) fn draw(
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     commit_message: Option<&BStr>,
+    changes: Option<&Changes>,
 ) {
     let [top_spacer, mut body, bottom_spacer, footer] = Layout::vertical([
         Constraint::Length(u16::from(app.inline)),
@@ -30,25 +72,51 @@ pub(crate) fn draw(
     .areas(frame.area());
     frame.render_widget(Clear, top_spacer);
     frame.render_widget(Clear, bottom_spacer);
-    let commit_pane = app.show_commit.then(|| {
-        let width = 80.min(body.width / 2);
-        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(body);
+    let full_body = body;
+    let compared_parent = if app.changes_visible() {
+        changes.and_then(|changes| changes.parent.map(|parent| parent.id))
+    } else {
+        None
+    };
+    let changes_pane = app.changes_visible().then(|| {
+        let desired_height = changes.filter(|changes| changes.is_visible()).map_or(0, |changes| {
+            u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(3)
+        });
+        let max_height = frame.area().height / 2;
+        let height = desired_height.min(max_height);
+        let [commits, changes] = Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(full_body);
         body = commits;
-        message.inner(Margin {
-            horizontal: 2,
-            vertical: 1,
-        })
+        (
+            changes,
+            changes.inner(Margin {
+                horizontal: 2,
+                vertical: 1,
+            }),
+        )
+    });
+    let commit_pane = app.show_commit.then(|| {
+        let width = 80.min(full_body.width / 2);
+        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
+        body.width = body.width.min(commits.width);
+        (
+            message,
+            message.inner(Margin {
+                horizontal: 2,
+                vertical: 1,
+            }),
+        )
     });
     app.viewport_rows = body.height as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
+    let lane_end = start.saturating_add(full_body.height as usize).min(app.rows.len());
     let visible_rows = &app.rows[start..end];
     let has_verifiable_signatures = visible_rows.iter().enumerate().any(|(index, row)| {
         !app.is_row_hidden(start + index)
             && matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying)
     });
-    let lanes = app.render_lanes(start..end);
+    let lanes = app.render_lanes(start..lane_end);
     let content = Rect::new(
         body.x.saturating_add(2),
         body.y,
@@ -98,7 +166,8 @@ pub(crate) fn draw(
                     show_trailers,
                     use_mailmap: app.use_mailmap && !preview_author_copy && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
-                    selected: selected == Some(start + index),
+                    selected: (selected == Some(start + index) && app.show_selection_tail)
+                        || compared_parent == Some(row.id),
                     preview_author_copy,
                     copy_feedback: if selected == Some(start + index) {
                         copy_feedback
@@ -110,18 +179,8 @@ pub(crate) fn draw(
         })
         .collect();
     let graph_max_offset = max_lane_width.saturating_sub(align_width);
-    let metadata_max_offset = if align_metadata {
-        metadata
-            .iter()
-            .map(Line::width)
-            .max()
-            .unwrap_or_default()
-            .saturating_sub((content.width as usize).saturating_sub(align_width))
-    } else {
-        0
-    };
     let max_offset = if align_metadata {
-        graph_max_offset.saturating_add(metadata_max_offset)
+        graph_max_offset
     } else {
         lanes
             .iter()
@@ -134,7 +193,6 @@ pub(crate) fn draw(
     .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
     let graph_offset = horizontal_offset.min(graph_max_offset);
-    let metadata_offset = horizontal_offset.saturating_sub(graph_max_offset);
 
     for (index, metadata) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
@@ -142,11 +200,16 @@ pub(crate) fn draw(
         let selected = app.selected == Some(start + index);
         let metadata_width = metadata.width();
         let signature_color = signature_color(visible_rows[index].signature);
-        let style = if selected {
-            color(signature_color).add_modifier(Modifier::REVERSED)
+        let highlight = if selected && app.show_selection_tail {
+            Some(signature_color)
+        } else if compared_parent == Some(visible_rows[index].id) {
+            Some(COMPARED_PARENT_COLOR)
         } else {
-            Style::default()
+            None
         };
+        let style = highlight.map_or_else(Style::default, |highlight| {
+            color(highlight).add_modifier(Modifier::REVERSED)
+        });
         frame.render_widget(
             Paragraph::new(if selected { "> " } else { "  " }).style(style),
             Rect::new(body.x, y, body.width.min(2), 1),
@@ -163,7 +226,7 @@ pub(crate) fn draw(
                 row_area,
                 lane,
                 graph_offset,
-                selected,
+                highlight,
                 visible_rows[index].signature,
             );
             let aligned = Rect::new(
@@ -173,7 +236,7 @@ pub(crate) fn draw(
                 1,
             );
             frame.render_widget(Clear, aligned);
-            frame.render_widget(Paragraph::new(metadata).scroll((0, metadata_offset as u16)), aligned);
+            frame.render_widget(Paragraph::new(metadata), aligned);
         } else {
             let mut spans = Vec::with_capacity(metadata.spans.len() + 1);
             spans.push(Span::styled(lane, style));
@@ -187,7 +250,7 @@ pub(crate) fn draw(
                 row_area,
                 lane,
                 horizontal_offset,
-                selected,
+                highlight,
                 visible_rows[index].signature,
             );
         }
@@ -219,7 +282,7 @@ pub(crate) fn draw(
         }
         if selected && app.show_selection_tail && body.width > 0 {
             let line_width = if align_metadata {
-                align_width.saturating_add(metadata_width.saturating_sub(metadata_offset))
+                align_width.saturating_add(metadata_width)
             } else {
                 lane.chars()
                     .count()
@@ -248,8 +311,51 @@ pub(crate) fn draw(
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
-    if let (Some(area), Some(message)) = (commit_pane, commit_message) {
-        render_commit_message(frame, area, message);
+    if let Some((outer, area)) = changes_pane {
+        frame.render_widget(Clear, outer);
+        frame.render_widget(Block::new().borders(Borders::TOP), outer);
+        if let Some(changes) = changes.filter(|changes| changes.is_visible()) {
+            render_changes(frame, area, changes, app);
+            let status = Rect::new(
+                outer.x.saturating_add(2),
+                outer.bottom().saturating_sub(1),
+                outer.width.saturating_sub(4),
+                1,
+            );
+            let mut spans = Vec::new();
+            if let Some(parent) = changes.parent {
+                spans.extend([
+                    Span::styled(
+                        format!(
+                            "vs parent {}/{} {}",
+                            parent.index + 1,
+                            parent.total,
+                            parent.id.to_hex_with_len(7)
+                        ),
+                        color(COMPARED_PARENT_COLOR),
+                    ),
+                    Span::raw(" · p next parent · "),
+                ]);
+            }
+            if let Some(error) = &app.diff_error {
+                spans.push(Span::styled(format!("diff: {error}"), color(Color::Red)));
+            } else {
+                spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
+            }
+            spans.push(Span::raw(" · c to hide"));
+            frame.render_widget(Paragraph::new(Line::from(spans)), status);
+        }
+        if !app.changes_focused {
+            frame
+                .buffer_mut()
+                .set_style(outer, Style::default().add_modifier(Modifier::DIM));
+        }
+    }
+    if let Some((outer, area)) = commit_pane {
+        frame.render_widget(Clear, outer);
+        if let Some(message) = commit_message {
+            render_commit_message(frame, area, message);
+        }
     }
 
     let status = match app.state {
@@ -263,8 +369,18 @@ pub(crate) fn draw(
         "{} commits{status} · ↑↓/jk move · h/l pan",
         app.rows.len()
     ))];
+    if app.changes_visible() && changes.is_some_and(Changes::is_visible) {
+        footer_spans.push(match app.focus_feedback.take() {
+            Some(destination) => Span::raw(format!(" · Tab → {destination}")),
+            None => Span::raw(" · Tab switch"),
+        });
+    }
+    if app.changes_focused {
+        footer_spans.push(Span::raw(" · q/Esc history"));
+    }
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
+    footer_spans.extend([Span::raw(" · "), toggle("c changes", app.show_changes)]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -313,11 +429,154 @@ pub(crate) fn draw(
             Span::styled("●", color(Color::Green)),
         ]);
     }
-    if app.state == State::Loading {
-        footer_spans.push(Span::raw(" · Esc cancel"));
+    if !app.changes_focused {
+        if app.state == State::Loading {
+            footer_spans.push(Span::raw(" · Esc cancel"));
+        }
+        footer_spans.push(Span::raw(" · q quit"));
     }
-    footer_spans.push(Span::raw(" · q quit"));
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    if app.changes_focused {
+        frame
+            .buffer_mut()
+            .set_style(body, Style::default().add_modifier(Modifier::DIM));
+    }
+}
+
+fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, app: &mut App) {
+    if !changes.is_visible() || area.height == 0 {
+        app.set_changes_bounds(0, 0, area.width as usize, 0);
+        return;
+    }
+    let mut summary = Vec::new();
+    for kind in [
+        ChangeKind::Added,
+        ChangeKind::Modified,
+        ChangeKind::Deleted,
+        ChangeKind::Renamed,
+        ChangeKind::Copied,
+        ChangeKind::TypeChanged,
+    ] {
+        let count = changes.paths.iter().filter(|change| change.kind == kind).count();
+        if count == 0 {
+            continue;
+        }
+        if !summary.is_empty() {
+            summary.push(Span::raw("  "));
+        }
+        summary.push(Span::styled(
+            format!("{} = {count}", kind.letter()),
+            color(change_color(kind)),
+        ));
+    }
+    if !summary.is_empty() {
+        summary.push(Span::raw(" · "));
+    }
+    summary.extend([
+        Span::raw(format!("{} files changed · ", changes.paths.len())),
+        Span::styled(format!("+{}", changes.lines_added), color(Color::Green)),
+        Span::raw(" "),
+        Span::styled(format!("-{}", changes.lines_removed), color(Color::Red)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(Line::from(summary)),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+
+    let path_capacity = usize::from(area.height.saturating_sub(1));
+    let overflow = changes.paths.len() > 1 && changes.paths.len() > path_capacity;
+    let visible_paths = if overflow {
+        path_capacity.saturating_sub(1)
+    } else {
+        path_capacity.min(changes.paths.len())
+    };
+    let lines: Vec<_> = changes
+        .paths
+        .iter()
+        .enumerate()
+        .map(|(index, change)| {
+            let selected = app.changes_focused && index == app.changes_selected;
+            let path_style = if selected {
+                Style::default().add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default()
+            };
+            let mut spans = vec![
+                Span::styled(change.kind.letter().to_string(), color(change_color(change.kind))),
+                Span::raw(" "),
+            ];
+            if let Some(source) = &change.source {
+                spans.extend([
+                    Span::styled(source.to_str_lossy(), path_style),
+                    Span::styled(" -> ", path_style),
+                    Span::styled(change.path.to_str_lossy(), path_style),
+                ]);
+            } else {
+                spans.push(Span::styled(change.path.to_str_lossy(), path_style));
+            }
+            if selected && let Some((insertions, removals)) = change.lines {
+                spans.extend([
+                    Span::raw(" "),
+                    Span::styled(format!("+{insertions}"), color(Color::Green)),
+                    Span::raw(" "),
+                    Span::styled(format!("-{removals}"), color(Color::Red)),
+                ]);
+            }
+            Line::from(spans)
+        })
+        .collect();
+    let horizontal_max = lines
+        .iter()
+        .map(Line::width)
+        .max()
+        .unwrap_or_default()
+        .saturating_sub(area.width as usize);
+    app.set_changes_bounds(visible_paths, changes.paths.len(), area.width as usize, horizontal_max);
+    let path_area = Rect::new(
+        area.x,
+        area.y.saturating_add(1),
+        area.width,
+        u16::try_from(visible_paths).unwrap_or(u16::MAX),
+    );
+    frame.render_widget(
+        Paragraph::new(Text::from(
+            lines
+                .into_iter()
+                .skip(app.changes_offset)
+                .take(visible_paths)
+                .collect::<Vec<_>>(),
+        ))
+        .scroll((0, u16::try_from(app.changes_horizontal_offset).unwrap_or(u16::MAX))),
+        path_area,
+    );
+    let hidden = changes
+        .paths
+        .len()
+        .saturating_sub(app.changes_offset.saturating_add(visible_paths));
+    if overflow && hidden > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!("… {hidden} {} not shown", if hidden == 1 { "line" } else { "lines" }),
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+            Rect::new(
+                area.x,
+                area.bottom().saturating_sub(1),
+                area.width,
+                u16::from(area.height > 0),
+            ),
+        );
+    }
+}
+
+fn change_color(kind: ChangeKind) -> Color {
+    match kind {
+        ChangeKind::Added => Color::Green,
+        ChangeKind::Modified => Color::Yellow,
+        ChangeKind::Deleted => Color::Red,
+        ChangeKind::Renamed | ChangeKind::Copied => Color::Cyan,
+        ChangeKind::TypeChanged => Color::Magenta,
+    }
 }
 
 fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr) {
@@ -622,15 +881,15 @@ fn color_graph(
     area: Rect,
     graph: &str,
     offset: usize,
-    selected: bool,
+    highlight: Option<Color>,
     signature: SignatureState,
 ) {
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
             continue;
         }
-        let style = if selected {
-            color(signature_color(signature)).add_modifier(Modifier::REVERSED)
+        let style = if let Some(highlight) = highlight {
+            color(highlight).add_modifier(Modifier::REVERSED)
         } else if symbol == '●' {
             color(signature_color(signature))
         } else {
@@ -686,7 +945,7 @@ mod tests {
     }
 
     fn draw(frame: &mut Frame<'_>, app: &mut App, decorations: &Decorations) {
-        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default(), None);
+        super::draw(frame, app, decorations, &gix::mailmap::Snapshot::default(), None, None);
     }
 
     fn complete(app: &mut App) {
@@ -695,6 +954,33 @@ mod tests {
             .expect("a loading app starts lane computation");
         let (rows, lanes, lane_time) = crate::app::compute_lanes(rows);
         app.finish_lane_computation(rows, lanes, lane_time);
+    }
+
+    #[test]
+    fn renders_a_colored_file_diff_pager() -> Result<(), Box<dyn std::error::Error>> {
+        let diff = BuiltInDiff::new(
+            "M file".into(),
+            ["--- a/file", "+++ b/file", "@@ -1 +1 @@", "-old", "+new"]
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
+        let mut terminal = Terminal::new(TestBackend::new(40, 7))?;
+
+        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+
+        assert_eq!(rendered_line(&terminal, 0).trim(), "M file");
+        for (y, color) in [
+            (1, Color::Red),
+            (2, Color::Green),
+            (3, Color::Cyan),
+            (4, Color::Red),
+            (5, Color::Green),
+        ] {
+            assert_eq!(terminal.backend().buffer()[(0, y)].fg, color);
+        }
+        assert!(rendered_line(&terminal, 6).contains("Enter/q/Esc back"));
+        Ok(())
     }
 
     #[test]
@@ -752,7 +1038,7 @@ mod tests {
 
         let mailmap =
             gix::mailmap::Snapshot::from_bytes(b"Mapped Human <mapped@example.com> Human <human@example.com>\n");
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
 
         let row = rendered_row(&terminal);
         assert!(
@@ -788,7 +1074,7 @@ mod tests {
 
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
         let row = rendered_row(&terminal);
         assert!(row.contains("Codex"), "the first n keeps the primary actor");
         assert!(
@@ -796,7 +1082,7 @@ mod tests {
             "the first n hides trailer actors while trailers are enabled"
         );
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("Codex"), "the second n hides the primary actor");
         assert!(
@@ -805,7 +1091,7 @@ mod tests {
         );
         app.update(Action::ToggleName);
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains("Re: Human"),
             "m restores original trailer actor names"
@@ -918,13 +1204,13 @@ mod tests {
         )]);
         let mailmap =
             gix::mailmap::Snapshot::from_bytes(b"mapped author <mapped@example.com> author <author@example.com>\n");
-        let mut terminal = Terminal::new(TestBackend::new(150, 2))?;
+        let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
 
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · c changes · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
-        let mut expected = Buffer::with_lines([format!("{selected_line:<150}"), format!("{footer_text:<150}")]);
+        let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
         }
@@ -965,7 +1251,7 @@ mod tests {
 
         app.inline = true;
         let mut inline_terminal = Terminal::new(TestBackend::new(140, 4))?;
-        inline_terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        inline_terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_line(&inline_terminal, 0).trim().is_empty(),
             "inline mode separates the commits from preceding content"
@@ -993,7 +1279,7 @@ mod tests {
         );
 
         app.update(Action::ToggleMailmap);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),
             "m restores the original author name"
@@ -1003,7 +1289,7 @@ mod tests {
 
         app.update(Action::ToggleDate);
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         let row = rendered_row(&terminal);
         assert!(!row.contains("1970-01-01"), "d hides the committer date");
         assert!(
@@ -1016,7 +1302,7 @@ mod tests {
         assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
 
         app.update(Action::ToggleName);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains("author"),
             "the second n restores the author name"
@@ -1027,7 +1313,7 @@ mod tests {
         );
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
@@ -1036,7 +1322,7 @@ mod tests {
         assert!(footer_is_dim(&terminal, "r no refs"), "no refs is dimmed");
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(rendered_row(&terminal).contains("HEAD"), "all refs shows regular refs");
         assert!(
             rendered_row(&terminal).contains("refs/patches"),
@@ -1045,7 +1331,7 @@ mod tests {
         assert!(!footer_is_dim(&terminal, "r all refs"), "all refs is not dimmed");
 
         app.update(Action::ToggleRefs);
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(rendered_row(&terminal).contains("HEAD"), "refs shows regular refs");
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
@@ -1054,20 +1340,20 @@ mod tests {
         assert!(!footer_is_dim(&terminal, "r refs"), "refs is not dimmed");
 
         app.has_hidden_filter = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v show hidden"),
             "the footer advertises the configured hidden-history toggle"
         );
         app.show_hidden = true;
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_line(&terminal, 1).contains("v hide hidden"),
             "the footer reflects the unfiltered view"
         );
 
         app.update(Action::PreviewAuthorCopy(true));
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None))?;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         let row = rendered_row(&terminal);
         assert!(
             row.contains("author subject"),
@@ -1176,7 +1462,14 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(2, states.len() as u16))?;
         terminal.draw(|frame| {
             for (y, (state, _)) in states.iter().enumerate() {
-                color_graph(frame, Rect::new(0, y as u16, 2, 1), "●─", 0, true, *state);
+                color_graph(
+                    frame,
+                    Rect::new(0, y as u16, 2, 1),
+                    "●─",
+                    0,
+                    Some(signature_color(*state)),
+                    *state,
+                );
             }
         })?;
 
@@ -1262,6 +1555,7 @@ mod tests {
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
                 Some(b"subject\n\nbody".as_bstr()),
+                None,
             );
         })?;
         assert_eq!(
@@ -1296,12 +1590,429 @@ mod tests {
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
                 Some(b"subject".as_bstr()),
+                None,
             );
         })?;
         assert_eq!(
             wide_terminal.backend().buffer()[(122, 1)].symbol(),
             "s",
             "the pane remains eighty columns wide on a wide screen"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn changing_the_changes_height_keeps_history_alignment_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(11);
+        app.extend_commits(
+            (1..=8)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("subject {n}").into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.set_lane(6, "●──────── ");
+        let path = crate::app::PathChange {
+            kind: ChangeKind::Modified,
+            source: None,
+            path: "path".into(),
+            lines: None,
+        };
+        let changes = |len| Changes {
+            paths: vec![path.clone(); len],
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes(1)),
+            );
+        })?;
+        let short = rendered_line(&terminal, 0)
+            .find("0101010")
+            .expect("metadata is visible with a short changes pane");
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes(8)),
+            );
+        })?;
+        assert_eq!(
+            rendered_line(&terminal, 0).find("0101010"),
+            Some(short),
+            "changes pane height does not move aligned history metadata"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn shows_changed_paths_in_a_bottom_pane_below_the_summary() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(6);
+        app.extend_commits(vec![
+            Commit {
+                id: gix::ObjectId::Sha1([1; 20]),
+                parent_ids: [gix::ObjectId::Sha1([2; 20]), gix::ObjectId::Sha1([3; 20])]
+                    .into_iter()
+                    .collect(),
+                committer_time: gix::date::Time::default(),
+                author: author(b"author", b"author@example.com"),
+                attributions: 0..0,
+                title: "merge".into(),
+                metadata_loaded: true,
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
+            },
+            Commit {
+                id: gix::ObjectId::Sha1([2; 20]),
+                parent_ids: Default::default(),
+                committer_time: gix::date::Time::default(),
+                author: author(b"author", b"author@example.com"),
+                attributions: 0..0,
+                title: "parent".into(),
+                metadata_loaded: true,
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
+            },
+        ]);
+        complete(&mut app);
+        let changes = Changes {
+            parent: None,
+            paths: vec![
+                crate::app::PathChange {
+                    kind: ChangeKind::Added,
+                    source: None,
+                    path: "added".into(),
+                    lines: Some((10, 0)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    source: None,
+                    path: "modified".into(),
+                    lines: Some((5, 2)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Deleted,
+                    source: None,
+                    path: "deleted".into(),
+                    lines: Some((0, 7)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Renamed,
+                    source: Some("old".into()),
+                    path: "new".into(),
+                    lines: Some((3, 3)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Copied,
+                    source: Some("source".into()),
+                    path: "copy".into(),
+                    lines: Some((0, 0)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::TypeChanged,
+                    source: None,
+                    path: format!("{}tail", "x".repeat(130)).into(),
+                    lines: Some((24, 5)),
+                },
+            ],
+            diffs: Vec::new(),
+            lines_added: 42,
+            lines_removed: 17,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 16))?;
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+
+        assert_eq!(
+            terminal.backend().buffer()[(20, 7)].symbol(),
+            "─",
+            "the changes pane starts at the screen's halfway point"
+        );
+        assert!(
+            terminal.backend().buffer()[(20, 7)].modifier.contains(Modifier::DIM),
+            "the inactive changes border is dimmed"
+        );
+        assert!(
+            !terminal.backend().buffer()[(5, 0)].modifier.contains(Modifier::DIM)
+                && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
+            "the focused history and its status use their normal intensity"
+        );
+        let summary = rendered_line(&terminal, 8);
+        assert!(
+            summary.contains("A = 1  M = 1  D = 1  R = 1  C = 1  T = 1 · 6 files changed · +42 -17"),
+            "the pane starts with nonzero status and line aggregates"
+        );
+        let added_x = summary.find("A = 1").expect("added aggregate is visible") as u16;
+        let deleted_x = summary.find("D = 1").expect("deleted aggregate is visible") as u16;
+        assert_eq!(terminal.backend().buffer()[(added_x, 8)].fg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(deleted_x, 8)].fg, Color::Red);
+        assert!(
+            terminal.backend().buffer()[(added_x, 8)]
+                .modifier
+                .contains(Modifier::DIM),
+            "the inactive summary is dimmed without losing its colors"
+        );
+        assert!(
+            rendered_line(&terminal, 9).contains("A added"),
+            "changed paths follow the summary in diff order"
+        );
+        let inactive_path = rendered_line(&terminal, 9);
+        let inactive_x = inactive_path.find("A added").expect("changed path is visible") as u16;
+        assert!(
+            terminal.backend().buffer()[(inactive_x, 9)]
+                .modifier
+                .contains(Modifier::DIM)
+                && terminal.backend().buffer()[(inactive_x + 2, 9)]
+                    .modifier
+                    .contains(Modifier::DIM),
+            "the inactive change kind and path are dimmed"
+        );
+        assert!(
+            !rendered_line(&terminal, 9).contains("+10"),
+            "inactive panes do not display a path selection"
+        );
+        assert!(
+            rendered_line(&terminal, 13).contains("… 2 lines not shown"),
+            "the capped pane reports paths that do not fit"
+        );
+        assert!(
+            rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"),
+            "the changes status advertises its navigation keys"
+        );
+        assert!(
+            terminal.backend().buffer()[(2, 14)].modifier.contains(Modifier::DIM),
+            "the inactive changes status is dimmed"
+        );
+        assert!(rendered_line(&terminal, 15).contains("Tab switch"));
+
+        app.changes_suppressed = true;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            !rendered_line(&terminal, 8).contains("files changed"),
+            "repeated history navigation temporarily hides the changes pane"
+        );
+        assert!(
+            app.show_changes && !footer_is_dim(&terminal, "c changes"),
+            "temporary suppression leaves the persistent changes setting enabled"
+        );
+        app.changes_suppressed = false;
+
+        app.update(Action::ToggleChangesFocus);
+        app.update(Action::MoveDown);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            !terminal.backend().buffer()[(20, 7)].modifier.contains(Modifier::DIM),
+            "the focused changes border uses its normal style"
+        );
+        assert!(
+            terminal.backend().buffer()[(5, 0)].modifier.contains(Modifier::DIM)
+                && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
+            "the inactive history is dimmed without dimming the main status"
+        );
+        assert!(rendered_line(&terminal, 15).contains("Tab → changes"));
+        assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 15).contains("Tab switch"),
+            "focus feedback lasts for one redraw"
+        );
+        assert!(
+            !terminal.backend().buffer()[(added_x, 8)]
+                .modifier
+                .contains(Modifier::DIM)
+                && !terminal.backend().buffer()[(2, 14)].modifier.contains(Modifier::DIM),
+            "the focused summary and status use their normal intensity"
+        );
+        let selected = rendered_line(&terminal, 10);
+        assert!(selected.contains("M modified +5 -2"));
+        let path_x = selected.find("modified").expect("selected path is visible") as u16;
+        let kind_x = selected.find("M modified").expect("selected kind is visible") as u16;
+        let added_x = selected.find("+5").expect("selected additions are visible") as u16;
+        let removed_x = selected.find("-2").expect("selected removals are visible") as u16;
+        assert!(
+            !terminal.backend().buffer()[(kind_x, 10)]
+                .modifier
+                .contains(Modifier::DIM)
+                && !terminal.backend().buffer()[(path_x, 10)]
+                    .modifier
+                    .contains(Modifier::DIM),
+            "focused paths use their normal intensity"
+        );
+        assert!(
+            terminal.backend().buffer()[(path_x, 10)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the selected filepath is inverted"
+        );
+        assert_eq!(terminal.backend().buffer()[(added_x, 10)].fg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(removed_x, 10)].fg, Color::Red);
+        assert!(
+            !terminal.backend().buffer()[(added_x, 10)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the diff-line suffix keeps its normal background"
+        );
+        assert!(
+            !rendered_line(&terminal, 9).contains("+10"),
+            "only the selected path displays its line counts"
+        );
+        assert!(rendered_line(&terminal, 13).contains("… 2 lines not shown"));
+        assert!(rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"));
+
+        assert!(
+            rendered_line(&terminal, 14).contains("Enter diff · c to hide"),
+            "the visible changes pane advertises how to hide it"
+        );
+
+        app.update(Action::Last);
+        app.update(Action::ScrollRight);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert_eq!(app.changes_horizontal_offset, 20);
+        assert!(
+            rendered_line(&terminal, 12).contains("tail"),
+            "h/l pans long path rows while the summary remains fixed"
+        );
+        assert!(
+            !rendered_line(&terminal, 13).contains("not shown"),
+            "the overflow indicator disappears at the end"
+        );
+
+        let mut short_terminal = Terminal::new(TestBackend::new(120, 8))?;
+        short_terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            rendered_line(&short_terminal, 5).contains("… 1 line not shown"),
+            "the overflow count follows the selected final path when no path row fits"
+        );
+
+        let mut merge_changes = changes.clone();
+        merge_changes.parent = Some(crate::app::ComparedParent {
+            index: 0,
+            total: 2,
+            id: gix::ObjectId::Sha1([2; 20]),
+        });
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&merge_changes),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 8).starts_with("  A = 1"),
+            "parent context no longer crowds the aggregate summary"
+        );
+        assert!(
+            rendered_line(&terminal, 14)
+                .contains("vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · c to hide"),
+            "merge diffs keep parent controls alongside navigation"
+        );
+        let parent = rendered_line(&terminal, 1);
+        let disk_x = parent.find('●').expect("the parent disk is visible") as u16;
+        let hash_x = parent.find("0202020").expect("the parent hash is visible") as u16;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(disk_x, 1)].fg, COMPARED_PARENT_COLOR);
+        assert!(buffer[(disk_x, 1)].modifier.contains(Modifier::REVERSED));
+        assert!(
+            buffer[(hash_x, 1)].modifier.contains(Modifier::REVERSED),
+            "the compared parent's hash is inverted"
+        );
+        assert!(
+            !rendered_line(&terminal, 15).contains("p next parent"),
+            "parent cycling is absent from the main status line"
+        );
+
+        app.update(Action::ToggleCommit);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject".as_bstr()),
+                Some(&changes),
+            );
+        })?;
+        assert_eq!(
+            terminal.backend().buffer()[(62, 7)].symbol(),
+            " ",
+            "the right commit pane is rendered over the bottom changes pane"
         );
         Ok(())
     }
@@ -1427,6 +2138,7 @@ mod tests {
             buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "a clipped selection marker uses the right border"
         );
+        let hash_color = buffer[(5, 1)].fg;
         assert_eq!(app.selected, Some(2), "drawing preserves the global selection");
         assert_eq!(app.offset, 1, "drawing preserves the global offset");
 
@@ -1434,9 +2146,22 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let buffer = terminal.backend().buffer();
         assert!(
-            buffer[(0, 1)].modifier.contains(Modifier::REVERSED),
-            "the final frame keeps the left selection marker"
+            !buffer[(0, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
+            "the inactive marker has no selection modifiers"
         );
+        assert!(
+            !buffer[(5, 1)].modifier.contains(Modifier::REVERSED | Modifier::DIM),
+            "the inactive hash has no selection modifiers"
+        );
+        assert_eq!(buffer[(0, 1)].symbol(), ">", "the inactive row keeps its marker");
+        assert_eq!(buffer[(0, 1)].fg, Color::Reset, "the marker uses normal text color");
+        assert_eq!(
+            buffer[(0, 1)].bg,
+            Color::Reset,
+            "the marker has no selection background"
+        );
+        assert_eq!(buffer[(5, 1)].fg, hash_color, "the hash returns to its normal color");
+        assert_eq!(buffer[(5, 1)].bg, Color::Reset, "the hash has no selection background");
         assert!(
             !buffer[(23, 1)].modifier.contains(Modifier::REVERSED),
             "the final frame hides the trailing selection marker"
@@ -1744,9 +2469,14 @@ mod tests {
 
         app.update(Action::ScrollRight);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            terminal.backend().buffer()[(4, 0)].symbol(),
+            "0",
+            "l leaves aligned metadata fixed when there is no graph left to pan"
+        );
         assert!(
-            rendered_row(&terminal).contains("subject-tail"),
-            "l reveals clipped aligned metadata after graph panning is exhausted"
+            !rendered_row(&terminal).contains("subject-tail"),
+            "aligned metadata remains clipped instead of becoming horizontal-scroll content"
         );
         Ok(())
     }

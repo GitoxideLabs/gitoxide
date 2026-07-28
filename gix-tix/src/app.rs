@@ -43,6 +43,59 @@ pub(crate) enum SignatureState {
     Failed,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+}
+
+impl ChangeKind {
+    pub(crate) fn letter(self) -> char {
+        match self {
+            ChangeKind::Added => 'A',
+            ChangeKind::Modified => 'M',
+            ChangeKind::Deleted => 'D',
+            ChangeKind::Renamed => 'R',
+            ChangeKind::Copied => 'C',
+            ChangeKind::TypeChanged => 'T',
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PathChange {
+    pub kind: ChangeKind,
+    pub source: Option<BString>,
+    pub path: BString,
+    pub lines: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Changes {
+    pub parent: Option<ComparedParent>,
+    pub paths: Vec<PathChange>,
+    pub diffs: Vec<gix::object::tree::diff::ChangeDetached>,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+}
+
+impl Changes {
+    pub(crate) fn is_visible(&self) -> bool {
+        self.parent.is_some() || !self.paths.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ComparedParent {
+    pub index: usize,
+    pub total: usize,
+    pub id: ObjectId,
+}
+
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Author {
     pub name: &'static BStr,
@@ -155,11 +208,16 @@ pub(crate) enum Action {
     ToggleHidden,
     ToggleAlign,
     ToggleCommit,
+    ToggleChanges,
+    ToggleChangesFocus,
+    CycleChangesParent,
+    OpenDiff,
     VerifySignatures,
     Cancel,
     Copy,
     CopyAuthor,
     PreviewAuthorCopy(bool),
+    ForceQuit,
     Quit,
 }
 
@@ -169,6 +227,7 @@ pub(crate) enum Effect {
     CopyId(ObjectId),
     CopyAuthor(&'static Author),
     Reload(bool),
+    OpenDiff(usize),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -197,6 +256,18 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
+    pub show_changes: bool,
+    pub(crate) changes_suppressed: bool,
+    pub(crate) changes_focused: bool,
+    pub(crate) changes_selected: usize,
+    pub(crate) changes_offset: usize,
+    pub(crate) changes_horizontal_offset: usize,
+    pub(crate) changes_parent: usize,
+    pub(crate) diff_error: Option<String>,
+    changes_page: usize,
+    changes_max: usize,
+    changes_horizontal_page: usize,
+    changes_horizontal_max: usize,
     pub(crate) show_selection_tail: bool,
     pub inline: bool,
     pub preview_author_copy: bool,
@@ -204,6 +275,7 @@ pub(crate) struct App {
     junction_parent: Option<usize>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
+    pub(crate) focus_feedback: Option<&'static str>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -239,6 +311,18 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
+            show_changes: true,
+            changes_suppressed: false,
+            changes_focused: false,
+            changes_selected: 0,
+            changes_offset: 0,
+            changes_horizontal_offset: 0,
+            changes_parent: 0,
+            diff_error: None,
+            changes_page: 1,
+            changes_max: 0,
+            changes_horizontal_page: 1,
+            changes_horizontal_max: 0,
             show_selection_tail: true,
             inline: false,
             preview_author_copy: false,
@@ -246,6 +330,7 @@ impl App {
             junction_parent: None,
             reachable_rows: None,
             copy_feedback: None,
+            focus_feedback: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -381,29 +466,49 @@ impl App {
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
+            Action::MoveUp if self.changes_focused => self.move_changes(1, false),
+            Action::MoveDown if self.changes_focused => self.move_changes(1, true),
             Action::MoveUp => self.move_reachable(false),
             Action::MoveDown => self.move_reachable(true),
             Action::ScrollLeft => {
-                if !self.cycle_junction_parent(false) {
+                if self.changes_focused {
+                    self.pan_changes(false);
+                } else if !self.cycle_junction_parent(false) {
                     self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
                 }
             }
             Action::ScrollRight => {
-                if !self.cycle_junction_parent(true) {
+                if self.changes_focused {
+                    self.pan_changes(true);
+                } else if !self.cycle_junction_parent(true) {
                     self.horizontal_offset = self
                         .horizontal_offset
                         .saturating_add(self.horizontal_page)
                         .min(self.horizontal_max);
                 }
             }
+            Action::HalfPageUp if self.changes_focused => self.move_changes((self.changes_page / 2).max(1), false),
+            Action::HalfPageDown if self.changes_focused => self.move_changes((self.changes_page / 2).max(1), true),
+            Action::PageUp if self.changes_focused => self.move_changes(self.changes_page, false),
+            Action::PageDown if self.changes_focused => self.move_changes(self.changes_page, true),
             Action::HalfPageUp => self.move_selection((self.viewport_rows / 2).max(1), false),
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
+            Action::First if self.changes_focused => {
+                self.changes_selected = 0;
+                self.diff_error = None;
+                self.ensure_changes_visible();
+            }
             Action::First => {
                 if let Some(index) = self.first_selectable() {
                     self.select(index);
                 }
+            }
+            Action::Last if self.changes_focused => {
+                self.changes_selected = self.changes_max;
+                self.diff_error = None;
+                self.ensure_changes_visible();
             }
             Action::Last if self.last_selectable().is_some() => {
                 let previous = self.selected;
@@ -445,6 +550,32 @@ impl App {
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
             Action::ToggleCommit => self.show_commit = !self.show_commit,
+            Action::ToggleChanges => {
+                self.focus_feedback = None;
+                self.show_changes = !self.show_changes;
+                if !self.show_changes {
+                    self.changes_suppressed = false;
+                    self.changes_focused = false;
+                    self.reset_changes_view();
+                }
+            }
+            Action::ToggleChangesFocus if self.show_changes => {
+                self.changes_focused = !self.changes_focused;
+                if self.changes_focused {
+                    self.clear_preview_author_copy();
+                }
+                self.focus_feedback = Some(if self.changes_focused { "changes" } else { "history" });
+            }
+            Action::CycleChangesParent => {
+                if self.show_changes {
+                    self.changes_parent = self.changes_parent.saturating_add(1);
+                    self.diff_error = None;
+                }
+            }
+            Action::OpenDiff if self.changes_focused => {
+                self.diff_error = None;
+                return vec![Effect::OpenDiff(self.changes_selected)];
+            }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
@@ -461,14 +592,15 @@ impl App {
                     return vec![Effect::VerifySignatures(ids)];
                 }
             }
+            Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel | Action::Quit if self.changes_focused => self.focus_history(),
+            Action::PreviewAuthorCopy(_) if self.changes_focused => {}
             Action::PreviewAuthorCopy(value) => {
                 if value && !self.preview_author_copy {
                     self.reachability_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
                     self.compute_reachable_rows();
                 } else if !value {
-                    self.reachability_anchor = None;
-                    self.junction_parent = None;
-                    self.reachable_rows = None;
+                    self.clear_preview_author_copy();
                 }
                 self.preview_author_copy = value;
             }
@@ -585,12 +717,12 @@ impl App {
         self.lane_time = None;
         self.estimated_lane_width = 0;
         self.show_hidden = show_hidden;
+        self.changes_suppressed = false;
         self.horizontal_offset = 0;
+        self.focus_history();
+        self.reset_changes_view();
         self.follow_tail = false;
-        self.preview_author_copy = false;
-        self.reachability_anchor = None;
-        self.junction_parent = None;
-        self.reachable_rows = None;
+        self.clear_preview_author_copy();
         self.signature_failures = 0;
         self.signature_verification_running = false;
     }
@@ -610,6 +742,54 @@ impl App {
         }
         self.signature_verification_running = false;
         self.signature_failures = failed;
+    }
+
+    fn move_changes(&mut self, distance: usize, down: bool) {
+        self.diff_error = None;
+        self.changes_selected = if down {
+            self.changes_selected.saturating_add(distance).min(self.changes_max)
+        } else {
+            self.changes_selected.saturating_sub(distance)
+        };
+        self.ensure_changes_visible();
+    }
+
+    fn clear_preview_author_copy(&mut self) {
+        self.preview_author_copy = false;
+        self.reachability_anchor = None;
+        self.junction_parent = None;
+        self.reachable_rows = None;
+    }
+
+    pub(crate) fn focus_history(&mut self) {
+        self.changes_focused = false;
+        self.focus_feedback = None;
+    }
+
+    pub(crate) fn changes_visible(&self) -> bool {
+        self.show_changes && !self.changes_suppressed
+    }
+
+    fn ensure_changes_visible(&mut self) {
+        if self.changes_selected < self.changes_offset {
+            self.changes_offset = self.changes_selected;
+        } else if self.changes_selected >= self.changes_offset.saturating_add(self.changes_page) {
+            self.changes_offset = self.changes_selected + 1 - self.changes_page;
+        }
+        self.changes_offset = self
+            .changes_offset
+            .min(self.changes_max.saturating_add(1).saturating_sub(self.changes_page));
+    }
+
+    fn pan_changes(&mut self, right: bool) {
+        self.changes_horizontal_offset = if right {
+            self.changes_horizontal_offset
+                .saturating_add(self.changes_horizontal_page)
+                .min(self.changes_horizontal_max)
+        } else {
+            self.changes_horizontal_offset
+                .saturating_sub(self.changes_horizontal_page)
+        };
     }
 
     fn move_selection(&mut self, distance: usize, down: bool) {
@@ -784,6 +964,34 @@ impl App {
         self.horizontal_page = page.max(1);
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
+    }
+
+    pub(crate) fn set_changes_bounds(
+        &mut self,
+        page: usize,
+        len: usize,
+        horizontal_page: usize,
+        horizontal_max: usize,
+    ) {
+        self.changes_page = page.max(1);
+        self.changes_max = len.saturating_sub(1);
+        if len == 0 {
+            self.changes_selected = 0;
+            self.changes_offset = 0;
+        } else {
+            self.changes_selected = self.changes_selected.min(self.changes_max);
+            self.ensure_changes_visible();
+        }
+        self.changes_horizontal_page = horizontal_page.max(1);
+        self.changes_horizontal_max = horizontal_max;
+        self.changes_horizontal_offset = self.changes_horizontal_offset.min(horizontal_max);
+    }
+
+    pub(crate) fn reset_changes_view(&mut self) {
+        self.diff_error = None;
+        self.changes_selected = 0;
+        self.changes_offset = 0;
+        self.changes_horizontal_offset = 0;
     }
 
     #[cfg(test)]
@@ -1356,6 +1564,28 @@ mod tests {
     }
 
     #[test]
+    fn changes_focus_clears_and_ignores_shift() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(app.preview_author_copy && app.reachable_rows.is_some());
+
+        app.update(Action::ToggleChangesFocus);
+        assert!(
+            app.changes_focused && !app.preview_author_copy && app.reachable_rows.is_none(),
+            "entering the changes pane clears transient history navigation"
+        );
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(
+            !app.preview_author_copy && app.reachable_rows.is_none(),
+            "the inactive history pane ignores Shift"
+        );
+    }
+
+    #[test]
     fn shift_defers_reachability_until_the_graph_is_complete() {
         let mut app = App::new(4);
         app.extend_commits(vec![row_with_parents(4, &[3, 2]), row_with_parents(3, &[1])]);
@@ -1466,9 +1696,56 @@ mod tests {
     }
 
     #[test]
+    fn focused_changes_redirect_navigation_to_the_path_viewport() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
+        app.set_changes_bounds(4, 10, 20, 45);
+        app.update(Action::ToggleChangesFocus);
+        assert!(app.changes_focused);
+        assert_eq!(app.focus_feedback.take(), Some("changes"));
+        app.update(Action::ToggleChangesFocus);
+        assert!(!app.changes_focused);
+        assert_eq!(app.focus_feedback.take(), Some("history"));
+        app.update(Action::ToggleChangesFocus);
+
+        app.update(Action::MoveDown);
+        assert_eq!((app.changes_selected, app.changes_offset), (1, 0));
+        assert_eq!(app.update(Action::OpenDiff), vec![Effect::OpenDiff(1)]);
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "path selection leaves commit selection untouched"
+        );
+        app.update(Action::PageDown);
+        assert_eq!((app.changes_selected, app.changes_offset), (5, 2));
+        app.update(Action::HalfPageDown);
+        assert_eq!((app.changes_selected, app.changes_offset), (7, 4));
+        app.update(Action::Last);
+        assert_eq!((app.changes_selected, app.changes_offset), (9, 6));
+        app.update(Action::First);
+        assert_eq!((app.changes_selected, app.changes_offset), (0, 0));
+
+        app.update(Action::ScrollRight);
+        app.update(Action::ScrollRight);
+        app.update(Action::ScrollRight);
+        assert_eq!(app.changes_horizontal_offset, 45);
+        assert_eq!(app.horizontal_offset, 0, "path panning leaves the graph untouched");
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.changes_horizontal_offset, 25);
+
+        app.update(Action::ToggleChanges);
+        assert!(!app.changes_focused, "closing the panel returns focus to history");
+        assert!(app.update(Action::OpenDiff).is_empty());
+        assert_eq!(app.changes_selected, 0);
+        assert_eq!(app.changes_offset, 0);
+        assert_eq!(app.changes_horizontal_offset, 0);
+    }
+
+    #[test]
     fn toggles_metadata_columns() {
         let mut app = App::new(1);
         assert!(app.show_trailers, "trailer attribution is visible by default");
+        assert!(app.show_changes, "changed paths are visible by default");
 
         app.update(Action::ToggleDate);
         app.update(Action::ToggleEmail);
@@ -1478,6 +1755,8 @@ mod tests {
         app.update(Action::ToggleRefs);
         app.update(Action::ToggleAlign);
         app.update(Action::ToggleCommit);
+        app.update(Action::CycleChangesParent);
+        app.update(Action::ToggleChanges);
 
         assert!(!app.show_committer_date);
         assert!(app.show_emails);
@@ -1491,6 +1770,8 @@ mod tests {
         assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
         assert!(app.show_commit);
+        assert!(!app.show_changes);
+        assert_eq!(app.changes_parent, 1);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
     }
@@ -1567,8 +1848,15 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("a row is selected")].id;
+        app.set_changes_bounds(1, 3, 1, 2);
+        app.update(Action::ToggleChangesFocus);
+        app.update(Action::MoveDown);
+        app.update(Action::ScrollRight);
 
         app.reload(true);
+        assert!(!app.changes_focused, "reload returns focus to history");
+        assert_eq!(app.changes_selected, 0);
+        assert_eq!((app.changes_offset, app.changes_horizontal_offset), (0, 0));
         app.extend_commits(vec![row(1), row(2), row(3)]);
         complete(&mut app);
         assert_eq!(
@@ -1604,6 +1892,31 @@ mod tests {
             1,
             "completion racing cancellation keeps already displayed commits"
         );
+    }
+
+    #[test]
+    fn pane_exit_keys_return_to_history_but_control_c_quits() {
+        let mut app = App::new(1);
+        app.update(Action::ToggleChangesFocus);
+
+        assert!(app.update(Action::Quit).is_empty());
+        assert!(!app.changes_focused, "q returns focus to history");
+
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(
+            app.update(Action::ForceQuit),
+            vec![Effect::Quit],
+            "Ctrl-C quits even while changes have focus"
+        );
+        assert!(app.update(Action::Cancel).is_empty());
+        assert!(!app.changes_focused, "Escape returns focus to history");
+        assert_eq!(
+            app.state,
+            State::Loading,
+            "Escape does not cancel while changes had focus"
+        );
+
+        assert_eq!(app.update(Action::Cancel), vec![Effect::Cancel]);
     }
 
     #[test]

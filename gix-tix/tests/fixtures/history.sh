@@ -21,8 +21,10 @@ git switch -q main
 commit main "2000-01-03T00:00:00"
 git merge -q --no-edit merged
 git switch -q -c topic HEAD~1
+# Two files make parallel changed-line aggregation and diff ordering observable.
 echo topic >topic
-git add topic
+echo topic-extra >topic-extra
+git add topic topic-extra
 GIT_AUTHOR_DATE="2000-01-04T00:00:00 +0000" GIT_COMMITTER_DATE="2000-01-04T00:00:00 +0000" \
   git commit -q --author="Codex <Codex@OpenAI.com>" -m topic \
     -m "--- agent
