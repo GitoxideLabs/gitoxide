@@ -292,10 +292,12 @@ fn gitdir_matches(
         return Ok(true);
     }
 
-    let expanded_git_dir = gix_path::into_bstr(gix_path::realpath(gix_path::from_byte_slice(&git_dir))?);
+    let expanded_git_dir = gix_path::to_unix_separators_on_windows(gix_path::into_bstr(gix_path::realpath(
+        gix_path::from_byte_slice(&git_dir),
+    )?));
     Ok(gix_glob::wildmatch(
         pattern_path.as_bstr(),
-        expanded_git_dir.as_bstr(),
+        expanded_git_dir.as_ref(),
         match_mode,
     ))
 }
