@@ -108,7 +108,7 @@ git init base
   git branch -D tmp
 )
 
-git clone --shared --depth 2 file://$PWD/base base.shallow
+git clone --shared --depth 2 "file://$PWD/base" base.shallow
 
 
 git clone --shared base clone
@@ -312,12 +312,12 @@ EOF
 git clone --shared base credential-helpers
 (cd credential-helpers
     export GIT_TERMINAL_PROMPT=0
-    git=$(which git)
+    git=$(command -v git)
     function baseline() {
       local url=${1:?need url}
       {
-        echo $url
-        echo url=$url | GIT_TRACE=1 $git credential fill 2>&1 | grep -E '^[a-z]+:' || :
+        echo "$url"
+        echo "url=$url" | GIT_TRACE=1 "$git" credential fill 2>&1 | grep -E '^[a-z]+:' || :
       } >> baseline.git
     }
 
