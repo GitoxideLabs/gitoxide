@@ -16,14 +16,8 @@ pub enum Header {
     Blob,
     /// The object is a tag
     Tag,
-    /// Describes a delta-object which needs to be applied to a base. The base object is identified by the `base_id` field
-    /// which is found within the parent repository.
-    /// Most commonly used for **thin-packs** when receiving pack files from the server to refer to objects that are not
-    /// part of the pack but expected to be present in the receivers repository.
-    ///
-    /// # Note
-    /// This could also be an object within this pack if the LSB encoded offset would be larger than 20 bytes, which is unlikely to
-    /// happen.
+    /// Describes a delta-object which needs to be applied to a base identified by `base_id`.
+    /// The base may occur anywhere in the same pack or in the parent repository, as it does in a **thin-pack**.
     ///
     /// **The naming** is exactly the same as the canonical implementation uses, namely **REF_DELTA**.
     RefDelta { base_id: gix_hash::ObjectId },

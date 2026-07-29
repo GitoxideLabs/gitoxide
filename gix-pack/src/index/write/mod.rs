@@ -68,6 +68,17 @@ pub(super) mod function {
     /// The resolver produced by `make_resolver` must resolve pack entries from the same pack data file that produced the
     /// `entries` iterator.
     ///
+    /// # Ref-delta bases
+    ///
+    /// Bases available through an ODB lookup are handled by wrapping `entries` in
+    /// [`crate::data::input::LookupRefDeltaObjectsIter`]. As entries are consumed, it inserts each full base immediately
+    /// before the first delta that needs it, then rewrites that and later references to the same base as `OFS_DELTA`s.
+    ///
+    /// Remaining `REF_DELTA`s are resolved in-pack here. They are recorded by base object ID; while traversing the delta
+    /// tree, each fully resolved object is hashed and any deltas waiting for that ID are attached as its children. Thus an
+    /// in-pack base may occur before or after its delta, and forward-reference chains are supported. Resolution fails if a
+    /// referenced base was neither inserted by the wrapper nor found among the pack entries.
+    ///
     /// * `kind` is the version of pack index to produce, use [`crate::index::Version::default()`] if in doubt.
     /// * `tread_limit` is used for a parallel tree traversal for obtaining object hashes with optimal performance.
     /// * `root_progress` is the top-level progress to stay informed about the progress of this potentially long-running
@@ -80,7 +91,6 @@ pub(super) mod function {
     ///
     /// # Remarks
     ///
-    /// * neither in-pack nor out-of-pack Ref Deltas are supported here, these must have been resolved beforehand.
     /// * `make_resolver()` will only be called after the iterator stopped returning elements and produces a function that
     ///   provides all bytes belonging to a pack entry writing them to the given mutable output `Vec`.
     ///   It should return `None` if the entry cannot be resolved from the pack that produced the `entries` iterator, causing
@@ -151,7 +161,16 @@ pub(super) mod function {
                         },
                     )?;
                 }
-                RefDelta { .. } => return Err(Error::IteratorInvariantNoRefDelta),
+                RefDelta { base_id } => {
+                    tree.add_child_by_id(
+                        base_id,
+                        pack_offset,
+                        TreeEntry {
+                            id: object_hash.null(),
+                            crc32,
+                        },
+                    )?;
+                }
                 OfsDelta { base_distance } => {
                     let base_pack_offset =
                         crate::data::entry::Header::verified_base_pack_offset(pack_offset, base_distance).ok_or(

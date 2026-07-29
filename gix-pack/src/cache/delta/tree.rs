@@ -1,5 +1,11 @@
+use std::collections::BTreeMap;
+
 use super::{Error, traverse};
 use crate::exact_vec;
+
+/// Maps each referenced base object ID to indices in `Tree::child_items` of ref-deltas waiting for it.
+pub(super) type RefDeltaChildren = BTreeMap<gix_hash::ObjectId, Vec<u32>>;
+
 /// An item stored within the [`Tree`] whose data is stored in a pack file, identified by
 /// the offset of its first (`offset`) and last (`next_offset`) bytes.
 ///
@@ -17,7 +23,7 @@ pub struct Item<T> {
     /// Limited to u32 as that's the maximum amount of objects in a pack.
     // SAFETY INVARIANT:
     //    - only one Item in a tree may have any given child index. `future_child_offsets`
-    //      should also not contain any indices found in `children`.\
+    //      and `ref_child_indices` should also not contain any indices found in `children`.
     //    - These indices should be in bounds for tree.child_items
     children: Vec<u32>,
 }
@@ -27,6 +33,10 @@ impl<T> Item<T> {
     // (we don't want to expose mutable access)
     pub fn children(&self) -> &[u32] {
         &self.children
+    }
+
+    pub(super) fn extend_children(&mut self, children: impl IntoIterator<Item = u32>) {
+        self.children.extend(children);
     }
 }
 
@@ -56,6 +66,8 @@ pub struct Tree<T> {
     //      in Item.children. Indices should be found here at most once.
     //    - These indices should be in bounds for tree.child_items.
     future_child_offsets: Vec<(crate::data::Offset, usize)>,
+    /// Child indices waiting for an in-pack object with the given id to be resolved.
+    ref_child_indices: RefDeltaChildren,
 }
 
 impl<T> Tree<T> {
@@ -66,6 +78,7 @@ impl<T> Tree<T> {
             child_items: exact_vec(num_objects / 2),
             last_seen: None,
             future_child_offsets: Vec::new(),
+            ref_child_indices: BTreeMap::new(),
         })
     }
 
@@ -76,8 +89,8 @@ impl<T> Tree<T> {
     /// Returns self's root and child items.
     ///
     /// You can rely on them following the same `children` invariants as they did in the tree
-    pub(super) fn take_root_and_child(self) -> (Vec<Item<T>>, Vec<Item<T>>) {
-        (self.root_items, self.child_items)
+    pub(super) fn take_root_child_and_refs(self) -> (Vec<Item<T>>, Vec<Item<T>>, RefDeltaChildren) {
+        (self.root_items, self.child_items, self.ref_child_indices)
     }
 
     pub(super) fn assert_is_incrementing_and_update_next_offset(
@@ -181,6 +194,28 @@ impl<T> Tree<T> {
             next_offset: 0,
             data,
             // SAFETY INVARIANT upheld: there are no children
+            children: Default::default(),
+        });
+        Ok(())
+    }
+
+    /// Add a child whose base is identified by object id and may occur anywhere in the pack.
+    #[cfg(feature = "streaming-input")]
+    pub(crate) fn add_child_by_id(
+        &mut self,
+        base_id: gix_hash::ObjectId,
+        offset: crate::data::Offset,
+        data: T,
+    ) -> Result<(), Error> {
+        self.assert_is_incrementing_and_update_next_offset(offset)?;
+
+        let child_index = self.child_items.len() as u32;
+        self.ref_child_indices.entry(base_id).or_default().push(child_index);
+        self.last_seen = NodeKind::Child.into();
+        self.child_items.push(Item {
+            offset,
+            next_offset: 0,
+            data,
             children: Default::default(),
         });
         Ok(())
