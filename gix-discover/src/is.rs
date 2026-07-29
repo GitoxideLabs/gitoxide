@@ -27,6 +27,7 @@ pub fn submodule_git_dir(git_dir: &Path) -> bool {
 ///   * …an objects directory
 ///   * …a refs directory
 ///
+/// This obtains filesystem metadata for `git_dir` before checking its repository layout.
 pub fn git(git_dir: &Path) -> Result<crate::repository::Kind, crate::is_git::Error> {
     let git_dir_metadata = git_dir.metadata().map_err(|err| crate::is_git::Error::Metadata {
         source: err,
@@ -34,12 +35,12 @@ pub fn git(git_dir: &Path) -> Result<crate::repository::Kind, crate::is_git::Err
     })?;
     // precompose-unicode can't be known here, so we just default it to false, hoping it won't matter.
     let cwd = gix_fs::current_dir(false)?;
-    git_with_metadata(git_dir, git_dir_metadata, &cwd)
+    git_with_metadata(git_dir, &git_dir_metadata, &cwd)
 }
 
 pub(crate) fn git_with_metadata(
     git_dir: &Path,
-    git_dir_metadata: std::fs::Metadata,
+    git_dir_metadata: &std::fs::Metadata,
     cwd: &Path,
 ) -> Result<crate::repository::Kind, crate::is_git::Error> {
     #[derive(Eq, PartialEq)]

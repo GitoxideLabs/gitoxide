@@ -207,3 +207,24 @@ fn ceilings_are_adjusted_to_match_search_dir() -> crate::Result {
     assert_repo_is_current_workdir(repo_path, &relative_work_dir);
     Ok(())
 }
+
+#[test]
+#[cfg(unix)]
+fn ceiling_dirs_limit_the_physical_symlink_target() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+    let search_dir = root.join("lexical-parent/link/real-dir");
+    let err = gix_discover::upwards_opts(
+        &search_dir,
+        Options {
+            ceiling_dirs: vec![root.join("subdir")],
+            ..Default::default()
+        },
+    )
+    .expect_err("the physical ceiling prevents discovery of the repository above it");
+
+    assert!(
+        matches!(err, gix_discover::upwards::Error::NoGitRepositoryWithinCeiling { .. }),
+        "the symlink target matches the ceiling before traversal reaches the repository"
+    );
+    Ok(())
+}

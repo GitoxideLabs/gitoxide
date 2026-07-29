@@ -58,6 +58,9 @@ pub struct Options<'a> {
     pub trust: TrustPolicy,
     /// When discovering a repository, ignore any repositories that are located in these directories or any of their parents.
     ///
+    /// Entries are made absolute and lexically normalized, but symlinks are not resolved. They must therefore use the
+    /// physical, symlink-resolved spelling of the directory to match the path traversed during discovery.
+    ///
     /// Note that we ignore ceiling directories if the search directory is directly on top of one, which by default is an error
     /// if `match_ceiling_dir_or_error` is true, the default.
     pub ceiling_dirs: Vec<PathBuf>,

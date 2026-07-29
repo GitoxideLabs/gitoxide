@@ -12,6 +12,8 @@ git commit -q -am c2
 
 mkdir subdir
 mkdir -p some/very/deeply/nested/subdir
+# Starting discovery in this invalid `.git` directory must still check the repository above its parent.
+mkdir -p non-repo/.git
 
 git clone --bare --shared . bare.git
 

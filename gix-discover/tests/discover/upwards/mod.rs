@@ -159,17 +159,24 @@ fn from_nested_dir() -> crate::Result {
 }
 
 #[test]
+fn an_invalid_dot_git_directory_does_not_skip_ancestors() -> crate::Result {
+    let repo = gix_path::realpath(repo_path()?)?;
+    let start = repo.join("non-repo/.git");
+
+    let (path, _trust) = gix_discover::upwards(&start)?;
+    assert_eq!(
+        path.as_ref(),
+        repo,
+        "after rejecting an invalid `.git`, discovery checks every physical ancestor"
+    );
+    Ok(())
+}
+
+#[test]
 #[cfg(unix)]
 fn from_symlinked_nested_dir_follows_target_ancestors() -> crate::Result {
-    use std::os::unix::fs::symlink;
-
-    let root = gix_testtools::tempfile::TempDir::new()?;
-    gix_testtools::git(root.path(), "init foo")?;
-
-    let worktree = root.path().join("foo");
-    std::fs::create_dir(worktree.join("subdir"))?;
-    let link = root.path().join("link");
-    symlink("foo/subdir", &link)?;
+    let root = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+    let link = root.join("lexical-parent/link");
 
     let (path, trust) = gix_discover::upwards(&link)?;
     assert_eq!(
@@ -179,10 +186,61 @@ fn from_symlinked_nested_dir_follows_target_ancestors() -> crate::Result {
     );
     assert_eq!(
         gix_path::realpath(path.as_ref())?,
-        gix_path::realpath(&worktree)?,
+        gix_path::realpath(&root)?,
         "parent traversal follows the symlink target instead of the symlink's parent"
     );
     assert_eq!(trust, expected_trust());
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn symlink_is_resolved_before_parent_component() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+
+    for path in [
+        "lexical-parent/link/real-dir/..",
+        "lexical-parent/link/real-dir",
+        "lexical-parent/link/..",
+        "lexical-parent/link",
+    ] {
+        let (actual, _trust) = gix_discover::upwards(&root.join(path))?;
+        assert_eq!(
+            gix_path::realpath(actual.as_ref())?,
+            gix_path::realpath(&root)?,
+            "{path} follows the symlink before ascending, just like Git"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn relative_symlinks_use_the_configured_current_dir() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+    let root = std::env::current_dir()?.join(root);
+
+    for (cwd, input, expected_worktree) in [
+        (root.join("lexical-parent"), "link/..", std::path::Path::new("..")),
+        (
+            root.clone(),
+            "linked-parent/repo/nested",
+            std::path::Path::new("linked-parent/repo"),
+        ),
+    ] {
+        let (path, _trust) = gix_discover::upwards_opts(
+            input.as_ref(),
+            gix_discover::upwards::Options {
+                current_dir: Some(&cwd),
+                ..Default::default()
+            },
+        )?;
+        assert_eq!(
+            path.into_repository_and_work_tree_directories().1.as_deref(),
+            Some(expected_worktree),
+            "{input} is resolved and returned relative to the configured current directory"
+        );
+    }
     Ok(())
 }
 
@@ -368,7 +426,7 @@ fn from_symlinked_worktree_with_relative_linking_files() -> crate::Result {
 #[cfg(target_os = "macos")]
 #[test]
 fn cross_fs() -> crate::Result {
-    use std::{os::unix::fs::symlink, process::Command};
+    use std::process::Command;
 
     use gix_discover::upwards::Options;
     if gix_testtools::is_ci::cached() {
@@ -387,20 +445,19 @@ fn cross_fs() -> crate::Result {
             .arg(&dmg_file)
             .status()?;
 
-        // Mount dmg file into temporary location
-        let mount_point = tempfile::tempdir()?;
+        // Mount the separate filesystem directly inside the repository so physical parent
+        // traversal reaches the repository when crossing filesystem boundaries is allowed.
+        let mount_point = top_level_repo.path().join("remote");
+        std::fs::create_dir(&mount_point)?;
         Command::new("hdiutil")
             .args(["attach", "-nobrowse", "-mountpoint"])
-            .arg(mount_point.path())
+            .arg(&mount_point)
             .arg(&dmg_file)
             .status()?;
 
-        // Symlink the mount point into the repo
-        symlink(mount_point.path(), top_level_repo.path().join("remote"))?;
-
         // Ensure that the mount point is always cleaned up
         defer::defer({
-            let arg = mount_point.path().to_owned();
+            let arg = mount_point;
             move || {
                 Command::new("hdiutil")
                     .arg("detach")
@@ -451,6 +508,41 @@ fn do_not_shorten_absolute_paths() -> crate::Result {
         _ => panic!("expected worktree path"),
     }
 
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn preserves_symlinked_ancestor_of_absolute_paths() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+    let root = std::env::current_dir()?.join(root);
+    let worktree = root.join("linked-parent/repo");
+
+    for input in ["", "nested", "nested/..", ".git/objects"] {
+        let (path, _trust) = gix_discover::upwards(&worktree.join(input))?;
+        let (git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
+        assert_eq!(
+            git_dir,
+            worktree.join(".git"),
+            "{input} retains the symlinked spelling for the git directory"
+        );
+        assert_eq!(
+            actual_worktree.as_deref(),
+            Some(worktree.as_path()),
+            "{input} retains the symlinked spelling for the worktree"
+        );
+    }
+
+    let bare = root.join("linked-parent/bare.git");
+    for input in ["", "objects"] {
+        let (path, _trust) = gix_discover::upwards(&bare.join(input))?;
+        let (git_dir, actual_worktree) = path.into_repository_and_work_tree_directories();
+        assert_eq!(
+            git_dir, bare,
+            "{input} retains the symlinked spelling for a bare repository"
+        );
+        assert_eq!(actual_worktree, None, "a bare repository has no worktree");
+    }
     Ok(())
 }
 
