@@ -75,3 +75,36 @@ pub(crate) fn device_id(m: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     m.dev()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_path_with_cwd;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn shorten_repository_paths_relative_to_cwd_when_beneficial() {
+        for (case_name, cursor, cwd, expected) in [
+            ("worktree itself", "long-repository/.git", "long-repository", ".git"),
+            (
+                "nested worktree directory",
+                "long-repository/.git",
+                "long-repository/a/b",
+                "../../.git",
+            ),
+            ("unrelated directory", "a/repo/.git", "elsewhere", "a/repo/.git"),
+            (
+                "component prefix is not an ancestor",
+                "a/repo/.git",
+                "a/repository/nested",
+                "a/repo/.git",
+            ),
+            ("relative path is not shorter", "a/.git", "a/b/c/d", "a/.git"),
+        ] {
+            assert_eq!(
+                shorten_path_with_cwd(PathBuf::from(cursor), Path::new(cwd)),
+                PathBuf::from(expected),
+                "{case_name}"
+            );
+        }
+    }
+}

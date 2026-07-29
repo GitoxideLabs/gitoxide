@@ -22,6 +22,40 @@ fn in_cwd_upwards_from_nested_dir() -> gix_testtools::Result {
 
 #[test]
 #[serial]
+#[cfg(unix)]
+fn upwards_from_relative_symlink_paths() -> gix_testtools::Result {
+    let repo = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+
+    let _keep = gix_testtools::set_current_dir(repo.join("lexical-parent"))?;
+    for path in [
+        "./link/real-dir/..",
+        "link/real-dir/..",
+        "link/real-dir",
+        "link/..",
+        "./link/..",
+    ] {
+        let (repo_path, _trust) = gix_discover::upwards(Path::new(path))?;
+        assert_repo_is_current_workdir(repo_path, Path::new(".."));
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(unix)]
+fn relative_paths_retain_a_symlinked_ancestor() -> gix_testtools::Result {
+    let repo = gix_testtools::scripted_fixture_read_only("make_symlinked_nested_repo.sh")?;
+
+    let _keep = gix_testtools::set_current_dir(repo)?;
+    for path in ["linked-parent/repo/nested", "linked-parent/repo/nested/.."] {
+        let (repo_path, _trust) = gix_discover::upwards(Path::new(path))?;
+        assert_repo_is_current_workdir(repo_path, Path::new("linked-parent/repo"));
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
 fn upwards_bare_repo_with_index() -> gix_testtools::Result {
     let repo = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
 
