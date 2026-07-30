@@ -4,7 +4,7 @@ use arc_swap::ArcSwap;
 
 use crate::{
     Store,
-    store::types::{MutableIndexAndPack, SlotMapIndex},
+    store::types::{Catalog, MutableIndexAndPack, SlotMapIndex},
 };
 
 /// Options for use in [`Store::at_opts()`].
@@ -26,6 +26,9 @@ pub struct Options {
     /// Defaults to [`Compression::BEST_SPEED`](gix_zlib::Compression::BEST_SPEED), which is
     /// also what `git` uses unless configured otherwise with `core.looseCompression` or `core.compression`.
     pub loose_compression: gix_zlib::Compression,
+    /// Deterministic synchronization hooks for tests of concurrent behavior.
+    #[cfg(feature = "test-support")]
+    pub debug: Option<debug::Options>,
 }
 
 impl Default for Options {
@@ -36,6 +39,126 @@ impl Default for Options {
             alloc_limit_bytes: None,
             current_dir: None,
             loose_compression: gix_zlib::Compression::BEST_SPEED,
+            #[cfg(feature = "test-support")]
+            debug: None,
+        }
+    }
+}
+
+/// Deterministic synchronization support for tests of concurrent object-database behavior.
+#[cfg(feature = "test-support")]
+pub mod debug {
+    use std::{fmt, sync::Arc};
+
+    /// The result of a filesystem-backed load attempt.
+    #[non_exhaustive]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum LoadOutcome {
+        /// The file was loaded successfully.
+        Success,
+        /// Loading the file failed.
+        Failure,
+    }
+
+    /// A synchronization point in concurrent object-database processing.
+    #[non_exhaustive]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub enum Point {
+        /// An index slot was claimed for loading. No Store or slot lock is held.
+        IndexLoadClaimed {
+            /// The claimed slot-map index.
+            slot: usize,
+        },
+        /// A loader found all index slots claimed by other loaders. No Store or slot lock is held.
+        IndexLoadWaiting,
+        /// Snapshot collection is waiting for an in-progress index load. No Store or slot lock is held.
+        SnapshotWaitingForIndexLoad,
+        /// The claimed index slot was locked, immediately before its file is loaded.
+        ///
+        /// The slot lock is held while the hook runs.
+        IndexSlotLocked {
+            /// The locked slot-map index.
+            slot: usize,
+        },
+        /// An index load attempt finished and its result was stored.
+        ///
+        /// The slot lock is held while the hook runs.
+        IndexLoadCompleted {
+            /// The loaded slot-map index.
+            slot: usize,
+            /// Whether the load succeeded.
+            outcome: LoadOutcome,
+        },
+        /// A pack loader is about to acquire its slot lock.
+        PackSlotLocking {
+            /// The pack's slot-map index.
+            slot: usize,
+            /// The pack index within a multi-pack index, or `None` for a standalone pack.
+            pack_index: Option<gix_pack::multi_index::PackIndex>,
+        },
+        /// A pack loader acquired its slot lock, immediately before checking or loading the file.
+        ///
+        /// The slot lock is held while the hook runs.
+        PackSlotLocked {
+            /// The pack's slot-map index.
+            slot: usize,
+            /// The pack index within a multi-pack index, or `None` for a standalone pack.
+            pack_index: Option<gix_pack::multi_index::PackIndex>,
+        },
+        /// A filesystem-backed pack load attempt finished.
+        ///
+        /// The slot lock is held while the hook runs. Cached outcomes do not emit this point.
+        PackLoadCompleted {
+            /// The pack's slot-map index.
+            slot: usize,
+            /// The pack index within a multi-pack index, or `None` for a standalone pack.
+            pack_index: Option<gix_pack::multi_index::PackIndex>,
+            /// Whether the load succeeded.
+            outcome: LoadOutcome,
+        },
+        /// A refresh is about to acquire the Store write lock.
+        RefreshLocking,
+        /// A refresh acquired the Store write lock.
+        ///
+        /// The Store write lock is held while the hook runs.
+        RefreshLockAcquired,
+        /// A refresh is about to inspect the object database on disk.
+        ///
+        /// The Store write lock is held while the hook runs.
+        RefreshScanStarted,
+        /// A refresh finished inspecting the object database on disk.
+        ///
+        /// The Store write lock is held while the hook runs.
+        RefreshScanCompleted {
+            /// Whether the refresh succeeded.
+            outcome: LoadOutcome,
+        },
+        /// A new index state was published.
+        ///
+        /// The Store write lock is held while the hook runs.
+        IndexStatePublished,
+    }
+
+    /// Configuration for deterministic synchronization hooks.
+    #[derive(Clone)]
+    pub struct Options {
+        hook: Arc<dyn Fn(Point) + Send + Sync>,
+    }
+
+    impl Options {
+        /// Create options that invoke `hook` at every configured synchronization point.
+        pub fn new(hook: impl Fn(Point) + Send + Sync + 'static) -> Self {
+            Options { hook: Arc::new(hook) }
+        }
+
+        pub(crate) fn at(&self, point: Point) {
+            (self.hook)(point);
+        }
+    }
+
+    impl fmt::Debug for Options {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Options").finish_non_exhaustive()
         }
     }
 }
@@ -89,6 +212,8 @@ impl Store {
             alloc_limit_bytes,
             current_dir,
             loose_compression,
+            #[cfg(feature = "test-support")]
+            debug,
         }: Options,
     ) -> std::io::Result<Self> {
         let _span = gix_features::trace::detail!("gix_odb::Store::at()");
@@ -118,21 +243,9 @@ impl Store {
                         .len();
 
                 let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);
-                let count = if candidate > crate::store::types::PackId::max_indices() {
-                    // A chance for this to work without 10% extra allocation - this already
-                    // is an insane amount of packs.
-                    num_slots
-                } else {
-                    candidate
-                };
-                (count, None)
+                (candidate, None)
             }
         };
-        if slot_count > crate::store::types::PackId::max_indices() {
-            return Err(std::io::Error::other(format!(
-                "Cannot use more than 2^15-1 slots, got {slot_count}"
-            )));
-        }
         let mut replacements: Vec<_> = replacements.collect();
         replacements.sort_by_key(|a| a.0);
 
@@ -141,20 +254,25 @@ impl Store {
             write: Default::default(),
             replacements,
             path: objects_dir,
-            files: ArcSwap::from_pointee(
-                std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default()))
-                    .take(slot_count)
-                    .collect(),
-            ),
+            catalog: ArcSwap::from_pointee(Catalog {
+                index: Arc::new(SlotMapIndex::default()),
+                slots: Arc::new(
+                    std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default()))
+                        .take(slot_count)
+                        .collect(),
+                ),
+            }),
             slot_limit,
-            index: ArcSwap::new(Arc::new(SlotMapIndex::default())),
             use_multi_pack_index,
             object_hash,
             alloc_limit_bytes,
             loose_compression,
-            num_handles_stable: Default::default(),
-            num_handles_unstable: Default::default(),
+            #[cfg(feature = "test-support")]
+            debug,
+            num_handles: Default::default(),
             num_disk_state_consolidation: Default::default(),
+            num_disk_state_consolidations_completed: Default::default(),
+            last_disk_state_consolidation_error: Default::default(),
         })
     }
 }

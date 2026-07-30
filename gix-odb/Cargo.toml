@@ -29,6 +29,8 @@ sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
 ## Enable support for multi-threaded usage of the object database.
 parallel = ["gix-features/parallel"]
+## Expose deterministic synchronization hooks for tests of concurrent object-database behavior.
+test-support = []
 
 [dependencies]
 gix-error = { version = "^0.3.0", path = "../gix-error" }
@@ -52,7 +54,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 insta = "1.46.3"
-gix-odb = { path = ".", features = ["sha1", "sha256"] }
+gix-odb = { path = ".", features = ["sha1", "sha256", "test-support"] }
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-date = { path = "../gix-date" }
