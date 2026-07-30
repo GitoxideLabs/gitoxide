@@ -143,8 +143,9 @@ impl super::Store {
             )
         };
         gix_features::trace::detail!("verify indices").into_scope(|| {
+            let slots = self.files.load();
             for slot_index in &index.slot_indices {
-                let slot = &self.files[*slot_index];
+                let slot = &slots[*slot_index];
                 if slot.generation.load(Ordering::SeqCst) != index.generation {
                     return Err(integrity::Error::NeedsRetryDueToChangeOnDisk);
                 }

@@ -58,6 +58,7 @@ impl Store {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;
         }
         let index = self.index.load();
+        let slots = self.files.load();
         let mut res: Vec<_> = index
             .loose_dbs
             .iter()
@@ -67,7 +68,7 @@ impl Store {
             })
             .collect();
 
-        for slot in index.slot_indices.iter().map(|idx| &self.files[*idx]) {
+        for slot in index.slot_indices.iter().map(|idx| &slots[*idx]) {
             let files = slot.files.load();
             let record = match &**files {
                 Some(index) => {
