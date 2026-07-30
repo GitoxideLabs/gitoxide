@@ -19,10 +19,8 @@ fn multi_threaded_access_will_not_panic() -> gix_testtools::TestResult {
                         let mut count = 0;
                         for id in store.iter()? {
                             let id = id?;
-                            assert!(
-                                store.try_find(&id, &mut buf).is_ok(),
-                                "Thread {tid} could not find {id}"
-                            );
+                            let found = store.try_find(&id, &mut buf)?;
+                            assert!(found.is_some(), "Thread {tid} could not find {id}");
                             count += 1;
                         }
                         Ok(count)
