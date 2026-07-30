@@ -1,5 +1,5 @@
 //! The standard object store which should fit all needs.
-use std::{cell::RefCell, ops::Deref};
+use std::{cell::RefCell, ops::Deref, time::Duration};
 
 use crate::Store;
 
@@ -41,17 +41,30 @@ where
 #[derive(Clone, Copy)]
 pub(crate) struct IndexCtx {
     refresh_mode: RefreshMode,
+    force_refresh: bool,
     marker: types::SlotIndexMarker,
     loose_compression: gix_zlib::Compression,
 }
 
+impl IndexCtx {
+    fn force_refresh(mut self) -> Self {
+        self.force_refresh = true;
+        self
+    }
+}
+
 /// Decide what happens when all indices are loaded.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RefreshMode {
     /// Check for new or changed pack indices (and pack data files) when the last known index is loaded.
     /// During runtime handles configured for stable pack locations retain the corresponding indices and packs.
     #[default]
     AfterAllIndicesLoaded,
+    /// Check for new or changed pack indices only if the last successful refresh is at least this old.
+    ///
+    /// This throttles filesystem scans caused by repeated misses. A duration of zero behaves like
+    /// [`AfterAllIndicesLoaded`](Self::AfterAllIndicesLoaded).
+    AfterDuration(Duration),
     /// Use this if you expect a lot of missing objects that shouldn't trigger refreshes even after all packs are loaded.
     /// This comes at the risk of not learning that the packs have changed in the mean time.
     Never,
@@ -90,6 +103,19 @@ impl Store {
         if let Some(debug) = &self.debug {
             debug.at(point);
         }
+    }
+
+    pub(crate) fn now(&self) -> std::time::Instant {
+        self.debug
+            .as_ref()
+            .map_or_else(std::time::Instant::now, init::debug::Options::now)
+    }
+}
+
+#[cfg(not(feature = "test-support"))]
+impl Store {
+    pub(crate) fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
     }
 }
 

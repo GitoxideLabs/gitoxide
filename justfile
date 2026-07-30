@@ -55,7 +55,7 @@ check:
     ! cargo check -p gitoxide-core --all-features --features gix/sha1 2>/dev/null
     cargo check -p gix-protocol --all-features
     tree="$(cargo --color=never tree -p gix --no-default-features -e normal --prefix none --format '{p}')"; \
-        ! printf '%s\n' "$tree" | rg -q '^gix-imara-diff(-01)? v'
+        ! printf '%s\n' "$tree" | grep -Eq '^gix-imara-diff(-01)? v'
     cargo --color=never tree -p gix --no-default-features -e normal -i gix-submodule \
         2>&1 >/dev/null | grep '^warning: nothing to print\>'
     cargo --color=never tree -p gix --no-default-features -e normal -i gix-pathspec \

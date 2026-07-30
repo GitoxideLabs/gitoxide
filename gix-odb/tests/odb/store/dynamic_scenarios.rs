@@ -276,9 +276,12 @@ fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
 #[cfg(feature = "parallel")]
 #[test]
 fn debug_hooks_coalesce_successful_refreshes() -> Result {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
     };
 
     use gix_odb::store::init::debug::Point;
@@ -287,6 +290,7 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
     let (point_tx, point_rx) = crossbeam_channel::unbounded();
     let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
     let pause_next_refresh = Arc::new(AtomicBool::new(false));
+    let now = Arc::new(Mutex::new(Instant::now()));
     let debug = gix_odb::store::init::debug::Options::new({
         let pause_next_refresh = Arc::clone(&pause_next_refresh);
         move |point| {
@@ -297,8 +301,12 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
                 resume_rx.recv().expect("the test releases the refresh scan");
             }
         }
+    })
+    .with_clock({
+        let now = Arc::clone(&now);
+        move || *now.lock().expect("the test clock isn't poisoned")
     });
-    let handle = gix_odb::at_opts(
+    let mut handle = gix_odb::at_opts(
         fixture.objects_dir(Database::Primary),
         fixture.manifest.object_hash,
         Vec::new(),
@@ -353,6 +361,12 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
         "the changed ODB adds one refresh"
     );
 
+    let refresh_after = Duration::from_secs(1);
+    handle.refresh = gix_odb::store::RefreshMode::AfterDuration(refresh_after);
+    {
+        let mut now = now.lock().expect("the test clock isn't poisoned");
+        *now += refresh_after;
+    }
     point_rx.try_iter().for_each(drop);
     let (first, second, observed) = contended_lookup(
         handle.clone(),
@@ -373,7 +387,7 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
             .filter(|point| matches!(point, Point::RefreshScanStarted))
             .count(),
         1,
-        "contending misses scan the unchanged ODB once"
+        "contending handles scan the unchanged ODB once at the shared deadline"
     );
     assert_eq!(
         handle.store_ref().metrics().num_refreshes,
@@ -870,6 +884,159 @@ fn never_refresh_does_not_retry_failed_initial_scan() -> Result {
         strict.store_ref().metrics().num_refreshes,
         2,
         "a strict shared handle can reconcile once the remaining index fits"
+    );
+    Ok(())
+}
+
+#[test]
+fn refresh_after_duration_is_shared_by_handles_until_the_deadline() -> Result {
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    let mut fixture = OdbFixture::from_script()?;
+    let now = Arc::new(Mutex::new(Instant::now()));
+    let debug = gix_odb::store::init::debug::Options::new(|_| {}).with_clock({
+        let now = Arc::clone(&now);
+        move || *now.lock().expect("the test clock isn't poisoned")
+    });
+    let mut first = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Growable { initial: 1 },
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?;
+    let refresh_after = Duration::from_secs(1);
+    first.refresh = gix_odb::store::RefreshMode::AfterDuration(refresh_after);
+    let second = first.clone();
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+
+    assert_eq!(
+        first.packed_object_count()?,
+        0,
+        "the empty store initializes without packed objects"
+    );
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        1,
+        "initialization scans the shared store once"
+    );
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    assert_object(&second, &id)?;
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        2,
+        "initialization leaves the first miss-triggered refresh available to discover published objects"
+    );
+    assert_missing(&first, &fixture.manifest.missing_id())?;
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        2,
+        "the other handle shares the freshness window established by the refresh"
+    );
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    let newly_published = fixture.manifest.pack(Pack::B).object_ids[0];
+    assert_missing(&second, &newly_published)?;
+    first.store_ref().mark_disk_state_stale();
+    assert_object(&second, &newly_published)?;
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        3,
+        "marking a known mutation stale makes the next lookup refresh without performing eager I/O"
+    );
+
+    {
+        let mut now = now.lock().expect("the test clock isn't poisoned");
+        *now += refresh_after;
+    }
+    assert_missing(&second, &fixture.manifest.missing_id())?;
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        4,
+        "the first handle to miss at the deadline refreshes the shared store"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_failed_refresh_does_not_renew_the_freshness_window() -> Result {
+    use std::{
+        sync::{Arc, Mutex},
+        time::{Duration, Instant},
+    };
+
+    let mut fixture = OdbFixture::from_script()?;
+    let now = Arc::new(Mutex::new(Instant::now()));
+    let debug = gix_odb::store::init::debug::Options::new(|_| {}).with_clock({
+        let now = Arc::clone(&now);
+        move || *now.lock().expect("the test clock isn't poisoned")
+    });
+    let mut handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(1),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?;
+    let refresh_after = Duration::from_secs(1);
+    handle.refresh = gix_odb::store::RefreshMode::AfterDuration(refresh_after);
+    assert_eq!(
+        handle.packed_object_count()?,
+        0,
+        "the empty store initializes without packed objects"
+    );
+
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    let mut buffer = Vec::new();
+    handle
+        .try_find(&fixture.manifest.missing_id(), &mut buffer)
+        .expect_err("one slot cannot hold both newly discovered indices");
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        2,
+        "the failed refresh is attempted once"
+    );
+
+    fixture.remove_pack(Database::Primary, Pack::B)?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        3,
+        "the next lookup retries because failure did not renew freshness"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_missing_known_pack_bypasses_the_refresh_deadline() -> Result {
+    use std::time::Duration;
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let mut handle = open(&fixture, 1)?;
+    handle.refresh = gix_odb::store::RefreshMode::AfterDuration(Duration::MAX);
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_eq!(
+        handle.packed_object_count()?,
+        fixture.manifest.pack(Pack::A).object_ids.len() as u64,
+        "the index is known while its pack remains unopened"
+    );
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+
+    assert_missing(&handle, &id)?;
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        2,
+        "losing a pack named by a known index forces structural reconciliation"
     );
     Ok(())
 }

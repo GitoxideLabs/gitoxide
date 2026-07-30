@@ -76,6 +76,7 @@ impl Cache {
         let object_kind_hint = util::disambiguate_hint(&config, lenient_config)?;
         let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes) =
             util::parse_object_caches(&config, lenient_config, filter_config_section)?;
+        let object_refresh_mode = util::parse_object_refresh_mode(&config, lenient_config, filter_config_section)?;
         let loose_compression = super::access::loose_compression(&config, lenient_config, filter_config_section)?;
         // NOTE: When adding a new initial cache, consider adjusting `reread_values_and_clear_caches()` as well.
         Ok(Cache {
@@ -88,6 +89,7 @@ impl Cache {
             pack_cache_bytes,
             object_cache_bytes,
             alloc_limit_bytes,
+            object_refresh_mode,
             loose_compression,
             reflog,
             refs_namespace,
@@ -168,6 +170,8 @@ impl Cache {
             self.object_cache_bytes,
             self.alloc_limit_bytes,
         ) = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
+        self.object_refresh_mode =
+            util::parse_object_refresh_mode(config, self.lenient_config, self.filter_config_section)?;
         let loose_compression =
             super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
         self.loose_compression = loose_compression;
@@ -366,6 +370,7 @@ impl crate::Repository {
     fn apply_changed_values(&mut self) {
         self.refs.write_reflog = util::reflog_or_default(self.config.reflog, self.workdir().is_some());
         self.refs.namespace.clone_from(&self.config.refs_namespace);
+        self.objects.refresh = self.config.object_refresh_mode;
     }
 }
 

@@ -48,7 +48,7 @@ impl Default for Options {
 /// Deterministic synchronization support for tests of concurrent object-database behavior.
 #[cfg(feature = "test-support")]
 pub mod debug {
-    use std::{fmt, sync::Arc};
+    use std::{fmt, sync::Arc, time::Instant};
 
     /// The result of a filesystem-backed load attempt.
     #[non_exhaustive]
@@ -143,16 +143,30 @@ pub mod debug {
     #[derive(Clone)]
     pub struct Options {
         hook: Arc<dyn Fn(Point) + Send + Sync>,
+        clock: Option<Arc<dyn Fn() -> Instant + Send + Sync>>,
     }
 
     impl Options {
         /// Create options that invoke `hook` at every configured synchronization point.
         pub fn new(hook: impl Fn(Point) + Send + Sync + 'static) -> Self {
-            Options { hook: Arc::new(hook) }
+            Options {
+                hook: Arc::new(hook),
+                clock: None,
+            }
+        }
+
+        /// Use `clock` instead of the system monotonic clock for refresh throttling.
+        pub fn with_clock(mut self, clock: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
+            self.clock = Some(Arc::new(clock));
+            self
         }
 
         pub(crate) fn at(&self, point: Point) {
             (self.hook)(point);
+        }
+
+        pub(crate) fn now(&self) -> Instant {
+            self.clock.as_ref().map_or_else(Instant::now, |clock| clock())
         }
     }
 
@@ -273,6 +287,7 @@ impl Store {
             num_disk_state_consolidation: Default::default(),
             num_disk_state_consolidations_completed: Default::default(),
             last_disk_state_consolidation_error: Default::default(),
+            last_successful_disk_state_consolidation: Default::default(),
         })
     }
 }

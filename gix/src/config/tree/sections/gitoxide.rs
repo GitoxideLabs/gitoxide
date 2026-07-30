@@ -470,6 +470,13 @@ mod subsections {
             keys::UnsignedInteger::new_unsigned_integer("allocLimitIfReducedTrust", &Gitoxide::OBJECTS).with_note(
                 "The default allocation limit used for reduced-trust repositories when no explicit allocLimit is configured; set to 0 to disable it",
             );
+        /// The default minimum age of the last successful object database refresh before another miss may refresh it.
+        pub const REFRESH_AFTER_DEFAULT: std::time::Duration = std::time::Duration::from_secs(1);
+        /// The `gitoxide.objects.refreshAfter` key.
+        pub const REFRESH_AFTER: keys::DurationInMilliseconds =
+            keys::DurationInMilliseconds::new_duration("refreshAfter", &Gitoxide::OBJECTS).with_note(
+                "The minimum age of the last successful object database refresh before another object miss may refresh it, in milliseconds; 0 refreshes strictly on every miss",
+            );
         /// The `gitoxide.objects.noReplace` key.
         pub const NO_REPLACE: keys::Boolean = keys::Boolean::new_boolean("noReplace", &Gitoxide::OBJECTS);
         /// The `gitoxide.objects.replaceRefBase` key.
@@ -488,6 +495,7 @@ mod subsections {
                 &Self::CACHE_LIMIT,
                 &Self::ALLOC_LIMIT,
                 &Self::ALLOC_LIMIT_IF_REDUCED_TRUST,
+                &Self::REFRESH_AFTER,
                 &Self::REPLACE_REF_BASE,
             ]
         }
