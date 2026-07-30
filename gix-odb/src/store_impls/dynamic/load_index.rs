@@ -295,7 +295,7 @@ impl super::Store {
         }
         let num_indices_needed = new_slot_map_indices.len() + index_paths_to_add.len();
         if num_indices_needed > index.files.len()
-            && (matches!(self.slots, super::init::Slots::Given(_)) || num_indices_needed > PackId::max_indices())
+            && (matches!(self.slots, super::init::Slots::Limit(_)) || num_indices_needed > PackId::max_indices())
         {
             return Err(Message::new("The object database has too few index slots")
                 .with("current", index.files.len())
@@ -314,7 +314,7 @@ impl super::Store {
                 if num_indices_checked == files.len() {
                     let needed = index_paths_to_add.len() + 1; // include the index just popped off
                     let new_len = files.len() + needed;
-                    if matches!(self.slots, super::init::Slots::Given(_)) || new_len > PackId::max_indices() {
+                    if matches!(self.slots, super::init::Slots::Limit(_)) || new_len > PackId::max_indices() {
                         bail!(
                             Message::new("The object database has too few index slots")
                                 .with("current", files.len())
