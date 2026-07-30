@@ -16,6 +16,9 @@ pub fn hex_to_id_for_hash(sha1: &str, sha256: &str) -> ObjectId {
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[path = "../tools/odb.rs"]
+pub mod odb_fixture;
+
 /// [`init::Options`](gix_odb::store::init::Options) respecting [`gix_testtools::object_hash()`]
 /// that regenerate under `GIX_TEST_FIXTURE_HASH` are opened with a matching object hash.
 pub fn fixture_options() -> gix_odb::store::init::Options {
