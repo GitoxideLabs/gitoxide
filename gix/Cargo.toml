@@ -269,6 +269,7 @@ hp-tempfile-registry = ["gix-tempfile/hp-hashmap"]
 ## If unset, most of `gix` can only be used in a single thread as data structures won't be `Send` anymore.
 parallel = [
     "gix-features/parallel",
+    "gix-pack/parallel",
     "gix-attributes?/parallel",
     "gix-filter?/parallel",
     "gix-pathspec?/parallel",
