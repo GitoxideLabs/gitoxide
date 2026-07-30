@@ -22,9 +22,7 @@ pub(crate) struct Snapshot {
 }
 
 mod error {
-    use std::path::PathBuf;
-
-    use gix_pack::multi_index::PackIndex;
+    use std::{path::PathBuf, sync::Arc};
 
     /// Returned by [`crate::at_opts()`]
     #[derive(thiserror::Error, Debug)]
@@ -34,6 +32,8 @@ mod error {
         Inaccessible(PathBuf),
         #[error(transparent)]
         Io(#[from] std::io::Error),
+        #[error(transparent)]
+        SharedRefresh(Arc<Error>),
         #[error(transparent)]
         Alternate(#[from] crate::alternate::Error),
         #[error("The slotmap turned out to be too small with {} entries, would need {} more", .current, .needed)]
@@ -46,20 +46,12 @@ mod error {
             super::Generation::MAX
         )]
         GenerationOverflow,
-        #[error(
-            "Cannot numerically handle more than {limit} packs in a single multi-pack index, got {actual} in file {index_path:?}"
-        )]
-        TooManyPacksInMultiIndex {
-            actual: PackIndex,
-            limit: PackIndex,
-            index_path: PathBuf,
-        },
     }
 }
 
 pub use error::Error;
 
-use crate::store::types::{Generation, IndexAndPacks, MutableIndexAndPack, PackId, SlotMapIndex};
+use crate::store::types::{Catalog, Generation, IndexAndPacks, MutableIndexAndPack, SlotMapIndex};
 
 impl super::Store {
     /// Load all indices, refreshing from disk only if needed.
@@ -85,7 +77,8 @@ impl super::Store {
             loose_compression,
         }: IndexCtx,
     ) -> Result<Option<Snapshot>, Error> {
-        let index = self.index.load();
+        let catalog = self.catalog.load_full();
+        let index = &catalog.index;
         if !index.is_initialized() {
             return self.consolidate_with_disk_state(
                 true,  /* needs_init */
@@ -100,7 +93,7 @@ impl super::Store {
         } else {
             // always compare to the latest state
             // Nothing changed in the meantime, try to load another index…
-            if self.load_next_index(index) {
+            if self.load_next_index(catalog)? {
                 Ok(Some(self.collect_snapshot()))
             } else {
                 // …and if that didn't yield anything new consider refreshing our disk state.
@@ -119,8 +112,12 @@ impl super::Store {
     /// load a new index (if not yet loaded), and return true if one was indeed loaded (leading to a `state_id()` change) of the current index.
     /// Note that interacting with the slot-map is inherently racy and we have to deal with it, being conservative in what we even try to load
     /// as our index might already be out-of-date as we try to use it to learn what's next.
-    fn load_next_index(&self, mut index: arc_swap::Guard<Arc<SlotMapIndex>>) -> bool {
+    fn load_next_index(&self, mut catalog: Arc<Catalog>) -> Result<bool, Error> {
         'retry_with_changed_index: loop {
+            let index = &catalog.index;
+            if self.retry_failed_index(&catalog)? {
+                return Ok(true);
+            }
             let previous_state_id = index.state_id();
             'retry_with_next_slot_index: loop {
                 match index
@@ -131,9 +128,13 @@ impl super::Store {
                     Ok(slot_map_index) => {
                         // This slot-map index is in bounds and was only given to us.
                         let _ongoing_operation = IncOnNewAndDecOnDrop::new(&index.num_indices_currently_being_loaded);
-                        let slots = self.files.load();
-                        let slot = &slots[index.slot_indices[slot_map_index]];
+                        let slot_id = index.slot_indices[slot_map_index];
+                        #[cfg(feature = "test-support")]
+                        self.debug(crate::store::init::debug::Point::IndexLoadClaimed { slot: slot_id });
+                        let slot = &catalog.slots[slot_id];
                         let _lock = slot.write.lock();
+                        #[cfg(feature = "test-support")]
+                        self.debug(crate::store::init::debug::Point::IndexSlotLocked { slot: slot_id });
                         if slot.generation.load(Ordering::SeqCst) > index.generation {
                             // There is a disk consolidation in progress which just overwrote a slot that could be disposed with some other
                             // index, one we didn't intend to load.
@@ -148,20 +149,28 @@ impl super::Store {
                                 let res = files.load_index(self.object_hash, self.alloc_limit_bytes);
                                 slot.files.store(bundle);
                                 index.loaded_indices.fetch_add(1, Ordering::SeqCst);
+                                #[cfg(feature = "test-support")]
+                                self.debug(crate::store::init::debug::Point::IndexLoadCompleted {
+                                    slot: slot_id,
+                                    outcome: if res.is_ok() {
+                                        crate::store::init::debug::LoadOutcome::Success
+                                    } else {
+                                        crate::store::init::debug::LoadOutcome::Failure
+                                    },
+                                });
                                 res
                             };
                             match res {
                                 Ok(_) => {
                                     break 'retry_with_next_slot_index;
                                 }
-                                Err(_err) => {
-                                    gix_features::trace::error!(err=?_err, "Failed to load index file - some objects may seem to not exist");
-                                    continue 'retry_with_next_slot_index;
-                                }
+                                Err(err) => return Err(err.into()),
                             }
                         }
                     }
                     Err(_nothing_more_to_load) => {
+                        #[cfg(feature = "test-support")]
+                        self.debug(crate::store::init::debug::Point::IndexLoadWaiting);
                         // There can be contention as many threads start working at the same time and take all the
                         // slots to load indices for. Some threads might just be left-over and have to wait for something
                         // to change.
@@ -179,43 +188,99 @@ impl super::Store {
                     }
                 }
             }
+            if self.retry_failed_index(&catalog)? {
+                return Ok(true);
+            }
             if previous_state_id == index.state_id() {
-                let potentially_new_index = self.index.load();
-                if std::ptr::eq(Arc::as_ptr(&potentially_new_index), Arc::as_ptr(&index)) {
+                let potentially_new_catalog = self.catalog.load_full();
+                if Arc::ptr_eq(&potentially_new_catalog, &catalog) {
                     // There isn't a new index with which to retry the whole ordeal, so nothing could be done here.
-                    return false;
+                    return Ok(false);
                 } else {
                     // the index changed, worth trying again
-                    index = potentially_new_index;
+                    catalog = potentially_new_catalog;
                     continue 'retry_with_changed_index;
                 }
             } else {
                 // something inarguably changed, probably an index was loaded. 'probably' because we consider failed loads valid attempts,
                 // even they don't change anything for the caller which would then do a round for nothing.
-                return true;
+                return Ok(true);
             }
         }
     }
 
-    /// refresh and possibly clear out our existing data structures, causing all pack ids to be invalidated.
-    /// `load_new_index` is an optimization to at least provide one newly loaded pack after refreshing the slot map.
+    fn retry_failed_index(&self, catalog: &Catalog) -> Result<bool, Error> {
+        let index = &catalog.index;
+        let claimed = index.next_index_to_load.load(Ordering::SeqCst);
+        for &slot_id in index.slot_indices.iter().take(claimed) {
+            let slot = &catalog.slots[slot_id];
+            let _lock = slot.write.lock();
+            if slot.generation.load(Ordering::SeqCst) > index.generation {
+                continue;
+            }
+            let mut bundle = slot.files.load_full();
+            let Some(files) = Arc::make_mut(&mut bundle).as_mut() else {
+                continue;
+            };
+            if let Some(err) = files.unchanged_index_load_error() {
+                return Err(err.into());
+            }
+            if !files.index_is_failed() {
+                continue;
+            }
+            let res = files.load_index(self.object_hash, self.alloc_limit_bytes);
+            slot.files.store(bundle);
+            if res.is_ok() {
+                index.loaded_indices.fetch_add(1, Ordering::SeqCst);
+            }
+            #[cfg(feature = "test-support")]
+            self.debug(crate::store::init::debug::Point::IndexLoadCompleted {
+                slot: slot_id,
+                outcome: if res.is_ok() {
+                    crate::store::init::debug::LoadOutcome::Success
+                } else {
+                    crate::store::init::debug::LoadOutcome::Failure
+                },
+            });
+            return res.map(|_| true).map_err(Into::into);
+        }
+        Ok(false)
+    }
+
+    /// Refresh the catalog from disk, reusing unchanged resource nodes.
+    /// `load_new_index` is an optimization to provide one newly loaded index after refreshing the catalog.
     pub(crate) fn consolidate_with_disk_state(
         &self,
         needs_init: bool,
         load_new_index: bool,
         loose_compression: gix_zlib::Compression,
     ) -> Result<Option<Snapshot>, Error> {
-        let index = self.index.load();
-        let previous_index_state = Arc::as_ptr(&index) as usize;
+        let completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
+        let previous_catalog = self.catalog.load_full();
 
         // IMPORTANT: get a lock after we recorded the previous state.
+        #[cfg(feature = "test-support")]
+        self.debug(crate::store::init::debug::Point::RefreshLocking);
         let write = self.write.lock();
+        #[cfg(feature = "test-support")]
+        self.debug(crate::store::init::debug::Point::RefreshLockAcquired);
         let objects_directory = &self.path;
 
-        // Now we know the index isn't going to change anymore, even though threads might still load indices in the meantime.
-        let index = self.index.load();
-        if previous_index_state != Arc::as_ptr(&index) as usize {
-            // Someone else took the look before and changed the index. Return it without doing any additional work.
+        // Now we know the catalog isn't going to change anymore, even though threads might still load indices in the meantime.
+        let catalog = self.catalog.load_full();
+        let index = Arc::clone(&catalog.index);
+        let current_completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
+        if completed_refreshes != current_completed_refreshes {
+            let last_error = self.last_disk_state_consolidation_error.lock();
+            if let Some((generation, error)) = last_error.as_ref() {
+                if *generation == current_completed_refreshes {
+                    return Err(Error::SharedRefresh(Arc::clone(error)));
+                }
+            }
+            return Ok((!Arc::ptr_eq(&previous_catalog, &catalog)).then(|| self.collect_snapshot()));
+        }
+        if !Arc::ptr_eq(&previous_catalog, &catalog) {
+            // Someone else took the lock before and changed the catalog. Return it without doing any additional work.
             return Ok(Some(self.collect_snapshot()));
         }
 
@@ -230,9 +295,15 @@ impl super::Store {
             return Ok(Some(self.collect_snapshot()));
         }
         self.num_disk_state_consolidation.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "test-support")]
+        self.debug(crate::store::init::debug::Point::RefreshScanStarted);
 
+        let alternates = match crate::alternate::resolve(objects_directory.clone(), &self.current_dir) {
+            Ok(alternates) => alternates,
+            Err(err) => return self.finish_refresh(current_completed_refreshes, Err(err.into())),
+        };
         let db_paths: Vec<_> = std::iter::once(objects_directory.to_owned())
-            .chain(crate::alternate::resolve(objects_directory.clone(), &self.current_dir)?)
+            .chain(alternates)
             .collect();
 
         // turn db paths into loose object databases. Reuse what's there, but only if it is in the right order.
@@ -262,13 +333,16 @@ impl super::Store {
             Arc::clone(&index.loose_dbs)
         };
 
-        let indices_by_modification_time = Self::collect_indices_and_mtime_sorted_by_size(
+        let indices_by_modification_time = match Self::collect_indices_and_mtime_sorted_by_size(
             db_paths,
             index.slot_indices.len().into(),
             self.use_multi_pack_index.then_some(self.object_hash),
             self.alloc_limit_bytes,
-        )?;
-        let mut slots = self.files.load_full();
+        ) {
+            Ok(indices) => indices,
+            Err(err) => return self.finish_refresh(current_completed_refreshes, Err(err)),
+        };
+        let mut slots = Arc::clone(&catalog.slots);
         let mut idx_by_index_path: BTreeMap<_, _> = index
             .slot_indices
             .iter()
@@ -294,18 +368,17 @@ impl super::Store {
                     let slot = &slots[slot_idx];
                     let files_guard = slot.files.load();
                     let Some(files) = Option::as_ref(&files_guard) else {
-                        index_paths_to_add.push_back((index_info, mtime, None));
+                        index_paths_to_add.push_back((index_info, mtime));
                         continue;
                     };
                     if index_info.is_multi_index() && files.mtime() != mtime {
-                        // we have a changed multi-pack index. We can't just change the existing slot as it may alter slot indices
-                        // that are currently available. Instead, we have to move what's there into a new slot, along with the changes,
-                        // and later free the slot or dispose of the index in the slot (like we do for removed/missing files).
-                        index_paths_to_add.push_back((index_info, mtime, Some(slot_idx)));
-                        // If the current slot is loaded, the soon-to-be copied multi-index path will be loaded as well.
-                        if files.index_is_loaded() {
-                            num_loaded_indices += 1;
-                        }
+                        drop(files_guard);
+                        // Publish the replacement through the new catalog. Existing snapshots retain the old resource node.
+                        let replacement = Arc::new(MutableIndexAndPack::default());
+                        Self::set_slot_to_index(&write, &replacement, index_info, mtime, index.generation);
+                        Arc::make_mut(&mut slots)[slot_idx] = replacement;
+                        num_loaded_indices += 1;
+                        new_slot_map_indices.push(slot_idx);
                     } else {
                         // Packs and successfully loaded indices are immutable. Failed index loads retain their modification time so a
                         // changed file can be retried without repeatedly opening the same malformed file.
@@ -313,7 +386,7 @@ impl super::Store {
                             match Self::assure_slot_matches_index(&write, slot, index_info, mtime, index.generation) {
                                 Ok(outcome) => outcome,
                                 Err(index_info) => {
-                                    index_paths_to_add.push_back((index_info, mtime, None));
+                                    index_paths_to_add.push_back((index_info, mtime));
                                     continue;
                                 }
                             };
@@ -324,42 +397,50 @@ impl super::Store {
                         new_slot_map_indices.push(slot_idx);
                     }
                 }
-                None => index_paths_to_add.push_back((index_info, mtime, None)),
+                None => index_paths_to_add.push_back((index_info, mtime)),
             }
         }
         let num_indices_needed = new_slot_map_indices.len() + index_paths_to_add.len();
-        let slot_limit = self.slot_limit.unwrap_or_else(PackId::max_indices);
+        let slot_limit = self.slot_limit.unwrap_or(usize::MAX);
         if num_indices_needed > slot_limit {
             if was_uninitialized {
-                self.index.store(Arc::new(SlotMapIndex {
-                    loose_dbs,
-                    ..Default::default()
+                self.catalog.store(Arc::new(Catalog {
+                    index: Arc::new(SlotMapIndex {
+                        loose_dbs,
+                        ..Default::default()
+                    }),
+                    slots: Arc::clone(&slots),
                 }));
+                #[cfg(feature = "test-support")]
+                self.debug(crate::store::init::debug::Point::IndexStatePublished);
             }
-            return Err(Error::InsufficientSlots {
-                current: slots.len(),
-                needed: num_indices_needed - slots.len(),
-            });
+            return self.finish_refresh(
+                current_completed_refreshes,
+                Err(Error::InsufficientSlots {
+                    current: slots.len(),
+                    needed: num_indices_needed - slots.len(),
+                }),
+            );
         }
         if num_indices_needed > slots.len() {
             let additional_slots = num_indices_needed - slots.len();
             Arc::make_mut(&mut slots)
                 .extend(std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default())).take(additional_slots));
-            self.files.store(Arc::clone(&slots));
         }
-        let needs_stable_indices = self.maintain_stable_indices(&write);
-
         let mut next_possibly_free_index = index.slot_indices.iter().max().map_or(0, |idx| (idx + 1) % slots.len());
         let mut num_indices_checked = 0;
         let mut needs_generation_change = false;
         let mut slot_indices_to_remove: Vec<_> = idx_by_index_path.into_values().collect();
-        while let Some((mut index_info, mtime, move_from_slot_idx)) = index_paths_to_add.pop_front() {
+        while let Some((mut index_info, mtime)) = index_paths_to_add.pop_front() {
             'increment_slot_index: loop {
                 if num_indices_checked == slots.len() {
-                    return Err(Error::InsufficientSlots {
-                        current: slots.len(),
-                        needed: index_paths_to_add.len() + 1, /*the one currently popped off*/
-                    });
+                    return self.finish_refresh(
+                        current_completed_refreshes,
+                        Err(Error::InsufficientSlots {
+                            current: slots.len(),
+                            needed: index_paths_to_add.len() + 1, /*the one currently popped off*/
+                        }),
+                    );
                 }
                 // Don't allow duplicate indicates, we need a 1:1 mapping.
                 if new_slot_map_indices.contains(&next_possibly_free_index) {
@@ -371,54 +452,16 @@ impl super::Store {
                 let slot = &slots[slot_index];
                 next_possibly_free_index = (next_possibly_free_index + 1) % slots.len();
                 num_indices_checked += 1;
-                match move_from_slot_idx {
-                    Some(move_from_slot_idx) => {
-                        debug_assert!(index_info.is_multi_index(), "only set for multi-pack indices");
-                        if slot_index == move_from_slot_idx {
-                            // don't try to move onto ourselves
-                            continue 'increment_slot_index;
+                match Self::try_set_index_slot(&write, slot, index_info, mtime, index.generation) {
+                    Ok(dest_was_empty) => {
+                        new_slot_map_indices.push(slot_index);
+                        if !dest_was_empty {
+                            slot_indices_to_remove.retain(|idx| *idx != slot_index);
+                            needs_generation_change = true;
                         }
-                        match Self::try_set_index_slot(
-                            &write,
-                            slot,
-                            index_info,
-                            mtime,
-                            index.generation,
-                            needs_stable_indices,
-                        ) {
-                            Ok(dest_was_empty) => {
-                                if !dest_was_empty {
-                                    slot_indices_to_remove.retain(|idx| *idx != slot_index);
-                                    needs_generation_change = true;
-                                }
-                                slot_indices_to_remove.push(move_from_slot_idx);
-                                new_slot_map_indices.push(slot_index);
-                                // To avoid handling out the wrong pack (due to reassigned pack ids), declare this a new generation.
-                                break 'increment_slot_index;
-                            }
-                            Err(unused_index_info) => index_info = unused_index_info,
-                        }
+                        break 'increment_slot_index;
                     }
-                    None => {
-                        match Self::try_set_index_slot(
-                            &write,
-                            slot,
-                            index_info,
-                            mtime,
-                            index.generation,
-                            needs_stable_indices,
-                        ) {
-                            Ok(dest_was_empty) => {
-                                new_slot_map_indices.push(slot_index);
-                                if !dest_was_empty {
-                                    slot_indices_to_remove.retain(|idx| *idx != slot_index);
-                                    needs_generation_change = true;
-                                }
-                                break 'increment_slot_index;
-                            }
-                            Err(unused_index_info) => index_info = unused_index_info,
-                        }
-                    }
+                    Err(unused_index_info) => index_info = unused_index_info,
                 }
                 // This isn't racy as it's only us who can change the Option::Some/None state of a slot.
             }
@@ -430,14 +473,19 @@ impl super::Store {
         );
 
         let generation = if needs_generation_change {
-            index.generation.checked_add(1).ok_or(Error::GenerationOverflow)?
+            match index.generation.checked_add(1) {
+                Some(generation) => generation,
+                None => return self.finish_refresh(current_completed_refreshes, Err(Error::GenerationOverflow)),
+            }
         } else {
             index.generation
         };
-        let index_unchanged =
-            generation == index.generation && index.slot_indices == new_slot_map_indices && !needs_index_reload;
-        if !index_unchanged || loose_dbs != index.loose_dbs {
-            let new_index = Arc::new(SlotMapIndex {
+        let index_unchanged = Arc::ptr_eq(&slots, &catalog.slots)
+            && generation == index.generation
+            && index.slot_indices == new_slot_map_indices
+            && !needs_index_reload;
+        let new_index = if !index_unchanged || loose_dbs != index.loose_dbs {
+            Arc::new(SlotMapIndex {
                 slot_indices: new_slot_map_indices,
                 loose_dbs,
                 generation,
@@ -454,42 +502,71 @@ impl super::Store {
                     Arc::new(num_loaded_indices.into())
                 },
                 num_indices_currently_being_loaded: Default::default(),
-            });
-            self.index.store(new_index);
+            })
+        } else {
+            Arc::clone(&index)
+        };
+        if !Arc::ptr_eq(&new_index, &index) || !Arc::ptr_eq(&slots, &catalog.slots) {
+            self.catalog.store(Arc::new(Catalog {
+                index: Arc::clone(&new_index),
+                slots: Arc::clone(&slots),
+            }));
+            #[cfg(feature = "test-support")]
+            self.debug(crate::store::init::debug::Point::IndexStatePublished);
         }
 
-        // deleted items - remove their slots AFTER we have set the new index if we may alter indices, otherwise we only declare them garbage.
-        // removing slots may cause pack loading to fail, and they will then reload their indices.
+        // Remove deleted items only after publishing the catalog which no longer references them.
         for slot in slot_indices_to_remove.into_iter().map(|idx| &slots[idx]) {
             let _lock = slot.write.lock();
             let mut files = slot.files.load_full();
             let files_mut = Arc::make_mut(&mut files);
-            if needs_stable_indices {
-                if let Some(files) = files_mut.as_mut() {
-                    files.trash();
-                    // generation stays the same, as it's the same value still but scheduled for eventual removal.
-                }
-            } else {
-                // set the generation before we actually change the value, otherwise readers of old generations could observe the new one.
-                // We rather want them to turn around here and update their index, which, by that time, might actually already be available.
-                // If not, they would fail unable to load a pack or index they need, but that's preferred over returning wrong objects.
-                // Safety: can't race as we hold the lock, have to set the generation beforehand to help avoid others to observe the value.
-                slot.generation.store(generation, Ordering::SeqCst);
-                *files_mut = None;
-            }
+            // Set the generation before changing the value so readers of old generations refresh instead of observing replacement data.
+            slot.generation.store(generation, Ordering::SeqCst);
+            *files_mut = None;
             slot.files.store(files);
         }
 
-        let new_index = self.index.load();
-        Ok(if index.state_id() == new_index.state_id() {
+        let new_catalog = self.catalog.load_full();
+        let new_index = &new_catalog.index;
+        let snapshot = if index.state_id() == new_index.state_id() {
             // there was no change, and nothing was loaded in the meantime, reflect that in the return value to not get into loops.
             None
         } else {
             if load_new_index {
-                self.load_next_index(new_index);
+                if let Err(err) = self.load_next_index(new_catalog) {
+                    return self.finish_refresh(current_completed_refreshes, Err(err));
+                }
             }
             Some(self.collect_snapshot())
-        })
+        };
+        self.finish_refresh(current_completed_refreshes, Ok(snapshot))
+    }
+
+    fn finish_refresh<T>(&self, previous_completion: usize, result: Result<T, Error>) -> Result<T, Error> {
+        let completion = previous_completion + 1;
+        match result {
+            Ok(value) => {
+                *self.last_disk_state_consolidation_error.lock() = None;
+                self.num_disk_state_consolidations_completed
+                    .store(completion, Ordering::Release);
+                #[cfg(feature = "test-support")]
+                self.debug(crate::store::init::debug::Point::RefreshScanCompleted {
+                    outcome: crate::store::init::debug::LoadOutcome::Success,
+                });
+                Ok(value)
+            }
+            Err(err) => {
+                let err = Arc::new(err);
+                *self.last_disk_state_consolidation_error.lock() = Some((completion, Arc::clone(&err)));
+                self.num_disk_state_consolidations_completed
+                    .store(completion, Ordering::Release);
+                #[cfg(feature = "test-support")]
+                self.debug(crate::store::init::debug::Point::RefreshScanCompleted {
+                    outcome: crate::store::init::debug::LoadOutcome::Failure,
+                });
+                Err(Error::SharedRefresh(err))
+            }
+        }
     }
 
     pub(crate) fn collect_indices_and_mtime_sorted_by_size(
@@ -518,32 +595,19 @@ impl super::Store {
                 .map(|(p, md)| md.modified().map_err(Error::from).map(|mtime| (p, mtime, md.len())))
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let multi_index_info = multi_pack_index_object_hash
-                .and_then(|hash| {
-                    indices.iter().find_map(|(p, a, b)| {
-                        is_multipack_index(p)
-                            .then(|| {
-                                // we always open the multi-pack here to be able to remove indices
-                                gix_pack::multi_index::File::at(p, alloc_limit_bytes)
-                                    .ok()
-                                    .filter(|midx| midx.object_hash() == hash)
-                                    .map(|midx| (midx, *a, *b))
-                            })
-                            .flatten()
-                            .map(|t| {
-                                if t.0.num_indices() > PackId::max_packs_in_multi_index() {
-                                    Err(Error::TooManyPacksInMultiIndex {
-                                        index_path: p.to_owned(),
-                                        actual: t.0.num_indices(),
-                                        limit: PackId::max_packs_in_multi_index(),
-                                    })
-                                } else {
-                                    Ok(t)
-                                }
-                            })
-                    })
+            let multi_index_info = multi_pack_index_object_hash.and_then(|hash| {
+                indices.iter().find_map(|(p, a, b)| {
+                    is_multipack_index(p)
+                        .then(|| {
+                            // we always open the multi-pack here to be able to remove indices
+                            gix_pack::multi_index::File::at(p, alloc_limit_bytes)
+                                .ok()
+                                .filter(|midx| midx.object_hash() == hash)
+                                .map(|midx| (midx, *a, *b))
+                        })
+                        .flatten()
                 })
-                .transpose()?;
+            });
             if let Some((multi_index, mtime, flen)) = multi_index_info {
                 let index_names_in_multi_index: Vec<_> = multi_index.index_names().iter().map(AsRef::as_ref).collect();
                 let mut indices_not_in_multi_index: Vec<(Either, _, _)> = indices
@@ -584,11 +648,10 @@ impl super::Store {
         index_info: Either,
         mtime: SystemTime,
         current_generation: Generation,
-        needs_stable_indices: bool,
     ) -> Result<bool, Either> {
         let (dest_slot_was_empty, generation) = match &**dest_slot.files.load() {
             Some(bundle) => {
-                if bundle.index_path() == index_info.path() || (bundle.is_disposable() && needs_stable_indices) {
+                if bundle.index_path() == index_info.path() {
                     // it might be possible to see ourselves in case all slots are taken, but there are still a few more destination
                     // slots to look for.
                     return Err(index_info);
@@ -603,16 +666,7 @@ impl super::Store {
                 // some other object.
                 (false, current_generation + 1)
             }
-            None => {
-                // For multi-pack indices:
-                //   Do NOT copy the packs over, they need to be reopened to get the correct pack id matching the new slot map index.
-                //   If we are allowed to delete the original, and nobody has the pack referenced, it is closed which is preferred.
-                //   Thus we simply always start new with packs in multi-pack indices.
-                //   In the worst case this could mean duplicate file handle usage though as the old and the new index can't share
-                //   packs due to the intrinsic id.
-                //   Note that the ID is used for cache access, too, so it must be unique. It must also be mappable from pack-id to slotmap id.
-                (true, current_generation)
-            }
+            None => (true, current_generation),
         };
         Self::set_slot_to_index(lock, dest_slot, index_info, mtime, generation);
         Ok(dest_slot_was_empty)
@@ -662,17 +716,8 @@ impl super::Store {
             *bundle = index_info.into_index_and_packs(mtime);
             ((false, true), true)
         } else {
-            let changed_slot = bundle.is_disposable();
-            if changed_slot {
-                // Put it into the correct mode now that the file is known to be present again.
-                bundle.put_back();
-                debug_assert_eq!(
-                    bundle.mtime(),
-                    mtime,
-                    "BUG: we can only put back files that didn't obviously change"
-                );
-            }
-            ((bundle.index_is_loaded(), false), changed_slot)
+            let changed_slot = bundle.prepare_retry_if_available();
+            ((bundle.index_is_loaded(), changed_slot), changed_slot)
         };
         if changed_slot {
             // Safety: the structural and slot locks keep the slot associated with the current generation while publishing it.
@@ -682,23 +727,22 @@ impl super::Store {
         Ok(outcome)
     }
 
-    /// Stability means that indices returned by this API will remain valid.
-    /// Without that constraint, we may unload unused packs and indices, and may rebuild the slotmap index.
-    ///
-    /// Note that this must be called with a lock to the relevant state held to assure these values don't change while
-    /// we are working on said index.
-    fn maintain_stable_indices(&self, _guard: &parking_lot::MutexGuard<'_, ()>) -> bool {
-        self.num_handles_stable.load(Ordering::SeqCst) > 0
-    }
-
     pub(crate) fn collect_snapshot(&self) -> Snapshot {
         // We don't observe changes-on-disk in our 'wait-for-load' loop.
         // That loop is meant to help assure the marker (which includes the amount of loaded indices) matches
         // the actual amount of indices we collect.
-        let index = self.index.load();
-        let slots = self.files.load();
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        let slots = &catalog.slots;
+        #[cfg(feature = "test-support")]
+        let mut reported_wait = false;
         loop {
             if index.num_indices_currently_being_loaded.deref().load(Ordering::SeqCst) != 0 {
+                #[cfg(feature = "test-support")]
+                if !reported_wait {
+                    self.debug(crate::store::init::debug::Point::SnapshotWaitingForIndexLoad);
+                    reported_wait = true;
+                }
                 std::thread::yield_now();
                 continue;
             }
@@ -719,7 +763,12 @@ impl super::Store {
                                 data: multi.data.iter().map(|f| f.loaded().cloned()).collect(),
                             },
                         };
-                        handle::IndexLookup { file: lookup, id }.into()
+                        handle::IndexLookup {
+                            file: lookup,
+                            slot: Arc::clone(file),
+                            slot_id: id,
+                        }
+                        .into()
                     })
                     .collect()
             } else {

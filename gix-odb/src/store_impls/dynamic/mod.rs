@@ -29,6 +29,7 @@ where
 
     pub(crate) token: Option<handle::Mode>,
     snapshot: RefCell<load_index::Snapshot>,
+    retained_indices: RefCell<Vec<handle::IndexLookup>>,
     inflate: RefCell<gix_zlib::Inflate>,
     packed_object_count: RefCell<Option<u64>>,
 }
@@ -48,8 +49,7 @@ pub(crate) struct IndexCtx {
 #[derive(Default, Clone, Copy)]
 pub enum RefreshMode {
     /// Check for new or changed pack indices (and pack data files) when the last known index is loaded.
-    /// During runtime we will keep pack indices stable by never reusing them, however, there is the option for
-    /// clearing internal caches which is likely to change pack ids and it will trigger unloading of packs as they are missing on disk.
+    /// During runtime handles configured for stable pack locations retain the corresponding indices and packs.
     #[default]
     AfterAllIndicesLoaded,
     /// Use this if you expect a lot of missing objects that shouldn't trigger refreshes even after all packs are loaded.
@@ -83,6 +83,15 @@ pub mod init;
 
 pub(crate) mod types;
 pub use types::Metrics;
+
+#[cfg(feature = "test-support")]
+impl Store {
+    pub(crate) fn debug(&self, point: init::debug::Point) {
+        if let Some(debug) = &self.debug {
+            debug.at(point);
+        }
+    }
+}
 
 pub(crate) mod handle;
 

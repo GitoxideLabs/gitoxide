@@ -39,34 +39,35 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
                         index_file,
                         pack: possibly_pack,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)
                     {
                         let pack = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker)? {
+                            None => match self.store.load_pack(slot, slot_id, pack_index, &index_file, marker)? {
                                 Some(pack) => {
                                     *possibly_pack = Some(pack);
                                     possibly_pack.as_deref().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker))? {
+                                    match self.store.load_one_index(self.index_ctx(marker))? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return Ok(None);
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
@@ -106,11 +107,12 @@ where
                                 let handle::index_lookup::Outcome {
                                     object_index:
                                         handle::IndexForObjectInPack {
-                                            pack_id: _,
+                                            pack_index: _,
                                             pack_offset,
                                         },
                                     index_file,
                                     pack: possibly_pack,
+                                    ..
                                 } = match snapshot.indices[idx].lookup(id) {
                                     Some(res) => res,
                                     None => {

@@ -4,14 +4,14 @@ use gix_hash::ObjectId;
 
 use crate::{
     loose,
-    store::{handle, handle::SingleOrMultiIndex, types::PackId},
+    store::{handle, handle::SingleOrMultiIndex},
     store_impls::dynamic,
 };
 
 struct EntryForOrdering {
     pack_offset: u64,
     entry_index: u32,
-    pack_index: u16,
+    pack_index: gix_pack::multi_index::PackIndex,
 }
 
 enum State {
@@ -133,13 +133,7 @@ fn maybe_sort_entries(index: &handle::IndexLookup, order: Ordering) -> Option<Ve
                 .map(|(idx, e)| EntryForOrdering {
                     pack_offset: e.pack_offset,
                     entry_index: idx as u32,
-                    pack_index: {
-                        debug_assert!(
-                            e.pack_index < PackId::max_packs_in_multi_index(),
-                            "this shows the relation between u16 and pack_index (u32) and why this is OK"
-                        );
-                        e.pack_index as u16
-                    },
+                    pack_index: { e.pack_index },
                 })
                 .collect(),
         },

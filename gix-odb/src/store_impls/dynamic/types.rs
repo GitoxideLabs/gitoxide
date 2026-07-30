@@ -10,14 +10,11 @@ use std::{
 use arc_swap::ArcSwap;
 use gix_features::hash;
 
-/// An id to refer to an index file or a multipack index file
-pub type IndexId = usize;
 pub(crate) type StateId = u32;
 pub(crate) type Generation = u32;
 pub(crate) type AtomicGeneration = AtomicU32;
 
-/// A way to indicate which pack indices we have seen already and which of them are loaded, along with an idea
-/// of whether stored `PackId`s are still usable.
+/// A way to indicate which pack indices we have seen already and which of them are loaded.
 #[derive(Default, Copy, Clone, Debug)]
 pub struct SlotIndexMarker {
     /// The generation the `loaded_until_index` belongs to. Indices of different generations are completely incompatible.
@@ -27,58 +24,6 @@ pub struct SlotIndexMarker {
     /// A unique id identifying the index state as well as all loose databases we have last observed.
     /// If it changes in any way, the value is different.
     pub(crate) state_id: StateId,
-}
-
-/// A way to load and refer to a pack uniquely, namespaced by their indexing mechanism, aka multi-pack or not.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct PackId {
-    /// This is the index in the slot map at which the packs index is located.
-    pub(crate) index: IndexId,
-    /// If the pack is in a multi-pack index, this additional index is the pack-index within the multi-pack index identified by `index`.
-    pub(crate) multipack_index: Option<gix_pack::multi_index::PackIndex>,
-}
-
-impl PackId {
-    /// Returns the maximum of indices we can represent.
-    pub(crate) const fn max_indices() -> usize {
-        (1 << 15) - 1
-    }
-    /// Returns the maximum of packs we can represent if stored in a multi-index.
-    pub(crate) const fn max_packs_in_multi_index() -> gix_pack::multi_index::PackIndex {
-        (1 << 16) - 1
-    }
-    /// Packs have a built-in identifier to make data structures simpler, and this method represents ourselves as such id
-    /// to be convertible back and forth. We essentially compress ourselves into a u32.
-    ///
-    /// Bit 16 is a marker to tell us if it's a multi-pack or not, the ones before are the index file itself, the ones after
-    /// are used to encode the pack index within the multi-pack.
-    pub(crate) fn to_intrinsic_pack_id(self) -> gix_pack::data::Id {
-        assert!(self.index < (1 << 15), "There shouldn't be more than 2^15 indices");
-        match self.multipack_index {
-            None => self.index as gix_pack::data::Id,
-            Some(midx) => {
-                assert!(
-                    midx <= Self::max_packs_in_multi_index(),
-                    "There shouldn't be more than 2^16 packs per multi-index"
-                );
-                (self.index as gix_pack::data::Id | (1 << 15)) | (midx << 16) as gix_pack::data::Id
-            }
-        }
-    }
-
-    pub(crate) fn from_intrinsic_pack_id(pack_id: gix_pack::data::Id) -> Self {
-        if pack_id & (1 << 15) == 0 {
-            PackId {
-                index: (pack_id & 0x7fff) as IndexId,
-                multipack_index: None,
-            }
-        } else {
-            PackId {
-                index: (pack_id & 0x7fff) as IndexId,
-                multipack_index: Some(pack_id >> 16),
-            }
-        }
-    }
 }
 
 /// An index that changes only if the packs directory changes and its contents is re-read.
@@ -128,6 +73,13 @@ impl SlotMapIndex {
     }
 }
 
+/// The complete structural state of the object database, published atomically.
+#[derive(Default)]
+pub(crate) struct Catalog {
+    pub(crate) index: Arc<SlotMapIndex>,
+    pub(crate) slots: Arc<Vec<Arc<MutableIndexAndPack>>>,
+}
+
 #[derive(Clone)]
 pub(crate) struct OnDiskFile<T: Clone> {
     /// The last known path of the file
@@ -142,10 +94,6 @@ pub(crate) enum OnDiskFileState<T: Clone> {
     /// The file is on disk and can be loaded from there.
     Unloaded,
     Loaded(T),
-    /// The file was loaded, but appeared to be missing on disk after reconciling our state with what's on disk.
-    /// As there were handles that required pack-id stability we had to keep the item to allow finding it on later
-    /// lookups.
-    Garbage(T),
     /// File is missing on disk and could not be loaded when we tried or turned missing after reconciling our state.
     Missing,
     /// Loading failed while the file had the recorded modification time and length.
@@ -170,42 +118,32 @@ impl<T: Clone> OnDiskFile<T> {
     }
     /// Return true if we hold a memory map of the file already.
     pub fn is_loaded(&self) -> bool {
-        matches!(self.state, OnDiskFileState::Loaded(_) | OnDiskFileState::Garbage(_))
+        matches!(self.state, OnDiskFileState::Loaded(_))
     }
 
     pub fn is_missing(&self) -> bool {
         matches!(self.state, OnDiskFileState::Missing)
     }
 
-    /// Return true if we are to be collected as garbage
-    pub fn is_disposable(&self) -> bool {
-        matches!(self.state, OnDiskFileState::Garbage(_) | OnDiskFileState::Missing)
+    pub fn is_failed(&self) -> bool {
+        matches!(self.state, OnDiskFileState::Failed { .. })
     }
 
-    // On error, always declare the file missing and return an error.
-    pub(crate) fn load_strict(&mut self, load: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<()> {
-        use OnDiskFileState::*;
-        match self.state {
-            Unloaded | Missing | Failed { .. } => match load(&self.path) {
-                Ok(v) => {
-                    self.state = Loaded(v);
-                    Ok(())
-                }
-                Err(err) => {
-                    // TODO: Should be provide more information? We don't even know what exactly failed right now, degenerating information.
-                    self.state = Missing;
-                    Err(err)
-                }
-            },
-            Loaded(_) | Garbage(_) => Ok(()),
+    pub fn unchanged_load_error(&self) -> Option<std::io::Error> {
+        match &self.state {
+            OnDiskFileState::Failed { error, metadata } if *metadata == self.metadata() => {
+                Some(Self::clone_error(error))
+            }
+            _ => None,
         }
     }
+
     /// If the file is missing, we don't consider this failure but instead return Ok(None) to allow recovery.
     /// when we know that loading is necessary. This also works around borrow check, which is a nice coincidence.
     pub fn load_with_recovery(&mut self, load: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<Option<T>> {
         use OnDiskFileState::*;
         match &self.state {
-            Loaded(v) | Garbage(v) => return Ok(Some(v.clone())),
+            Loaded(v) => return Ok(Some(v.clone())),
             Missing => return Ok(None),
             Failed { error, metadata } if *metadata == self.metadata() => {
                 return Err(Self::clone_error(error));
@@ -235,31 +173,22 @@ impl<T: Clone> OnDiskFile<T> {
     pub fn loaded(&self) -> Option<&T> {
         use OnDiskFileState::*;
         match &self.state {
-            Loaded(v) | Garbage(v) => Some(v),
+            Loaded(v) => Some(v),
             Unloaded | Missing | Failed { .. } => None,
         }
     }
 
-    pub fn put_back(&mut self) {
+    pub fn prepare_retry_if_available(&mut self) -> bool {
+        if !matches!(self.state, OnDiskFileState::Missing | OnDiskFileState::Failed { .. }) || !self.path.is_file() {
+            return false;
+        }
         match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
-            OnDiskFileState::Garbage(v) => self.state = OnDiskFileState::Loaded(v),
             OnDiskFileState::Missing => self.state = OnDiskFileState::Unloaded,
             other @ (OnDiskFileState::Loaded(_) | OnDiskFileState::Unloaded | OnDiskFileState::Failed { .. }) => {
                 self.state = other;
             }
         }
-    }
-
-    pub fn trash(&mut self) {
-        match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
-            OnDiskFileState::Loaded(v) => self.state = OnDiskFileState::Garbage(v),
-            other @ (OnDiskFileState::Garbage(_)
-            | OnDiskFileState::Unloaded
-            | OnDiskFileState::Missing
-            | OnDiskFileState::Failed { .. }) => {
-                self.state = other;
-            }
-        }
+        true
     }
 }
 
@@ -297,34 +226,18 @@ impl IndexAndPacks {
         }
     }
 
-    /// If we are garbage, put ourselves into the loaded state. Otherwise, put ourselves back to unloaded.
-    pub(crate) fn put_back(&mut self) {
+    /// Make files which have reappeared eligible for another load attempt.
+    pub(crate) fn prepare_retry_if_available(&mut self) -> bool {
         match self {
             IndexAndPacks::Index(bundle) => {
-                bundle.index.put_back();
-                bundle.data.put_back();
+                bundle.index.prepare_retry_if_available() | bundle.data.prepare_retry_if_available()
             }
             IndexAndPacks::MultiIndex(bundle) => {
-                bundle.multi_index.put_back();
+                let mut changed = bundle.multi_index.prepare_retry_if_available();
                 for data in &mut bundle.data {
-                    data.put_back();
+                    changed |= data.prepare_retry_if_available();
                 }
-            }
-        }
-    }
-
-    // The inverse of `put_back()`, by trashing the content.
-    pub(crate) fn trash(&mut self) {
-        match self {
-            IndexAndPacks::Index(bundle) => {
-                bundle.index.trash();
-                bundle.data.trash();
-            }
-            IndexAndPacks::MultiIndex(bundle) => {
-                bundle.multi_index.trash();
-                for data in &mut bundle.data {
-                    data.trash();
-                }
+                changed
             }
         }
     }
@@ -343,12 +256,17 @@ impl IndexAndPacks {
         }
     }
 
-    pub(crate) fn is_disposable(&self) -> bool {
+    pub(crate) fn index_is_failed(&self) -> bool {
         match self {
-            Self::Index(bundle) => bundle.index.is_disposable() || bundle.data.is_disposable(),
-            Self::MultiIndex(bundle) => {
-                bundle.multi_index.is_disposable() || bundle.data.iter().any(OnDiskFile::is_disposable)
-            }
+            Self::Index(bundle) => bundle.index.is_failed(),
+            Self::MultiIndex(bundle) => bundle.multi_index.is_failed(),
+        }
+    }
+
+    pub(crate) fn unchanged_index_load_error(&self) -> Option<std::io::Error> {
+        match self {
+            Self::Index(bundle) => bundle.index.unchanged_load_error(),
+            Self::MultiIndex(bundle) => bundle.multi_index.unchanged_load_error(),
         }
     }
 
@@ -358,16 +276,22 @@ impl IndexAndPacks {
         alloc_limit_bytes: Option<usize>,
     ) -> std::io::Result<()> {
         match self {
-            IndexAndPacks::Index(bundle) => bundle.index.load_strict(|path| {
-                gix_pack::index::File::at(path, object_hash)
-                    .map(Arc::new)
-                    .map_err(|err| match err {
-                        gix_pack::index::init::Error::Io { source, .. } => source,
-                        err => std::io::Error::other(err),
-                    })
-            }),
+            IndexAndPacks::Index(bundle) => bundle
+                .index
+                .load_with_recovery(|path| {
+                    gix_pack::index::File::at(path, object_hash)
+                        .map(Arc::new)
+                        .map_err(|err| match err {
+                            gix_pack::index::init::Error::Io { source, .. } => source,
+                            err => std::io::Error::other(err),
+                        })
+                })
+                .map(|_| ()),
             IndexAndPacks::MultiIndex(bundle) => {
-                bundle.multi_index.load_strict(|path| {
+                if bundle.multi_index.is_loaded() {
+                    return Ok(());
+                }
+                bundle.multi_index.load_with_recovery(|path| {
                     gix_pack::multi_index::File::at(path, alloc_limit_bytes)
                         .map(Arc::new)
                         .map_err(|err| match err {
@@ -462,8 +386,12 @@ pub struct Metrics {
     ///
     /// This allows to keep files available while they are still potentially required for operations like pack generation, despite
     /// the file on disk being removed or changed.
+    ///
+    /// This is always zero for dynamic stores, whose stable handles now own retained indices directly.
     pub unreachable_indices: usize,
     /// Equivalent to `unreachable_indices`, but for mapped packed data files
+    ///
+    /// This is always zero for dynamic stores, whose stable handles now own retained packs directly.
     pub unreachable_packs: usize,
     /// The amount of loose object databases currently available for object retrieval.
     ///
@@ -474,34 +402,6 @@ pub struct Metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    mod pack_id {
-        use super::PackId;
-
-        #[test]
-        fn to_intrinsic_roundtrip() {
-            let single = PackId {
-                index: (1 << 15) - 1,
-                multipack_index: None,
-            };
-            let multi = PackId {
-                index: (1 << 15) - 1,
-                multipack_index: Some((1 << 16) - 1),
-            };
-            assert_eq!(PackId::from_intrinsic_pack_id(single.to_intrinsic_pack_id()), single);
-            assert_eq!(PackId::from_intrinsic_pack_id(multi.to_intrinsic_pack_id()), multi);
-        }
-
-        #[test]
-        #[should_panic]
-        fn max_supported_index_count() {
-            PackId {
-                index: 1 << 15,
-                multipack_index: None,
-            }
-            .to_intrinsic_pack_id();
-        }
-    }
 
     #[test]
     fn unchanged_load_failures_are_not_retried() -> std::io::Result<()> {

@@ -45,6 +45,432 @@ fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
     Ok(())
 }
 
+#[cfg(feature = "parallel")]
+fn contended_lookup(
+    first: gix_odb::HandleArc,
+    second: gix_odb::HandleArc,
+    id: gix_hash::ObjectId,
+    pause_next_refresh: &std::sync::atomic::AtomicBool,
+    point_rx: &crossbeam_channel::Receiver<gix_odb::store::init::debug::Point>,
+    resume_tx: &crossbeam_channel::Sender<()>,
+) -> (
+    std::result::Result<bool, String>,
+    std::result::Result<bool, String>,
+    Vec<gix_odb::store::init::debug::Point>,
+) {
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    use gix_odb::store::init::debug::Point;
+
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    pause_next_refresh.store(true, Ordering::SeqCst);
+    let first_thread = lookup(first);
+    let mut observed = Vec::new();
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first handle starts its refresh scan");
+        observed.push(point);
+        if matches!(point, Point::RefreshScanStarted) {
+            break;
+        }
+    }
+    let second_thread = lookup(second);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second handle attempts to acquire the refresh lock");
+        observed.push(point);
+        if matches!(point, Point::RefreshLocking) {
+            break;
+        }
+    }
+    resume_tx
+        .send(())
+        .expect("the first refresh is waiting for its release");
+    let first = first_thread.join().expect("the first lookup does not panic");
+    let second = second_thread.join().expect("the second lookup does not panic");
+    observed.extend(point_rx.try_iter());
+    (first, second, observed)
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.corrupt_index(Database::Primary, Pack::A)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_first_loader = Arc::new(AtomicBool::new(true));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_first_loader = Arc::clone(&pause_first_loader);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::IndexLoadClaimed { .. }) && pause_first_loader.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the first index loader");
+            }
+        }
+    });
+    let first = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(1),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    let second = first.clone();
+    let recovery = first.clone();
+
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    let first_thread = lookup(first);
+    let mut observed = Vec::new();
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first loader reaches its claimed-index synchronization point");
+        observed.push(point);
+        if matches!(point, Point::IndexLoadClaimed { .. }) {
+            break;
+        }
+    }
+
+    let second_thread = lookup(second);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second loader reaches snapshot contention");
+        observed.push(point);
+        if matches!(point, Point::SnapshotWaitingForIndexLoad) {
+            break;
+        }
+    }
+    resume_tx.send(()).expect("the first loader is waiting for its release");
+
+    let first_error = first_thread
+        .join()
+        .expect("the first loader does not panic")
+        .expect_err("the first loader reports the malformed index");
+    let second_error = second_thread
+        .join()
+        .expect("the second loader does not panic")
+        .expect_err("the waiting loader reports the malformed index");
+    assert_eq!(
+        first_error, second_error,
+        "all handles observe the same cached index-load error"
+    );
+    observed.extend(point_rx.try_iter());
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::IndexLoadClaimed { .. }))
+            .count(),
+        1,
+        "only one thread claims the malformed index"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::IndexSlotLocked { .. }))
+            .count(),
+        1,
+        "the claimed slot is locked exactly once"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(
+                point,
+                Point::IndexLoadCompleted {
+                    outcome: LoadOutcome::Failure,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the shared malformed index is opened exactly once"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::IndexStatePublished))
+            .count(),
+        1,
+        "initial discovery publishes one index state"
+    );
+
+    let mut buffer = Vec::new();
+    assert_eq!(
+        recovery
+            .try_find(&id, &mut buffer)
+            .expect_err("the unchanged malformed index remains an error")
+            .to_string(),
+        first_error,
+        "later lookups observe the cached error"
+    );
+    assert!(
+        point_rx
+            .try_iter()
+            .all(|point| !matches!(point, Point::IndexLoadCompleted { .. })),
+        "the unchanged malformed index is not loaded again"
+    );
+
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    assert!(
+        recovery
+            .try_find(&id, &mut buffer)
+            .expect("the replacement index loads")
+            .is_some(),
+        "the shared store recovers after the malformed index is replaced"
+    );
+    assert_eq!(
+        point_rx
+            .try_iter()
+            .filter(|point| matches!(
+                point,
+                Point::IndexLoadCompleted {
+                    outcome: LoadOutcome::Success,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the replacement index is loaded exactly once"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn debug_hooks_coalesce_successful_refreshes() -> Result {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use gix_odb::store::init::debug::Point;
+
+    let mut fixture = OdbFixture::from_script()?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_next_refresh = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_next_refresh = Arc::clone(&pause_next_refresh);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::RefreshScanStarted) && pause_next_refresh.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the refresh scan");
+            }
+        }
+    });
+    let handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(4),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    assert_eq!(
+        handle.store_ref().structure()?.len(),
+        1,
+        "initialization discovers only the primary loose-object database"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        1,
+        "initialization scans the empty ODB once"
+    );
+
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    point_rx.try_iter().for_each(drop);
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let (first, second, observed) = contended_lookup(
+        handle.clone(),
+        handle.clone(),
+        id,
+        &pause_next_refresh,
+        &point_rx,
+        &resume_tx,
+    );
+    assert!(
+        first.expect("the first lookup succeeds"),
+        "the first handle finds the new object"
+    );
+    assert!(
+        second.expect("the waiting lookup succeeds"),
+        "the waiting handle observes the refreshed state"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::RefreshScanStarted))
+            .count(),
+        1,
+        "contending handles scan the changed ODB once"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        2,
+        "the changed ODB adds one refresh"
+    );
+
+    point_rx.try_iter().for_each(drop);
+    let (first, second, observed) = contended_lookup(
+        handle.clone(),
+        handle.clone(),
+        fixture.manifest.missing_id(),
+        &pause_next_refresh,
+        &point_rx,
+        &resume_tx,
+    );
+    assert!(!first.expect("the first miss succeeds"), "the object remains absent");
+    assert!(
+        !second.expect("the waiting miss succeeds"),
+        "the waiting handle shares the unchanged refresh"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::RefreshScanStarted))
+            .count(),
+        1,
+        "contending misses scan the unchanged ODB once"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        3,
+        "the unchanged ODB adds one refresh"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn debug_hooks_share_refresh_errors_with_waiters() -> Result {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_next_refresh = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_next_refresh = Arc::clone(&pause_next_refresh);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::RefreshScanStarted) && pause_next_refresh.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the refresh scan");
+            }
+        }
+    });
+    let handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(1),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    point_rx.try_iter().for_each(drop);
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let (first, second, observed) = contended_lookup(
+        handle.clone(),
+        handle.clone(),
+        id,
+        &pause_next_refresh,
+        &point_rx,
+        &resume_tx,
+    );
+    let first = first.expect_err("one slot cannot hold both discovered indices");
+    let second = second.expect_err("the waiting handle observes the same refresh failure");
+    assert_eq!(first, second, "both handles receive the shared refresh error");
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(point, Point::RefreshScanStarted))
+            .count(),
+        1,
+        "the failed refresh scans the ODB once"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(
+                point,
+                Point::RefreshScanCompleted {
+                    outcome: LoadOutcome::Failure
+                }
+            ))
+            .count(),
+        1,
+        "the single scan publishes one failed outcome"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        1,
+        "the failed initialization scans once"
+    );
+
+    fixture.remove_pack(Database::Primary, Pack::B)?;
+    assert_object(&handle, &id)?;
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        2,
+        "a later lookup retries after the disk state changes"
+    );
+    Ok(())
+}
+
 #[test]
 fn fixture_actions_build_a_valid_odb_from_empty() -> Result {
     let mut fixture = OdbFixture::from_script()?;
@@ -130,6 +556,24 @@ fn stale_handles_follow_multi_index_rewrites() -> Result {
 }
 
 #[test]
+fn a_multi_index_subset_and_standalone_index_use_their_own_packs() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    fixture.publish(Database::Alternate, Pack::A, Component::Index)?;
+    fixture.publish(Database::Alternate, Pack::C, Component::Index)?;
+    fixture.install_pack(Database::Alternate, Pack::B)?;
+    fixture.write_multi_index(Database::Alternate, &[Pack::A, Pack::C])?;
+    fixture.set_alternate(true)?;
+
+    let handle = open(&fixture, 16)?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::B).object_ids[0])?;
+    Ok(())
+}
+
+#[test]
 fn alternates_can_change_while_handles_are_alive() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Alternate, Pack::C)?;
@@ -157,10 +601,9 @@ fn malformed_index_can_be_restored_for_an_existing_handle() -> Result {
     let handle = open(&fixture, 4)?;
     let id = fixture.manifest.pack(Pack::A).object_ids[0];
     let mut buffer = Vec::new();
-    assert!(
-        handle.try_find(&id, &mut buffer)?.is_none(),
-        "a malformed index cannot provide its objects"
-    );
+    handle
+        .try_find(&id, &mut buffer)
+        .expect_err("a malformed index is reported to the caller");
 
     fixture.publish(Database::Primary, Pack::A, Component::Index)?;
     assert!(fixture.is_valid(), "restoring the generated index makes the ODB valid");
@@ -203,37 +646,168 @@ fn a_pack_missing_on_first_access_is_shared_and_recovers() -> Result {
 }
 
 #[test]
-fn a_failed_pack_load_is_shared_and_recovers_after_replacement() -> Result {
+fn a_loaded_index_recovers_after_its_pack_and_index_are_republished() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Primary, Pack::A)?;
-    let mut first = open(&fixture, 4)?;
-    let mut second = first.clone();
-    first.refresh_never();
-    second.refresh_never();
+    let mut stale = open(&fixture, 4)?;
+    let current = stale.clone();
+    stale.refresh_never();
+    assert_eq!(
+        current.packed_object_count()?,
+        fixture.manifest.pack(Pack::A).object_ids.len() as u64,
+        "the shared store loads the index before its files are replaced"
+    );
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_missing(&stale, &id)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
+
+    assert_missing(&current, &fixture.manifest.missing_id())?;
+    assert_object(&current, &id)?;
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn a_failed_pack_load_is_shared_and_recovers_after_replacement() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_first_loader = Arc::new(AtomicBool::new(true));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_first_loader = Arc::clone(&pause_first_loader);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::PackSlotLocked { .. }) && pause_first_loader.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the first pack loader");
+            }
+        }
+    });
+    let first = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(4),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    let second = first.clone();
+    let recovery = first.clone();
     assert_eq!(
         first.packed_object_count()?,
         fixture.manifest.pack(Pack::A).object_ids.len() as u64,
         "loading the index leaves its pack unopened"
     );
+    point_rx.try_iter().for_each(drop);
 
     fixture.corrupt_pack(Database::Primary, Pack::A)?;
     let id = fixture.manifest.pack(Pack::A).object_ids[0];
-    let mut buffer = Vec::new();
-    let first_err = first
-        .try_find(&id, &mut buffer)
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    let first_thread = lookup(first);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first loader acquires the pack slot");
+        if matches!(point, Point::PackSlotLocked { .. }) {
+            break;
+        }
+    }
+    let second_thread = lookup(second);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second loader attempts to acquire the pack slot");
+        if matches!(point, Point::PackSlotLocking { .. }) {
+            break;
+        }
+    }
+    resume_tx.send(()).expect("the first loader is waiting for its release");
+
+    let first_err = first_thread
+        .join()
+        .expect("the first loader does not panic")
         .expect_err("the first handle observes the malformed pack");
-    let second_err = second
-        .try_find(&id, &mut buffer)
+    let second_err = second_thread
+        .join()
+        .expect("the second loader does not panic")
         .expect_err("the second handle observes the shared pack-load failure");
     assert_eq!(
-        first_err.to_string(),
-        second_err.to_string(),
+        first_err, second_err,
         "shared handles report the same pack-load failure"
     );
+    let observed: Vec<_> = point_rx.try_iter().collect();
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(
+                point,
+                Point::PackLoadCompleted {
+                    outcome: LoadOutcome::Failure,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the shared malformed pack is opened exactly once"
+    );
 
+    let mut buffer = Vec::new();
+    assert_eq!(
+        recovery
+            .try_find(&id, &mut buffer)
+            .expect_err("the unchanged malformed pack remains an error")
+            .to_string(),
+        first_err,
+        "later lookups observe the cached error"
+    );
+    assert!(
+        point_rx
+            .try_iter()
+            .all(|point| !matches!(point, Point::PackLoadCompleted { .. })),
+        "the unchanged malformed pack is not loaded again"
+    );
     fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
-    assert_object(&second, &id)?;
-    assert_object(&first, &id)?;
+    assert_object(&recovery, &id)?;
+    assert_eq!(
+        point_rx
+            .try_iter()
+            .filter(|point| matches!(
+                point,
+                Point::PackLoadCompleted {
+                    outcome: LoadOutcome::Success,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the replacement pack is loaded exactly once"
+    );
     Ok(())
 }
 
@@ -296,6 +870,26 @@ fn never_refresh_does_not_retry_failed_initial_scan() -> Result {
         strict.store_ref().metrics().num_refreshes,
         2,
         "a strict shared handle can reconcile once the remaining index fits"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_midx_rewrite_does_not_require_a_spare_slot() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let handle = open(&fixture, 1)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object(&handle, &id)?;
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    assert_missing(&handle, &fixture.manifest.missing_id())?;
+    assert_object(&handle, &id)?;
+    assert_eq!(
+        handle.store_ref().metrics().known_reachable_indices,
+        1,
+        "rewriting the only reachable index stays within the configured limit"
     );
     Ok(())
 }
@@ -379,6 +973,124 @@ fn growable_slots_expand_without_invalidating_existing_handles() -> Result {
         3,
         "all standalone indices are represented after growth"
     );
+    Ok(())
+}
+
+#[test]
+fn making_a_stale_handle_stable_discards_invalid_pack_ids() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let current = open(&fixture, 1)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object(&current, &id)?;
+    let mut stable = current.clone();
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    assert_missing(&current, &fixture.manifest.missing_id())?;
+
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &id, &mut buffer)
+        .expect("the stable handle locates the object through the current MIDX");
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)
+            .is_none(),
+        "a miss may refresh the stable handle without invalidating its location"
+    );
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the location obtained after stability was enabled remains valid"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_midx_rewrite_does_not_reuse_a_stable_standalone_pack_id() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let mut stable = open(&fixture, 2)?;
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let b = fixture.manifest.pack(Pack::B).object_ids[0];
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &b, &mut buffer)
+        .expect("the standalone pack is available before the MIDX absorbs it");
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)
+            .is_none(),
+        "slot exhaustion during the rewrite is reported as a miss by the infallible location API"
+    );
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the standalone pack ID remains mapped after the failed rewrite"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_stable_location_keeps_a_deleted_midx_pack_available_across_refresh() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let mut stable = open(&fixture, 16)?;
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &id, &mut buffer)
+        .expect("the stable handle locates the object through the MIDX");
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)
+            .is_none(),
+        "a lookup miss refreshes the stable handle after the pack was deleted"
+    );
+
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the deleted pack remains available by its previously returned location"
+    );
+    Ok(())
+}
+
+#[test]
+fn iteration_objects_are_readable_after_an_unchanged_index_gets_its_pack_back() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let current = open(&fixture, 4)?;
+    let mut stale = current.clone();
+    stale.refresh_never();
+    assert_eq!(
+        current.packed_object_count()?,
+        fixture.manifest.pack(Pack::A).object_ids.len() as u64,
+        "the shared store loads the index before its pack disappears"
+    );
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_missing(&stale, &id)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
+
+    for id in current.iter()? {
+        assert_object(&current, &id?)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_multi_index_with_a_missing_pack_does_not_refresh_forever() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
+    let handle = open(&fixture, 4)?;
+
+    assert_missing(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::B).object_ids[0])?;
     Ok(())
 }
 

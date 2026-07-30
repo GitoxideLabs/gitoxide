@@ -491,6 +491,7 @@ impl ThreadSafeRepository {
                     alloc_limit_bytes: config.alloc_limit_bytes,
                     loose_compression: config.loose_compression,
                     current_dir: current_dir.to_owned().into(),
+                    ..Default::default()
                 },
             )?),
             common_dir,

@@ -10,6 +10,7 @@ use gix_hash::oid;
 
 use crate::store::{RefreshMode, handle, types};
 
+#[derive(Clone)]
 pub(crate) enum SingleOrMultiIndex {
     Single {
         index: Arc<gix_pack::index::File>,
@@ -33,6 +34,20 @@ pub(crate) enum IntraPackLookup<'a> {
 }
 
 impl IntraPackLookup<'_> {
+    pub(crate) fn matches(&self, files: &types::IndexAndPacks) -> bool {
+        match (self, files) {
+            (IntraPackLookup::Single(expected), types::IndexAndPacks::Index(bundle)) => bundle
+                .index
+                .loaded()
+                .is_some_and(|actual| std::ptr::eq(actual.as_ref(), *expected)),
+            (IntraPackLookup::Multi { index: expected, .. }, types::IndexAndPacks::MultiIndex(bundle)) => bundle
+                .multi_index
+                .loaded()
+                .is_some_and(|actual| std::ptr::eq(actual.as_ref(), *expected)),
+            _ => false,
+        }
+    }
+
     pub(crate) fn pack_offset_by_id(&self, id: &oid) -> Option<gix_pack::data::Offset> {
         match self {
             IntraPackLookup::Single(index) => index
@@ -49,15 +64,18 @@ impl IntraPackLookup<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct IndexLookup {
     pub(crate) file: SingleOrMultiIndex,
-    /// The index we were found at in the slot map
-    pub(crate) id: types::IndexId,
+    /// The resource node from which packs can be loaded without resolving a mutable catalog position.
+    pub(crate) slot: Arc<types::MutableIndexAndPack>,
+    /// The slot position, used only for diagnostics and deterministic test synchronization.
+    pub(crate) slot_id: usize,
 }
 
 pub struct IndexForObjectInPack {
-    /// The internal identifier of the pack itself, which either is referred to by an index or a multi-pack index.
-    pub(crate) pack_id: types::PackId,
+    /// The pack within a multi-pack index, or `None` for a standalone pack.
+    pub(crate) pack_index: Option<gix_pack::multi_index::PackIndex>,
     /// The offset at which the object's entry can be found
     pub(crate) pack_offset: u64,
 }
@@ -73,42 +91,66 @@ pub(crate) mod index_lookup {
         pub object_index: handle::IndexForObjectInPack,
         pub index_file: IntraPackLookup<'a>,
         pub pack: &'a mut Option<Arc<gix_pack::data::File>>,
+        pub slot: &'a types::MutableIndexAndPack,
+        pub slot_id: usize,
     }
 
     impl handle::IndexLookup {
-        /// Return an iterator over the entries of the given pack. The `pack_id` is required to identify a pack uniquely within
-        /// a potential multi-pack index.
+        /// Return an iterator over the entries of the loaded pack identified by `pack_id`.
         pub(crate) fn iter(
             &self,
-            pack_id: types::PackId,
+            pack_id: gix_pack::data::Id,
         ) -> Option<Box<dyn Iterator<Item = gix_pack::index::Entry> + '_>> {
-            (self.id == pack_id.index).then(|| match &self.file {
-                handle::SingleOrMultiIndex::Single { index, .. } => index.iter(),
-                handle::SingleOrMultiIndex::Multi { index, .. } => {
-                    let pack_index = pack_id.multipack_index.expect(
-                        "BUG: multi-pack index must be set if this is a multi-pack, pack-indices seem unstable",
-                    );
-                    Box::new(index.iter().filter_map(move |e| {
+            match &self.file {
+                handle::SingleOrMultiIndex::Single { index, data } => {
+                    (data.as_ref()?.id == pack_id).then(|| index.iter())
+                }
+                handle::SingleOrMultiIndex::Multi { index, data } => {
+                    let pack_index = data
+                        .iter()
+                        .position(|pack| pack.as_ref().is_some_and(|pack| pack.id == pack_id))?
+                        as gix_pack::multi_index::PackIndex;
+                    Some(Box::new(index.iter().filter_map(move |e| {
                         (e.pack_index == pack_index).then_some(gix_pack::index::Entry {
                             oid: e.oid,
                             pack_offset: e.pack_offset,
                             crc32: None,
                         })
-                    }))
+                    })))
                 }
-            })
+            }
         }
 
-        pub(crate) fn pack(&mut self, pack_id: types::PackId) -> Option<&'_ mut Option<Arc<gix_pack::data::File>>> {
-            (self.id == pack_id.index).then(move || match &mut self.file {
-                handle::SingleOrMultiIndex::Single { data, .. } => data,
+        pub(crate) fn pack(&mut self, pack_id: gix_pack::data::Id) -> Option<&'_ Arc<gix_pack::data::File>> {
+            match &mut self.file {
+                handle::SingleOrMultiIndex::Single { data, .. } => data.as_ref().filter(|pack| pack.id == pack_id),
                 handle::SingleOrMultiIndex::Multi { data, .. } => {
-                    let pack_index = pack_id.multipack_index.expect(
-                        "BUG: multi-pack index must be set if this is a multi-pack, pack-indices seem unstable",
-                    );
-                    &mut data[pack_index as usize]
+                    data.iter().filter_map(Option::as_ref).find(|pack| pack.id == pack_id)
                 }
-            })
+            }
+        }
+
+        pub(crate) fn contains_pack(&self, pack_id: gix_pack::data::Id) -> bool {
+            match &self.file {
+                handle::SingleOrMultiIndex::Single { data, .. } => data.as_ref().is_some_and(|pack| pack.id == pack_id),
+                handle::SingleOrMultiIndex::Multi { data, .. } => {
+                    data.iter().filter_map(Option::as_ref).any(|pack| pack.id == pack_id)
+                }
+            }
+        }
+
+        pub(crate) fn set_pack(
+            &mut self,
+            pack_index: Option<gix_pack::multi_index::PackIndex>,
+            pack: Arc<gix_pack::data::File>,
+        ) {
+            match (&mut self.file, pack_index) {
+                (handle::SingleOrMultiIndex::Single { data, .. }, None) => *data = Some(pack),
+                (handle::SingleOrMultiIndex::Multi { data, .. }, Some(pack_index)) => {
+                    data[pack_index as usize] = Some(pack);
+                }
+                _ => debug_assert!(false, "index and pack selector originate from the same lookup"),
+            }
         }
 
         /// Return true if the given object id exists in this index
@@ -163,27 +205,24 @@ pub(crate) mod index_lookup {
         /// they won't be used in practice as it's more efficient to store their offsets.
         /// If it is not loaded, ask it to be loaded and put it into the returned mutable option for safe-keeping.
         pub(crate) fn lookup(&mut self, object_id: &oid) -> Option<Outcome<'_>> {
-            let id = self.id;
+            let slot = &*self.slot;
+            let slot_id = self.slot_id;
             match &mut self.file {
                 handle::SingleOrMultiIndex::Single { index, data } => index.lookup(object_id).map(move |idx| Outcome {
                     object_index: handle::IndexForObjectInPack {
-                        pack_id: types::PackId {
-                            index: id,
-                            multipack_index: None,
-                        },
+                        pack_index: None,
                         pack_offset: index.pack_offset_at_index(idx),
                     },
                     index_file: IntraPackLookup::Single(index),
                     pack: data,
+                    slot,
+                    slot_id,
                 }),
                 handle::SingleOrMultiIndex::Multi { index, data } => index.lookup(object_id).map(move |idx| {
                     let (pack_index, pack_offset) = index.pack_id_and_pack_offset_at_index(idx);
                     Outcome {
                         object_index: handle::IndexForObjectInPack {
-                            pack_id: types::PackId {
-                                index: id,
-                                multipack_index: Some(pack_index),
-                            },
+                            pack_index: Some(pack_index),
                             pack_offset,
                         },
                         index_file: IntraPackLookup::Multi {
@@ -191,6 +230,8 @@ pub(crate) mod index_lookup {
                             required_pack_index: pack_index,
                         },
                         pack: &mut data[pack_index as usize],
+                        slot,
+                        slot_id,
                     }
                 }),
             }
@@ -207,24 +248,13 @@ pub(crate) enum Mode {
 /// Handle registration
 impl super::Store {
     pub(crate) fn register_handle(&self) -> Mode {
-        self.num_handles_unstable.fetch_add(1, Ordering::Relaxed);
+        self.num_handles.fetch_add(1, Ordering::Relaxed);
         Mode::DeletedPacksAreInaccessible
     }
-    pub(crate) fn remove_handle(&self, mode: Mode) {
-        match mode {
-            Mode::KeepDeletedPacksAvailable => {
-                let _lock = self.write.lock();
-                self.num_handles_stable.fetch_sub(1, Ordering::SeqCst)
-            }
-            Mode::DeletedPacksAreInaccessible => self.num_handles_unstable.fetch_sub(1, Ordering::Relaxed),
-        };
+    pub(crate) fn remove_handle(&self, _mode: Mode) {
+        self.num_handles.fetch_sub(1, Ordering::Relaxed);
     }
-    pub(crate) fn upgrade_handle(&self, mode: Mode) -> Mode {
-        if let Mode::DeletedPacksAreInaccessible = mode {
-            let _lock = self.write.lock();
-            self.num_handles_stable.fetch_add(1, Ordering::SeqCst);
-            self.num_handles_unstable.fetch_sub(1, Ordering::SeqCst);
-        }
+    pub(crate) fn upgrade_handle(&self, _mode: Mode) -> Mode {
         Mode::KeepDeletedPacksAvailable
     }
 }
@@ -259,6 +289,7 @@ impl super::Store {
             token: Some(token),
             inflate: RefCell::new(Default::default()),
             snapshot: RefCell::new(self.collect_snapshot()),
+            retained_indices: Default::default(),
             max_recursion_depth: Self::INITIAL_MAX_RECURSION_DEPTH,
             packed_object_count: Default::default(),
         }
@@ -277,6 +308,7 @@ impl super::Store {
             token: Some(token),
             inflate: RefCell::new(Default::default()),
             snapshot: RefCell::new(self.collect_snapshot()),
+            retained_indices: Default::default(),
             max_recursion_depth: Self::INITIAL_MAX_RECURSION_DEPTH,
             packed_object_count: Default::default(),
         }
@@ -307,11 +339,15 @@ where
         }
     }
 
-    /// Call once if pack ids are stored and later used for lookup, meaning they should always remain mapped and not be unloaded
-    /// even if they disappear from disk.
+    /// Call once if pack locations are stored and later used for lookup, retaining their indices and packs even if they disappear.
     /// This must be called if there is a chance that git maintenance is happening while a pack is created.
     pub fn prevent_pack_unload(&mut self) {
+        let was_unstable = matches!(self.token.as_ref(), Some(handle::Mode::DeletedPacksAreInaccessible));
         self.token = self.token.take().map(|token| self.store.upgrade_handle(token));
+        if was_unstable {
+            *self.snapshot.get_mut() = self.store.collect_snapshot();
+            self.clear_cache();
+        }
     }
 
     /// Return a shared reference to the contained store.
@@ -354,17 +390,19 @@ impl TryFrom<&super::Store> for super::Store {
     type Error = std::io::Error;
 
     fn try_from(s: &super::Store) -> Result<Self, Self::Error> {
-        let slots = s.files.load();
+        let catalog = s.catalog.load();
         super::Store::at_opts(
             s.path().into(),
             s.object_hash,
             &mut s.replacements(),
             crate::store::init::Options {
-                slots: crate::store::init::Slots::Limit(slots.len().try_into().expect("BUG: too many slots")),
+                slots: crate::store::init::Slots::Limit(catalog.slots.len().try_into().expect("BUG: too many slots")),
                 use_multi_pack_index: false,
                 alloc_limit_bytes: s.alloc_limit_bytes,
                 current_dir: s.current_dir.clone().into(),
                 loose_compression: s.loose_compression,
+                #[cfg(feature = "test-support")]
+                debug: s.debug.clone(),
             },
         )
     }
@@ -410,6 +448,7 @@ where
             },
             inflate: RefCell::new(Default::default()),
             snapshot: RefCell::new(self.store.collect_snapshot()),
+            retained_indices: RefCell::new(self.retained_indices.borrow().clone()),
             max_recursion_depth: self.max_recursion_depth,
             packed_object_count: Default::default(),
         }
