@@ -47,30 +47,36 @@ fn open(fixture: &OdbFixture, slots: gix_odb::store::init::Slots) -> gix_odb::Ha
 #[derive(Clone, Copy)]
 enum RefreshPolicy {
     Strict,
+    Fresh,
     Never,
+    Expired,
 }
 
 impl RefreshPolicy {
-    const STEADY: [Self; 2] = [Self::Strict, Self::Never];
+    const STEADY: [Self; 3] = [Self::Strict, Self::Fresh, Self::Never];
 
     fn apply(self, handle: &mut gix_odb::Handle) {
         handle.refresh = match self {
             RefreshPolicy::Strict => gix_odb::store::RefreshMode::AfterAllIndicesLoaded,
+            RefreshPolicy::Fresh => gix_odb::store::RefreshMode::AfterDuration(Duration::MAX),
             RefreshPolicy::Never => gix_odb::store::RefreshMode::Never,
+            RefreshPolicy::Expired => gix_odb::store::RefreshMode::AfterDuration(Duration::ZERO),
         };
     }
 
     fn name(self) -> &'static str {
         match self {
             RefreshPolicy::Strict => "strict",
+            RefreshPolicy::Fresh => "after-duration-fresh",
             RefreshPolicy::Never => "never",
+            RefreshPolicy::Expired => "after-duration-expired",
         }
     }
 
     fn refreshes_per_miss(self) -> usize {
         match self {
-            RefreshPolicy::Strict => 1,
-            RefreshPolicy::Never => 0,
+            RefreshPolicy::Strict | RefreshPolicy::Expired => 1,
+            RefreshPolicy::Fresh | RefreshPolicy::Never => 0,
         }
     }
 }
@@ -78,6 +84,7 @@ impl RefreshPolicy {
 fn bench_open(c: &mut Criterion) {
     let mut group = c.benchmark_group("dynamic/open");
     for (name, slots) in [
+        ("growable", gix_odb::store::init::Slots::default()),
         (
             "scan",
             gix_odb::store::init::Slots::AsNeededByDiskState {
@@ -96,6 +103,28 @@ fn bench_open(c: &mut Criterion) {
         });
     }
     group.finish();
+}
+
+fn bench_growth(c: &mut Criterion) {
+    let fixture = populated_fixture(false);
+    let id = fixture.manifest.pack(Pack::C).object_ids[0];
+    c.bench_function("dynamic/grow/1-to-3", |b| {
+        b.iter_batched(
+            || open(&fixture, gix_odb::store::init::Slots::Growable { initial: 1 }),
+            |handle| {
+                let mut buffer = Vec::new();
+                black_box(
+                    handle
+                        .try_find(&id, &mut buffer)
+                        .expect("growth succeeds")
+                        .expect("fixture object exists")
+                        .data
+                        .len(),
+                )
+            },
+            criterion::BatchSize::SmallInput,
+        );
+    });
 }
 
 fn bench_lookup(c: &mut Criterion) {
@@ -247,7 +276,7 @@ fn bench_post_publication(c: &mut Criterion) {
     let mut group = c.benchmark_group("dynamic/post-publication");
     group.throughput(Throughput::Elements(1));
 
-    for policy in [RefreshPolicy::Strict] {
+    for policy in [RefreshPolicy::Strict, RefreshPolicy::Expired] {
         {
             let (_fixture, handle, id) = setup_post_publication(policy);
             let refreshes = handle.store_ref().metrics().num_refreshes;
@@ -336,6 +365,7 @@ fn bench_concurrent(c: &mut Criterion) {
         for workload in [
             Workload::Hit,
             Workload::Missing(RefreshPolicy::Strict),
+            Workload::Missing(RefreshPolicy::Fresh),
             Workload::Missing(RefreshPolicy::Never),
         ] {
             let refreshes = base.store_ref().metrics().num_refreshes;
@@ -441,6 +471,7 @@ fn run_workers(
 criterion_group!(
     benches,
     bench_open,
+    bench_growth,
     bench_lookup,
     bench_missing,
     bench_prefix,
