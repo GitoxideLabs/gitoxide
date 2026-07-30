@@ -110,16 +110,15 @@ fn names_are_made_available_via_references() {
 }
 
 #[test]
-fn missing_revision_keeps_reference_lookup_error_in_error_sources_for_path_fallback() -> crate::Result {
+fn missing_revision_keeps_reference_lookup_error_available_for_path_fallback() -> crate::Result {
     let repo = repo("complex_graph")?;
     let err = repo
         .rev_parse("README.md")
         .expect_err("missing revspec must fail before callers can inspect the error chain");
 
     let not_found = err
-        .sources()
-        .find_map(|err| err.downcast_ref::<gix::refs::file::find::existing::Error>())
-        .expect("reference lookup failure remains visible in error sources after rev-parse");
+        .downcast_any_ref::<gix::refs::file::find::existing::Error>()
+        .expect("reference lookup failure remains available for downcasting after rev-parse");
 
     match not_found {
         gix::refs::file::find::existing::Error::NotFound { name } => {

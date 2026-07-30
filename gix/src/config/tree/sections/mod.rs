@@ -91,6 +91,11 @@ mod mailmap;
 pub struct Merge;
 mod merge;
 
+/// The `notes` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Notes;
+pub mod notes;
+
 /// The `pack` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Pack;

@@ -153,6 +153,7 @@ mod with_overrides {
             .set("GIT_AUTHOR_DATE", default_date)
             .set("EMAIL", "user email")
             .set("GIX_PACK_CACHE_MEMORY", "0")
+            .set("GIT_NOTES_DISPLAY_REF", "refs/notes/review:refs/notes/*")
             .set("GIX_PARSE_PRECIOUS", "1")
             .set("GIX_OBJECT_CACHE_MEMORY", "5m")
             .set("GIX_CREDENTIALS_HELPER_STDERR", "creds-stderr")
@@ -323,6 +324,7 @@ mod with_overrides {
             ("gitoxide.commit.authorDate", default_date),
             ("gitoxide.commit.committerDate", default_date),
             ("gitoxide.user.emailFallback", "user email"),
+            ("notes.displayRef", "refs/notes/review:refs/notes/*"),
             ("gitoxide.parsePrecious", "1"),
             ("core.deltaBaseCacheLimit", "0"),
             ("gitoxide.objects.cacheLimit", "5m"),

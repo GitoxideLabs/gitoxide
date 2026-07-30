@@ -10,7 +10,7 @@ use crate::{
     config::{
         Cache,
         cache::util::ApplyLeniency,
-        tree::{Core, Gitoxide, Http, gitoxide},
+        tree::{Core, Gitoxide, Http, Notes, gitoxide},
     },
     open,
     repository::init::setup_objects,
@@ -402,6 +402,10 @@ fn apply_environment_overrides(
                     (env(key), key.name)
                 },
                 {
+                    let key = &Core::NOTES_REF;
+                    (env(key), key.name)
+                },
+                {
                     let key = &Core::EDITOR;
                     (env(key), key.name)
                 },
@@ -424,6 +428,15 @@ fn apply_environment_overrides(
                     (env(key), key.name)
                 },
             ][..],
+        ),
+        (
+            "notes",
+            None,
+            git_prefix,
+            &[{
+                let key = &Notes::DISPLAY_REF;
+                (env(key), key.name)
+            }][..],
         ),
         (
             "gitoxide",

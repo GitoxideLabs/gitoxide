@@ -1573,6 +1573,7 @@ dependencies = [
  "gix-mailmap",
  "gix-merge",
  "gix-negotiate",
+ "gix-note",
  "gix-object",
  "gix-odb",
  "gix-pack",

@@ -98,7 +98,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] use credential helper configuration and to obtain credentials with `gix_credentials::helper::Cascade`
     * **traverse**
         * [x] commit graphs
-        * [ ] make [git-notes](https://git-scm.com/docs/git-notes) accessible
+        * [x] make [git-notes](https://git-scm.com/docs/git-notes) accessible
         * [x] tree entries
     * **diffs/changes**
         * [x] tree with other tree
