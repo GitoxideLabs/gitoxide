@@ -842,13 +842,15 @@ fn healthy_indices_remain_searchable_after_index_load_failures() -> gix_error::T
     .expect("the largest fixture index is malformed")
     .to_string();
     let missing_id = gix_testtools::object_hash().null();
-    for never_refresh in [false, true] {
+    for refresh_mode in [
+        gix_odb::store::RefreshMode::AfterAllIndicesLoaded,
+        gix_odb::store::RefreshMode::Never,
+        gix_odb::store::RefreshMode::AfterDuration(std::time::Duration::from_secs(60)),
+    ] {
         for lookup in 0..4 {
             let mut parent = crate::odb_at(fixture.join("objects"))?;
             parent.prevent_pack_unload();
-            if never_refresh {
-                parent.refresh_never();
-            }
+            parent.refresh = refresh_mode;
             for handle in [parent.clone(), parent] {
                 let mut buffer = Vec::new();
                 let found = match lookup {
