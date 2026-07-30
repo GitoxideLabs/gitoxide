@@ -83,8 +83,6 @@ impl PackId {
 /// An index that changes only if the packs directory changes and its contents is re-read.
 #[derive(Default)]
 pub struct SlotMapIndex {
-    /// A refresh can append slots. Older snapshots share the same slots at the same indices.
-    pub(crate) files: Arc<Vec<Arc<MutableIndexAndPack>>>,
     /// The index into the slot map at which we expect an index or pack file. Neither of these might be already loaded.
     pub(crate) slot_indices: Vec<usize>,
     /// A list of loose object databases as resolved by their alternates file in the `object_directory`.
