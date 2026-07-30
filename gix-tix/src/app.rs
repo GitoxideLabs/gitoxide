@@ -237,6 +237,7 @@ pub(crate) struct App {
     pub rows: Vec<CommitRow>,
     hidden_rows: HashSet<ObjectId>,
     titles: Vec<u8>,
+    notes: HashMap<ObjectId, Vec<BString>>,
     graph: Option<Graph>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
@@ -264,6 +265,9 @@ pub(crate) struct App {
     pub(crate) changes_horizontal_offset: usize,
     pub(crate) changes_parent: usize,
     pub(crate) diff_error: Option<String>,
+    pub(crate) commit_offset: usize,
+    commit_page: usize,
+    commit_max: usize,
     changes_page: usize,
     changes_max: usize,
     changes_horizontal_page: usize,
@@ -292,6 +296,7 @@ impl App {
             rows: Vec::new(),
             hidden_rows: HashSet::new(),
             titles: Vec::new(),
+            notes: HashMap::new(),
             graph: None,
             attributions: Vec::new(),
             #[cfg(test)]
@@ -319,6 +324,9 @@ impl App {
             changes_horizontal_offset: 0,
             changes_parent: 0,
             diff_error: None,
+            commit_offset: 0,
+            commit_page: 1,
+            commit_max: 0,
             changes_page: 1,
             changes_max: 0,
             changes_horizontal_page: 1,
@@ -445,6 +453,18 @@ impl App {
         self.titles[row.title.clone()].as_bstr()
     }
 
+    pub(crate) fn notes_loaded(&self, id: ObjectId) -> bool {
+        self.notes.contains_key(&id)
+    }
+
+    pub(crate) fn set_notes(&mut self, id: ObjectId, notes: Vec<BString>) {
+        self.notes.insert(id, notes);
+    }
+
+    pub(crate) fn notes(&self, id: ObjectId) -> &[BString] {
+        self.notes.get(&id).map(Vec::as_slice).unwrap_or_default()
+    }
+
     pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
         #[cfg(test)]
         if !self.test_lanes.is_empty() {
@@ -491,6 +511,12 @@ impl App {
             Action::HalfPageDown if self.changes_focused => self.move_changes((self.changes_page / 2).max(1), true),
             Action::PageUp if self.changes_focused => self.move_changes(self.changes_page, false),
             Action::PageDown if self.changes_focused => self.move_changes(self.changes_page, true),
+            Action::PageUp if self.show_commit && self.commit_max > 0 => {
+                self.commit_offset = self.commit_offset.saturating_sub(self.commit_page);
+            }
+            Action::PageDown if self.show_commit && self.commit_max > 0 => {
+                self.commit_offset = self.commit_offset.saturating_add(self.commit_page).min(self.commit_max);
+            }
             Action::HalfPageUp => self.move_selection((self.viewport_rows / 2).max(1), false),
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
@@ -549,7 +575,10 @@ impl App {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
-            Action::ToggleCommit => self.show_commit = !self.show_commit,
+            Action::ToggleCommit => {
+                self.show_commit = !self.show_commit;
+                self.reset_commit_view();
+            }
             Action::ToggleChanges => {
                 self.focus_feedback = None;
                 self.show_changes = !self.show_changes;
@@ -707,6 +736,7 @@ impl App {
         self.rows = Vec::new();
         self.hidden_rows.clear();
         self.titles = Vec::new();
+        self.notes.clear();
         self.graph = None;
         self.attributions = Vec::new();
         #[cfg(test)]
@@ -720,6 +750,7 @@ impl App {
         self.changes_suppressed = false;
         self.horizontal_offset = 0;
         self.focus_history();
+        self.reset_commit_view();
         self.reset_changes_view();
         self.follow_tail = false;
         self.clear_preview_author_copy();
@@ -964,6 +995,17 @@ impl App {
         self.horizontal_page = page.max(1);
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
+    }
+
+    pub(crate) fn set_commit_bounds(&mut self, page: usize, max: usize) {
+        self.commit_page = page.max(1);
+        self.commit_max = max;
+        self.commit_offset = self.commit_offset.min(max);
+    }
+
+    pub(crate) fn reset_commit_view(&mut self) {
+        self.commit_offset = 0;
+        self.commit_max = 0;
     }
 
     pub(crate) fn set_changes_bounds(
@@ -1665,6 +1707,31 @@ mod tests {
             app.update(Action::VerifySignatures).is_empty(),
             "hidden signatures are not actionable"
         );
+    }
+
+    #[test]
+    fn full_pages_target_changes_then_commit_messages_then_history() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
+        app.show_commit = true;
+        app.set_commit_bounds(3, 7);
+
+        app.update(Action::PageDown);
+        assert_eq!(app.commit_offset, 3);
+        assert_eq!(app.selected, Some(0), "commit paging leaves history selection alone");
+        app.update(Action::PageDown);
+        assert_eq!(app.commit_offset, 6);
+
+        app.changes_focused = true;
+        app.set_changes_bounds(2, 5, 1, 0);
+        app.update(Action::PageDown);
+        assert_eq!(app.changes_selected, 2, "focused changes retain paging priority");
+        assert_eq!(app.commit_offset, 6);
+
+        app.changes_focused = false;
+        app.set_commit_bounds(3, 0);
+        app.update(Action::PageDown);
+        assert_eq!(app.selected, Some(2), "history paging resumes when the commit fits");
     }
 
     #[test]

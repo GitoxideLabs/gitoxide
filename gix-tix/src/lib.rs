@@ -464,9 +464,10 @@ fn event_loop(
         screen,
     } = options;
     let repository_path = repository.git_dir().to_owned();
-    let mailmap = gix::open(&repository_path)
-        .context("could not open repository for mailmap")?
-        .open_mailmap();
+    let mut view_repository = gix::open(&repository_path).context("could not open repository for history view")?;
+    view_repository.object_cache_size(None);
+    let mailmap = view_repository.open_mailmap();
+    let mut notes = view_repository.notes().context("could not open Git notes")?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let (mut cancelled, mut receiver) = start_history(
         repository,
@@ -503,6 +504,7 @@ fn event_loop(
         &mailmap,
         &authors,
         &mut fill_repository,
+        &mut notes,
         &mut commit_message,
         &mut changes,
         &mut line_diff_pool,
@@ -563,6 +565,7 @@ fn event_loop(
                 &mailmap,
                 &authors,
                 &mut fill_repository,
+                &mut notes,
                 &mut commit_message,
                 &mut changes,
                 &mut line_diff_pool,
@@ -638,6 +641,7 @@ fn event_loop(
                 &mailmap,
                 &authors,
                 &mut fill_repository,
+                &mut notes,
                 &mut commit_message,
                 &mut changes,
                 &mut line_diff_pool,
@@ -728,6 +732,7 @@ fn event_loop(
                 Effect::Reload(show_hidden) => {
                     cancelled.store(true, Ordering::Relaxed);
                     app.reload(show_hidden);
+                    notes = view_repository.notes().context("could not open Git notes")?;
                     decorations.clear();
                     let hidden = if show_hidden { &[][..] } else { hide.as_slice() };
                     (cancelled, receiver) = start_history(
@@ -791,6 +796,7 @@ fn event_loop(
             &mailmap,
             &authors,
             &mut fill_repository,
+            &mut notes,
             &mut commit_message,
             &mut changes,
             &mut line_diff_pool,
@@ -890,6 +896,7 @@ fn draw(
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
     fill_repository: &mut FillRepository<'_>,
+    notes: &mut gix::note::Platform,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     changes: &mut Option<(gix::ObjectId, usize, Changes)>,
     line_diff_pool: &mut Option<LineDiffPool>,
@@ -905,6 +912,22 @@ fn draw(
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
+    for index in start..end {
+        let id = app.rows[index].id;
+        if app.notes_loaded(id) {
+            continue;
+        }
+        let loaded = notes
+            .get(id)
+            .context("could not load visible commit notes")?
+            .into_iter()
+            .map(|note| {
+                let mut blob = note.blob;
+                BString::from(blob.take_data())
+            })
+            .collect();
+        app.set_notes(id, loaded);
+    }
     let changes_visible = app.changes_visible();
     let selected = (app.show_commit || changes_visible)
         .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
@@ -914,6 +937,9 @@ fn draw(
         .then_some(selected)
         .flatten()
         .filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
+    if message_to_load.is_some() {
+        app.reset_commit_view();
+    }
     if changes_visible && selected.is_some() && changes.as_ref().map(|(cached, _, _)| *cached) != selected {
         app.changes_parent = 0;
     }
