@@ -125,7 +125,7 @@ use store::types;
 ///
 /// ### Features
 ///
-/// - entirely lazy, creating an instance does no disk IO at all if [`Slots::Given`][store::init::Slots::Given] is used.
+/// - entirely lazy, creating an instance does no disk IO at all if [`Slots::Limit`][store::init::Slots::Limit] is used.
 /// - multi-threaded lazy-loading of indices and packs
 /// - per-thread pack and object caching avoiding cache trashing.
 /// - most-recently-used packs are always first for speedups if objects are stored in the same pack, typical for packs organized by

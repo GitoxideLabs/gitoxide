@@ -11,7 +11,7 @@ fn open(fixture: &OdbFixture, slots: u16) -> std::io::Result<gix_odb::Handle> {
         fixture.objects_dir(Database::Primary),
         Vec::new(),
         gix_odb::store::init::Options {
-            slots: gix_odb::store::init::Slots::Given(slots),
+            slots: gix_odb::store::init::Slots::Limit(slots),
             object_hash: fixture.manifest.object_hash,
             ..Default::default()
         },

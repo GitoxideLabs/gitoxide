@@ -51,7 +51,7 @@ pub enum Slots {
     /// on the server side where the repository setup is controlled.
     ///
     /// Note that this won't affect their packs, as each index can have one or more packs associated with it.
-    Given(u16),
+    Limit(u16),
     /// Compute the number of slots needed, as probably best used on the client side where a variety of repositories is encountered.
     AsNeededByDiskState {
         /// 1.0 means no safety, 1.1 means 10% more slots than needed
@@ -107,7 +107,7 @@ impl Store {
             )));
         }
         let slot_count = match slots {
-            Slots::Given(n) => n as usize,
+            Slots::Limit(n) => n as usize,
             Slots::AsNeededByDiskState { multiplier, minimum } => {
                 let mut db_paths =
                     crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(std::io::Error::other)?;
