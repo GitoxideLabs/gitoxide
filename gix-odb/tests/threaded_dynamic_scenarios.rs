@@ -302,9 +302,12 @@ fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
 
 #[test]
 fn debug_hooks_coalesce_successful_refreshes() -> Result {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
+    use std::{
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
     };
 
     use gix_odb::store::init::debug::Point;
@@ -313,6 +316,7 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
     let (point_tx, point_rx) = crossbeam_channel::unbounded();
     let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
     let pause_next_refresh = Arc::new(AtomicBool::new(false));
+    let now = Arc::new(Mutex::new(Instant::now()));
     let debug = gix_odb::store::init::debug::Options::new({
         let pause_next_refresh = Arc::clone(&pause_next_refresh);
         move |point| {
@@ -323,8 +327,12 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
                 resume_rx.recv().expect("the test releases the refresh scan");
             }
         }
+    })
+    .with_clock({
+        let now = Arc::clone(&now);
+        move || *now.lock().expect("the test clock isn't poisoned")
     });
-    let handle = gix_odb::at_opts(
+    let mut handle = gix_odb::at_opts(
         fixture.objects_dir(Database::Primary),
         fixture.manifest.object_hash,
         Vec::new(),
@@ -379,6 +387,12 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
         "the changed ODB adds one refresh"
     );
 
+    let refresh_after = Duration::from_secs(1);
+    handle.refresh = gix_odb::store::RefreshMode::AfterDuration(refresh_after);
+    {
+        let mut now = now.lock().expect("the test clock isn't poisoned");
+        *now += refresh_after;
+    }
     point_rx.try_iter().for_each(drop);
     let (first, second, observed) = contended_lookup(
         handle.clone(),
@@ -399,7 +413,7 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
             .filter(|point| matches!(point, Point::RefreshScanStarted))
             .count(),
         1,
-        "contending misses scan the unchanged ODB once"
+        "contending handles scan the unchanged ODB once at the shared deadline"
     );
     assert_eq!(
         handle.store_ref().metrics().num_refreshes,
@@ -633,6 +647,86 @@ fn a_failed_pack_load_is_shared_and_recovers_after_replacement() -> Result {
             .count(),
         1,
         "the replacement pack is loaded exactly once"
+    );
+    Ok(())
+}
+#[test]
+fn invalidation_during_refresh_preserves_newly_published_packs() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+
+    use gix_odb::store::init::debug::Point;
+
+    let mut fixture = OdbFixture::from_script()?;
+    let (published_tx, published_rx) = crossbeam_channel::bounded(1);
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(1);
+    let pause_next_publication = Arc::new(AtomicBool::new(false));
+    let now = Instant::now();
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_next_publication = Arc::clone(&pause_next_publication);
+        move |point| {
+            if matches!(point, Point::IndexStatePublished) && pause_next_publication.swap(false, Ordering::SeqCst) {
+                published_tx
+                    .send(())
+                    .expect("the test observes publication after scanning");
+                resume_rx.recv().expect("the test resumes the refresh");
+            }
+        }
+    })
+    .with_clock(move || now);
+    let store = Arc::new(gix_odb::Store::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        &mut std::iter::empty(),
+        gix_odb::store::init::Options {
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?);
+    store.structure()?;
+    let mut first = store.to_handle_arc();
+    first.refresh = gix_odb::store::RefreshMode::AfterDuration(Duration::from_secs(1));
+    let second = first.clone();
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let object_id = fixture.manifest.pack(Pack::A).object_ids[0];
+    pause_next_publication.store(true, Ordering::SeqCst);
+    let refresh = std::thread::spawn(move || {
+        first
+            .try_find(&object_id, &mut Vec::new())
+            .map(|object| object.is_some())
+    });
+    published_rx.recv_timeout(Duration::from_secs(10))?;
+
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    let (started_tx, started_rx) = crossbeam_channel::bounded(1);
+    let (invalidated_tx, invalidated_rx) = crossbeam_channel::bounded(1);
+    let invalidation = std::thread::spawn(move || {
+        started_tx.send(()).expect("the test observes the invalidating thread");
+        store.mark_disk_state_stale();
+        invalidated_tx
+            .send(())
+            .expect("the test observes completed invalidation");
+    });
+    started_rx.recv_timeout(Duration::from_secs(10))?;
+    // An uncoordinated invalidation can finish while the scan is paused; a coordinated one waits for its release.
+    let _ = invalidated_rx.recv_timeout(Duration::from_secs(1));
+    resume_tx
+        .send(())
+        .expect("the refresh can complete before checking invalidation");
+    assert!(
+        refresh.join().expect("the refresh does not panic")?,
+        "the refresh sees the pack published before its scan"
+    );
+    invalidation.join().expect("invalidation does not panic");
+    let object_id = fixture.manifest.pack(Pack::B).object_ids[0];
+    assert!(
+        second.try_find(&object_id, &mut Vec::new())?.is_some(),
+        "invalidation after the directory scan survives refresh completion without advancing the clock"
     );
     Ok(())
 }
