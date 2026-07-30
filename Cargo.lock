@@ -2203,6 +2203,7 @@ dependencies = [
  "bstr",
  "clru",
  "criterion",
+ "crossbeam-deque",
  "document-features",
  "gix-chunk",
  "gix-diff",
