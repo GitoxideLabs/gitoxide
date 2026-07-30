@@ -47,6 +47,7 @@ impl super::Store {
         let mut snapshot = self.collect_snapshot();
         while let Some(new_snapshot) = self.load_one_index(IndexCtx {
             refresh_mode: RefreshMode::Never,
+            force_refresh: false,
             marker: snapshot.marker,
             loose_compression: self.loose_compression,
         })? {
@@ -61,6 +62,7 @@ impl super::Store {
         &self,
         IndexCtx {
             refresh_mode,
+            force_refresh,
             marker,
             loose_compression,
         }: IndexCtx,
@@ -93,11 +95,17 @@ impl super::Store {
                 // A failed index must not hide healthy packs published since the previous refresh.
                 let snapshot = match refresh_mode {
                     RefreshMode::Never => None,
-                    RefreshMode::AfterAllIndicesLoaded => self.consolidate_with_disk_state(
-                        false, /* needs init */
-                        true,  /* load one new index */
-                        loose_compression,
-                    )?,
+                    RefreshMode::AfterDuration(refresh_after)
+                        if !force_refresh && self.last_refresh_is_younger_than(refresh_after) =>
+                    {
+                        None
+                    }
+                    RefreshMode::AfterAllIndicesLoaded | RefreshMode::AfterDuration(_) => self
+                        .consolidate_with_disk_state(
+                            false, /* needs init */
+                            true,  /* load one new index */
+                            loose_compression,
+                        )?,
                 };
                 match snapshot {
                     Some(snapshot) => Ok(Some(snapshot)),
@@ -105,6 +113,17 @@ impl super::Store {
                 }
             }
         }
+    }
+
+    fn last_refresh_is_younger_than(&self, max_age: std::time::Duration) -> bool {
+        let now = self.now();
+        self.last_successful_disk_state_consolidation
+            .lock()
+            .as_ref()
+            .is_some_and(|last| {
+                now.checked_duration_since(*last)
+                    .is_none_or(|elapsed| elapsed < max_age)
+            })
     }
 
     /// load a new index (if not yet loaded), and return true if one was indeed loaded (leading to a `state_id()` change) of the current index.
@@ -267,6 +286,7 @@ impl super::Store {
         load_new_index: bool,
         loose_compression: gix_zlib::Compression,
     ) -> Result<Option<Snapshot>> {
+        let stale_marks = self.num_disk_state_stale_marks.load(Ordering::Acquire);
         let completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
         let previous_catalog = self.catalog.load_full();
 
@@ -282,7 +302,8 @@ impl super::Store {
         let catalog = self.catalog.load_full();
         let index = Arc::clone(&catalog.index);
         let current_completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
-        if completed_refreshes != current_completed_refreshes {
+        let stale_marks_unchanged = stale_marks == self.num_disk_state_stale_marks.load(Ordering::Acquire);
+        if completed_refreshes != current_completed_refreshes && stale_marks_unchanged {
             let last_error = self.last_disk_state_consolidation_error.lock();
             if let Some((generation, error)) = last_error.as_ref()
                 && *generation == current_completed_refreshes
@@ -291,7 +312,7 @@ impl super::Store {
             }
             return Ok((!Arc::ptr_eq(&previous_catalog, &catalog)).then(|| self.collect_snapshot()));
         }
-        if !Arc::ptr_eq(&previous_catalog, &catalog) {
+        if !Arc::ptr_eq(&previous_catalog, &catalog) && stale_marks_unchanged {
             // Someone else took the lock before and changed the catalog. Return it without doing any additional work.
             return Ok(Some(self.collect_snapshot()));
         }
@@ -547,6 +568,9 @@ impl super::Store {
             }
             Some(self.collect_snapshot())
         };
+        if !was_uninitialized {
+            *self.last_successful_disk_state_consolidation.lock() = Some(self.now());
+        }
         self.finish_refresh(current_completed_refreshes, Ok(snapshot))
     }
 
