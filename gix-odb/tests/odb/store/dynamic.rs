@@ -212,6 +212,64 @@ fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> gix_testtools:
 }
 
 #[test]
+fn multi_index_pack_locations_after_lazy_loading() -> gix_testtools::TestResult {
+    use gix_odb::HeaderExt as _;
+    use gix_pack::Find as _;
+
+    let dir = crate::scripted_fixture_read_only("make_repo_multi_index.sh")?;
+    let objects_dir = dir.join(".git/objects");
+    let multi_index = gix_pack::multi_index::File::at(objects_dir.join("pack/multi-pack-index"), None)?;
+    let mut object_ids = std::collections::BTreeMap::new();
+    for entry in multi_index.iter() {
+        let entry = entry?;
+        object_ids.entry(entry.pack_index).or_insert(entry.oid);
+    }
+    for load_method in 0..3 {
+        let mut handle = crate::odb_at(&objects_dir)?;
+        handle.prevent_pack_unload();
+        for (&pack_index, object_id) in &object_ids {
+            let mut buf = Vec::new();
+            match load_method {
+                0 => {
+                    handle.find(object_id, &mut buf)?;
+                }
+                1 => {
+                    handle.header(object_id)?;
+                }
+                _ => {}
+            }
+            let location = handle
+                .location_by_oid(object_id, &mut buf)?
+                .expect("the MIDX object is packed");
+            let pack_path = objects_dir
+                .join("pack")
+                .join(&multi_index.index_names()[pack_index as usize])
+                .with_extension("pack");
+            let pack = gix_pack::data::File::at(pack_path, gix_testtools::object_hash())?;
+            assert_eq!(
+                handle
+                    .clone()
+                    .entry_by_location(&location)
+                    .expect("the clone retains the loaded pack")
+                    .data,
+                pack.entry_slice(location.entry_range(location.pack_offset))
+                    .expect("the entry is in its component pack"),
+                "every loading path preserves direct lookup of each MIDX component"
+            );
+            assert!(
+                handle
+                    .pack_offsets_and_oid(location.pack_id)?
+                    .expect("the loaded pack has an index")
+                    .iter()
+                    .any(|(_, id)| id == object_id),
+                "the pack ID also selects the correct MIDX entries"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn multi_index_keep_open() -> gix_testtools::TestResult {
     let dir = crate::scripted_fixture_writable("make_repo_multi_index.sh")?;
     let expected = expected_pack_metrics(dir.path())?;
@@ -261,12 +319,12 @@ fn multi_index_keep_open() -> gix_testtools::TestResult {
             known_reachable_indices: 1,
             open_reachable_packs: 0, /*no pack is open anymore at least as seen from the index*/
             known_packs: expected.packs,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "now there is an unreachable index and pack which is still loaded, but whose pack hasn't been loaded"
+        "the old catalog resources are retained only by the stable handle"
     );
 
     assert!(
@@ -1104,20 +1162,29 @@ fn auto_refresh_with_and_without_id_stability() -> gix_testtools::TestResult {
                 known_reachable_indices: 1,
                 open_reachable_packs: 1,
                 known_packs: 1,
-                unused_slots: 30,
+                unused_slots: 31,
                 loose_dbs: 1,
-                unreachable_indices: 1,
-                unreachable_packs: 1
+                unreachable_indices: 0,
+                unreachable_packs: 0
             },
-            "the removed pack is still loaded"
+            "the removed pack is retained by the stable handle, not the store"
         );
         assert!(
             stable_handle.entry_by_location(&location).is_some(),
             "it finds the old removed location (still loaded) on the old id, it's still cached in the handle, too"
         );
         assert!(
-            stable_handle.clone().entry_by_location(&location).is_some(),
+            stable_handle.pack_offsets_and_oid(location.pack_id)?.is_some(),
+            "the index describing the removed pack is retained along with its data"
+        );
+        let cloned_stable_handle = stable_handle.clone();
+        assert!(
+            cloned_stable_handle.entry_by_location(&location).is_some(),
             "handles without any internal cache also work"
+        );
+        assert!(
+            cloned_stable_handle.pack_offsets_and_oid(location.pack_id)?.is_some(),
+            "clones retain enough index information to consume an existing location"
         );
     }
 
@@ -1139,12 +1206,12 @@ fn auto_refresh_with_and_without_id_stability() -> gix_testtools::TestResult {
             known_reachable_indices: 1,
             open_reachable_packs: 1,
             known_packs: 1,
-            unused_slots: 30,
+            unused_slots: 31,
             loose_dbs: 1,
-            unreachable_indices: 1,
-            unreachable_packs: 1
+            unreachable_indices: 0,
+            unreachable_packs: 0
         },
-        "garbaged slots aren't reclaimed until there is the need. Keeping indices open despite them not being accessible anymore."
+        "the store can immediately reclaim slots after stable handles release their retained resources"
     );
     Ok(())
 }
