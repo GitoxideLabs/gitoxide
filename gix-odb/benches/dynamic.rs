@@ -85,7 +85,7 @@ fn bench_open(c: &mut Criterion) {
                 minimum: 32,
             },
         ),
-        ("given", gix_odb::store::init::Slots::Given(8)),
+        ("limit", gix_odb::store::init::Slots::Limit(8)),
     ] {
         group.bench_function(name, |b| {
             b.iter_batched(
@@ -104,7 +104,7 @@ fn bench_lookup(c: &mut Criterion) {
         let layout = if with_multi_index { "midx" } else { "indices" };
         let fixture = populated_fixture(with_multi_index);
         let id = fixture.manifest.pack(Pack::C).object_ids[0];
-        let handle = open(&fixture, gix_odb::store::init::Slots::Given(8));
+        let handle = open(&fixture, gix_odb::store::init::Slots::Limit(8));
         let mut buffer = Vec::new();
         handle
             .try_find(&id, &mut buffer)
@@ -127,7 +127,7 @@ fn bench_lookup(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("cold-hit", layout), |b| {
             b.iter_batched(
-                || open(&fixture, gix_odb::store::init::Slots::Given(8)),
+                || open(&fixture, gix_odb::store::init::Slots::Limit(8)),
                 |cold| {
                     let mut buffer = Vec::new();
                     black_box(
@@ -150,7 +150,7 @@ fn bench_missing(c: &mut Criterion) {
     let fixture = populated_fixture(true);
     let missing = fixture.manifest.missing_id();
     for policy in RefreshPolicy::STEADY {
-        let mut handle = open(&fixture, gix_odb::store::init::Slots::Given(8));
+        let mut handle = open(&fixture, gix_odb::store::init::Slots::Limit(8));
         handle.packed_object_count().expect("all indices load");
         handle
             .try_find(&missing, &mut Vec::new())
@@ -192,7 +192,7 @@ fn bench_prefix(c: &mut Criterion) {
     group.throughput(Throughput::Elements(ids.len() as u64));
 
     for policy in RefreshPolicy::STEADY {
-        let mut handle = open(&fixture, gix_odb::store::init::Slots::Given(8));
+        let mut handle = open(&fixture, gix_odb::store::init::Slots::Limit(8));
         handle.packed_object_count().expect("all indices load");
         handle
             .try_find(&fixture.manifest.missing_id(), &mut Vec::new())
@@ -233,7 +233,7 @@ fn setup_post_publication(policy: RefreshPolicy) -> (OdbFixture, gix_odb::Handle
     fixture
         .install_pack(Database::Primary, Pack::A)
         .expect("the initial pack can be installed");
-    let mut handle = open(&fixture, gix_odb::store::init::Slots::Given(8));
+    let mut handle = open(&fixture, gix_odb::store::init::Slots::Limit(8));
     handle.packed_object_count().expect("the initial index loads");
     policy.apply(&mut handle);
     fixture
@@ -297,7 +297,7 @@ fn bench_slot_pressure(c: &mut Criterion) {
         let slot_counts = if with_multi_index { &[1][..] } else { &[1, 3][..] };
         for &slots in slot_counts {
             for policy in [RefreshPolicy::Strict, RefreshPolicy::Never] {
-                let mut handle = open(&fixture, gix_odb::store::init::Slots::Given(slots));
+                let mut handle = open(&fixture, gix_odb::store::init::Slots::Limit(slots));
                 policy.apply(&mut handle);
                 let id = fixture.manifest.pack(Pack::C).object_ids[0];
                 let mut buffer = Vec::new();
@@ -326,7 +326,7 @@ fn bench_concurrent(c: &mut Criterion) {
     let fixture = populated_fixture(true);
     let ids = Arc::new(fixture.manifest.object_ids().collect::<Vec<_>>());
     let missing = fixture.manifest.missing_id();
-    let base = open(&fixture, gix_odb::store::init::Slots::Given(8));
+    let base = open(&fixture, gix_odb::store::init::Slots::Limit(8));
     base.packed_object_count().expect("all indices load");
     let cores = std::thread::available_parallelism().map_or(1, usize::from);
     let worker_counts = [1, cores, cores.saturating_mul(2)].into_iter().collect::<BTreeSet<_>>();
