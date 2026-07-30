@@ -16,6 +16,8 @@ mod filter;
 mod mailmap;
 #[cfg(feature = "merge")]
 mod merge;
+#[cfg(feature = "notes")]
+mod note;
 mod object;
 mod open;
 #[cfg(feature = "attributes")]
