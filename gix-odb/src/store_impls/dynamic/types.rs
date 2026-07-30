@@ -148,9 +148,23 @@ pub(crate) enum OnDiskFileState<T: Clone> {
     Garbage(T),
     /// File is missing on disk and could not be loaded when we tried or turned missing after reconciling our state.
     Missing,
+    /// Loading failed while the file had the recorded modification time and length.
+    Failed {
+        error: Arc<std::io::Error>,
+        metadata: Option<(Option<SystemTime>, u64)>,
+    },
 }
 
 impl<T: Clone> OnDiskFile<T> {
+    fn metadata(&self) -> Option<(Option<SystemTime>, u64)> {
+        let metadata = std::fs::metadata(&*self.path).ok()?;
+        Some((metadata.modified().ok(), metadata.len()))
+    }
+
+    fn clone_error(error: &Arc<std::io::Error>) -> std::io::Error {
+        std::io::Error::new(error.kind(), Arc::clone(error))
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -159,47 +173,48 @@ impl<T: Clone> OnDiskFile<T> {
         matches!(self.state, OnDiskFileState::Loaded(_) | OnDiskFileState::Garbage(_))
     }
 
+    pub fn is_missing(&self) -> bool {
+        matches!(self.state, OnDiskFileState::Missing)
+    }
+
+    pub fn is_failed(&self) -> bool {
+        matches!(self.state, OnDiskFileState::Failed { .. })
+    }
+
     /// Return true if we are to be collected as garbage
     pub fn is_disposable(&self) -> bool {
         matches!(self.state, OnDiskFileState::Garbage(_) | OnDiskFileState::Missing)
     }
 
-    // On error, always declare the file missing and return an error.
-    pub(crate) fn load_strict(&mut self, load: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<()> {
-        use OnDiskFileState::*;
-        match self.state {
-            Unloaded | Missing => match load(&self.path) {
-                Ok(v) => {
-                    self.state = Loaded(v);
-                    Ok(())
-                }
-                Err(err) => {
-                    // TODO: Should be provide more information? We don't even know what exactly failed right now, degenerating information.
-                    self.state = Missing;
-                    Err(err)
-                }
-            },
-            Loaded(_) | Garbage(_) => Ok(()),
-        }
-    }
     /// If the file is missing, we don't consider this failure but instead return Ok(None) to allow recovery.
     /// when we know that loading is necessary. This also works around borrow check, which is a nice coincidence.
     pub fn load_with_recovery(&mut self, load: impl FnOnce(&Path) -> std::io::Result<T>) -> std::io::Result<Option<T>> {
         use OnDiskFileState::*;
-        match &mut self.state {
-            Loaded(v) | Garbage(v) => Ok(Some(v.clone())),
-            Missing => Ok(None),
-            Unloaded => match load(&self.path) {
-                Ok(v) => {
-                    self.state = OnDiskFileState::Loaded(v.clone());
-                    Ok(Some(v))
-                }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    self.state = OnDiskFileState::Missing;
-                    Ok(None)
-                }
-                Err(err) => Err(err),
-            },
+        match &self.state {
+            Loaded(v) | Garbage(v) => return Ok(Some(v.clone())),
+            Missing => return Ok(None),
+            Failed { error, metadata } if *metadata == self.metadata() => {
+                return Err(Self::clone_error(error));
+            }
+            Unloaded | Failed { .. } => {}
+        }
+        match load(&self.path) {
+            Ok(v) => {
+                self.state = OnDiskFileState::Loaded(v.clone());
+                Ok(Some(v))
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                self.state = OnDiskFileState::Missing;
+                Ok(None)
+            }
+            Err(err) => {
+                let error = Arc::new(err);
+                self.state = Failed {
+                    error: Arc::clone(&error),
+                    metadata: self.metadata(),
+                };
+                Err(Self::clone_error(&error))
+            }
         }
     }
 
@@ -207,7 +222,7 @@ impl<T: Clone> OnDiskFile<T> {
         use OnDiskFileState::*;
         match &self.state {
             Loaded(v) | Garbage(v) => Some(v),
-            Unloaded | Missing => None,
+            Unloaded | Missing | Failed { .. } => None,
         }
     }
 
@@ -215,14 +230,19 @@ impl<T: Clone> OnDiskFile<T> {
         match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
             OnDiskFileState::Garbage(v) => self.state = OnDiskFileState::Loaded(v),
             OnDiskFileState::Missing => self.state = OnDiskFileState::Unloaded,
-            other @ (OnDiskFileState::Loaded(_) | OnDiskFileState::Unloaded) => self.state = other,
+            other @ (OnDiskFileState::Loaded(_) | OnDiskFileState::Unloaded | OnDiskFileState::Failed { .. }) => {
+                self.state = other;
+            }
         }
     }
 
     pub fn trash(&mut self) {
         match std::mem::replace(&mut self.state, OnDiskFileState::Missing) {
             OnDiskFileState::Loaded(v) => self.state = OnDiskFileState::Garbage(v),
-            other @ (OnDiskFileState::Garbage(_) | OnDiskFileState::Unloaded | OnDiskFileState::Missing) => {
+            other @ (OnDiskFileState::Garbage(_)
+            | OnDiskFileState::Unloaded
+            | OnDiskFileState::Missing
+            | OnDiskFileState::Failed { .. }) => {
                 self.state = other;
             }
         }
@@ -302,6 +322,20 @@ impl IndexAndPacks {
         }
     }
 
+    pub(crate) fn index_is_missing(&self) -> bool {
+        match self {
+            Self::Index(bundle) => bundle.index.is_missing(),
+            Self::MultiIndex(bundle) => bundle.multi_index.is_missing(),
+        }
+    }
+
+    pub(crate) fn index_is_failed(&self) -> bool {
+        match self {
+            Self::Index(bundle) => bundle.index.is_failed(),
+            Self::MultiIndex(bundle) => bundle.multi_index.is_failed(),
+        }
+    }
+
     pub(crate) fn is_disposable(&self) -> bool {
         match self {
             Self::Index(bundle) => bundle.index.is_disposable() || bundle.data.is_disposable(),
@@ -317,16 +351,19 @@ impl IndexAndPacks {
         alloc_limit_bytes: Option<usize>,
     ) -> std::io::Result<()> {
         match self {
-            IndexAndPacks::Index(bundle) => bundle.index.load_strict(|path| {
-                gix_pack::index::File::at(path, object_hash)
-                    .map(Arc::new)
-                    .map_err(|err| match err {
-                        gix_pack::index::init::Error::Io { source, .. } => source,
-                        err => std::io::Error::other(err),
-                    })
-            }),
+            IndexAndPacks::Index(bundle) => bundle
+                .index
+                .load_with_recovery(|path| {
+                    gix_pack::index::File::at(path, object_hash)
+                        .map(Arc::new)
+                        .map_err(|err| match err {
+                            gix_pack::index::init::Error::Io { source, .. } => source,
+                            err => std::io::Error::other(err),
+                        })
+                })
+                .map(|_| ()),
             IndexAndPacks::MultiIndex(bundle) => {
-                bundle.multi_index.load_strict(|path| {
+                bundle.multi_index.load_with_recovery(|path| {
                     gix_pack::multi_index::File::at(path, alloc_limit_bytes)
                         .map(Arc::new)
                         .map_err(|err| match err {
@@ -460,5 +497,45 @@ mod tests {
             }
             .to_intrinsic_pack_id();
         }
+    }
+
+    #[test]
+    fn unchanged_load_failures_are_not_retried() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("pack");
+        std::fs::write(&path, b"broken")?;
+        let mut file = OnDiskFile {
+            path: Arc::new(path),
+            mtime: SystemTime::UNIX_EPOCH,
+            state: OnDiskFileState::Unloaded,
+        };
+        let mut attempts = 0;
+
+        for _ in 0..2 {
+            let err = file
+                .load_with_recovery(|_| {
+                    attempts += 1;
+                    Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "broken pack"))
+                })
+                .expect_err("an unchanged broken file remains unavailable");
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::InvalidData,
+                "the original error kind is preserved"
+            );
+        }
+        assert_eq!(attempts, 1, "an unchanged file is opened only once");
+
+        std::fs::write(file.path(), b"valid replacement")?;
+        assert_eq!(
+            file.load_with_recovery(|_| {
+                attempts += 1;
+                Ok(42)
+            })?,
+            Some(42),
+            "changed file metadata permits another load"
+        );
+        assert_eq!(attempts, 2, "the replacement is opened once");
+        Ok(())
     }
 }
