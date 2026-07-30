@@ -285,13 +285,16 @@ impl super::Store {
 
         // Figure out this number based on what we see while handling the existing indices
         let mut num_loaded_indices = 0;
+        let mut needs_index_reload = false;
         for (index_info, mtime) in indices_by_modification_time.into_iter().map(|(a, b, _)| (a, b)) {
             match idx_by_index_path.remove(index_info.path()) {
                 Some(slot_idx) => {
                     let slot = &self.files[slot_idx];
                     let files_guard = slot.files.load();
-                    let files =
-                        Option::as_ref(&files_guard).expect("slot is set or we wouldn't know it points to this file");
+                    let Some(files) = Option::as_ref(&files_guard) else {
+                        index_paths_to_add.push_back((index_info, mtime, None));
+                        continue;
+                    };
                     if index_info.is_multi_index() && files.mtime() != mtime {
                         // we have a changed multi-pack index. We can't just change the existing slot as it may alter slot indices
                         // that are currently available. Instead, we have to move what's there into a new slot, along with the changes,
@@ -302,17 +305,38 @@ impl super::Store {
                             num_loaded_indices += 1;
                         }
                     } else {
-                        // packs and indices are immutable, so no need to check modification times. Unchanged multi-pack indices also
-                        // are handled like this just to be sure they are in the desired state. For these, the only way this could happen
-                        // is if somebody deletes and then puts back
-                        if Self::assure_slot_matches_index(&write, slot, index_info, mtime, index.generation) {
+                        // Packs and successfully loaded indices are immutable. Failed index loads retain their modification time so a
+                        // changed file can be retried without repeatedly opening the same malformed file.
+                        let (is_loaded, changed) =
+                            match Self::assure_slot_matches_index(&write, slot, index_info, mtime, index.generation) {
+                                Ok(outcome) => outcome,
+                                Err(index_info) => {
+                                    index_paths_to_add.push_back((index_info, mtime, None));
+                                    continue;
+                                }
+                            };
+                        if is_loaded {
                             num_loaded_indices += 1;
                         }
+                        needs_index_reload |= changed;
                         new_slot_map_indices.push(slot_idx);
                     }
                 }
                 None => index_paths_to_add.push_back((index_info, mtime, None)),
             }
+        }
+        let num_indices_needed = new_slot_map_indices.len() + index_paths_to_add.len();
+        if num_indices_needed > self.files.len() {
+            if was_uninitialized {
+                self.index.store(Arc::new(SlotMapIndex {
+                    loose_dbs,
+                    ..Default::default()
+                }));
+            }
+            return Err(Error::InsufficientSlots {
+                current: self.files.len(),
+                needed: num_indices_needed - self.files.len(),
+            });
         }
         let needs_stable_indices = self.maintain_stable_indices(&write);
 
@@ -358,12 +382,13 @@ impl super::Store {
                             needs_stable_indices,
                         ) {
                             Ok(dest_was_empty) => {
+                                if !dest_was_empty {
+                                    slot_indices_to_remove.retain(|idx| *idx != slot_index);
+                                    needs_generation_change = true;
+                                }
                                 slot_indices_to_remove.push(move_from_slot_idx);
                                 new_slot_map_indices.push(slot_index);
                                 // To avoid handling out the wrong pack (due to reassigned pack ids), declare this a new generation.
-                                if !dest_was_empty {
-                                    needs_generation_change = true;
-                                }
                                 break 'increment_slot_index;
                             }
                             Err(unused_index_info) => index_info = unused_index_info,
@@ -381,6 +406,7 @@ impl super::Store {
                             Ok(dest_was_empty) => {
                                 new_slot_map_indices.push(slot_index);
                                 if !dest_was_empty {
+                                    slot_indices_to_remove.retain(|idx| *idx != slot_index);
                                     needs_generation_change = true;
                                 }
                                 break 'increment_slot_index;
@@ -403,13 +429,8 @@ impl super::Store {
         } else {
             index.generation
         };
-        let index_unchanged = index.slot_indices == new_slot_map_indices;
-        if generation != index.generation {
-            assert!(
-                !index_unchanged,
-                "if the generation changed, the slot index must have changed for sure"
-            );
-        }
+        let index_unchanged =
+            generation == index.generation && index.slot_indices == new_slot_map_indices && !needs_index_reload;
         if !index_unchanged || loose_dbs != index.loose_dbs {
             let new_index = Arc::new(SlotMapIndex {
                 slot_indices: new_slot_map_indices,
@@ -611,52 +632,49 @@ impl super::Store {
         slot.files.store(files);
     }
 
-    /// Returns true if the index was left in a loaded state.
+    /// Returns whether the index was left loaded and whether its changed file needs another load attempt.
     fn assure_slot_matches_index(
-        _lock: &parking_lot::MutexGuard<'_, ()>,
+        _structural_lock: &parking_lot::MutexGuard<'_, ()>,
         slot: &MutableIndexAndPack,
         index_info: Either,
         mtime: SystemTime,
         current_generation: Generation,
-    ) -> bool {
-        match Option::as_ref(&slot.files.load()) {
-            Some(bundle) => {
-                assert_eq!(
-                    bundle.index_path(),
-                    index_info.path(),
-                    "Parallel writers cannot change the file the slot points to."
+    ) -> Result<(bool, bool), Either> {
+        let _slot_lock = slot.write.lock();
+        let mut files = slot.files.load_full();
+        let Some(bundle) = Arc::make_mut(&mut files).as_mut() else {
+            return Err(index_info);
+        };
+        assert_eq!(
+            bundle.index_path(),
+            index_info.path(),
+            "Parallel writers cannot change the file the slot points to."
+        );
+        let (outcome, changed_slot) = if bundle.index_is_missing() {
+            if bundle.mtime() == mtime {
+                return Ok((false, false));
+            }
+            *bundle = index_info.into_index_and_packs(mtime);
+            ((false, true), true)
+        } else {
+            let changed_slot = bundle.is_disposable();
+            if changed_slot {
+                // Put it into the correct mode now that the file is known to be present again.
+                bundle.put_back();
+                debug_assert_eq!(
+                    bundle.mtime(),
+                    mtime,
+                    "BUG: we can only put back files that didn't obviously change"
                 );
-                if bundle.is_disposable() {
-                    // put it into the correct mode, it's now available for sure so should not be missing or garbage.
-                    // The latter can happen if files are removed and put back for some reason, but we should definitely
-                    // have them in a decent state now that we know/think they are there.
-                    let _lock = slot.write.lock();
-                    let mut files = slot.files.load_full();
-                    let files_mut = Arc::make_mut(&mut files)
-                        .as_mut()
-                        .expect("BUG: cannot change from something to nothing, would be race");
-                    files_mut.put_back();
-                    debug_assert_eq!(
-                        files_mut.mtime(),
-                        mtime,
-                        "BUG: we can only put back files that didn't obviously change"
-                    );
-                    // Safety: can't race as we hold the lock, must be set before replacing the data.
-                    // NOTE that we don't change the generation as it's still the very same index we talk about, it doesn't change
-                    // identity.
-                    slot.generation.store(current_generation, Ordering::SeqCst);
-                    slot.files.store(files);
-                } else {
-                    // it's already in the correct state, either loaded or unloaded.
-                }
-                bundle.index_is_loaded()
             }
-            None => {
-                unreachable!(
-                    "BUG: a slot can never be deleted if we have it recorded in the index WHILE changing said index. There shouldn't be a race"
-                )
-            }
+            ((bundle.index_is_loaded(), false), changed_slot)
+        };
+        if changed_slot {
+            // Safety: the structural and slot locks keep the slot associated with the current generation while publishing it.
+            slot.generation.store(current_generation, Ordering::SeqCst);
+            slot.files.store(files);
         }
+        Ok(outcome)
     }
 
     /// Stability means that indices returned by this API will remain valid.
@@ -771,5 +789,31 @@ impl PartialOrd<Self> for Either {
 impl Ord for Either {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.path().cmp(other.path())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_vacant_recorded_slot_can_be_reconciled() {
+        let structural_lock = parking_lot::Mutex::new(());
+        let guard = structural_lock.lock();
+        let slot = MutableIndexAndPack::default();
+
+        let requeued = super::super::Store::assure_slot_matches_index(
+            &guard,
+            &slot,
+            Either::IndexPath(PathBuf::from("reappeared.idx")),
+            SystemTime::UNIX_EPOCH,
+            0,
+        )
+        .expect_err("a vacant slot returns its disk entry for reinstallation");
+        assert_eq!(
+            requeued.path(),
+            Path::new("reappeared.idx"),
+            "the scanned disk entry is preserved"
+        );
     }
 }
