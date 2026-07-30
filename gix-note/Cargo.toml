@@ -16,13 +16,14 @@ doctest = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding it to dependencies.
-sha1 = ["gix-hash/sha1", "gix-object/sha1"]
+sha1 = ["gix-hash/sha1", "gix-object/sha1", "gix-hashtable/sha1" ]
 ## Enable support for the SHA-256 hash by forwarding it to dependencies.
-sha256 = ["gix-hash/sha256", "gix-object/sha256"]
+sha256 = ["gix-hash/sha256", "gix-object/sha256",  "gix-hashtable/sha256" ]
 
 [dependencies]
 gix-error = { version = "^0.2.5", path = "../gix-error" }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
+gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
 gix-object = { version = "^0.63.0", path = "../gix-object" }
 
 [dev-dependencies]

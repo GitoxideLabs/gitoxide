@@ -1,0 +1,3 @@
+# This fixture is fast to create, and its baseline intentionally comes from the installed Git used for comparison.
+/make_notes_fanout_repo.tar
+/make_notes_fanout_repo_sha256.tar
