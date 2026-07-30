@@ -2141,6 +2141,13 @@ dependencies = [
 [[package]]
 name = "gix-note"
 version = "0.0.0"
+dependencies = [
+ "gix-error",
+ "gix-hash",
+ "gix-object",
+ "gix-odb",
+ "gix-testtools",
+]
 
 [[package]]
 name = "gix-object"
