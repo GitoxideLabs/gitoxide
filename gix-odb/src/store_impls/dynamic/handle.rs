@@ -354,12 +354,13 @@ impl TryFrom<&super::Store> for super::Store {
     type Error = std::io::Error;
 
     fn try_from(s: &super::Store) -> Result<Self, Self::Error> {
+        let slots = s.files.load();
         super::Store::at_opts(
             s.path().into(),
             s.object_hash,
             &mut s.replacements(),
             crate::store::init::Options {
-                slots: crate::store::init::Slots::Limit(s.files.len().try_into().expect("BUG: too many slots")),
+                slots: crate::store::init::Slots::Limit(slots.len().try_into().expect("BUG: too many slots")),
                 use_multi_pack_index: false,
                 alloc_limit_bytes: s.alloc_limit_bytes,
                 current_dir: s.current_dir.clone().into(),
