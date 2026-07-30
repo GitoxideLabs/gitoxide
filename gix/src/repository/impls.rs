@@ -20,6 +20,7 @@ impl Clone for crate::Repository {
             #[cfg(feature = "attributes")]
             self.modules.clone(),
         );
+        new.objects.refresh = self.objects.refresh;
 
         if self.bufs.is_none() {
             new.bufs.take();
