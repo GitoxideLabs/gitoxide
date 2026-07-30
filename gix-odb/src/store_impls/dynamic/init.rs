@@ -40,16 +40,20 @@ impl Default for Options {
     }
 }
 
-/// Configures the number of slots in the index slotmap, which is fixed throughout the existence of the store.
+/// Configures the initial size and possible growth of the index slot map.
 #[derive(Copy, Clone, Debug)]
 pub enum Slots {
-    /// The number of slots to use, that is the total number of indices we can hold at a time.
-    /// Using this has the advantage of avoiding an initial directory listing of the repository, and is recommended
-    /// on the server side where the repository setup is controlled.
+    /// The maximum number of indices the store can hold.
+    /// This avoids an initial directory listing and provides an explicit resource bound.
     ///
     /// Note that this won't affect their packs, as each index can have one or more packs associated with it.
     Limit(u16),
-    /// Compute the number of slots needed, as probably best used on the client side where a variety of repositories is encountered.
+    /// Start with `initial` slots without reading the object database and grow as needed.
+    Growable {
+        /// The number of slots allocated when opening the store.
+        initial: u16,
+    },
+    /// Compute the initial number of slots from the disk state and grow as needed.
     AsNeededByDiskState {
         /// 1.0 means no safety, 1.1 means 10% more slots than needed
         multiplier: f32,
@@ -60,18 +64,15 @@ pub enum Slots {
 
 impl Default for Slots {
     fn default() -> Self {
-        Slots::AsNeededByDiskState {
-            multiplier: 1.1,
-            minimum: 32,
-        }
+        Slots::Growable { initial: 32 }
     }
 }
 
 impl Store {
     /// Open the store at `objects_dir` (containing loose objects and `packs/`), which must only be a directory for
     /// the store to be created without any additional work being done.
-    /// `slots` defines how many multi-pack-indices as well as indices we can know about at a time, which includes
-    /// the allowance for all additional object databases coming in via `alternates` as well.
+    /// `slots` defines the initial capacity and whether it may grow, including indices from additional object
+    /// databases reached through `alternates`.
     /// Note that the `slots` isn't used for packs, these are included with their multi-index or index respectively.
     /// For example, In a repository with 250m objects and geometric packing one would expect 27 index/pack pairs,
     /// or a single multi-pack index.
@@ -104,8 +105,9 @@ impl Store {
                 objects_dir.display()
             )));
         }
-        let slot_count = match slots {
-            Slots::Limit(n) => n as usize,
+        let (slot_count, slot_limit) = match slots {
+            Slots::Limit(n) => (n as usize, Some(n as usize)),
+            Slots::Growable { initial } => (initial as usize, None),
             Slots::AsNeededByDiskState { multiplier, minimum } => {
                 let mut db_paths =
                     crate::alternate::resolve(objects_dir.clone(), &current_dir).map_err(std::io::Error::other)?;
@@ -116,13 +118,14 @@ impl Store {
                         .len();
 
                 let candidate = ((num_slots as f32 * multiplier) as usize).max(minimum);
-                if candidate > crate::store::types::PackId::max_indices() {
+                let count = if candidate > crate::store::types::PackId::max_indices() {
                     // A chance for this to work without 10% extra allocation - this already
                     // is an insane amount of packs.
                     num_slots
                 } else {
                     candidate
-                }
+                };
+                (count, None)
             }
         };
         if slot_count > crate::store::types::PackId::max_indices() {
@@ -138,7 +141,12 @@ impl Store {
             write: Default::default(),
             replacements,
             path: objects_dir,
-            files: Vec::from_iter(std::iter::repeat_with(MutableIndexAndPack::default).take(slot_count)),
+            files: ArcSwap::from_pointee(
+                std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default()))
+                    .take(slot_count)
+                    .collect(),
+            ),
+            slot_limit,
             index: ArcSwap::new(Arc::new(SlotMapIndex::default())),
             use_multi_pack_index,
             object_hash,

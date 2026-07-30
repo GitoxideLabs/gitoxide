@@ -7,12 +7,16 @@ use crate::{
 };
 
 fn open(fixture: &OdbFixture, slots: u16) -> std::io::Result<gix_odb::Handle> {
+    open_with_slots(fixture, gix_odb::store::init::Slots::Limit(slots))
+}
+
+fn open_with_slots(fixture: &OdbFixture, slots: gix_odb::store::init::Slots) -> std::io::Result<gix_odb::Handle> {
     gix_odb::at_opts(
         fixture.objects_dir(Database::Primary),
         fixture.manifest.object_hash,
         Vec::new(),
         gix_odb::store::init::Options {
-            slots: gix_odb::store::init::Slots::Limit(slots),
+            slots,
             ..Default::default()
         },
     )
@@ -336,5 +340,66 @@ fn a_multi_index_can_replace_a_standalone_index_in_the_same_slot() -> Result {
 
     fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
     assert_object(&handle, &id)?;
+    Ok(())
+}
+
+#[test]
+fn growable_slots_expand_without_invalidating_existing_handles() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    let first = open_with_slots(&fixture, gix_odb::store::init::Slots::Growable { initial: 1 })?;
+    let second = first.clone();
+    let mut stable = first.clone();
+    stable.prevent_pack_unload();
+    assert_eq!(
+        first.store_ref().metrics().num_refreshes,
+        0,
+        "opening a growable store does not scan the pack directory"
+    );
+
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let a = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object(&first, &a)?;
+    let mut buffer = Vec::new();
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &a, &mut buffer)
+        .expect("the stable handle locates the first pack");
+
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.install_pack(Database::Primary, Pack::C)?;
+    let b = fixture.manifest.pack(Pack::B).object_ids[0];
+    let c = fixture.manifest.pack(Pack::C).object_ids[0];
+    assert_object(&second, &c)?;
+    assert_object(&first, &b)?;
+    assert_object(&stable, &a)?;
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "growing the slot map preserves stable pack locations"
+    );
+    assert_eq!(
+        first.store_ref().metrics().known_reachable_indices,
+        3,
+        "all standalone indices are represented after growth"
+    );
+    Ok(())
+}
+
+#[test]
+fn disk_sized_slots_can_grow_beyond_the_opening_estimate() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    let handle = open_with_slots(
+        &fixture,
+        gix_odb::store::init::Slots::AsNeededByDiskState {
+            multiplier: 1.0,
+            minimum: 1,
+        },
+    )?;
+
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::B).object_ids[0])?;
+    assert_eq!(
+        handle.store_ref().metrics().known_reachable_indices,
+        2,
+        "a disk-sized store grows when later maintenance adds more indices than estimated"
+    );
     Ok(())
 }
