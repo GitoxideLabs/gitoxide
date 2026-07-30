@@ -27,6 +27,8 @@ sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
 sha256 = ["gix-hash/sha256", "gix-pack/sha256"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-hash/serde", "gix-object/serde", "gix-pack/serde"]
+## Expose deterministic synchronization hooks for tests of concurrent object-database behavior.
+test-support = []
 
 [dependencies]
 crc32fast = "1.5.0"
@@ -53,7 +55,7 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 insta = "1.46.3"
-gix-odb = { path = ".", features = ["sha1", "sha256"] }
+gix-odb = { path = ".", features = ["sha1", "sha256", "test-support"] }
 gix-hash = { path = "../gix-hash" }
 gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-date = { path = "../gix-date" }
@@ -73,6 +75,11 @@ path = "tests/odb/main.rs"
 [[test]]
 name = "threaded"
 path = "tests/threaded.rs"
+required-features = ["gix-parallel/parallel"]
+
+[[test]]
+name = "threaded_dynamic_scenarios"
+path = "tests/threaded_dynamic_scenarios.rs"
 required-features = ["gix-parallel/parallel"]
 
 [package.metadata.docs.rs]
