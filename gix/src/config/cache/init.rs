@@ -381,10 +381,16 @@ fn apply_environment_overrides(
             "core",
             None,
             git_prefix,
-            &[{
-                let key = &Core::WORKTREE;
-                (env(key), key.name)
-            }][..],
+            &[
+                {
+                    let key = &Core::WORKTREE;
+                    (env(key), key.name)
+                },
+                {
+                    let key = &Core::NOTES_REF;
+                    (env(key), key.name)
+                },
+            ][..],
         ),
         (
             "http",

@@ -43,6 +43,9 @@ impl Core {
         keys::LockTimeout::new_lock_timeout("packedRefsTimeout", &config::Tree::CORE);
     /// The `core.multiPackIndex` key.
     pub const MULTIPACK_INDEX: keys::Boolean = keys::Boolean::new_boolean("multiPackIndex", &config::Tree::CORE);
+    /// The `core.notesRef` key.
+    pub const NOTES_REF: keys::Any =
+        keys::Any::new("notesRef", &config::Tree::CORE).with_environment_override("GIT_NOTES_REF");
     /// The `core.logAllRefUpdates` key.
     pub const LOG_ALL_REF_UPDATES: LogAllRefUpdates =
         LogAllRefUpdates::new_with_validate("logAllRefUpdates", &config::Tree::CORE, validate::LogAllRefUpdates);
@@ -124,6 +127,7 @@ impl Section for Core {
             &Self::FILES_REF_LOCK_TIMEOUT,
             &Self::PACKED_REFS_TIMEOUT,
             &Self::MULTIPACK_INDEX,
+            &Self::NOTES_REF,
             &Self::LOG_ALL_REF_UPDATES,
             &Self::PRECOMPOSE_UNICODE,
             &Self::REPOSITORY_FORMAT_VERSION,
