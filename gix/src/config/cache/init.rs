@@ -130,6 +130,7 @@ impl Cache {
         let object_kind_hint = util::disambiguate_hint(&config, lenient_config)?;
         let (static_pack_cache_limit_bytes, pack_cache_bytes, object_cache_bytes, alloc_limit_bytes) =
             util::parse_object_caches(&config, lenient_config, filter_config_section)?;
+        let object_refresh_mode = util::parse_object_refresh_mode(&config, lenient_config, filter_config_section)?;
         let loose_compression = super::access::loose_compression(&config, lenient_config, filter_config_section)?;
         let shared_repository_permissions =
             config::file_mut::shared_repository_permissions(&config, filter_config_section)
@@ -147,6 +148,7 @@ impl Cache {
             pack_cache_bytes,
             object_cache_bytes,
             alloc_limit_bytes,
+            object_refresh_mode,
             loose_compression,
             reflog,
             shared_repository_permissions,
@@ -209,6 +211,8 @@ impl Cache {
                 .with_lenient_default(self.lenient_config)?;
         let refs_namespace = util::query_refs_namespace(config, self.lenient_config, self.filter_config_section)?;
         let object_caches = util::parse_object_caches(config, self.lenient_config, self.filter_config_section)?;
+        let object_refresh_mode =
+            util::parse_object_refresh_mode(config, self.lenient_config, self.filter_config_section)?;
         let loose_compression =
             super::access::loose_compression(config, self.lenient_config, self.filter_config_section)?;
 
@@ -227,6 +231,7 @@ impl Cache {
             self.object_cache_bytes,
             self.alloc_limit_bytes,
         ) = object_caches;
+        self.object_refresh_mode = object_refresh_mode;
         self.loose_compression = loose_compression;
 
         self.user_agent = Default::default();
@@ -472,6 +477,7 @@ impl crate::Repository {
         self.refs.shared_repository_permissions = self.config.shared_repository_permissions;
         self.objects.shared_repository_permissions = self.config.shared_repository_permissions;
         self.refs.namespace.clone_from(&self.config.refs_namespace);
+        self.objects.refresh = self.config.object_refresh_mode;
     }
 }
 
