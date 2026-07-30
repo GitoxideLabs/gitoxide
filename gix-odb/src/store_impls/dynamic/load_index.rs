@@ -95,7 +95,8 @@ impl super::Store {
                     Ok(slot_map_index) => {
                         // This slot-map index is in bounds and was only given to us.
                         let _ongoing_operation = IncOnNewAndDecOnDrop::new(&index.num_indices_currently_being_loaded);
-                        let slot = &self.files[index.slot_indices[slot_map_index]];
+                        let slots = self.files.load();
+                        let slot = &slots[index.slot_indices[slot_map_index]];
                         let _lock = slot.write.lock();
                         if slot.generation.load(Ordering::SeqCst) > index.generation {
                             // There is a disk consolidation in progress which just overwrote a slot that could be disposed with some other
@@ -234,11 +235,12 @@ impl super::Store {
             self.use_multi_pack_index.then_some(self.object_hash),
             self.alloc_limit_bytes,
         )?;
+        let mut slots = self.files.load_full();
         let mut idx_by_index_path: BTreeMap<_, _> = index
             .slot_indices
             .iter()
             .filter_map(|&idx| {
-                let f = &self.files[idx];
+                let f = &slots[idx];
                 Option::as_ref(&f.files.load()).map(|f| (f.index_path().to_owned(), idx))
             })
             .collect();
@@ -256,7 +258,7 @@ impl super::Store {
         for (index_info, mtime) in indices_by_modification_time.into_iter().map(|(a, b, _)| (a, b)) {
             match idx_by_index_path.remove(index_info.path()) {
                 Some(slot_idx) => {
-                    let slot = &self.files[slot_idx];
+                    let slot = &slots[slot_idx];
                     let files_guard = slot.files.load();
                     let Some(files) = Option::as_ref(&files_guard) else {
                         index_paths_to_add.push_back((index_info, mtime, None));
@@ -293,7 +295,8 @@ impl super::Store {
             }
         }
         let num_indices_needed = new_slot_map_indices.len() + index_paths_to_add.len();
-        if num_indices_needed > self.files.len() {
+        let slot_limit = self.slot_limit.unwrap_or_else(PackId::max_indices);
+        if num_indices_needed > slot_limit {
             if was_uninitialized {
                 self.index.store(Arc::new(SlotMapIndex {
                     loose_dbs,
@@ -301,37 +304,39 @@ impl super::Store {
                 }));
             }
             return Err(Message::new("The object database has too few index slots")
-                .with("current", self.files.len())
-                .with("needed", num_indices_needed - self.files.len())
+                .with("current", slots.len())
+                .with("needed", num_indices_needed - slots.len())
                 .raise_erased());
+        }
+        if num_indices_needed > slots.len() {
+            let additional_slots = num_indices_needed - slots.len();
+            Arc::make_mut(&mut slots)
+                .extend(std::iter::repeat_with(|| Arc::new(MutableIndexAndPack::default())).take(additional_slots));
+            self.files.store(Arc::clone(&slots));
         }
         let needs_stable_indices = self.maintain_stable_indices(&write);
 
-        let mut next_possibly_free_index = index
-            .slot_indices
-            .iter()
-            .max()
-            .map_or(0, |idx| (idx + 1) % self.files.len());
+        let mut next_possibly_free_index = index.slot_indices.iter().max().map_or(0, |idx| (idx + 1) % slots.len());
         let mut num_indices_checked = 0;
         let mut needs_generation_change = false;
         let mut slot_indices_to_remove: Vec<_> = idx_by_index_path.into_values().collect();
         while let Some((mut index_info, mtime, move_from_slot_idx)) = index_paths_to_add.pop_front() {
             'increment_slot_index: loop {
-                if num_indices_checked == self.files.len() {
+                if num_indices_checked == slots.len() {
                     return Err(Message::new("The object database has too few index slots")
-                        .with("current", self.files.len())
+                        .with("current", slots.len())
                         .with("needed", index_paths_to_add.len() + 1) // include the index just popped off
                         .raise_erased());
                 }
                 // Don't allow duplicate indicates, we need a 1:1 mapping.
                 if new_slot_map_indices.contains(&next_possibly_free_index) {
-                    next_possibly_free_index = (next_possibly_free_index + 1) % self.files.len();
+                    next_possibly_free_index = (next_possibly_free_index + 1) % slots.len();
                     num_indices_checked += 1;
                     continue 'increment_slot_index;
                 }
                 let slot_index = next_possibly_free_index;
-                let slot = &self.files[slot_index];
-                next_possibly_free_index = (next_possibly_free_index + 1) % self.files.len();
+                let slot = &slots[slot_index];
+                next_possibly_free_index = (next_possibly_free_index + 1) % slots.len();
                 num_indices_checked += 1;
                 match move_from_slot_idx {
                     Some(move_from_slot_idx) => {
@@ -427,7 +432,7 @@ impl super::Store {
 
         // deleted items - remove their slots AFTER we have set the new index if we may alter indices, otherwise we only declare them garbage.
         // removing slots may cause pack loading to fail, and they will then reload their indices.
-        for slot in slot_indices_to_remove.into_iter().map(|idx| &self.files[idx]) {
+        for slot in slot_indices_to_remove.into_iter().map(|idx| &slots[idx]) {
             let _lock = slot.write.lock();
             let mut files = slot.files.load_full();
             let files_mut = Arc::make_mut(&mut files);
@@ -675,6 +680,7 @@ impl super::Store {
         // That loop is meant to help assure the marker (which includes the amount of loaded indices) matches
         // the actual amount of indices we collect.
         let index = self.index.load();
+        let slots = self.files.load();
         loop {
             if index.num_indices_currently_being_loaded.deref().load(Ordering::SeqCst) != 0 {
                 std::thread::yield_now();
@@ -685,7 +691,7 @@ impl super::Store {
                 index
                     .slot_indices
                     .iter()
-                    .map(|idx| (*idx, &self.files[*idx]))
+                    .map(|idx| (*idx, &slots[*idx]))
                     .filter_map(|(id, file)| {
                         let lookup = match (**file.files.load()).as_ref()? {
                             types::IndexAndPacks::Index(bundle) => handle::SingleOrMultiIndex::Single {

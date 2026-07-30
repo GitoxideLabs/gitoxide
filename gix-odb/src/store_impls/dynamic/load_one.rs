@@ -35,7 +35,10 @@ impl super::Store {
                 .map_err(super::exn_to_io)
         }
 
-        let slot = &self.files[id.index];
+        let slots = self.files.load();
+        let Some(slot) = slots.get(id.index) else {
+            return Ok(None);
+        };
         // pin the current state before loading in the generation. That way we won't risk seeing the wrong value later.
         let slot_files = &**slot.files.load();
         if slot.generation.load(Ordering::SeqCst) > marker.generation {
@@ -121,7 +124,8 @@ impl super::Store {
     /// Returns `None` if the index wasn't available anymore or could otherwise not be loaded, which can be considered a bug
     /// as we should always keep needed indices available.
     pub(crate) fn index_by_id(&self, id: types::PackId, marker: types::SlotIndexMarker) -> Option<handle::IndexLookup> {
-        let slot = self.files.get(id.index)?;
+        let slots = self.files.load();
+        let slot = slots.get(id.index)?;
         // Pin this value before we check the generation to avoid seeing something newer later.
         let slot_files = &**slot.files.load();
         if slot.generation.load(Ordering::SeqCst) > marker.generation {
