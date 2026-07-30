@@ -104,15 +104,16 @@ impl super::Store {
     {
         let changed = || gix_error::message("The object database changed during verification").retryable_error();
         let _span = gix_trace::coarse!("gix_odb:Store::verify_integrity()");
-        let mut index = self.index.load();
-        if !index.is_initialized() {
+        let mut catalog = self.catalog.load_full();
+        if !catalog.index.is_initialized() {
             self.consolidate_with_disk_state(true, false, self.loose_compression)?;
-            index = self.index.load();
+            catalog = self.catalog.load_full();
             assert!(
-                index.is_initialized(),
+                catalog.index.is_initialized(),
                 "BUG: after consolidating successfully, we have an initialized index"
             );
         }
+        let index = &catalog.index;
 
         progress.init(
             Some(index.slot_indices.len()),
@@ -127,7 +128,7 @@ impl super::Store {
             )
         };
         gix_trace::detail!("verify indices").into_scope(|| {
-            let slots = self.files.load();
+            let slots = &catalog.slots;
             for slot_index in &index.slot_indices {
                 let slot = &slots[*slot_index];
                 if slot.generation.load(Ordering::SeqCst) != index.generation {

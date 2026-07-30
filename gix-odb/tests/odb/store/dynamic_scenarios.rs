@@ -5,6 +5,9 @@ use crate::{
     Result,
     odb_fixture::{Component, Database, OdbFixture, Pack},
 };
+#[path = "../../tools/scenario.rs"]
+mod support;
+use support::*;
 
 fn open(fixture: &OdbFixture, slots: u16) -> std::io::Result<gix_odb::Handle> {
     open_with_slots(fixture, gix_odb::store::init::Slots::Limit(slots))
@@ -20,20 +23,6 @@ fn open_with_slots(fixture: &OdbFixture, slots: gix_odb::store::init::Slots) -> 
             ..Default::default()
         },
     )
-}
-
-fn assert_object(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
-    let mut buffer = Vec::new();
-    let object = handle.try_find(id, &mut buffer)?.expect("fixture object is available");
-    assert_eq!(
-        gix_object::compute_hash(id.kind(), object.kind, object.data)?,
-        id,
-        "the ODB returned bytes belonging to the requested object"
-    );
-    let header = handle.try_header(id)?.expect("the same object has a header");
-    assert_eq!(header.kind(), object.kind, "header and object kinds agree");
-    assert_eq!(header.size(), object.data.len() as u64, "header and object sizes agree");
-    Ok(())
 }
 
 fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
@@ -130,6 +119,24 @@ fn stale_handles_follow_multi_index_rewrites() -> Result {
 }
 
 #[test]
+fn a_multi_index_subset_and_standalone_index_use_their_own_packs() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    fixture.publish(Database::Alternate, Pack::A, Component::Index)?;
+    fixture.publish(Database::Alternate, Pack::C, Component::Index)?;
+    fixture.install_pack(Database::Alternate, Pack::B)?;
+    fixture.write_multi_index(Database::Alternate, &[Pack::A, Pack::C])?;
+    fixture.set_alternate(true)?;
+
+    let handle = open(&fixture, 16)?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::B).object_ids[0])?;
+    Ok(())
+}
+
+#[test]
 fn alternates_can_change_while_handles_are_alive() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Alternate, Pack::C)?;
@@ -157,10 +164,9 @@ fn malformed_index_can_be_restored_for_an_existing_handle() -> Result {
     let handle = open(&fixture, 4)?;
     let id = fixture.manifest.pack(Pack::A).object_ids[0];
     let mut buffer = Vec::new();
-    assert!(
-        handle.try_find(&id, &mut buffer)?.is_none(),
-        "a malformed index cannot provide its objects"
-    );
+    handle
+        .try_find(&id, &mut buffer)
+        .expect_err("a malformed index is reported to the caller");
 
     fixture.publish(Database::Primary, Pack::A, Component::Index)?;
     assert!(fixture.is_valid(), "restoring the generated index makes the ODB valid");
@@ -230,37 +236,26 @@ fn a_pack_missing_on_first_access_is_shared_and_recovers() -> Result {
 }
 
 #[test]
-fn a_failed_pack_load_is_shared_and_recovers_after_replacement() -> Result {
+fn a_loaded_index_recovers_after_its_pack_and_index_are_republished() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Primary, Pack::A)?;
-    let mut first = open(&fixture, 4)?;
-    let mut second = first.clone();
-    first.refresh_never();
-    second.refresh_never();
+    let mut stale = open(&fixture, 4)?;
+    let current = stale.clone();
+    stale.refresh_never();
     assert_eq!(
-        first.packed_object_count()?,
+        current.packed_object_count()?,
         fixture.manifest.pack(Pack::A).object_ids.len() as u64,
-        "loading the index leaves its pack unopened"
+        "the shared store loads the index before its files are replaced"
     );
 
-    fixture.corrupt_pack(Database::Primary, Pack::A)?;
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
     let id = fixture.manifest.pack(Pack::A).object_ids[0];
-    let mut buffer = Vec::new();
-    let first_err = first
-        .try_find(&id, &mut buffer)
-        .expect_err("the first handle observes the malformed pack");
-    let second_err = second
-        .try_find(&id, &mut buffer)
-        .expect_err("the second handle observes the shared pack-load failure");
-    assert_eq!(
-        first_err.to_string(),
-        second_err.to_string(),
-        "shared handles report the same pack-load failure"
-    );
-
+    assert_missing(&stale, &id)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
     fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
-    assert_object(&second, &id)?;
-    assert_object(&first, &id)?;
+
+    assert_missing(&current, &fixture.manifest.missing_id())?;
+    assert_object(&current, &id)?;
     Ok(())
 }
 
@@ -323,6 +318,26 @@ fn never_refresh_does_not_retry_failed_initial_scan() -> Result {
         strict.store_ref().metrics().num_refreshes,
         2,
         "a strict shared handle can reconcile once the remaining index fits"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_midx_rewrite_does_not_require_a_spare_slot() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let handle = open(&fixture, 1)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object(&handle, &id)?;
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    assert_missing(&handle, &fixture.manifest.missing_id())?;
+    assert_object(&handle, &id)?;
+    assert_eq!(
+        handle.store_ref().metrics().known_reachable_indices,
+        1,
+        "rewriting the only reachable index stays within the configured limit"
     );
     Ok(())
 }
@@ -445,6 +460,192 @@ fn growable_slots_expand_without_invalidating_existing_handles() -> Result {
         3,
         "all standalone indices are represented after growth"
     );
+    Ok(())
+}
+
+#[test]
+fn making_a_stale_handle_stable_discards_invalid_pack_ids() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let current = open(&fixture, 1)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object(&current, &id)?;
+    let mut stable = current.clone();
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    assert_missing(&current, &fixture.manifest.missing_id())?;
+
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &id, &mut buffer)?
+        .expect("the stable handle locates the object through the current MIDX");
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)?
+            .is_none(),
+        "a miss may refresh the stable handle without invalidating its location"
+    );
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the location obtained after stability was enabled remains valid"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_midx_rewrite_does_not_reuse_a_stable_standalone_pack_id() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let mut stable = open(&fixture, 2)?;
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let b = fixture.manifest.pack(Pack::B).object_ids[0];
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &b, &mut buffer)?
+        .expect("the standalone pack is available before the MIDX absorbs it");
+
+    fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)?
+            .is_none(),
+        "the missing object remains absent after the rewrite"
+    );
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the standalone pack ID remains mapped after the failed rewrite"
+    );
+    Ok(())
+}
+
+#[test]
+fn stable_clones_share_locations_discovered_after_cloning() -> Result {
+    use gix_pack::Find;
+
+    for use_multi_index in [false, true] {
+        for use_find in [false, true] {
+            let mut fixture = OdbFixture::from_script()?;
+            fixture.install_pack(Database::Primary, Pack::A)?;
+            if use_multi_index {
+                fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+            }
+            let mut parent = open(&fixture, 4)?.into_arc()?;
+            parent.prevent_pack_unload();
+            let sibling = parent.clone();
+            let producer = parent.clone();
+            let object_id = fixture.manifest.pack(Pack::A).object_ids[0];
+            let location = std::thread::spawn(move || {
+                let mut buffer = Vec::new();
+                if use_find {
+                    Find::try_find(&producer, &object_id, &mut buffer)
+                        .expect("the clone reads a packed object")
+                        .expect("the fixture object is present")
+                        .1
+                } else {
+                    producer
+                        .location_by_oid(&object_id, &mut buffer)
+                        .expect("the clone locates a packed object")
+                }
+                .expect("the clone obtains a pack location")
+            })
+            .join()
+            .expect("the producing clone does not panic");
+
+            for remove_pack in [false, true] {
+                if remove_pack {
+                    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+                    fixture.remove(Database::Primary, Pack::A, Component::Index)?;
+                    if use_multi_index {
+                        fixture.remove_multi_index(Database::Primary)?;
+                    }
+                }
+                for consumer in [&parent, &sibling] {
+                    if remove_pack {
+                        assert!(
+                            consumer
+                                .location_by_oid(&fixture.manifest.missing_id(), &mut Vec::new())?
+                                .is_none(),
+                            "a miss refreshes the consumer after maintenance"
+                        );
+                    }
+                    assert!(
+                        consumer.entry_by_location(&location).is_some(),
+                        "an existing clone retains locations discovered by another, even after maintenance"
+                    );
+                    assert!(
+                        consumer
+                            .pack_offsets_and_oid(location.pack_id)?
+                            .expect("the retained index is shared too")
+                            .contains(&(location.pack_offset, object_id)),
+                        "the shared index maps the retained entry back to its object"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn a_stable_location_keeps_a_deleted_midx_pack_available_across_refresh() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let mut stable = open(&fixture, 16)?;
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &id, &mut buffer)?
+        .expect("the stable handle locates the object through the MIDX");
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    assert!(
+        gix_odb::pack::Find::location_by_oid(&stable, &fixture.manifest.pack(Pack::C).object_ids[0], &mut buffer)?
+            .is_none(),
+        "a lookup miss refreshes the stable handle after the pack was deleted"
+    );
+
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the deleted pack remains available by its previously returned location"
+    );
+    Ok(())
+}
+
+#[test]
+fn iteration_objects_are_readable_after_an_unchanged_index_gets_its_pack_back() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let current = open(&fixture, 4)?;
+    let mut stale = current.clone();
+    stale.refresh_never();
+    assert_eq!(
+        current.packed_object_count()?,
+        fixture.manifest.pack(Pack::A).object_ids.len() as u64,
+        "the shared store loads the index before its pack disappears"
+    );
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_missing(&stale, &id)?;
+    fixture.publish(Database::Primary, Pack::A, Component::Pack)?;
+
+    for id in current.iter()? {
+        assert_object(&current, &id?)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn a_multi_index_with_a_missing_pack_does_not_refresh_forever() -> Result {
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.publish(Database::Primary, Pack::A, Component::Index)?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
+    let handle = open(&fixture, 4)?;
+
+    assert_missing(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::B).object_ids[0])?;
     Ok(())
 }
 
