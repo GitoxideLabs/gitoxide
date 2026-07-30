@@ -223,6 +223,8 @@ pub(crate) struct Cache {
     pub(crate) object_cache_bytes: usize,
     /// The maximum size of a single allocation caused by user-controlled on-disk packed object data.
     pub(crate) alloc_limit_bytes: Option<usize>,
+    /// The policy for filesystem refreshes caused by object misses.
+    pub(crate) object_refresh_mode: gix_odb::store::RefreshMode,
     /// The compression level to use when writing loose objects, from `core.looseCompression` or `core.compression`.
     pub(crate) loose_compression: gix_zlib::Compression,
     /// The amount of bytes we can hold in our static LRU cache. Otherwise, go with the defaults.
