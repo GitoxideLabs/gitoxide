@@ -16,6 +16,9 @@ pub fn hex_to_id_for_hash(sha1: &str, sha256: &str) -> ObjectId {
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+#[path = "../tools/odb.rs"]
+pub mod odb_fixture;
+
 /// Open an object store at `objects_dir`.
 /// The static SHA-1 fixtures keep using [`db()`]/[`db_small_packs()`] instead.
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {
