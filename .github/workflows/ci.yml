@@ -302,10 +302,12 @@ jobs:
         # It's tested individually.
         run: | # zizmor: ignore[template-injection]
           cargo nextest run --workspace --no-fail-fast --exclude gix-error -- ${{ matrix.test-args }}
-      - name: Check that tracked archives are up to date
+      - name: Check that generated archives are committed or ignored
+        shell: bash # This relies on `-e` and uses shell-specific features on all OSes.
         run: |
-          # If this fails, the fix is usually to commit a regenerated archive.
-          git diff --exit-code
+          # If this fails, the fix is usually to commit a regenerated or new archive.
+          git status --porcelain
+          test -z "$(git status --porcelain)"
       - name: Remove Git for Windows directories from PATH
         if: startsWith(matrix.os, 'windows')
         run: |
