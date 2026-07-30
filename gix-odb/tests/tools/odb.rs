@@ -207,6 +207,11 @@ impl OdbFixture {
         self.objects_dir(database).join("pack/multi-pack-index")
     }
 
+    pub fn remove_loose_object(&self, database: Database, id: &gix_hash::oid) -> Result<()> {
+        let hex = id.to_hex().to_string();
+        remove_if_exists(&self.objects_dir(database).join(&hex[..2]).join(&hex[2..]))
+    }
+
     pub fn apply(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Publish {
@@ -321,6 +326,13 @@ impl OdbFixture {
         })?;
         self.multi_index_packs[database.index()] = Some(packs.to_vec());
         Ok(())
+    }
+
+    pub fn can_write_multi_index(&self, database: Database, packs: &[Pack]) -> bool {
+        packs.iter().all(|pack| {
+            self.component_path(database, *pack, Component::Index).is_file()
+                && !self.corrupt_indices.contains(&(database, *pack))
+        })
     }
 
     pub fn remove_multi_index(&mut self, database: Database) -> Result<()> {
