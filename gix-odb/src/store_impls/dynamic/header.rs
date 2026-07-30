@@ -45,34 +45,43 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (mut idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (mut idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
                         index_file,
                         pack: possibly_pack,
+                        pack_id_to_index,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)?
                     {
                         let pack = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker).or_error()? {
+                            None => match self
+                                .store
+                                .load_pack(slot, slot_id, pack_index, &index_file, marker)
+                                .or_error()?
+                            {
                                 Some(pack) => {
+                                    if let (Some(pack_ids), Some(pack_index)) = (pack_id_to_index, pack_index) {
+                                        pack_ids.insert(pack.id, pack_index);
+                                    }
                                     *possibly_pack = Some(pack);
                                     possibly_pack.as_deref().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker))? {
+                                    match self.store.load_one_index(self.index_ctx(marker))? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return Ok(None);
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
@@ -116,12 +125,12 @@ where
                                             .with("base_id", base_id.to_string())
                                             .with("object_id", id.to_string())
                                     })?;
-                                // A refreshed snapshot may reuse pack ids; retry through normal pack loading.
+                                // A refreshed snapshot may reuse slots; retry through normal pack loading.
                                 if snapshot.store_state_changed_since(marker) {
                                     continue 'outer;
                                 }
                                 // Base lookup can reorder indices; keep the original pack and delta representation.
-                                idx = match snapshot.indices.iter().position(|index| index.id == pack_id.index) {
+                                idx = match snapshot.indices.iter().position(|index| index.slot_id == slot_id) {
                                     Some(idx) => idx,
                                     None => continue 'outer,
                                 };
