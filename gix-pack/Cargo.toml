@@ -38,7 +38,7 @@ object-cache-dynamic = ["dep:clru", "dep:gix-hashtable"]
 ## Data structures implement `serde::Serialize` and `serde::Deserialize`.
 serde = ["dep:serde", "gix-object/serde", "gix-zlib/serde"]
 ## Enable parallel algorithms.
-parallel = ["gix-features/parallel"]
+parallel = ["gix-features/parallel", "dep:crossbeam-deque"]
 ## Make it possible to compile to the `wasm32-unknown-unknown` target.
 wasm = ["gix-diff?/wasm"]
 
@@ -60,6 +60,7 @@ memmap2 = "0.9.11"
 smallvec = "1.15.1"
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
 thiserror = "2.0.18"
+crossbeam-deque = { version = "0.8.6", optional = true }
 
 # for caching
 uluru = { version = "3.0.0", optional = true }
@@ -74,7 +75,7 @@ document-features = { version = "0.2.0", optional = true }
 gix-tempfile = { version = "^24.0.0", default-features = false, path = "../gix-tempfile", optional = true }
 
 [dev-dependencies]
-gix-pack = { path = ".", features = ["sha1", "sha256", "pack-cache-lru-dynamic", "pack-cache-lru-static", "object-cache-dynamic", "serde", "parallel"] }
+gix-pack = { path = ".", features = ["sha1", "sha256", "pack-cache-lru-dynamic", "pack-cache-lru-static", "object-cache-dynamic", "serde"] }
 gix-testtools = { path = "../tests/tools", default-features = false }
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 gix-object = { path = "../gix-object" }
