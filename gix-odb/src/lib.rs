@@ -125,7 +125,8 @@ use store::types;
 ///
 /// ### Features
 ///
-/// - entirely lazy, creating an instance does no disk IO at all if [`Slots::Limit`][store::init::Slots::Limit] is used.
+/// - creating an instance does not scan the object directory unless
+///   [`Slots::AsNeededByDiskState`][store::init::Slots::AsNeededByDiskState] is used.
 /// - multi-threaded lazy-loading of indices and packs
 /// - per-thread pack and object caching avoiding cache trashing.
 /// - most-recently-used packs are always first for speedups if objects are stored in the same pack, typical for packs organized by
@@ -152,11 +153,12 @@ pub struct Store {
     /// A list of indices keeping track of which slots are filled with data. These are usually, but not always, consecutive.
     pub(crate) index: ArcSwap<types::SlotMapIndex>,
 
-    /// The below state acts like a slot-map with each slot is mutable when the write lock is held, but readable independently of it.
-    /// This allows multiple file to be loaded concurrently if there is multiple handles requesting to load packs or additional indices.
-    /// The map is static and cannot change.
-    /// It's read often and changed rarely.
-    pub(crate) files: Vec<types::MutableIndexAndPack>,
+    /// The below state acts like a slot-map with each slot mutable when the write lock is held, but readable independently of it.
+    /// This allows multiple files to be loaded concurrently if multiple handles request packs or additional indices.
+    /// Existing slots retain their address when a larger snapshot is published.
+    pub(crate) files: ArcSwap<Vec<Arc<types::MutableIndexAndPack>>>,
+    /// The user-provided hard limit, or `None` if the slot map may grow to the representable maximum.
+    slot_limit: Option<usize>,
 
     /// The amount of handles that would prevent us from unloading packs or indices
     pub(crate) num_handles_stable: AtomicUsize,
