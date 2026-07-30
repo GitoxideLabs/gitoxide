@@ -619,7 +619,7 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 
 A mechanism to associate metadata with any object, and keep revisions of it using git itself.
 
-* [ ] CRUD for git notes
+* [x] CRUD for git notes
 
 ### gix-negotiate
 * **algorithms**
