@@ -161,6 +161,7 @@ pub struct OdbFixture {
     pub manifest: Manifest,
     clock: u32,
     corrupt_indices: HashSet<(Database, Pack)>,
+    corrupt_packs: HashSet<(Database, Pack)>,
     multi_index_packs: [Option<Vec<Pack>>; 2],
 }
 
@@ -185,6 +186,7 @@ impl OdbFixture {
             manifest,
             clock: 0,
             corrupt_indices: HashSet::new(),
+            corrupt_packs: HashSet::new(),
             multi_index_packs: [None, None],
         })
     }
@@ -263,6 +265,8 @@ impl OdbFixture {
         })?;
         if component == Component::Index {
             self.corrupt_indices.remove(&(database, pack));
+        } else if component == Component::Pack {
+            self.corrupt_packs.remove(&(database, pack));
         }
         Ok(())
     }
@@ -271,6 +275,8 @@ impl OdbFixture {
         remove_if_exists(&self.component_path(database, pack, component))?;
         if component == Component::Index {
             self.corrupt_indices.remove(&(database, pack));
+        } else if component == Component::Pack {
+            self.corrupt_packs.remove(&(database, pack));
         }
         Ok(())
     }
@@ -282,6 +288,16 @@ impl OdbFixture {
             Ok(())
         })?;
         self.corrupt_indices.insert((database, pack));
+        Ok(())
+    }
+
+    pub fn corrupt_pack(&mut self, database: Database, pack: Pack) -> Result<()> {
+        let target = self.component_path(database, pack, Component::Pack);
+        self.atomic_replace(&target, |staged| {
+            fs::write(staged, b"not a pack")?;
+            Ok(())
+        })?;
+        self.corrupt_packs.insert((database, pack));
         Ok(())
     }
 
@@ -327,7 +343,7 @@ impl OdbFixture {
     }
 
     pub fn is_valid(&self) -> bool {
-        if !self.corrupt_indices.is_empty() {
+        if !self.corrupt_indices.is_empty() || !self.corrupt_packs.is_empty() {
             return false;
         }
         Database::ALL.into_iter().all(|database| {
@@ -354,6 +370,7 @@ impl OdbFixture {
                     .filter(move |database| {
                         self.component_path(*database, pack, Component::Pack).is_file()
                             && self.component_path(*database, pack, Component::Index).is_file()
+                            && !self.corrupt_packs.contains(&(*database, pack))
                     })
                     .flat_map(move |_| self.manifest.pack(pack).object_ids.iter().copied())
             })
