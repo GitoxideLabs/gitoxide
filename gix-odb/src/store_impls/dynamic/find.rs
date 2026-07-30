@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ops::Deref, sync::Arc};
 
 use gix_pack::cache::DecodeEntry;
 
@@ -78,8 +78,6 @@ pub(crate) mod error {
 }
 pub use error::Error;
 
-use crate::store::types::PackId;
-
 impl<S> super::Handle<S>
 where
     S: Deref<Target = super::Store> + Clone,
@@ -113,38 +111,46 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                    let mut index_to_retain =
+                        matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable))
+                            .then(|| index.clone());
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
                         index_file,
                         pack: possibly_pack,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)
                     {
-                        let pack = match possibly_pack {
+                        let pack_arc = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker)? {
+                            None => match self.store.load_pack(slot, slot_id, pack_index, &index_file, marker)? {
                                 Some(pack) => {
                                     *possibly_pack = Some(pack);
-                                    possibly_pack.as_deref().expect("just put it in")
+                                    possibly_pack.as_mut().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker))? {
+                                    match self.store.load_one_index(self.index_ctx(marker))? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return Ok(None);
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
                         };
+                        if let Some(index) = index_to_retain.as_mut() {
+                            index.set_pack(pack_index, Arc::clone(pack_arc));
+                        }
+                        let pack = pack_arc.as_ref();
                         let entry = pack.entry(pack_offset)?;
                         let header_size = entry.header_size();
                         let res = pack.decode_entry(
@@ -210,11 +216,12 @@ where
                                 let handle::index_lookup::Outcome {
                                     object_index:
                                         handle::IndexForObjectInPack {
-                                            pack_id: _,
+                                            pack_index: _,
                                             pack_offset,
                                         },
                                     index_file,
                                     pack: possibly_pack,
+                                    ..
                                 } = match snapshot.indices[idx].lookup(id) {
                                     Some(res) => res,
                                     None => {
@@ -278,6 +285,13 @@ where
                             }
                             Err(err) => Err(err),
                         }?;
+                        if matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)) {
+                            let pack_id = res.1.as_ref().expect("packed objects have a location").pack_id;
+                            let mut retained = self.retained_indices.borrow_mut();
+                            if !retained.iter().any(|known| known.contains_pack(pack_id)) {
+                                retained.push(index_to_retain.expect("stable handles clone their index"));
+                            }
+                        }
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -374,34 +388,39 @@ where
         'outer: loop {
             {
                 let marker = snapshot.marker;
-                for (idx, index) in snapshot.indices.iter_mut().enumerate() {
+                'indices: for (idx, index) in snapshot.indices.iter_mut().enumerate() {
                     if let Some(handle::index_lookup::Outcome {
-                        object_index: handle::IndexForObjectInPack { pack_id, pack_offset },
-                        index_file: _,
+                        object_index:
+                            handle::IndexForObjectInPack {
+                                pack_index,
+                                pack_offset,
+                            },
+                        index_file,
                         pack: possibly_pack,
+                        slot,
+                        slot_id,
                     }) = index.lookup(id)
                     {
                         let pack = match possibly_pack {
                             Some(pack) => pack,
-                            None => match self.store.load_pack(pack_id, marker).ok()? {
+                            None => match self
+                                .store
+                                .load_pack(slot, slot_id, pack_index, &index_file, marker)
+                                .ok()?
+                            {
                                 Some(pack) => {
                                     *possibly_pack = Some(pack);
                                     possibly_pack.as_deref().expect("just put it in")
                                 }
                                 None => {
                                     // The pack wasn't available anymore so we are supposed to try another round with a fresh index
-                                    match self.store.load_one_index(self.index_ctx(snapshot.marker)).ok()? {
+                                    match self.store.load_one_index(self.index_ctx(marker)).ok()? {
                                         Some(new_snapshot) => {
                                             *snapshot = new_snapshot;
                                             self.clear_cache();
                                             continue 'outer;
                                         }
-                                        None => {
-                                            // nothing new in the index, kind of unexpected to not have a pack but to also
-                                            // to have no new index yet. We set the new index before removing any slots, so
-                                            // this should be observable.
-                                            return None;
-                                        }
+                                        None => continue 'indices,
                                     }
                                 }
                             },
@@ -414,8 +433,6 @@ where
                             return None;
                         }
                         buf.resize(size, 0);
-                        assert_eq!(pack.id, pack_id.to_intrinsic_pack_id(), "both ids must always match");
-
                         let res = pack
                             .decompress_entry(&entry, &mut inflate, buf)
                             .ok()
@@ -424,6 +441,13 @@ where
                                 pack_offset,
                                 entry_size: entry.header_size() + entry_size_past_header,
                             });
+                        if let Some(location) = &res {
+                            let pack_id = location.pack_id;
+                            let mut retained = self.retained_indices.borrow_mut();
+                            if !retained.iter().any(|known| known.contains_pack(pack_id)) {
+                                retained.push(index.clone());
+                            }
+                        }
 
                         if idx != 0 {
                             snapshot.indices.swap(0, idx);
@@ -446,11 +470,15 @@ where
             matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)),
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
-        let pack_id = PackId::from_intrinsic_pack_id(pack_id);
         loop {
             let snapshot = self.snapshot.borrow();
             {
                 for index in &snapshot.indices {
+                    if let Some(iter) = index.iter(pack_id) {
+                        return Some(iter.map(|e| (e.pack_offset, e.oid)).collect());
+                    }
+                }
+                for index in self.retained_indices.borrow().iter() {
                     if let Some(iter) = index.iter(pack_id) {
                         return Some(iter.map(|e| (e.pack_offset, e.oid)).collect());
                     }
@@ -470,40 +498,28 @@ where
             matches!(self.token.as_ref(), Some(handle::Mode::KeepDeletedPacksAvailable)),
             "BUG: handle must be configured to `prevent_pack_unload()` before using this method"
         );
-        let pack_id = PackId::from_intrinsic_pack_id(location.pack_id);
-        let mut snapshot = self.snapshot.borrow_mut();
-        let marker = snapshot.marker;
-        loop {
-            {
-                for index in &mut snapshot.indices {
-                    if let Some(possibly_pack) = index.pack(pack_id) {
-                        let pack = match possibly_pack {
-                            Some(pack) => pack,
-                            None => {
-                                let pack = self.store.load_pack(pack_id, marker).ok()?.expect(
-                                "BUG: pack must exist from previous call to location_by_oid() and must not be unloaded",
-                            );
-                                *possibly_pack = Some(pack);
-                                possibly_pack.as_deref().expect("just put it in")
-                            }
-                        };
-                        return pack
-                            .entry_slice(location.entry_range(location.pack_offset))
-                            .map(|data| gix_pack::find::Entry {
-                                data: data.to_owned(),
-                                version: pack.version(),
-                            });
-                    }
-                }
+        for index in self.retained_indices.borrow_mut().iter_mut() {
+            if let Some(pack) = index.pack(location.pack_id) {
+                return pack
+                    .entry_slice(location.entry_range(location.pack_offset))
+                    .map(|data| gix_pack::find::Entry {
+                        data: data.to_owned(),
+                        version: pack.version(),
+                    });
             }
-
-            snapshot.indices.insert(
-                0,
-                self.store
-                    .index_by_id(pack_id, marker)
-                    .expect("BUG: index must always be present, must not be unloaded or overwritten"),
-            );
         }
+
+        for index in &mut self.snapshot.borrow_mut().indices {
+            if let Some(pack) = index.pack(location.pack_id) {
+                return pack
+                    .entry_slice(location.entry_range(location.pack_offset))
+                    .map(|data| gix_pack::find::Entry {
+                        data: data.to_owned(),
+                        version: pack.version(),
+                    });
+            }
+        }
+        None
     }
 }
 
