@@ -167,6 +167,8 @@ pub struct Store {
     pub(crate) num_disk_state_consolidations_completed: AtomicUsize,
     /// The most recent failed consolidation, shared only with callers that were already waiting for it.
     pub(crate) last_disk_state_consolidation_error: parking_lot::Mutex<Option<(usize, Arc<store::load_index::Error>)>>,
+    /// The last successful post-initialization disk-state consolidation, used to throttle miss-triggered refreshes.
+    pub(crate) last_successful_disk_state_consolidation: parking_lot::Mutex<Option<std::time::Instant>>,
     /// If true, we are allowed to use multi-pack indices and they must have the `object_hash` or be ignored.
     use_multi_pack_index: bool,
     /// The hash kind to use for some operations
