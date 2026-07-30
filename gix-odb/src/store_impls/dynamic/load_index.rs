@@ -59,6 +59,7 @@ impl super::Store {
         let mut snapshot = self.collect_snapshot();
         while let Some(new_snapshot) = self.load_one_index(IndexCtx {
             refresh_mode: RefreshMode::Never,
+            force_refresh: false,
             marker: snapshot.marker,
             loose_compression: self.loose_compression,
         })? {
@@ -73,6 +74,7 @@ impl super::Store {
         &self,
         IndexCtx {
             refresh_mode,
+            force_refresh,
             marker,
             loose_compression,
         }: IndexCtx,
@@ -99,14 +101,32 @@ impl super::Store {
                 // …and if that didn't yield anything new consider refreshing our disk state.
                 match refresh_mode {
                     RefreshMode::Never => Ok(None),
-                    RefreshMode::AfterAllIndicesLoaded => self.consolidate_with_disk_state(
-                        false, /* needs init */
-                        true,  /* load one new index */
-                        loose_compression,
-                    ),
+                    RefreshMode::AfterDuration(refresh_after)
+                        if !force_refresh && self.last_refresh_is_younger_than(refresh_after) =>
+                    {
+                        Ok(None)
+                    }
+                    RefreshMode::AfterAllIndicesLoaded | RefreshMode::AfterDuration(_) => {
+                        self.consolidate_with_disk_state(
+                            false, /* needs init */
+                            true,  /* load one new index */
+                            loose_compression,
+                        )
+                    }
                 }
             }
         }
+    }
+
+    fn last_refresh_is_younger_than(&self, max_age: std::time::Duration) -> bool {
+        let now = self.now();
+        self.last_successful_disk_state_consolidation
+            .lock()
+            .as_ref()
+            .is_some_and(|last| {
+                now.checked_duration_since(*last)
+                    .is_none_or(|elapsed| elapsed < max_age)
+            })
     }
 
     /// load a new index (if not yet loaded), and return true if one was indeed loaded (leading to a `state_id()` change) of the current index.
@@ -539,6 +559,9 @@ impl super::Store {
             }
             Some(self.collect_snapshot())
         };
+        if !was_uninitialized {
+            *self.last_successful_disk_state_consolidation.lock() = Some(self.now());
+        }
         self.finish_refresh(current_completed_refreshes, Ok(snapshot))
     }
 

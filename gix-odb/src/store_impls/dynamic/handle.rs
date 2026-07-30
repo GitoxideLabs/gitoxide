@@ -334,6 +334,7 @@ where
     pub(crate) fn index_ctx(&self, marker: types::SlotIndexMarker) -> super::IndexCtx {
         super::IndexCtx {
             refresh_mode: self.refresh,
+            force_refresh: false,
             marker,
             loose_compression: self.loose_compression,
         }

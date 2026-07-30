@@ -47,6 +47,13 @@ pub enum IndexState {
 }
 
 impl Store {
+    /// Mark the known disk state stale after the caller changed the object database.
+    ///
+    /// This only makes the next miss eligible for a refresh; it performs no I/O.
+    pub fn mark_disk_state_stale(&self) {
+        *self.last_successful_disk_state_consolidation.lock() = None;
+    }
+
     /// Return information about all files known to us as well as their loading state.
     ///
     /// Note that this call is expensive as it gathers additional information about loose object databases.
