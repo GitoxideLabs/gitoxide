@@ -2250,6 +2250,7 @@ dependencies = [
  "parking_lot",
  "pretty_assertions",
  "serde",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
 ]
