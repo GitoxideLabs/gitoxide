@@ -7,7 +7,7 @@ use std::{
 use bstr::ByteSlice;
 use gix_object::{FindExt, Write, tree::EntryMode};
 
-use super::{basic_merge_options, new_blob_merge_platform, new_diff_resource_cache};
+use super::{assert_no_unknown_conflicts, basic_merge_options, new_blob_merge_platform, new_diff_resource_cache};
 
 type Tree = BTreeMap<String, (EntryMode, gix_hash::ObjectId)>;
 
@@ -177,6 +177,7 @@ fn records_status_quo_sha1() -> crate::Result {
                 options.clone(),
             )?
             .tree_merge;
+            assert_no_unknown_conflicts(&outcome, &format!("{ours_label} + {theirs_label}"));
             let conflicted = outcome.has_unresolved_conflicts(git_kind);
             let conflicted_with_forced_resolution = outcome.has_unresolved_conflicts(forced_resolution);
             let failed_on_first_unresolved_conflict = outcome.failed_on_first_unresolved_conflict;
@@ -848,6 +849,239 @@ fn records_status_quo_sha1() -> crate::Result {
         report,
         expected,
         "Cartesian merge behavior changed. Review the report, then set \
+         GIX_MERGE_UPDATE_CARTESIAN_BASELINE=1 to accept the new status quo."
+    );
+    Ok(())
+}
+
+/// Exercise the same finite state machine with gitlinks, including add/add, rename, delete, and file/directory
+/// interactions. Unlike the blob matrix, this primarily protects structured conflict classification: modify/modify
+/// reports [`SubmoduleMerge`](gix_merge::tree::ResolutionFailure::SubmoduleMerge) for a possible graph-aware follow-up,
+/// while collisions without a base at the destination report
+/// [`SubmoduleAddAdd`](gix_merge::tree::ResolutionFailure::SubmoduleAddAdd).
+///
+/// This matrix deliberately does not test whether one gitlink commit is reachable from another: the tree merger cannot
+/// load the repository behind a submodule today.
+/// TODO: Allow callers to provide a callback with enough submodule-repository context to perform reachability checks.
+#[test]
+fn records_submodule_status_quo_sha1() -> crate::Result {
+    if gix_testtools::object_hash() != gix_hash::Kind::Sha1 {
+        return Ok(());
+    }
+
+    let root = gix_testtools::scripted_fixture_read_only("tree-cartesian-baseline.sh")?;
+    let repo = root.join("matrix-submodule");
+    let cases = std::fs::read_to_string(repo.join("cases.tsv"))?
+        .lines()
+        .map(parse_case)
+        .collect::<Vec<_>>();
+    let operations = cases
+        .iter()
+        .flat_map(|case| [&case.left_operation, &case.right_operation])
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        operations.len(),
+        14,
+        "the submodule fixture mirrors all fourteen states"
+    );
+    assert_eq!(
+        cases.len(),
+        operations.len() * (operations.len() + 1) / 2,
+        "the submodule fixture must contain the full unordered Cartesian product"
+    );
+
+    let odb = gix_odb::at_opts(
+        repo.join(".git/objects"),
+        Vec::new(),
+        gix_odb::store::init::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )?;
+    let objects = gix_odb::memory::Proxy::new(odb, gix_hash::Kind::Sha1);
+    let mut graph = gix_revwalk::Graph::new(&objects, None);
+    let mut diff_resource_cache = new_diff_resource_cache(&repo);
+    let mut blob_merge = new_blob_merge_platform(&repo, 100);
+    let default_options = basic_merge_options();
+    let mut ours_options = default_options.clone();
+    ours_options.tree_merge.tree_conflicts = Some(gix_merge::tree::ResolveWith::Ours);
+    let mut ancestor_options = default_options.clone();
+    ancestor_options.tree_merge.tree_conflicts = Some(gix_merge::tree::ResolveWith::Ancestor);
+    let unresolved = gix_merge::tree::TreatAsUnresolved::git();
+
+    let mut exact_agreement = 0;
+    let mut shape_agreement = 0;
+    let mut conflict_agreement = 0;
+    let mut default_submodule_merges = 0;
+    let mut ours_submodule_merges = 0;
+    let mut ancestor_submodule_merges = 0;
+    let mut default_submodule_add_adds = 0;
+    let mut ours_submodule_add_adds = 0;
+    let mut ancestor_submodule_add_adds = 0;
+    let mut implementation_differences = Vec::new();
+
+    for case in &cases {
+        let git_forward = git_result(&repo, &case.forward_file, case.git_forward_conflicted, &objects)?;
+        let git_reverse = git_result(&repo, &case.reverse_file, case.git_reverse_conflicted, &objects)?;
+        for (ours, theirs, ours_label, theirs_label, git) in [
+            (
+                case.left_commit,
+                case.right_commit,
+                format!("A-{}", case.left_operation),
+                format!("B-{}", case.right_operation),
+                &git_forward,
+            ),
+            (
+                case.right_commit,
+                case.left_commit,
+                format!("B-{}", case.right_operation),
+                format!("A-{}", case.left_operation),
+                &git_reverse,
+            ),
+        ] {
+            for (policy, options) in [
+                ("default", &default_options),
+                ("ours", &ours_options),
+                ("ancestor", &ancestor_options),
+            ] {
+                let mut outcome = gix_merge::commit(
+                    ours,
+                    theirs,
+                    gix_merge::blob::builtin_driver::text::Labels {
+                        ancestor: Some("BASE".into()),
+                        current: Some(ours_label.as_str().into()),
+                        other: Some(theirs_label.as_str().into()),
+                    },
+                    &mut graph,
+                    &mut diff_resource_cache,
+                    &mut blob_merge,
+                    &objects,
+                    &mut |id| id.to_hex_with_len(7).to_string(),
+                    options.clone(),
+                )?
+                .tree_merge;
+                let context = format!("{ours_label} + {theirs_label} ({policy})");
+                assert_no_unknown_conflicts(&outcome, &context);
+                let submodule_merges = outcome
+                    .conflicts
+                    .iter()
+                    .filter(|conflict| {
+                        matches!(
+                            (*conflict).clone().into_parts_by_resolution().0,
+                            Err(gix_merge::tree::ResolutionFailure::SubmoduleMerge)
+                                | Ok(gix_merge::tree::Resolution::Forced(
+                                    gix_merge::tree::ResolutionFailure::SubmoduleMerge
+                                ))
+                        )
+                    })
+                    .count();
+                let submodule_add_adds = outcome
+                    .conflicts
+                    .iter()
+                    .filter(|conflict| {
+                        matches!(
+                            (*conflict).clone().into_parts_by_resolution().0,
+                            Err(gix_merge::tree::ResolutionFailure::SubmoduleAddAdd)
+                                | Ok(gix_merge::tree::Resolution::Forced(
+                                    gix_merge::tree::ResolutionFailure::SubmoduleAddAdd
+                                ))
+                        )
+                    })
+                    .count();
+                match policy {
+                    "default" => {
+                        default_submodule_merges += submodule_merges;
+                        default_submodule_add_adds += submodule_add_adds;
+                    }
+                    "ours" => {
+                        ours_submodule_merges += submodule_merges;
+                        ours_submodule_add_adds += submodule_add_adds;
+                    }
+                    "ancestor" => {
+                        ancestor_submodule_merges += submodule_merges;
+                        ancestor_submodule_add_adds += submodule_add_adds;
+                    }
+                    _ => unreachable!("all policies are listed above"),
+                }
+                let conflicted = outcome.has_unresolved_conflicts(unresolved);
+                let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
+                let tree = flatten_tree(tree_id, &objects)?;
+                if policy == "default" {
+                    exact_agreement += usize::from(tree_id == git.tree_id);
+                    shape_agreement += usize::from(same_shape(&tree, &git.tree));
+                    conflict_agreement += usize::from(conflicted == git.conflicted);
+                    if tree_id != git.tree_id || conflicted != git.conflicted {
+                        implementation_differences.push(context);
+                    }
+                }
+            }
+        }
+    }
+    let directional_merges = cases.len() * 2;
+    let policy_merges = directional_merges * 3;
+    assert_eq!(
+        (exact_agreement, shape_agreement, conflict_agreement),
+        (directional_merges, directional_merges, directional_merges),
+        "all tree-only gitlink cases should agree with Git"
+    );
+    let mut report = String::new();
+    writeln!(report, "# Cartesian submodule tree-merge status quo")?;
+    writeln!(report)?;
+    writeln!(
+        report,
+        "Model: 14 atomic gitlink states, {} unordered pairs, {directional_merges} directional merges.",
+        cases.len()
+    )?;
+    writeln!(
+        report,
+        "Policies exercised: default, ours, ancestor ({policy_merges} merges)."
+    )?;
+    writeln!(report, "Unknown classifications: 0 (asserted).")?;
+    writeln!(
+        report,
+        "Git/gix exact tree agreement: {exact_agreement}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "Git/gix path-and-mode agreement: {shape_agreement}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "Git/gix unresolved-conflict agreement: {conflict_agreement}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "Default SubmoduleMerge classifications: {default_submodule_merges}"
+    )?;
+    writeln!(report, "Ours SubmoduleMerge classifications: {ours_submodule_merges}")?;
+    writeln!(
+        report,
+        "Ancestor SubmoduleMerge classifications: {ancestor_submodule_merges}"
+    )?;
+    writeln!(
+        report,
+        "Default SubmoduleAddAdd classifications: {default_submodule_add_adds}"
+    )?;
+    writeln!(
+        report,
+        "Ours SubmoduleAddAdd classifications: {ours_submodule_add_adds}"
+    )?;
+    writeln!(
+        report,
+        "Ancestor SubmoduleAddAdd classifications: {ancestor_submodule_add_adds}"
+    )?;
+    write_list(&mut report, "Git/gix differences", &implementation_differences)?;
+
+    let baseline = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/merge/tree/cartesian-submodule-baseline.txt");
+    if std::env::var_os("GIX_MERGE_UPDATE_CARTESIAN_BASELINE").is_some() {
+        std::fs::write(&baseline, report)?;
+        return Ok(());
+    }
+    let expected = std::fs::read_to_string(&baseline)?.replace("\r\n", "\n");
+    pretty_assertions::assert_str_eq!(
+        report,
+        expected,
+        "Cartesian submodule behavior changed. Review the report, then set \
          GIX_MERGE_UPDATE_CARTESIAN_BASELINE=1 to accept the new status quo."
     );
     Ok(())

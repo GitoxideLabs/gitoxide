@@ -73,6 +73,63 @@ fn rename_by_id() -> crate::Result {
 }
 
 #[test]
+fn gitlinks_are_renamed_only_by_id() {
+    let id = hex_to_id(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    let other_id = hex_to_id(
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    );
+    let gitlink = |id, kind| Change {
+        id,
+        kind,
+        mode: EntryKind::Commit.into(),
+        relation: None,
+    };
+
+    let mut tracker = util::new_tracker(Default::default());
+    assert!(
+        tracker
+            .try_push_change(gitlink(id, ChangeKind::Deletion), "old".into())
+            .is_none()
+    );
+    assert!(
+        tracker
+            .try_push_change(gitlink(id, ChangeKind::Addition), "new".into())
+            .is_none()
+    );
+    let mut matched = false;
+    util::assert_emit(&mut tracker, |destination, source| {
+        assert_eq!(destination.location, "new");
+        assert_eq!(source.expect("equal gitlink IDs form an exact rename").location, "old");
+        matched = true;
+        std::ops::ControlFlow::Continue(())
+    });
+    assert!(matched, "the exact gitlink rename was emitted");
+
+    let mut tracker = util::new_tracker(Default::default());
+    assert!(
+        tracker
+            .try_push_change(gitlink(id, ChangeKind::Deletion), "old".into())
+            .is_none()
+    );
+    assert!(
+        tracker
+            .try_push_change(gitlink(other_id, ChangeKind::Addition), "new".into())
+            .is_none()
+    );
+    let mut unmatched = 0;
+    util::assert_emit(&mut tracker, |_destination, source| {
+        assert!(source.is_none(), "gitlink IDs are never compared by blob similarity");
+        unmatched += 1;
+        std::ops::ControlFlow::Continue(())
+    });
+    assert_eq!(unmatched, 2, "both unrelated gitlink changes remain unmatched");
+}
+
+#[test]
 fn copy_by_similarity_reports_limit_if_encountered() -> crate::Result {
     let rewrites = Rewrites {
         copies: Some(Copies {
@@ -616,19 +673,17 @@ fn rename_by_similarity_prefers_stronger_match_over_same_filename_match() -> cra
 #[test]
 fn directories_without_relation_are_ignored() -> crate::Result {
     let mut track = util::new_tracker(Default::default());
-    for mode in [EntryKind::Tree, EntryKind::Commit] {
-        let tree_without_relation = Change {
-            id: *NULL_ID,
-            kind: ChangeKind::Deletion,
-            mode: mode.into(),
-            relation: None,
-        };
-        assert_eq!(
-            track.try_push_change(tree_without_relation, "dir".into()),
-            Some(tree_without_relation),
-            "trees and submodules are ignored, particularly when they have no relation"
-        );
-    }
+    let tree_without_relation = Change {
+        id: *NULL_ID,
+        kind: ChangeKind::Deletion,
+        mode: EntryKind::Tree.into(),
+        relation: None,
+    };
+    assert_eq!(
+        track.try_push_change(tree_without_relation, "dir".into()),
+        Some(tree_without_relation),
+        "trees without a relation are ignored"
+    );
     Ok(())
 }
 

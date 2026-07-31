@@ -50,23 +50,28 @@ fn tree_merge(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("tree-merge/mixed-structural-cases");
     group.throughput(Throughput::Elements(CASE_COUNT));
-    group.bench_function("merge", |b| {
-        b.iter_batched(
-            || options.clone(),
-            |options| {
-                black_box(merge(
-                    &scenario,
-                    scenario.ours,
-                    scenario.theirs,
-                    &mut diff_state,
-                    &mut diff_resource_cache,
-                    &mut blob_merge,
-                    options,
-                ))
-            },
-            BatchSize::SmallInput,
-        );
-    });
+    for (name, ours, theirs) in [
+        ("ours-theirs", scenario.ours, scenario.theirs),
+        ("theirs-ours", scenario.theirs, scenario.ours),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter_batched(
+                || options.clone(),
+                |options| {
+                    black_box(merge(
+                        &scenario,
+                        ours,
+                        theirs,
+                        &mut diff_state,
+                        &mut diff_resource_cache,
+                        &mut blob_merge,
+                        options,
+                    ))
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
     group.finish();
 }
 

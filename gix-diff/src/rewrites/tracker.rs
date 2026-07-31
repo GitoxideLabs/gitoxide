@@ -75,7 +75,7 @@ impl<T: Change> Item<T> {
         use EntryKind::*;
         matches!(
             (other.kind(), self.change.entry_mode().kind()),
-            (Blob | BlobExecutable, Blob | BlobExecutable) | (Link, Link) | (Tree, Tree)
+            (Blob | BlobExecutable, Blob | BlobExecutable) | (Link, Link) | (Tree, Tree) | (Commit, Commit)
         )
     }
 
@@ -173,9 +173,6 @@ impl<T: Change> Tracker<T> {
         }
 
         let entry_kind = change.entry_mode().kind();
-        if entry_kind == EntryKind::Commit {
-            return Some(change);
-        }
         let relation = change
             .relation()
             .filter(|_| matches!(change_kind, ChangeKind::Addition | ChangeKind::Deletion));
@@ -709,7 +706,8 @@ fn find_match<'a, T: Change>(
     num_checks: &mut usize,
 ) -> Result<Option<SourceTuple<'a, T>>, emit::Error> {
     let (item_id, item_mode) = item.change.id_and_entry_mode();
-    if needs_exact_match(percentage) || item_mode.is_link() {
+    // Symlinks and gitlinks only participate in exact-ID matching; neither has meaningful blob similarity here.
+    if needs_exact_match(percentage) || item_mode.is_link() || item_mode.is_commit() {
         let first_idx = items.partition_point(|a| a.change.id() < item_id);
         let range = items.get(first_idx..).map(|slice| {
             let end = slice
