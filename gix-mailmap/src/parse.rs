@@ -44,13 +44,11 @@ impl<'a> Iterator for Lines<'a> {
 
 fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
     let (name1, email1, rest) = parse_name_and_email(line, line_number)?;
-    let (name2, email2, rest) = parse_name_and_email(rest, line_number)?;
-    if !rest.trim().is_empty() {
-        return Err(ValidationError::new_with_input(
-            format!("Line {line_number} has too many names or emails, or none at all"),
-            line,
-        )
-        .raise());
+    let (name2, email2, _) = parse_name_and_email(rest, line_number)?;
+    if email1.is_none() {
+        return Err(
+            ValidationError::new_with_input(format!("Line {line_number} does not contain an email"), line).raise(),
+        );
     }
     Ok(match (name1, email1, name2, email2) {
         (Some(proper_name), Some(commit_email), None, None) => Entry::change_name_by_email(proper_name, commit_email),

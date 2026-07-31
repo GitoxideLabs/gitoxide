@@ -85,6 +85,25 @@ fn valid_entries() {
 }
 
 #[test]
+fn trailing_content_after_a_complete_mapping_is_ignored() {
+    assert_eq!(
+        line("Philip Oakley <philipoakley@iee.email> <philipoakley@iee.org> # secondary <philipoakley@dunelm.org.uk>"),
+        Entry::change_name_and_email_by_email("Philip Oakley", "philipoakley@iee.email", "philipoakley@iee.org"),
+        "only the first two names and emails are used to build the mapping"
+    );
+    assert_eq!(
+        line("Satya Priya <quic_skakitap@quicinc.com> <quic_c_skakit@quicinc.com> <skakit@codeaurora.org>"),
+        Entry::change_name_and_email_by_email("Satya Priya", "quic_skakitap@quicinc.com", "quic_c_skakit@quicinc.com"),
+        "a third email does not invalidate the line"
+    );
+    assert_eq!(
+        line("Dana L. How <danahow@gmail.com> Dana How"),
+        Entry::change_name_by_email("Dana L. How", "danahow@gmail.com"),
+        "a trailing name without an email is not a mapping source and is dropped"
+    );
+}
+
+#[test]
 fn error_if_there_is_just_a_name() {
     let err = try_line("just a name").unwrap_err();
     let err_str = err.to_string();
