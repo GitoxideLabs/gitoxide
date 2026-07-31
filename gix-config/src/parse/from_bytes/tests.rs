@@ -1200,25 +1200,33 @@ mod value {
     #[test]
     fn continuation_into_an_empty_line_completes_the_value() {
         let (remaining, events) = parse(b"hello\\\n").unwrap();
-        assert_eq!(remaining, b"");
         assert_eq!(
             events,
-            vec![value_not_done_event("hello"), newline_event(), value_done_event("")],
-            "Git reports `hello`, so the empty continuation line must terminate the accumulated value"
+            vec![value_not_done_event("hello"), newline_event(), value_done_event("")]
+        );
+        assert_eq!(
+            remaining, b"",
+            "the newline belongs to the continuation value, leaving nothing else"
         );
 
         let (remaining, events) = parse(b"hello\\\n\nb = c").unwrap();
-        assert_eq!(remaining, b"\nb = c");
         assert_eq!(
             events,
             vec![value_not_done_event("hello"), newline_event(), value_done_event("")]
         );
+        assert_eq!(
+            remaining, b"\nb = c",
+            "the first newline belongs to the value, the second is left alone"
+        );
 
         let (remaining, events) = parse(b"hello\\\n; comment").unwrap();
-        assert_eq!(remaining, b"; comment");
         assert_eq!(
             events,
             vec![value_not_done_event("hello"), newline_event(), value_done_event("")]
+        );
+        assert_eq!(
+            remaining, b"; comment",
+            "everything beyond the newline is in the remainder, no matter the newlines"
         );
     }
 

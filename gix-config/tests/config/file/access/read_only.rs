@@ -469,11 +469,19 @@ fn multi_line_value_with_empty_continuation_line() {
     ] {
         let file = File::try_from(config).unwrap();
         assert_eq!(
-            file.raw_value("core.k").unwrap(),
-            "abc",
-            "Git reports `abc` for {config:?}, as a continuation line that is empty ends the value"
+            file.raw_values("core.k").unwrap(),
+            vec![bstring("abc")],
+            "Git reports only `abc` for {config:?}, as a continuation line that is empty ends the value"
         );
     }
+
+    let config = "[core]\n\tk = abc\\\n\tk = def\n";
+    let file = File::try_from(config).unwrap();
+    assert_eq!(
+        file.raw_value("core.k").unwrap(),
+        bstring("abc\tk = def"),
+        "Git reports one value, `abc\tk = def`, for {config:?}, as the next line continues the first value"
+    );
 }
 
 #[test]
