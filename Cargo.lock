@@ -2171,6 +2171,7 @@ name = "gix-odb"
 version = "0.83.0"
 dependencies = [
  "arc-swap",
+ "criterion",
  "crossbeam-channel",
  "document-features",
  "filetime",
