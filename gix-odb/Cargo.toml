@@ -15,6 +15,11 @@ autotests = false
 [lib]
 doctest = true
 
+[[bench]]
+name = "dynamic"
+harness = false
+required-features = ["sha1", "parallel"]
+
 [features]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1", "gix-pack/sha1"]
@@ -57,6 +62,7 @@ filetime = "0.2.29"
 maplit = "1.0.2"
 crossbeam-channel = "0.5.15"
 tar = { version = "0.4.46", default-features = false }
+criterion = "0.8.2"
 
 [[test]]
 name = "odb"
