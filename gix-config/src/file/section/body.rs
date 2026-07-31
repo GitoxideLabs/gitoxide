@@ -213,7 +213,11 @@ impl BodyData {
             // is included in the range
             let value_range = value_range.start..value_range.end + 1;
             let key_range = key_start..value_range.end;
-            (key_range, (value_range.start != key_start + 1).then_some(value_range))
+            let has_separator = self.0[key_start + 1..]
+                .iter()
+                .take_while(|e| matches!(e, Event::Whitespace(_) | Event::KeyValueSeparator))
+                .any(|e| matches!(e, Event::KeyValueSeparator));
+            (key_range, has_separator.then_some(value_range))
         })
     }
 

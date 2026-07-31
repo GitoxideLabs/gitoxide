@@ -496,6 +496,47 @@ fn overrides_with_implicit_booleans_work_in_single_section() {
 }
 
 #[test]
+fn implicit_booleans_may_be_followed_by_whitespace() -> crate::Result {
+    for config in [
+        "[a]\n\tb \n",
+        "[a]\n\tb\t\n",
+        "[a]\n\tb  \n",
+        "[a]\n\tb \t \n",
+        "[a]\n\tb ",
+        "[a]\n\tb \r\n",
+        "[a]\n\tb\n",
+    ] {
+        let file = File::try_from(config)?;
+        assert_eq!(
+            file.boolean("a.b"),
+            Ok(Some(true)),
+            "Git sees no separator in {config:?}, so the value is an implicit boolean and thus true"
+        );
+        assert_eq!(
+            file.string("a.b"),
+            None,
+            "implicit booleans have no value of their own, no matter the whitespace that follows them"
+        );
+    }
+
+    for config in ["[a]\n\tb =\n", "[a]\n\tb = \n", "[a]\n\tb=\"\"\n", "[a]\n\tb ="] {
+        let file = File::try_from(config)?;
+        assert_eq!(
+            file.boolean("a.b"),
+            Ok(Some(false)),
+            "a separator in {config:?} makes the value explicitly empty, and an empty value is false"
+        );
+        assert_eq!(
+            file.string("a.b"),
+            Some(bstring("")),
+            "an explicitly empty value is the empty string"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
 fn overrides_with_implicit_booleans_work_across_sections() {
     let config = r#"
         [a]
