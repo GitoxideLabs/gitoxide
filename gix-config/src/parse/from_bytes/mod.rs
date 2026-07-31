@@ -382,7 +382,11 @@ fn value(backing: &[u8], i: &mut &[u8], dispatch: &mut dyn FnMut(Event)) -> Pars
 
     let end = value_end.unwrap_or(cursor);
     if end == value_start {
-        dispatch(Event::Value(Span::default()));
+        dispatch(if partial_value_found {
+            Event::ValueDone(Span::default())
+        } else {
+            Event::Value(Span::default())
+        });
         *i = &input[cursor..];
         return Ok(());
     }

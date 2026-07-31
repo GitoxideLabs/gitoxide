@@ -1198,6 +1198,31 @@ mod value {
     }
 
     #[test]
+    fn continuation_into_an_empty_line_completes_the_value() {
+        let (remaining, events) = parse(b"hello\\\n").unwrap();
+        assert_eq!(remaining, b"");
+        assert_eq!(
+            events,
+            vec![value_not_done_event("hello"), newline_event(), value_done_event("")],
+            "Git reports `hello`, so the empty continuation line must terminate the accumulated value"
+        );
+
+        let (remaining, events) = parse(b"hello\\\n\nb = c").unwrap();
+        assert_eq!(remaining, b"\nb = c");
+        assert_eq!(
+            events,
+            vec![value_not_done_event("hello"), newline_event(), value_done_event("")]
+        );
+
+        let (remaining, events) = parse(b"hello\\\n; comment").unwrap();
+        assert_eq!(remaining, b"; comment");
+        assert_eq!(
+            events,
+            vec![value_not_done_event("hello"), newline_event(), value_done_event("")]
+        );
+    }
+
+    #[test]
     fn unsupported_escapes_are_rejected() {
         assert!(parse(br"\a").is_err());
         assert!(parse(br"\x").is_err());
