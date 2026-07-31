@@ -2277,6 +2277,7 @@ version = "0.88.0"
 dependencies = [
  "arc-swap",
  "crc32fast",
+ "criterion",
  "crossbeam-channel",
  "document-features",
  "filetime",
