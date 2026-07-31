@@ -473,5 +473,410 @@ fn new_blob_merge_platform() -> gix_merge::blob::Platform {
     )
 }
 
-criterion_group!(benches, tree_merge);
+mod linux {
+    use std::{fmt::Write as _, hint::black_box, path::Path};
+
+    use criterion::{BatchSize, Criterion, Throughput};
+    use gix_diff::Rewrites;
+    use gix_hash::ObjectId;
+    use gix_merge::tree::{Options, Outcome, TreatAsUnresolved};
+    use gix_object::{
+        FindExt, Kind, Tree, Write,
+        tree::{Editor, EntryKind},
+    };
+    use gix_worktree::stack::state::attributes;
+
+    type ObjectDb = gix_odb::memory::Proxy<gix_object::find::Never>;
+
+    const ROOT_FILES: usize = 17;
+    const FILES: usize = 94_852;
+    const TREES: usize = 6_202;
+    const MAX_DEPTH: usize = 11;
+    const MODIFICATIONS_PER_SIDE: usize = 4_500;
+    const RENAMES_PER_SIDE: usize = 500;
+    const LARGE_SIDE_CHANGES: u64 = ((MODIFICATIONS_PER_SIDE + RENAMES_PER_SIDE) * 2) as u64;
+    const SPREAD_STEP: usize = 7_919;
+
+    /// Shape of Linux commit 8ba098e6b6ff0db8edf28528d1552be261af30d4.
+    const LINUX_LAYOUT: &[Layout] = &[
+        Layout::new("Documentation", 11_301, 736, 8),
+        Layout::new("LICENSES", 23, 5, 3),
+        Layout::new("arch", 18_521, 931, 7),
+        Layout::new("block", 103, 2, 3),
+        Layout::new("certs", 12, 1, 2),
+        Layout::new("crypto", 184, 4, 3),
+        Layout::new("drivers", 37_497, 2_466, 11),
+        Layout::new("fs", 2_369, 99, 5),
+        Layout::new("include", 6_675, 347, 6),
+        Layout::new("init", 17, 1, 2),
+        Layout::new("io_uring", 89, 1, 2),
+        Layout::new("ipc", 13, 1, 2),
+        Layout::new("kernel", 722, 46, 6),
+        Layout::new("lib", 905, 67, 5),
+        Layout::new("mm", 201, 7, 4),
+        Layout::new("net", 1_906, 88, 4),
+        Layout::new("rust", 585, 56, 5),
+        Layout::new("samples", 292, 49, 4),
+        Layout::new("scripts", 694, 75, 6),
+        Layout::new("security", 308, 24, 4),
+        Layout::new("sound", 2_981, 188, 6),
+        Layout::new("tools", 9_394, 1_000, 10),
+        Layout::new("usr", 23, 5, 4),
+        Layout::new("virt", 20, 3, 3),
+    ];
+
+    #[derive(Clone, Copy)]
+    struct Layout {
+        name: &'static str,
+        files: usize,
+        trees: usize,
+        depth: usize,
+    }
+
+    impl Layout {
+        const fn new(name: &'static str, files: usize, trees: usize, depth: usize) -> Self {
+            Layout {
+                name,
+                files,
+                trees,
+                depth,
+            }
+        }
+    }
+
+    struct File {
+        path: String,
+        id: ObjectId,
+    }
+
+    #[derive(Clone, Copy)]
+    struct Scenario {
+        base: ObjectId,
+        ours: ObjectId,
+        theirs: ObjectId,
+        changes: u64,
+    }
+
+    struct Fixture {
+        objects: ObjectDb,
+        small: Scenario,
+        large: Scenario,
+    }
+
+    pub(super) fn tree_merge(c: &mut Criterion) {
+        let fixture = fixture();
+        for (name, scenario) in [("small-conflict", fixture.small), ("large-change", fixture.large)] {
+            let mut group = c.benchmark_group(format!("tree-merge/linux-sized/{name}"));
+            group.throughput(Throughput::Elements(scenario.changes));
+            for (name, rewrites) in [("without-renames", None), ("with-renames", Some(Rewrites::default()))] {
+                validate(&fixture.objects, scenario, rewrites);
+                let mut diff_state = gix_diff::tree::State::default();
+                let mut diff_resource_cache = new_diff_resource_cache();
+                let mut blob_merge = new_blob_merge_platform();
+                group.bench_function(name, |b| {
+                    b.iter_batched(
+                        || options(rewrites),
+                        |options| {
+                            black_box(merge(
+                                &fixture.objects,
+                                scenario,
+                                &mut diff_state,
+                                &mut diff_resource_cache,
+                                &mut blob_merge,
+                                options,
+                            ))
+                        },
+                        BatchSize::SmallInput,
+                    );
+                });
+            }
+            group.finish();
+        }
+    }
+
+    fn validate(objects: &ObjectDb, scenario: Scenario, rewrites: Option<Rewrites>) {
+        let mut diff_state = gix_diff::tree::State::default();
+        let mut diff_resource_cache = new_diff_resource_cache();
+        let mut blob_merge = new_blob_merge_platform();
+        let outcome = merge(
+            objects,
+            scenario,
+            &mut diff_state,
+            &mut diff_resource_cache,
+            &mut blob_merge,
+            options(rewrites),
+        );
+        assert_eq!(outcome.conflicts.len(), 1, "the workload has exactly one conflict");
+        assert!(
+            outcome.conflicts[0].is_unresolved(TreatAsUnresolved::git()),
+            "the conflicting text edit remains unresolved"
+        );
+    }
+
+    fn merge<'objects>(
+        objects: &'objects ObjectDb,
+        scenario: Scenario,
+        diff_state: &mut gix_diff::tree::State,
+        diff_resource_cache: &mut gix_diff::blob::Platform,
+        blob_merge: &mut gix_merge::blob::Platform,
+        options: Options,
+    ) -> Outcome<'objects> {
+        gix_merge::tree(
+            &scenario.base,
+            &scenario.ours,
+            &scenario.theirs,
+            gix_merge::blob::builtin_driver::text::Labels {
+                ancestor: Some("BASE".into()),
+                current: Some("OURS".into()),
+                other: Some("THEIRS".into()),
+            },
+            objects,
+            |buf| objects.write_buf(Kind::Blob, buf),
+            diff_state,
+            diff_resource_cache,
+            blob_merge,
+            options,
+        )
+        .expect("the synthetic tree merge succeeds")
+    }
+
+    fn fixture() -> Fixture {
+        assert_eq!(
+            ROOT_FILES + LINUX_LAYOUT.iter().map(|layout| layout.files).sum::<usize>(),
+            FILES,
+            "the layout has the Linux file count"
+        );
+        assert_eq!(
+            LINUX_LAYOUT.iter().map(|layout| layout.trees).sum::<usize>(),
+            TREES,
+            "the layout has the Linux tree count"
+        );
+        assert_eq!(
+            LINUX_LAYOUT.iter().map(|layout| layout.depth).max(),
+            Some(MAX_DEPTH),
+            "the layout has the Linux maximum depth"
+        );
+
+        let objects = ObjectDb::new(gix_object::find::Never, gix_hash::Kind::Sha1);
+        let (base, files) = base_tree(&objects);
+        let conflict_idx = files
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, file)| depth(&file.path))
+            .map(|(idx, _)| idx)
+            .expect("the fixture contains files");
+        let small = small_scenario(&objects, base, &files[conflict_idx]);
+        let large = large_scenario(&objects, base, &files, conflict_idx);
+        Fixture { objects, small, large }
+    }
+
+    fn base_tree(objects: &ObjectDb) -> (ObjectId, Vec<File>) {
+        let mut editor = Editor::new(Tree::default(), &gix_object::find::Never, gix_hash::Kind::Sha1);
+        let mut files = Vec::with_capacity(FILES);
+        for idx in 0..ROOT_FILES {
+            add_base_file(objects, &mut editor, &mut files, format!("root-{idx:02}.txt"));
+        }
+        for layout in LINUX_LAYOUT {
+            let directories = directories(*layout);
+            assert_eq!(
+                directories.len(),
+                layout.trees,
+                "{} has the requested tree count",
+                layout.name
+            );
+            for idx in 0..layout.files {
+                let directory = &directories[idx % directories.len()];
+                add_base_file(objects, &mut editor, &mut files, format!("{directory}/file-{idx:05}.c"));
+            }
+        }
+        assert_eq!(files.len(), FILES, "the generated fixture has the requested file count");
+        assert_eq!(
+            files.iter().map(|file| depth(&file.path)).max(),
+            Some(MAX_DEPTH),
+            "the generated fixture has the requested maximum depth"
+        );
+        let id = editor
+            .write(|tree| objects.write(tree))
+            .expect("the base tree can be written");
+        (id, files)
+    }
+
+    fn directories(layout: Layout) -> Vec<String> {
+        let mut directories = Vec::with_capacity(layout.trees);
+        directories.push(layout.name.to_owned());
+
+        let mut deepest = layout.name.to_owned();
+        for level in 2..layout.depth {
+            write!(deepest, "/deep-{level:02}").expect("writing to a string succeeds");
+            directories.push(deepest.clone());
+        }
+
+        while directories.len() < layout.trees {
+            let idx = directories.len();
+            let mut parent = idx.wrapping_mul(37) % directories.len();
+            while depth(&directories[parent]) >= layout.depth - 1 {
+                parent = (parent + 1) % directories.len();
+            }
+            directories.push(format!("{}/dir-{idx:04}", directories[parent]));
+        }
+        directories
+    }
+
+    fn add_base_file(objects: &ObjectDb, editor: &mut Editor<'_>, files: &mut Vec<File>, path: String) {
+        let id = blob(objects, &path, "base");
+        editor
+            .upsert(path.split('/'), EntryKind::Blob, id)
+            .expect("generated paths are valid");
+        files.push(File { path, id });
+    }
+
+    fn small_scenario(objects: &ObjectDb, base: ObjectId, conflict: &File) -> Scenario {
+        let mut ours = editor(objects, base);
+        let mut theirs = editor(objects, base);
+        modify(objects, &mut ours, conflict, "ours");
+        modify(objects, &mut theirs, conflict, "theirs");
+        Scenario {
+            base,
+            ours: write_tree(objects, &mut ours),
+            theirs: write_tree(objects, &mut theirs),
+            changes: 2,
+        }
+    }
+
+    fn large_scenario(objects: &ObjectDb, base: ObjectId, files: &[File], conflict_idx: usize) -> Scenario {
+        let mut ours = editor(objects, base);
+        let mut theirs = editor(objects, base);
+        modify(objects, &mut ours, &files[conflict_idx], "ours");
+        modify(objects, &mut theirs, &files[conflict_idx], "theirs");
+
+        let mut indices = (0..files.len())
+            .map(|idx| idx * SPREAD_STEP % files.len())
+            .filter(|idx| *idx != conflict_idx);
+        for _ in 1..MODIFICATIONS_PER_SIDE {
+            modify(
+                objects,
+                &mut ours,
+                &files[indices.next().expect("enough files for our modifications")],
+                "ours",
+            );
+        }
+        for _ in 1..MODIFICATIONS_PER_SIDE {
+            modify(
+                objects,
+                &mut theirs,
+                &files[indices.next().expect("enough files for their modifications")],
+                "theirs",
+            );
+        }
+        for idx in 0..RENAMES_PER_SIDE {
+            rename(
+                &mut ours,
+                &files[indices.next().expect("enough files for our renames")],
+                &format!("moved/ours/batch-{:02}/file-{idx:04}.c", idx / 50),
+            );
+        }
+        for idx in 0..RENAMES_PER_SIDE {
+            rename(
+                &mut theirs,
+                &files[indices.next().expect("enough files for their renames")],
+                &format!("moved/theirs/batch-{:02}/file-{idx:04}.c", idx / 50),
+            );
+        }
+
+        Scenario {
+            base,
+            ours: write_tree(objects, &mut ours),
+            theirs: write_tree(objects, &mut theirs),
+            changes: LARGE_SIDE_CHANGES,
+        }
+    }
+
+    fn modify(objects: &ObjectDb, editor: &mut Editor<'_>, file: &File, side: &str) {
+        editor
+            .upsert(file.path.split('/'), EntryKind::Blob, blob(objects, &file.path, side))
+            .expect("generated paths are valid");
+    }
+
+    fn rename(editor: &mut Editor<'_>, file: &File, destination: &str) {
+        editor
+            .remove(file.path.split('/'))
+            .expect("the rename source exists")
+            .upsert(destination.split('/'), EntryKind::Blob, file.id)
+            .expect("generated paths are valid");
+    }
+
+    fn blob(objects: &ObjectDb, path: &str, state: &str) -> ObjectId {
+        objects
+            .write_buf(
+                Kind::Blob,
+                format!("path: {path}\nstate: {state}\nstable line\n").as_bytes(),
+            )
+            .expect("in-memory blob writes succeed")
+    }
+
+    fn editor(objects: &ObjectDb, tree: ObjectId) -> Editor<'_> {
+        let mut buf = Vec::new();
+        let root = objects
+            .find_tree(&tree, &mut buf)
+            .expect("the generated base tree exists")
+            .to_owned();
+        Editor::new(root, objects, gix_hash::Kind::Sha1)
+    }
+
+    fn write_tree(objects: &ObjectDb, editor: &mut Editor<'_>) -> ObjectId {
+        editor
+            .write(|tree| objects.write(tree))
+            .expect("the side tree can be written")
+    }
+
+    fn depth(path: &str) -> usize {
+        path.bytes().filter(|byte| *byte == b'/').count() + 1
+    }
+
+    fn options(rewrites: Option<Rewrites>) -> Options {
+        Options {
+            rewrites,
+            ..Default::default()
+        }
+    }
+
+    fn new_diff_resource_cache() -> gix_diff::blob::Platform {
+        gix_diff::blob::Platform::new(
+            Default::default(),
+            gix_diff::blob::Pipeline::new(Default::default(), Default::default(), Vec::new(), Default::default()),
+            Default::default(),
+            gix_worktree::Stack::new(
+                Path::new("gix-merge-benchmark-no-worktree"),
+                gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::default()),
+                Default::default(),
+                Vec::new(),
+                Vec::new(),
+            ),
+        )
+    }
+
+    fn new_blob_merge_platform() -> gix_merge::blob::Platform {
+        let attributes = gix_worktree::Stack::new(
+            Path::new("gix-merge-benchmark-no-worktree"),
+            gix_worktree::stack::State::AttributesStack(gix_worktree::stack::state::Attributes::new(
+                Default::default(),
+                None,
+                attributes::Source::WorktreeThenIdMapping,
+                Default::default(),
+            )),
+            gix_worktree::glob::pattern::Case::Sensitive,
+            Vec::new(),
+            Vec::new(),
+        );
+        gix_merge::blob::Platform::new(
+            gix_merge::blob::Pipeline::new(Default::default(), gix_filter::Pipeline::default(), Default::default()),
+            gix_merge::blob::pipeline::Mode::ToGit,
+            attributes,
+            vec![],
+            Default::default(),
+        )
+    }
+}
+
+criterion_group!(benches, tree_merge, linux::tree_merge);
 criterion_main!(benches);
