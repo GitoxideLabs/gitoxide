@@ -289,31 +289,48 @@ impl Pipeline<'_> {
 
 /// Obtain a list of all configured driver, but ignore those in sections that we don't trust enough.
 fn extract_drivers(repo: &Repository) -> Result<Vec<gix_filter::Driver>, pipeline::options::Error> {
-    repo.config
+    let mut drivers = Vec::<gix_filter::Driver>::new();
+    for section in repo
+        .config
         .resolved
         .sections_by_name("filter")
         .into_iter()
         .flatten()
-        .filter(|s| repo.filter_config_section()(s.meta()))
-        .filter_map(|s| {
-            s.header().subsection_name().map(|name| {
-                Ok(gix_filter::Driver {
+        .filter(|section| repo.filter_config_section()(section.meta()))
+    {
+        let Some(name) = section.header().subsection_name() else {
+            continue;
+        };
+        let driver = match drivers.iter_mut().find(|driver| driver.name == name) {
+            Some(driver) => driver,
+            None => {
+                drivers.push(gix_filter::Driver {
                     name: name.to_owned(),
-                    clean: s.value("clean"),
-                    smudge: s.value("smudge"),
-                    process: s.value("process"),
-                    required: s
-                        .value("required")
-                        .map(|value| gix_config::Boolean::try_from(BStr::new(&value)))
-                        .transpose()
-                        .map_err(|err| pipeline::options::Error::Driver {
-                            name: name.to_owned(),
-                            source: err,
-                        })?
-                        .unwrap_or_default()
-                        .into(),
-                })
-            })
-        })
-        .collect::<Result<Vec<_>, pipeline::options::Error>>()
+                    clean: None,
+                    smudge: None,
+                    process: None,
+                    required: false,
+                });
+                drivers.last_mut().expect("the driver was just added")
+            }
+        };
+        if let Some(value) = section.value("clean") {
+            driver.clean = Some(value);
+        }
+        if let Some(value) = section.value("smudge") {
+            driver.smudge = Some(value);
+        }
+        if let Some(value) = section.value("process") {
+            driver.process = Some(value);
+        }
+        if let Some(value) = section.value("required") {
+            driver.required = gix_config::Boolean::try_from(BStr::new(&value))
+                .map_err(|source| pipeline::options::Error::Driver {
+                    name: name.to_owned(),
+                    source,
+                })?
+                .into();
+        }
+    }
+    Ok(drivers)
 }
