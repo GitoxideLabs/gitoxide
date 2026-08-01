@@ -72,7 +72,11 @@ fn quotes_are_removed_from_partially_quoted_values() {
 
 #[test]
 fn newline_tab_and_backspace_escapes_are_interpreted() {
-    assert_eq!(&*normalize(r"\n\ta\b"), "\n\t");
+    assert_eq!(
+        &*normalize(r"\n\ta\b"),
+        "\n\ta\x08",
+        "`\\b` is the backspace character (0x08), matching git, not a request to delete the preceding character"
+    );
 }
 
 #[test]
