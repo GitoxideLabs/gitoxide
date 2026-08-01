@@ -88,6 +88,28 @@ fn each_nl_is_replaced_with_crnl() -> crate::Result {
 }
 
 #[test]
+fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
+    let mut buf = Vec::new();
+    let changed = eol::convert_to_worktree(
+        b"a\nb\n\x1a",
+        AttributesDigest::TextAutoCrlf,
+        &mut buf,
+        Default::default(),
+    )?;
+    assert!(changed, "the DOS EOF marker doesn't stand in the way of conversion");
+    assert_eq!(buf.as_bstr(), "a\r\nb\r\n\x1a");
+
+    let changed = eol::convert_to_worktree(
+        b"a\nb\n\x1a\x1a",
+        AttributesDigest::TextAutoCrlf,
+        &mut buf,
+        Default::default(),
+    )?;
+    assert!(!changed, "a second marker isn't discounted, so this is binary");
+    Ok(())
+}
+
+#[test]
 fn existing_crnl_are_not_replaced_for_safety_nor_are_lone_cr() -> crate::Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_worktree(
