@@ -116,6 +116,8 @@ impl TryFrom<BString> for Color {
 ///
 /// `git-config` supports the eight standard colors, their bright variants, an
 /// ANSI color code, or a 24-bit hex value prefixed with an octothorpe/hash.
+/// Color names and the `bright` prefix are matched case-insensitively, and
+/// `bright` may only precede one of the eight standard colors.
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum Name {
     /// The `normal` color name.
@@ -210,37 +212,39 @@ impl serde::Serialize for Name {
 impl FromStr for Name {
     type Err = Error;
 
-    fn from_str(mut s: &str) -> Result<Self, Self::Err> {
-        let bright = if let Some(rest) = s.strip_prefix("bright") {
-            s = rest;
-            true
-        } else {
-            false
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        const BASIC: &[(&str, Name, Name)] = &[
+            ("black", Name::Black, Name::BrightBlack),
+            ("red", Name::Red, Name::BrightRed),
+            ("green", Name::Green, Name::BrightGreen),
+            ("yellow", Name::Yellow, Name::BrightYellow),
+            ("blue", Name::Blue, Name::BrightBlue),
+            ("magenta", Name::Magenta, Name::BrightMagenta),
+            ("cyan", Name::Cyan, Name::BrightCyan),
+            ("white", Name::White, Name::BrightWhite),
+        ];
+
+        let (name, bright) = match s.split_at_checked("bright".len()) {
+            Some((prefix, rest)) if prefix.eq_ignore_ascii_case("bright") => (rest, true),
+            _ => (s, false),
         };
 
-        match s {
-            "normal" if !bright => return Ok(Self::Normal),
-            "-1" if !bright => return Ok(Self::Normal),
-            "normal" if bright => return Err(color_err(s)),
-            "default" if !bright => return Ok(Self::Default),
-            "default" if bright => return Err(color_err(s)),
-            "black" if !bright => return Ok(Self::Black),
-            "black" if bright => return Ok(Self::BrightBlack),
-            "red" if !bright => return Ok(Self::Red),
-            "red" if bright => return Ok(Self::BrightRed),
-            "green" if !bright => return Ok(Self::Green),
-            "green" if bright => return Ok(Self::BrightGreen),
-            "yellow" if !bright => return Ok(Self::Yellow),
-            "yellow" if bright => return Ok(Self::BrightYellow),
-            "blue" if !bright => return Ok(Self::Blue),
-            "blue" if bright => return Ok(Self::BrightBlue),
-            "magenta" if !bright => return Ok(Self::Magenta),
-            "magenta" if bright => return Ok(Self::BrightMagenta),
-            "cyan" if !bright => return Ok(Self::Cyan),
-            "cyan" if bright => return Ok(Self::BrightCyan),
-            "white" if !bright => return Ok(Self::White),
-            "white" if bright => return Ok(Self::BrightWhite),
-            _ => (),
+        for &(basic, plain, brightened) in BASIC {
+            if name.eq_ignore_ascii_case(basic) {
+                return Ok(if bright { brightened } else { plain });
+            }
+        }
+
+        if bright {
+            return Err(color_err(s));
+        }
+
+        if s.eq_ignore_ascii_case("normal") || s == "-1" {
+            return Ok(Self::Normal);
+        }
+
+        if s.eq_ignore_ascii_case("default") {
+            return Ok(Self::Default);
         }
 
         if let Ok(v) = u8::from_str(s) {
