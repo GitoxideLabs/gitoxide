@@ -105,10 +105,31 @@ fn substitute_f_parameter(cmd: &BStr, path: &BStr) -> BString {
 
     let mut ofs = 0;
     while let Some(pos) = cmd[ofs..].find(b"%f") {
-        buf.push_str(&cmd[..ofs + pos]);
+        buf.push_str(&cmd[ofs..ofs + pos]);
         buf.extend_from_slice(&gix_quote::single(path));
         ofs += pos + 2;
     }
     buf.push_str(&cmd[ofs..]);
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::substitute_f_parameter;
+
+    #[test]
+    fn each_f_parameter_is_replaced_with_the_quoted_path() {
+        for (cmd, expected) in [
+            ("cmd", "cmd"),
+            ("cmd %f", "cmd 'path'"),
+            ("cmd a %f b %f c", "cmd a 'path' b 'path' c"),
+            ("%f %f %f", "'path' 'path' 'path'"),
+        ] {
+            assert_eq!(
+                substitute_f_parameter(cmd.into(), "path".into()),
+                expected,
+                "only `%f` is replaced, the rest of the command is copied exactly once"
+            );
+        }
+    }
 }
