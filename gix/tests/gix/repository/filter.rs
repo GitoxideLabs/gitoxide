@@ -33,6 +33,31 @@ fn pipeline_in_repo_without_special_options() -> crate::Result {
 }
 
 #[test]
+fn repo_local_filter_driver_configuration_overrides_global_configuration() -> crate::Result {
+    let mut repo = named_repo("make_basic_repo.sh")?;
+    repo.config_snapshot_mut()
+        .append_config(
+            ["filter.lfs.clean=global-clean", "filter.lfs.smudge=global-smudge"],
+            gix_config::Source::User,
+        )?
+        .append_config(["filter.lfs.clean=local-clean"], gix_config::Source::Local)?;
+
+    let drivers = gix::filter::Pipeline::options(&repo)?.drivers;
+    assert_eq!(drivers.len(), 1, "configuration for the same driver is merged");
+    assert_eq!(
+        drivers[0].clean.as_deref().map(Vec::as_slice),
+        Some(b"local-clean".as_slice()),
+        "repository-local properties take precedence"
+    );
+    assert_eq!(
+        drivers[0].smudge.as_deref().map(Vec::as_slice),
+        Some(b"global-smudge".as_slice()),
+        "properties not overridden locally are inherited"
+    );
+    Ok(())
+}
+
+#[test]
 #[cfg(unix)]
 fn pipeline_worktree_file_to_object() -> crate::Result {
     let repo = named_repo("repo_with_untracked_files.sh")?;
