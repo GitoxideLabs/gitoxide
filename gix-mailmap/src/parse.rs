@@ -43,14 +43,12 @@ impl<'a> Iterator for Lines<'a> {
 }
 
 fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
-    let (name1, email1, rest) = parse_name_and_email(line, line_number)?;
-    let (name2, email2, rest) = parse_name_and_email(rest, line_number)?;
-    if !rest.trim().is_empty() {
-        return Err(ValidationError::new_with_input(
-            format!("Line {line_number} has too many names or emails, or none at all"),
-            line,
-        )
-        .raise());
+    let (name1, email1, rest) = parse_name_and_email(line, line_number, false)?;
+    let (name2, email2, _rest) = parse_name_and_email(rest, line_number, true).unwrap_or((None, None, rest));
+    if email1.is_none() {
+        return Err(
+            ValidationError::new_with_input(format!("Line {line_number} does not contain an email"), line).raise(),
+        );
     }
     Ok(match (name1, email1, name2, email2) {
         (Some(proper_name), Some(commit_email), None, None) => Entry::change_name_by_email(proper_name, commit_email),
@@ -79,6 +77,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Result<Entry<'_>, Error> {
 fn parse_name_and_email(
     line: &BStr,
     line_number: usize,
+    allow_empty_email: bool,
 ) -> Result<(Option<&'_ BStr>, Option<&'_ BStr>, &'_ BStr), Error> {
     match line.find_byte(b'<') {
         Some(start_bracket) => {
@@ -87,7 +86,7 @@ fn parse_name_and_email(
                 ValidationError::new_with_input(format!("{line_number}: Missing closing bracket '>' in email"), line)
             })?;
             let email = email[..closing_bracket].trim().as_bstr();
-            if email.is_empty() {
+            if email.is_empty() && !allow_empty_email {
                 return Err(
                     ValidationError::new_with_input(format!("{line_number}: Email must not be empty"), line).raise(),
                 );

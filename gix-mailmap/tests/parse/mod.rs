@@ -85,10 +85,49 @@ fn valid_entries() {
 }
 
 #[test]
+fn trailing_content_after_a_complete_mapping_is_ignored() {
+    assert_eq!(
+        line("Canonical Name <canonical@example.com> <mapped@example.com> # secondary <ignored@example.com>"),
+        Entry::change_name_and_email_by_email("Canonical Name", "canonical@example.com", "mapped@example.com"),
+        "only the first two names and emails are used to build the mapping"
+    );
+    assert_eq!(
+        line("Canonical Name <canonical@example.com> <mapped@example.com> <ignored@example.com>"),
+        Entry::change_name_and_email_by_email("Canonical Name", "canonical@example.com", "mapped@example.com"),
+        "a third email does not invalidate the line"
+    );
+    assert_eq!(
+        line("Canonical Name <mapped@example.com> Ignored Trailing Name"),
+        Entry::change_name_by_email("Canonical Name", "mapped@example.com"),
+        "a trailing name without an email is not a mapping source and is dropped"
+    );
+}
+
+#[test]
+fn malformed_second_emails_are_ignored() {
+    assert_eq!(
+        line("Canonical Name <mapped@example.com> Ignored <broken"),
+        Entry::change_name_by_email("Canonical Name", "mapped@example.com"),
+        "a malformed second identity is ignored"
+    );
+}
+
+#[test]
+fn the_second_email_may_be_empty() {
+    assert_eq!(
+        line("Canonical Name <canonical@example.com> <>"),
+        Entry::change_name_and_email_by_email("Canonical Name", "canonical@example.com", ""),
+    );
+}
+
+#[test]
 fn error_if_there_is_just_a_name() {
     let err = try_line("just a name").unwrap_err();
     let err_str = err.to_string();
-    assert!(err_str.contains("Line 1"), "expected line 1, got: {err_str}");
+    assert!(
+        err_str.contains("Line 1 does not contain an email"),
+        "expected the missing-email error, got: {err_str}"
+    );
 }
 
 #[test]
