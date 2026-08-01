@@ -75,6 +75,23 @@ fn try_resolve() {
 }
 
 #[test]
+fn empty_emails_can_be_mapped() {
+    let snapshot = Snapshot::from_bytes(b"Canonical Name <canonical@example.com> <>");
+    let mut buf = TimeBuf::default();
+
+    assert_eq!(
+        snapshot.try_resolve(signature("Any Name", "").to_ref(&mut buf)),
+        Some(signature("Canonical Name", "canonical@example.com")),
+        "an empty email matches an empty old email"
+    );
+    assert_eq!(
+        snapshot.try_resolve(signature("Any Name", "other@example.com").to_ref(&mut buf)),
+        None,
+        "the empty-email mapping does not match a non-empty email"
+    );
+}
+
+#[test]
 fn non_name_and_name_mappings_will_not_clash() {
     let entries = vec![
         // add mapping from email
