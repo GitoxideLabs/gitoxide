@@ -2,9 +2,9 @@ use std::borrow::Cow;
 
 use bstr::{BStr, BString, ByteSlice};
 
-/// Removes quotes, if any, from the provided inputs, and transforms
-/// the 3 escape sequences `\n`, `\t` and `\b` into newline and tab
-/// respectively, while `\b` will remove the previous character.
+/// Removes quotes, if any, from the provided inputs, and transforms the
+/// escape sequences `\n`, `\t` and `\b` into newline, tab and backspace
+/// (byte `0x08`) respectively, matching how `git` interprets them.
 ///
 /// It assumes the input contains a even number of unescaped quotes,
 /// and will unescape escaped quotes and everything else (even though the latter
@@ -63,9 +63,7 @@ fn normalize_inner(mut input: &BStr) -> Cow<'_, BStr> {
             b'\\' => match bytes.next() {
                 Some(b'n') => out.push(b'\n'),
                 Some(b't') => out.push(b'\t'),
-                Some(b'b') => {
-                    out.pop();
-                }
+                Some(b'b') => out.push(b'\x08'),
                 Some(c) => {
                     out.push(c);
                 }
