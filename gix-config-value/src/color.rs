@@ -224,18 +224,22 @@ impl FromStr for Name {
             ("white", Name::White, Name::BrightWhite),
         ];
 
-        let (name, bright) = match s.split_at_checked("bright".len()) {
+        if s.eq_ignore_ascii_case("normal") {
+            return Ok(Self::Normal);
+        }
+
+        let (name, is_bright) = match s.split_at_checked("bright".len()) {
             Some((prefix, rest)) if prefix.eq_ignore_ascii_case("bright") => (rest, true),
             _ => (s, false),
         };
 
         for &(basic, plain, brightened) in BASIC {
             if name.eq_ignore_ascii_case(basic) {
-                return Ok(if bright { brightened } else { plain });
+                return Ok(if is_bright { brightened } else { plain });
             }
         }
 
-        if bright {
+        if is_bright {
             return Err(color_err(s));
         }
 
@@ -377,9 +381,15 @@ impl FromStr for Attribute {
             false
         };
 
+        if s.eq_ignore_ascii_case("reset") {
+            return if inverted {
+                Err(color_err(s))
+            } else {
+                Ok(Attribute::RESET)
+            };
+        }
+
         match s {
-            "reset" if !inverted => Ok(Attribute::RESET),
-            "reset" if inverted => Err(color_err(s)),
             "bold" if !inverted => Ok(Attribute::BOLD),
             "bold" if inverted => Ok(Attribute::NO_BOLD),
             "dim" if !inverted => Ok(Attribute::DIM),

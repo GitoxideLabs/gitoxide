@@ -156,6 +156,8 @@ mod from_git {
     #[test]
     fn reset() {
         assert_eq!(color("reset"), "reset");
+        assert_eq!(color("RESET"), "reset");
+        assert_eq!(color("red Reset"), "red reset");
     }
 
     #[test]
