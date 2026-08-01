@@ -216,6 +216,46 @@ fn attribute_names_must_not_begin_with_dash_and_must_be_ascii_only() {
 }
 
 #[test]
+fn attribute_names_must_not_be_empty() {
+    assert!(
+        matches!(
+            try_line(r"p text =lf"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "a blank in front of the equals sign leaves the assignment without a name"
+    );
+    assert!(
+        lenient_lines(r"p text =lf").is_empty(),
+        "lenient parsing skips the invalid line entirely"
+    );
+    assert!(
+        matches!(
+            try_line(r"p ="),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "an assignment that is nothing but an equals sign has no name either"
+    );
+    assert!(
+        matches!(
+            try_line(r"p -"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "prefixes need a name to apply to"
+    );
+    assert!(
+        lenient_lines(r"p -").is_empty(),
+        "lenient parsing skips the invalid line entirely"
+    );
+    assert!(
+        matches!(
+            try_line(r"p !"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "the unspecified prefix needs one as well"
+    );
+}
+
+#[test]
 fn attributes_are_parsed_behind_various_whitespace_characters() {
     assert_eq!(
         line(r#"p a b"#),
@@ -246,6 +286,51 @@ fn attributes_are_parsed_behind_various_whitespace_characters() {
         line("\"p\" \t a \t b"),
         (pattern("p", Mode::NO_SUB_DIR, None), vec![set("a"), set("b")], 1),
         "behind a mix of space and tab"
+    );
+}
+
+#[test]
+fn only_ascii_blanks_separate_attributes() {
+    assert_eq!(
+        line("p text=auto\u{a0}eol=lf"),
+        (
+            pattern("p", Mode::NO_SUB_DIR, None),
+            vec![value("text", "auto\u{a0}eol=lf")],
+            1
+        ),
+        "a non-breaking space belongs to the value it appears in"
+    );
+    assert!(
+        matches!(
+            try_line("p text\u{a0}eol=lf"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "in a name it makes the whole name invalid"
+    );
+    assert!(
+        lenient_lines("p text\u{a0}eol=lf").is_empty(),
+        "lenient parsing skips the invalid line entirely"
+    );
+    assert!(
+        matches!(
+            try_line("p a\u{b}b"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "a vertical tab is part of the name, not a separator"
+    );
+    assert!(
+        matches!(
+            try_line("p a\u{c}b"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "a form feed is part of the name, not a separator"
+    );
+    assert!(
+        matches!(
+            try_line("p a\u{2028}b"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "vertical tabs, form feeds and unicode line separators aren't blanks either"
     );
 }
 

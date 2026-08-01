@@ -40,13 +40,15 @@ pub struct Lines<'a> {
 
 /// An iterator over attribute assignments in a single line.
 pub struct Iter<'a> {
-    attrs: bstr::Fields<'a>,
+    attrs: std::slice::Split<'a, u8, fn(&u8) -> bool>,
 }
 
 impl<'a> Iter<'a> {
     /// Create a new instance to parse attribute assignments from `input`.
     pub fn new(input: &'a BStr) -> Self {
-        Iter { attrs: input.fields() }
+        Iter {
+            attrs: input.split(is_blank as fn(&u8) -> bool),
+        }
     }
 
     fn parse_attr(&self, attr: &'a [u8]) -> Result<AssignmentRef<'a>, name::Error> {
@@ -66,7 +68,7 @@ impl<'a> Iter<'a> {
 
 fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
     fn attr_valid(attr: &BStr) -> bool {
-        if attr.first() == Some(&b'-') {
+        if attr.is_empty() || attr.first() == Some(&b'-') {
             return false;
         }
 
@@ -83,7 +85,7 @@ impl<'a> Iterator for Iter<'a> {
     type Item = Result<AssignmentRef<'a>, name::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let attr = self.attrs.next().filter(|a| !a.is_empty())?;
+        let attr = self.attrs.find(|a| !a.is_empty())?;
         self.parse_attr(attr).into()
     }
 }
@@ -163,6 +165,10 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
         Err(err) => return Some(Err(err)),
     };
     Ok((kind, Iter::new(attrs), line_number)).into()
+}
+
+fn is_blank(b: &u8) -> bool {
+    BLANKS.contains(b)
 }
 
 const BLANKS: &[u8] = b" \t\r";
