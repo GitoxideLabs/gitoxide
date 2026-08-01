@@ -43,6 +43,34 @@ mod name {
     }
 
     #[test]
+    fn any_case() {
+        for (input, expected) in [
+            ("RED", Name::Red),
+            ("Normal", Name::Normal),
+            ("DEFAULT", Name::Default),
+            ("BrightRed", Name::BrightRed),
+            ("brightBLUE", Name::BrightBlue),
+            ("BRIGHTWHITE", Name::BrightWhite),
+        ] {
+            assert_eq!(
+                Name::from_str(input),
+                Ok(expected),
+                "{input:?}: color names and the 'bright' prefix are case-insensitive, like in Git"
+            );
+        }
+    }
+
+    #[test]
+    fn bright_only_applies_to_standard_colors() {
+        for input in ["bright0", "bright1", "bright255", "bright-1", "bright#ff0010"] {
+            assert!(
+                Name::from_str(input).is_err(),
+                "{input:?}: 'bright' may only precede one of the eight standard colors, like in Git"
+            );
+        }
+    }
+
+    #[test]
     fn ansi() {
         assert_eq!(Name::from_str("255"), Ok(Name::Ansi(255)));
         assert_eq!(Name::from_str("0"), Ok(Name::Ansi(0)));
@@ -128,6 +156,8 @@ mod from_git {
     #[test]
     fn reset() {
         assert_eq!(color("reset"), "reset");
+        assert_eq!(color("RESET"), "reset");
+        assert_eq!(color("red Reset"), "red reset");
     }
 
     #[test]
@@ -190,6 +220,11 @@ mod from_git {
     #[test]
     fn normal_default_can_clear_backgrounds() {
         assert_eq!(color("normal default"), "normal default");
+    }
+
+    #[test]
+    fn color_names_ignore_case() {
+        assert_eq!(color("RED brightBLUE bold"), "red brightblue bold");
     }
 
     #[test]
