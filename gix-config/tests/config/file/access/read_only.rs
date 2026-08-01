@@ -406,12 +406,11 @@ fn complex_quoted_values() {
             escape-sequence = "hi\nho\n\tthere\bi\\\" \""
 "#;
     let config = File::try_from(config).unwrap();
-    // `\b` is the backspace character (0x08), matching git.
     let expected = "hi\nho\n\tthere\x08i\\\" \"";
     assert_eq!(
         config.raw_value("core.escape-sequence").unwrap(),
         expected,
-        "raw_value is normalized…"
+        "raw_value is normalized; `\\b` is the backspace character (0x08)"
     );
     assert_eq!(
         config.string("core.escape-sequence").unwrap(),
