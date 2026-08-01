@@ -51,4 +51,10 @@ fn to_string() {
         Events::from_str(input).unwrap_err().to_string(),
         "Got an unexpected token on line 1 while trying to parse a section header: '[core'"
     );
+    let input = "[a]\n\tb \u{8}\n";
+    assert_eq!(
+        Events::from_str(input).unwrap_err().to_string(),
+        "Got an unexpected token on line 2 while trying to parse a name: '\u{8}\n'",
+        "Git rejects backspace as trailing whitespace after an implicit boolean"
+    );
 }
