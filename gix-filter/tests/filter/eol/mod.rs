@@ -33,7 +33,10 @@ mod stats {
                     non_printable: 0,
                 }
             );
-            assert!(!stats.is_binary(), "text that ends with a DOS EOF marker is still text");
+            assert!(
+                !stats.is_binary(),
+                "text that ends with a DOS EOF (\x1a) marker is still text"
+            );
 
             let stats = eol::Stats::from_bytes(b"hello\r\n\x1a\x1a");
             assert_eq!(stats.non_printable, 1, "only the very last byte is discounted");
