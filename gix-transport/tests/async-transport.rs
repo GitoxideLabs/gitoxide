@@ -14,3 +14,5 @@ pub fn fixture_bytes(path: &str) -> Vec<u8> {
 
 #[cfg(not(any(feature = "blocking-client", feature = "http-client-curl")))]
 mod client;
+
+mod server;

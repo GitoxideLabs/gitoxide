@@ -91,3 +91,6 @@ pub use traits::IsSpuriousError;
 
 ///
 pub mod client;
+
+///
+pub mod server;

@@ -16,3 +16,5 @@ mod http_helpers;
 
 #[cfg(not(feature = "http-client-curl"))]
 mod client;
+
+mod server;
