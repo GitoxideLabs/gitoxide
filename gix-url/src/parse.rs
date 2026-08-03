@@ -168,8 +168,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     } else {
         url.host
     };
+    let path_with_percent_escapes = url.path_has_percent_escapes.then(|| path.clone());
     Ok(crate::Url {
         serialize_alternative_form: false,
+        path_with_percent_escapes,
         scheme,
         user,
         password,
@@ -228,6 +230,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
 
     Ok(crate::Url {
         serialize_alternative_form: true,
+        path_with_percent_escapes: None,
         scheme: Scheme::from(url.scheme.as_str()),
         user,
         password,
@@ -305,6 +308,7 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url, Error> {
 
     Ok(crate::Url {
         serialize_alternative_form: true,
+        path_with_percent_escapes: None,
         scheme: Scheme::File,
         password: None,
         user: None,

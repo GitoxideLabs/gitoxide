@@ -171,6 +171,12 @@ pub struct Url {
     ///
     /// If this value is ever going to be passed to a command-line application, call [Self::path_argument_safe()] instead.
     pub path: BString,
+    /// The parsed path when it contains preserved percent escapes for reserved URL characters.
+    ///
+    /// This lets serialization distinguish preserved escapes from literal percent text in [`Self::path`]. Escapes are
+    /// reused only while both paths match; constructing or mutating the public path causes percent signs to be encoded.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub(crate) path_with_percent_escapes: Option<BString>,
 }
 
 /// Instantiation
@@ -185,18 +191,29 @@ impl Url {
         path: BString,
         serialize_alternative_form: bool,
     ) -> Result<Self, parse::Error> {
-        parse(
+        let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
+        let mut parsed = parse(
             Url {
                 scheme,
                 user,
                 password,
                 host,
                 port,
-                path,
+                path: path.clone(),
                 serialize_alternative_form,
+                path_with_percent_escapes: None,
             }
             .to_bstring(),
-        )
+        )?;
+        if is_http {
+            // Preserve the caller's path as decoded data, except for an empty path normalized to `/` above. In
+            // particular, percent escapes supplied through `from_parts()` are literal text and must be encoded.
+            if !path.is_empty() {
+                parsed.path = path;
+            }
+            parsed.path_with_percent_escapes = None;
+        }
+        Ok(parsed)
     }
 }
 
@@ -486,10 +503,34 @@ impl Url {
                 .add(b'`')
                 .add(b'{')
                 .add(b'}');
+
+            let preserve_percent_escapes = self.path_with_percent_escapes.as_ref() == Some(&self.path);
+            let mut start = 0;
+            if preserve_percent_escapes {
+                let mut pos = start;
+                while pos + 2 < self.path.len() {
+                    if self.path[pos] == b'%'
+                        && self.path[pos + 1].is_ascii_hexdigit()
+                        && self.path[pos + 2].is_ascii_hexdigit()
+                    {
+                        write!(
+                            out,
+                            "{}",
+                            percent_encoding::percent_encode(&self.path[start..pos], PATH_ENCODE_SET)
+                        )?;
+                        let unchanged_percent_encoded_triplet = &self.path[pos..pos + 3];
+                        out.write_all(unchanged_percent_encoded_triplet)?;
+                        pos += 3;
+                        start = pos;
+                    } else {
+                        pos += 1;
+                    }
+                }
+            };
             write!(
                 out,
                 "{}",
-                percent_encoding::percent_encode(self.path.as_ref(), PATH_ENCODE_SET)
+                percent_encoding::percent_encode(&self.path[start..], PATH_ENCODE_SET)
             )?;
         } else {
             out.write_all(&self.path)?;
@@ -598,6 +639,7 @@ pub mod testing {
                 port,
                 path,
                 serialize_alternative_form,
+                path_with_percent_escapes: None,
             }
         }
     }

@@ -306,6 +306,13 @@ fn ipv6_full_address() -> crate::Result {
 }
 
 #[test]
+fn percent_encoded_path_delimiters_are_decoded() -> crate::Result {
+    let url = gix_url::parse("ssh://example.com/a%2Fb")?;
+    assert_eq!(url.path, "/a/b", "Git decodes reserved escapes in SSH repository paths");
+    Ok(())
+}
+
+#[test]
 fn ipv6_address_scp_like() -> crate::Result {
     let url = assert_url("[::1]:repo", url_alternate(Scheme::Ssh, None, "::1", None, b"repo"))?;
     assert_eq!(url.host(), Some("::1"), "SCP-like format with IPv6");

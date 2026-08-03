@@ -10,6 +10,8 @@ pub(crate) struct ParsedUrl {
     pub host: Option<String>,     // Owned to allow normalization to lowercase
     pub port: Option<u16>,
     pub path: String, // Owned to allow percent-decoding
+    /// Whether `path` retains percent escapes for reserved URL characters, allowing lossless serialization.
+    pub path_has_percent_escapes: bool,
 }
 
 /// Minimal parse error type to replace url::ParseError
@@ -37,6 +39,39 @@ fn percent_decode(s: &str) -> Result<String, UrlParseError> {
     percent_decode_str(s)
         .decode_utf8()
         .map(std::borrow::Cow::into_owned)
+        .map_err(|_| UrlParseError::InvalidDomainCharacter)
+}
+
+/// Decode percent-encoded path bytes, unlike [`percent_decode`] preserving escapes for reserved URL characters.
+/// This keeps escaped delimiters from changing the path's structure and lets an unchanged parsed path be serialized
+/// losslessly, while still exposing decoded non-reserved characters.
+/// The boolean indicates whether the returned path still contains such escapes.
+fn percent_decode_path(s: &str) -> Result<(String, bool), UrlParseError> {
+    let input = s.as_bytes();
+    let mut out = Vec::with_capacity(input.len());
+    let mut has_percent_escapes = false;
+    let mut pos = 0;
+    while pos < input.len() {
+        if input[pos] == b'%' {
+            if let Some(value) = s
+                .get(pos + 1..pos + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+            {
+                if value == b'%' || b":/?#[]@!$&'()*+,;=".contains(&value) {
+                    out.extend_from_slice(&input[pos..pos + 3]);
+                    has_percent_escapes = true;
+                } else {
+                    out.push(value);
+                }
+                pos += 3;
+                continue;
+            }
+        }
+        out.push(input[pos]);
+        pos += 1;
+    }
+    String::from_utf8(out)
+        .map(|path| (path, has_percent_escapes))
         .map_err(|_| UrlParseError::InvalidDomainCharacter)
 }
 
@@ -74,11 +109,15 @@ impl ParsedUrl {
         if authority.contains('\\') {
             return Err(UrlParseError::InvalidDomainCharacter);
         }
-        let path = if path_start < after_scheme.len() {
-            percent_decode(&after_scheme[path_start..])?
+        let (path, path_has_percent_escapes) = if path_start < after_scheme.len() {
+            if matches!(scheme.as_str(), "http" | "https") {
+                percent_decode_path(&after_scheme[path_start..])?
+            } else {
+                (percent_decode(&after_scheme[path_start..])?, false)
+            }
         } else {
             // No path specified - leave empty (caller can default to / if needed)
-            String::new()
+            (String::new(), false)
         };
 
         let allow_unbracketed_ipv6 = matches!(scheme.as_str(), "git" | "ssh" | "git+ssh" | "ssh+git");
@@ -125,6 +164,7 @@ impl ParsedUrl {
             host,
             port,
             path,
+            path_has_percent_escapes,
         })
     }
 

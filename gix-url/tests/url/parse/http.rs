@@ -171,17 +171,90 @@ fn percent_encoded_international_path() -> crate::Result {
 }
 
 #[test]
+fn reserved_percent_encoded_path_octets_remain_encoded() -> crate::Result {
+    for (input, message) in [
+        ("https://example.com/a%2Fb", "an encoded slash remains path data"),
+        (
+            "https://example.com/%3Fquery",
+            "an encoded question mark does not start a query",
+        ),
+        (
+            "https://example.com/%23fragment",
+            "an encoded hash does not start a fragment",
+        ),
+        (
+            "https://example.com/%252F",
+            "an encoded percent sign remains lossless",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.to_bstring(), input, "{message}");
+        assert!(url.path.contains(&b'%'), "{message}");
+    }
+    Ok(())
+}
+
+#[test]
+fn literal_percent_escape_text_from_parts_is_encoded() -> crate::Result {
+    let url = gix_url::Url::from_parts(
+        Scheme::Https,
+        None,
+        None,
+        Some("example.com".into()),
+        None,
+        "/foo%2Fbar".into(),
+        false,
+    )?;
+    assert_eq!(url.path, "/foo%2Fbar", "the decoded path remains unchanged");
+    assert_eq!(
+        url.to_bstring(),
+        "https://example.com/foo%252Fbar",
+        "literal percent text is encoded"
+    );
+    let empty = gix_url::Url::from_parts(
+        Scheme::Https,
+        None,
+        None,
+        Some("example.com".into()),
+        None,
+        "".into(),
+        false,
+    )?;
+    assert_eq!(empty.path, "/", "an empty HTTP path is normalized");
+    assert_eq!(empty.to_bstring(), "https://example.com/");
+
+    let mut parsed = gix_url::parse("https://example.com/a%2Fb")?;
+    parsed.path = "/literal%2Ftext".into();
+    assert_eq!(
+        parsed.to_bstring(),
+        "https://example.com/literal%252Ftext",
+        "mutating a parsed path invalidates preserved escapes"
+    );
+    Ok(())
+}
+
+#[test]
 fn percent_encoded_path_roundtrips_in_lossless_serialization() -> crate::Result {
-    for (input, expected_host, expected_path) in [
-        ("https://%20@%40.example.org/%20%25", "%40.example.org", "/ %"),
-        ("https://%20@%40.example.org/%20%25/%20%25", "%40.example.org", "/ %/ %"),
+    for (input, message, expected_host, expected_path) in [
+        (
+            "https://%20@%40.example.org/%20%25",
+            "a single percent-encoded path segment roundtrips losslessly",
+            "%40.example.org",
+            "/ %25",
+        ),
+        (
+            "https://%20@%40.example.org/%20%25/%20%25",
+            "multiple percent-encoded path segments roundtrip losslessly",
+            "%40.example.org",
+            "/ %25/ %25",
+        ),
     ] {
         let url = gix_url::parse(input)?;
         let serialized = url.to_bstring();
-        assert_eq!(serialized, input);
-        assert_eq!(url.host(), Some(expected_host));
-        assert_eq!(url.path, expected_path);
-        assert_eq!(gix_url::parse(&serialized)?, url);
+        assert_eq!(serialized, input, "{message}");
+        assert_eq!(url.host(), Some(expected_host), "{message}");
+        assert_eq!(url.path, expected_path, "{message}");
+        assert_eq!(gix_url::parse(&serialized)?, url, "{message}");
     }
     Ok(())
 }
