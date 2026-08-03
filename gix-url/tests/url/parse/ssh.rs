@@ -306,6 +306,113 @@ fn ipv6_full_address() -> crate::Result {
 }
 
 #[test]
+fn scoped_ipv6_address() -> crate::Result {
+    let input = "ssh://[fe80::1%25Eth0]/repo";
+    let url = gix_url::parse(input)?;
+    assert_eq!(
+        url.host(),
+        Some("fe80::1%Eth0"),
+        "the zone identifier is decoded for SSH"
+    );
+    assert_eq!(url.to_bstring(), input, "the URI spelling remains encoded");
+    assert_eq!(gix_url::parse(url.to_bstring())?, url, "the scoped address roundtrips");
+    Ok(())
+}
+
+#[test]
+fn scp_like_scoped_ipv6_address_uses_a_raw_zone_separator() -> crate::Result {
+    let input = "[fe80::1%Eth0]:repo";
+    let url = gix_url::parse(input)?;
+    assert_eq!(url.host(), Some("fe80::1%Eth0"), "the raw percent sign is host data");
+    assert_eq!(
+        url.to_bstring(),
+        input,
+        "alternative serialization retains the raw separator"
+    );
+    assert_eq!(gix_url::parse(url.to_bstring())?, url, "the alternative form reparses");
+    Ok(())
+}
+
+#[test]
+fn scoped_ipv6_address_with_empty_port() -> crate::Result {
+    let url = gix_url::parse("ssh://[fe80::1%25Eth0]:/repo")?;
+    assert_eq!(
+        url.host(),
+        Some("fe80::1%Eth0"),
+        "the bracketed host with an empty port is decoded"
+    );
+    assert_eq!(url.port, None, "an empty port is not represented");
+    assert_eq!(
+        url.to_bstring(),
+        "ssh://[fe80::1%25Eth0]/repo",
+        "serialization omits the empty port"
+    );
+    Ok(())
+}
+
+#[test]
+fn bracketed_host_is_percent_decoded_once() -> crate::Result {
+    let url = gix_url::parse("SSh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
+    assert_eq!(
+        url.host(),
+        Some("::81ssssssssssssssssssssssssssssssssssssss%85"),
+        "an escape produced by decoding must not be decoded again"
+    );
+    assert_eq!(url.path, "/00%85]://", "the path is decoded once as well");
+    Ok(())
+}
+
+#[test]
+fn escaped_authority_delimiters_remain_host_data() -> crate::Result {
+    for (input, expected_host) in [
+        ("ssh://host%3A123/repo", "host:123"),
+        ("ssh://host%2Fname/repo", "host/name"),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(
+            url.host(),
+            Some(expected_host),
+            "the escaped delimiter is host data: {input}"
+        );
+        assert_eq!(
+            url.to_bstring(),
+            input,
+            "serialization re-escapes the delimiter: {input}"
+        );
+        assert_eq!(
+            gix_url::parse(url.to_bstring())?,
+            url,
+            "the URL reparses unchanged: {input}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> crate::Result {
+    for (input, decoded_path, original_path, message) in [
+        (
+            "ssh://example.com/a%2Fb",
+            "/a/b",
+            "/a%2Fb",
+            "Git decodes reserved escapes in SSH repository paths",
+        ),
+        (
+            "ssh://example.com/a%20b",
+            "/a b",
+            "/a%20b",
+            "original paths are available independently of the URL scheme",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.path, decoded_path, "{message}");
+        assert_eq!(url.original_path(), original_path, "{message}");
+        assert_eq!(url.to_bstring(), input, "serialization remains lossless: {message}");
+    }
+    Ok(())
+}
+
+#[test]
 fn ipv6_address_scp_like() -> crate::Result {
     let url = assert_url("[::1]:repo", url_alternate(Scheme::Ssh, None, "::1", None, b"repo"))?;
     assert_eq!(url.host(), Some("::1"), "SCP-like format with IPv6");

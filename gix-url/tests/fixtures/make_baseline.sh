@@ -7,6 +7,19 @@ tests=()
 tests_unix=()
 # urls only intended for testing on Windows
 tests_windows=()
+# HTTP URLs whose decoded paths are obtained through Git's credential plumbing.
+credential_urls=(
+  "https://example.com/a%2Fb/"
+  "https://example.com/%3Fquery"
+  "https://example.com/%23fragment"
+  "https://example.com/%252F"
+  "https://host?@redirected/repo"
+  "https://host#@redirected/repo"
+  "https://example.com/a%20b"
+  "https://example.com/caf%C3%A9"
+  "https://[2001:db8::1]:8443/repo"
+  "https://example.com/%2f%3f%23%25"
+)
 
 # The contents and structure of this loop are an adaption
 # from git's own test suite (t/t5500-fetch-pack.sh).
@@ -42,7 +55,7 @@ for path in "repo" "re:po" "re/po"; do
     tests+=("./$protocol:$host/~$path")
   done
   # SCP like urls
-  for host in "user@name@host" "user_name@host" "host" "[::1]"; do
+  for host in "user@name@host" "user_name@host" "host" "[::1]" "[fe80::1%Eth0]"; do
     tests+=("$host:$path")
     tests+=("$host:/~$path")
   done
@@ -51,6 +64,41 @@ done
 # These two test cases are from git's test suite as well.
 tests_windows+=("file://c:/repo")
 tests_windows+=("c:repo")
+tests+=("ssh://[fe80::1%25Eth0]/repo")
+tests+=(
+  "ssh://host?@redirected/repo"
+  "ssh://host#@redirected/repo"
+  "ssh://host%2ename/repo"
+  "git://host%2ename/repo"
+  "ssh://host:0/repo"
+  "ssh://foo:bar:baz/repo"
+  "ssh://[not-ip]/repo"
+  "file://::1/repo"
+  "ssh://host:1/repo"
+  "ssh://host:65535/repo"
+  "ssh://user@[2001:db8::1]:2222/repo"
+  "ssh://user@2001:db8::1/repo"
+  "ssh://::1/repo"
+  "git://::1/repo"
+  "ssh://host/a%2Fb"
+  "ssh://host/%3Fquery"
+  "ssh://host/%23fragment"
+  "ssh://host/%252F"
+  "git://host/a%2Fb"
+)
+tests_unix+=(
+  "file:///repo"
+  "file://host/repo"
+  "file://localhost/repo"
+  "file://[::1]/repo"
+  "file://x:/repo"
+)
+tests_windows+=(
+  "file:///repo"
+  "file://host/repo"
+  "file://localhost/repo"
+  "file://[::1]/repo"
+)
 
 tests_unix+=("${tests[@]}")
 tests_windows+=("${tests[@]}")
@@ -71,5 +119,19 @@ do
   echo ";" # there are no `;` in the tested urls
   git -C temp-repo fetch-pack --diag-url "$url"
 done >git-baseline.windows
+
+# `fetch-pack --diag-url` doesn't support HTTP, so use Git's credential parser as the baseline oracle.
+for url in "${credential_urls[@]}"
+do
+  block=$(
+    echo ";"
+    echo "Diag: url=$url"
+    printf 'url=%s\n\n' "$url" |
+      git -c credential.useHttpPath=true \
+        -c 'credential.helper=!f() { echo username=baseline; echo password=baseline; }; f' credential fill |
+      sed -n 's/^protocol=/Diag: protocol=/p; s/^host=/Diag: hostandport=/p; s/^path=/Diag: path=/p'
+  )
+  printf '%s\n' "$block" | tee -a git-baseline.unix >>git-baseline.windows
+done
 
 rm -rf temp-repo

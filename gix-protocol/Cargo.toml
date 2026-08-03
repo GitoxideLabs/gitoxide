@@ -75,7 +75,7 @@ required-features = ["async-client"]
 gix-features = { version = "^0.49.0", path = "../gix-features", features = [
     "progress",
 ] }
-gix-transport = { version = "^0.58.0", path = "../gix-transport" }
+gix-transport = { version = "^0.58.1", path = "../gix-transport" }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 gix-shallow = { version = "^0.13.0", path = "../gix-shallow" }
 gix-date = { version = "^0.15.6", path = "../gix-date" }
@@ -86,7 +86,7 @@ gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
 gix-negotiate = { version = "^0.34.0", path = "../gix-negotiate", optional = true }
 gix-object = { version = "^0.63.0", path = "../gix-object", optional = true }
 gix-revwalk = { version = "^0.34.0", path = "../gix-revwalk", optional = true }
-gix-credentials = { version = "^0.39.0", path = "../gix-credentials", optional = true }
+gix-credentials = { version = "^0.39.1", path = "../gix-credentials", optional = true }
 gix-refspec = { version = "^0.44.0", path = "../gix-refspec", optional = true }
 gix-lock = { version = "^24.0.0", path = "../gix-lock", optional = true }
 

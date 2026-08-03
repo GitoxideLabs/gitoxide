@@ -160,6 +160,11 @@ fn https_with_ipv6_user_and_port() -> crate::Result {
 fn percent_encoded_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/path/with%20spaces/file")?;
     assert_eq!(url.path, "/path/with spaces/file", "paths are now decoded");
+    assert_eq!(
+        url.original_path(),
+        "/path/with%20spaces/file",
+        "the encoded request path remains available"
+    );
     Ok(())
 }
 
@@ -171,17 +176,138 @@ fn percent_encoded_international_path() -> crate::Result {
 }
 
 #[test]
+fn original_path_preserves_exact_spelling() -> crate::Result {
+    for (input, decoded_path, original_path, message) in [
+        (
+            "https://example.com/plain",
+            "/plain",
+            "/plain",
+            "a path without escapes falls back to the decoded path",
+        ),
+        (
+            "https://example.com/%41",
+            "/A",
+            "/%41",
+            "an unreserved escape retains its spelling",
+        ),
+        (
+            "https://example.com/%2f",
+            "//",
+            "/%2f",
+            "lowercase escape digits retain their case",
+        ),
+        (
+            "https://example.com/caf%C3%A9",
+            "/café",
+            "/caf%C3%A9",
+            "a multi-byte escape retains its complete spelling",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.path, decoded_path, "the public path is decoded: {message}");
+        assert_eq!(url.original_path(), original_path, "{message}");
+        assert_eq!(url.to_bstring(), input, "serialization remains lossless: {message}");
+    }
+    Ok(())
+}
+
+#[test]
+fn reserved_percent_encoded_path_octets_remain_lossless() -> crate::Result {
+    for (input, expected_path, message) in [
+        (
+            "https://example.com/a%2Fb",
+            "/a/b",
+            "an encoded slash remains path data",
+        ),
+        (
+            "https://example.com/%3Fquery",
+            "/?query",
+            "an encoded question mark does not start a query",
+        ),
+        (
+            "https://example.com/%23fragment",
+            "/#fragment",
+            "an encoded hash does not start a fragment",
+        ),
+        (
+            "https://example.com/%252F",
+            "/%2F",
+            "an encoded percent sign remains lossless",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.to_bstring(), input, "{message}");
+        assert_eq!(url.path, expected_path, "the public path is decoded: {message}");
+    }
+    Ok(())
+}
+
+#[test]
+fn literal_percent_escape_text_from_parts_is_encoded() -> crate::Result {
+    let url = gix_url::Url::from_parts(
+        Scheme::Https,
+        None,
+        None,
+        Some("example.com".into()),
+        None,
+        "/foo%2Fbar".into(),
+        false,
+    )?;
+    assert_eq!(url.path, "/foo%2Fbar", "the decoded path remains unchanged");
+    assert_eq!(
+        url.to_bstring(),
+        "https://example.com/foo%252Fbar",
+        "literal percent text is encoded"
+    );
+    let empty = gix_url::Url::from_parts(
+        Scheme::Https,
+        None,
+        None,
+        Some("example.com".into()),
+        None,
+        "".into(),
+        false,
+    )?;
+    assert_eq!(empty.path, "/", "an empty HTTP path is normalized");
+    assert_eq!(empty.to_bstring(), "https://example.com/");
+
+    let mut parsed = gix_url::parse("https://example.com/a%2Fb")?;
+    parsed.path = "/literal%2Ftext".into();
+    assert_eq!(
+        parsed.original_path(),
+        "/literal%2Ftext",
+        "mutating the path invalidates its encoded spelling"
+    );
+    assert_eq!(
+        parsed.to_bstring(),
+        "https://example.com/literal%252Ftext",
+        "mutating a parsed path invalidates preserved escapes"
+    );
+    Ok(())
+}
+
+#[test]
 fn percent_encoded_path_roundtrips_in_lossless_serialization() -> crate::Result {
-    for (input, expected_host, expected_path) in [
-        ("https://%20@%40:example.org/%20%25", "%40:example.org", "/ %"),
-        ("https://%20@%40:example.org/%20%25/%20%25", "%40:example.org", "/ %/ %"),
+    for (input, message, expected_host, expected_path) in [
+        (
+            "https://%20@%40.example.org/%20%25",
+            "a single percent-encoded path segment roundtrips losslessly",
+            "%40.example.org",
+            "/ %",
+        ),
+        (
+            "https://%20@%40.example.org/%20%25/%20%25",
+            "multiple percent-encoded path segments roundtrip losslessly",
+            "%40.example.org",
+            "/ %/ %",
+        ),
     ] {
         let url = gix_url::parse(input)?;
         let serialized = url.to_bstring();
-        assert_eq!(serialized, input);
-        assert_eq!(url.host(), Some(expected_host));
-        assert_eq!(url.path, expected_path);
-        assert_eq!(gix_url::parse(&serialized)?, url);
+        assert_eq!(serialized, input, "{message}");
+        assert_eq!(url.host(), Some(expected_host), "{message}");
+        assert_eq!(url.path, expected_path, "{message}");
+        assert_eq!(gix_url::parse(&serialized)?, url, "{message}");
     }
     Ok(())
 }
@@ -196,5 +322,43 @@ fn query_and_fragment_delimiters_in_path_roundtrip() -> crate::Result {
         "https://host/repo.git#section",
         url(Scheme::Https, None, "host", None, b"/repo.git#section"),
     )?;
+    Ok(())
+}
+
+#[test]
+fn query_and_fragment_delimiters_end_the_authority() -> crate::Result {
+    for input in ["https://host?@redirected/repo", "https://host#@redirected/repo"] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.host(), Some("host"), "the authority ends at the delimiter");
+        assert_eq!(
+            &url.path,
+            &input["https://host".len()..],
+            "the remainder is kept in the path"
+        );
+    }
+    for delimiter in ['?', '#'] {
+        let input = format!("https://host{delimiter}{}", "x".repeat(1025));
+        assert_eq!(
+            gix_url::parse(input)?.host(),
+            Some("host"),
+            "the remainder does not count toward the authority length"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn authority_length_limit_excludes_the_scheme_separator() -> crate::Result {
+    let at_limit = format!("https://{}", "a".repeat(1024));
+    assert_eq!(
+        gix_url::parse(&at_limit)?.host().map(str::len),
+        Some(1024),
+        "the full authority limit is accepted"
+    );
+    let over_limit = format!("https://{}", "a".repeat(1025));
+    assert!(
+        matches!(gix_url::parse(over_limit), Err(gix_url::parse::Error::TooLong { .. })),
+        "one byte beyond the authority limit is rejected"
+    );
     Ok(())
 }

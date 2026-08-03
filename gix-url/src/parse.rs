@@ -35,14 +35,14 @@ impl From<Infallible> for Error {
     }
 }
 
-///
+/// The syntax used to interpret an input location.
 #[derive(Debug, Clone, Copy)]
 pub enum UrlKind {
-    ///
+    /// A URL containing a `scheme://` separator.
     Url,
-    ///
+    /// An SCP-like SSH location such as `user@host:path`.
     Scp,
-    ///
+    /// A local filesystem path.
     Local,
 }
 
@@ -101,12 +101,17 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
 
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
-    let bytes_to_path = input[protocol_end + "://".len()..]
+    let input_after_protocol = &input[protocol_end + "://".len()..];
+    let is_http = {
+        let scheme = &input[..protocol_end];
+        scheme.eq_ignore_ascii_case(b"http") || scheme.eq_ignore_ascii_case(b"https")
+    };
+    let bytes_to_path = input_after_protocol
         .iter()
         .filter(|b| !b.is_ascii_whitespace())
         .skip_while(|b| **b == b'/' || **b == b'\\')
-        .position(|b| *b == b'/')
-        .unwrap_or(input.len() - protocol_end);
+        .position(|b| *b == b'/' || is_http && matches!(*b, b'?' | b'#'))
+        .unwrap_or(input_after_protocol.len());
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         return Err(Error::TooLong {
             truncated_url: input[..(protocol_end + "://".len() + MAX_LEN).min(input.len())].into(),
@@ -149,10 +154,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             if let Some(h2) = h.strip_prefix('[') {
                 if let Some(inner) = h2.strip_suffix("]:") {
                     // "[::1]:" → "::1"
-                    h = inner.to_string();
+                    h = inner.to_owned();
                 } else if let Some(inner) = h2.strip_suffix(']') {
                     // "[::1]" → "::1"
-                    h = inner.to_string();
+                    h = inner.to_owned();
                 }
             } else {
                 // Non-bracketed host: strip a single trailing colon
@@ -168,8 +173,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     } else {
         url.host
     };
+    let path_with_percent_escapes = url.path_with_percent_escapes.map(Into::into);
     Ok(crate::Url {
         serialize_alternative_form: false,
+        path_with_percent_escapes,
         scheme,
         user,
         password,
@@ -198,7 +205,8 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     // should never differ in any other way (ssh URLs should not contain a query or fragment part).
     // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
     // determined above and can therefore skip parsing it here as well.
-    let url_string = format!("ssh://{host}");
+    // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
+    let url_string = format!("ssh://{}", host.replace('%', "%25"));
     let url = crate::simple_url::ParsedUrl::parse(&url_string).map_err(|source| Error::Url {
         url: input.to_owned(),
         kind: UrlKind::Scp,
@@ -228,6 +236,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
 
     Ok(crate::Url {
         serialize_alternative_form: true,
+        path_with_percent_escapes: None,
         scheme: Scheme::from(url.scheme.as_str()),
         user,
         password,
@@ -305,6 +314,7 @@ pub(crate) fn local(input: &BStr) -> Result<crate::Url, Error> {
 
     Ok(crate::Url {
         serialize_alternative_form: true,
+        path_with_percent_escapes: None,
         scheme: Scheme::File,
         password: None,
         user: None,

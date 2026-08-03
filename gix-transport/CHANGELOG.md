@@ -5,7 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.58.1 (2026-08-03)
+
+### Bug Fixes
+
+ - <csr-id-60850df267f902ef6b65e8211e6d40aeb45e1970/> preserve encoded HTTP paths across redirects.
+   <!-- agent -->
+   Resolve relative curl redirects against the original request URL spelling
+   so percent-encoded separators remain data instead of changing path segment
+   structure.
+ - <csr-id-156b53de2b7d93087aceee623965110a19750d37/> terminate URL authorities at query and fragment delimiters.
+   <!-- agent -->
+   gix-url treated everything before the first slash as the authority, so a
+   query or fragment could change the parsed host and make gix-transport retain
+   an identity across an actual authority change.
+   
+   End the authority at slash, query, or fragment delimiters, and cover both the
+   parser result and redirect identity decision. This addresses
+   GHSA-jrcm-326h-gpp8 without changing how the remainder is stored in the path.
+   
+   Git baseline: git url-parse at da5fa735905c97b9454542bcaba848bcdeac760d
+   reports the host before either delimiter.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 3 commits contributed to the release over the course of 11 calendar days.
+ - 11 days passed between releases.
+ - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Preserve encoded HTTP paths across redirects. ([`60850df`](https://github.com/GitoxideLabs/gitoxide/commit/60850df267f902ef6b65e8211e6d40aeb45e1970))
+    - Terminate URL authorities at query and fragment delimiters. ([`156b53d`](https://github.com/GitoxideLabs/gitoxide/commit/156b53de2b7d93087aceee623965110a19750d37))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.58.0 (2026-07-23)
 
 ### New Features
 
@@ -44,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <csr-read-only-do-not-edit/>
 
- - 20 commits contributed to the release.
+ - 22 commits contributed to the release.
  - 31 days passed between releases.
  - 4 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#2685](https://github.com/GitoxideLabs/gitoxide/issues/2685)
@@ -58,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  * **[#2685](https://github.com/GitoxideLabs/gitoxide/issues/2685)**
     - Re-authenticate smart HTTP redirects ([`ac26491`](https://github.com/GitoxideLabs/gitoxide/commit/ac264913e55fa10b2237820ef5ee61aeb50467c7))
  * **Uncategorized**
+    - Release gix-actor v0.41.2, gix-features v0.49.0, gix-hash v0.26.0, gix-hashtable v0.16.0, gix-object v0.63.0, gix-glob v0.27.0, gix-attributes v0.34.0, gix-packetline v0.22.0, gix-filter v0.33.0, gix-fs v0.22.0, gix-chunk v0.7.3, gix-commitgraph v0.38.0, gix-revwalk v0.34.0, gix-traverse v0.60.0, gix-worktree-stream v0.35.0, gix-archive v0.35.0, gix-bitmap v0.3.3, gix-tempfile v24.0.0, gix-lock v24.0.0, gix-index v0.54.0, gix-pathspec v0.19.0, gix-ignore v0.22.0, gix-worktree v0.55.0, gix-imara-diff v0.2.4, gix-diff v0.66.0, gix-blame v0.16.0, gix-ref v0.66.0, gix-config v0.59.0, gix-discover v0.54.0, gix-dir v0.28.0, gix-mailmap v0.33.2, gix-revision v0.48.0, gix-merge v0.19.0, gix-negotiate v0.34.0, gix-zlib v0.1.0, gix-pack v0.73.0, gix-odb v0.83.0, gix-refspec v0.44.0, gix-shallow v0.13.0, gix-transport v0.58.0, gix-protocol v0.64.0, gix-status v0.33.0, gix-submodule v0.33.0, gix-worktree-state v0.33.0, gix v0.86.0, gix-fsck v0.24.0, gitoxide-core v0.60.0, gix-tix v0.1.0, gitoxide v0.56.0, safety bump 40 crates ([`842bc44`](https://github.com/GitoxideLabs/gitoxide/commit/842bc447e3aeacf5d9d36f7f8a01068eda4b7999))
+    - Update changelogs prior to release ([`cb6ec7d`](https://github.com/GitoxideLabs/gitoxide/commit/cb6ec7dce283943d811b1600b577f586d7a13e1f))
     - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
     - Merge pull request #2734 from GitoxideLabs/url-parse-convenience ([`e7af50e`](https://github.com/GitoxideLabs/gitoxide/commit/e7af50ea6c686593ba627fcf79fdb228a1f29193))
     - Adapt to changes in gix-url ([`271454b`](https://github.com/GitoxideLabs/gitoxide/commit/271454b5d544e2af2d17db454e72800dbc87acfe))

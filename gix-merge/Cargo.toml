@@ -28,8 +28,8 @@ gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 gix-object = { version = "^0.63.0", path = "../gix-object" }
 gix-filter = { version = "^0.33.0", path = "../gix-filter" }
 gix-worktree = { version = "^0.55.0", path = "../gix-worktree", default-features = false, features = ["attributes"] }
-gix-command = { version = "^0.9.1", path = "../gix-command" }
-gix-path = { version = "^0.12.3", path = "../gix-path" }
+gix-command = { version = "^0.9.2", path = "../gix-command" }
+gix-path = { version = "^0.12.4", path = "../gix-path" }
 gix-fs = { version = "^0.22.0", path = "../gix-fs" }
 gix-tempfile = { version = "^24.0.0", path = "../gix-tempfile" }
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }

@@ -2,7 +2,7 @@ lints.workspace = true
 
 [package]
 name = "gix-config-value"
-version = "0.19.0"
+version = "0.19.1"
 repository = "https://github.com/GitoxideLabs/gitoxide"
 license = "MIT OR Apache-2.0"
 description = "A crate of the gitoxide project providing git-config value parsing"
@@ -19,7 +19,7 @@ doctest = true
 serde = ["dep:serde", "bstr/serde"]
 
 [dependencies]
-gix-path = { version = "^0.12.3", path = "../gix-path" }
+gix-path = { version = "^0.12.4", path = "../gix-path" }
 
 thiserror = "2.0.18"
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use bstr::{BStr, BString, ByteSlice};
 
-/// Whether a repository is resolving for the current user, or the given one.
+/// The user whose home directory a repository path refers to.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ForUser {
@@ -43,8 +43,10 @@ fn path_segments(path: &BStr) -> Option<impl Iterator<Item = &[u8]>> {
 /// Parse user information from the given `path`, returning `(possible user information, adjusted input path)`.
 ///
 /// Supported formats for user extraction are…
-/// * `~/repopath` - the currently logged in user's home.
-/// * `~user/repopath` - the repository in the given user's home.
+/// * `/~/repopath` - the currently logged-in user's home, returning `/repopath`.
+/// * `/~user/repopath` - the named user's home, returning `/repopath`.
+///
+/// Paths without a leading slash or home marker are returned unchanged without user information.
 pub fn parse(path: &BStr) -> Result<(Option<ForUser>, BString), Error> {
     Ok(path_segments(path)
         .and_then(|mut iter| {
@@ -71,7 +73,9 @@ pub fn parse(path: &BStr) -> Result<(Option<ForUser>, BString), Error> {
         .unwrap_or_else(|| (None, path.into())))
 }
 
-/// Expand `path` for use in a shell and return the expanded path.
+/// Convert a leading URL-style `/~/` or `/~user/` path into shell-style `~/` or `~user/` syntax.
+///
+/// Other paths are returned unchanged.
 pub fn for_shell(path: BString) -> BString {
     use bstr::ByteVec;
     match parse(path.as_slice().as_bstr()) {
@@ -91,9 +95,13 @@ pub fn for_shell(path: BString) -> BString {
     }
 }
 
-/// Expand `path` for the given `user`, which can be obtained by [`parse()`], resolving them with `home_for_user(&user)`.
+/// Expand `path` for the given `user`, which can be obtained with [`parse()`], resolving the home directory with
+/// `home_for_user(&user)`.
 ///
-/// For the common case consider using [`expand_path()]` instead.
+/// When `user` is present, `path` must be the slash-prefixed adjusted path returned by [`parse()`]; it is joined below
+/// the resolved home directory. With no user, `path` is returned as a platform path without home expansion.
+///
+/// For the common case consider using [`crate::expand_path()`] instead.
 pub fn with(
     user: Option<&ForUser>,
     path: &BStr,

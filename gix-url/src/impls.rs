@@ -14,6 +14,7 @@ impl Default for Url {
             host: None,
             port: None,
             path: bstr::BString::default(),
+            path_with_percent_escapes: None,
         }
     }
 }

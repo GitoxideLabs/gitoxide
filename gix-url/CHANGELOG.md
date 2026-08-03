@@ -5,13 +5,181 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.37.1 (2026-08-03)
+
+### New Features
+
+ - <csr-id-57a13cfe401669edbf71ab110eb89b607b42a30f/> add `Url::original_path()`
+   <!-- agent -->
+   Retain the original spelling of every percent-escaped parsed path and expose
+   it through Url::original_path(). Fall back to the decoded public path after
+   construction or mutation so consumers can use one read-only accessor safely.
+
+### Bug Fixes
+
+ - <csr-id-4b62822bf56f8eff8886ed39c00ba1177db615a3/> match Git URL parsing edge cases.
+   <!-- agent -->
+   Expand the URL baseline with Git-observed authority, port, IPv6, file, and
+   percent-encoding forms. Match Git’s scheme-specific delimiters and permissive
+   SSH authority behavior, retain escaped paths across serialization, and align
+   public docs with the actual parsing and serialization contracts.
+ - <csr-id-5c01fc9cfc01bee0a7396c0660071f4bc1cb99da/> accept scoped IPv6 URL literals.
+   <!-- agent -->
+   Validate RFC 6874 IPv6 addresses and zone identifiers separately, decode scoped
+   hosts for SSH invocation, and restore bracketed percent-encoded form during URL
+   serialization. Add the scoped form to the Git-generated compatibility baseline.
+ - <csr-id-7ea6c37981e9c0b732f0b97cabad38deb6a6a919/> keep parsed HTTP paths decoded.
+   <!-- agent -->
+   Retain the encoded HTTP path privately for lossless request serialization while
+   exposing the fully decoded public path used by credential consumers. Migrate legacy
+   serde values and extend the Git-derived credential baseline with reserved escapes.
+ - <csr-id-93c5398e1d9050cab30c21bffe4780d14b7ea2fc/> measure URL authorities after the scheme separator.
+   <!-- agent -->
+   Count only bytes after :// when a URL has no path, so the documented 1024-byte
+   authority limit accepts exactly 1024 bytes and still rejects 1025.
+ - <csr-id-97dce26f31f91077827d3a4caca0a5af536ad845/> validate URL schemes and percent escapes.
+   <!-- agent -->
+   Apply RFC 3986 grammar before decoding: schemes must begin with an ASCII letter
+   and every percent sign must introduce two hexadecimal digits. This prevents
+   malformed inputs from being accepted and rewritten during serialization.
+ - <csr-id-23559057b1ad6db03714f16aa7ba9bde041f55c8/> preserve percent-encoded URL path delimiters.
+   <!-- agent -->
+   Parse URL components before decoding reserved octets so encoded slashes,
+   queries, fragments, and other RFC 3986 delimiters cannot become structure. Keep
+   valid escapes intact during HTTP URL serialization, including nested percent
+   escapes.
+ - <csr-id-79b4c613de30da93108ca948e36d732920dc91e6/> reject malformed URL authorities.
+   <!-- agent -->
+   Fail closed when GHSA-jrcm-326h-gpp8 redirect authority checks receive syntax
+   that RFC 3986 and HTTP clients interpret differently. Reject backslashes,
+   non-ASCII reg-names, malformed ports, malformed IPv6 literals, and unbracketed
+   IPv6 before host identity is trusted.
+ - <csr-id-156b53de2b7d93087aceee623965110a19750d37/> terminate URL authorities at query and fragment delimiters.
+   <!-- agent -->
+   gix-url treated everything before the first slash as the authority, so a
+   query or fragment could change the parsed host and make gix-transport retain
+   an identity across an actual authority change.
+   
+   End the authority at slash, query, or fragment delimiters, and cover both the
+   parser result and redirect identity decision. This addresses
+   GHSA-jrcm-326h-gpp8 without changing how the remainder is stored in the path.
+   
+   Git baseline: git url-parse at da5fa735905c97b9454542bcaba848bcdeac760d
+   reports the host before either delimiter.
+ - <csr-id-4a6834de50298d3e23beab3a529f70cb72323c27/> preserve colons in URL usernames
+   <!-- agent -->
+   
+   Percent-decoded colons in usernames were serialized literally, causing the
+   parser to reinterpret the suffix as a password. The regression test shows
+   that an HTTP username containing a colon did not survive serialization and
+   reparsing.
+   
+   Encode colons specifically in the username while retaining the existing
+   userinfo encoding for passwords, where colons are data.
+   
+   Git baseline: credential.c at a23bace963d508bd96983cc637131392d3face18
+   uses the first literal colon as the user/password boundary and percent-decodes
+   the resulting fields.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 13 commits contributed to the release over the course of 11 calendar days.
+ - 11 days passed between releases.
+ - 10 commits were understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2827](https://github.com/GitoxideLabs/gitoxide/issues/2827)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2827](https://github.com/GitoxideLabs/gitoxide/issues/2827)**
+    - Preserve colons in URL usernames ([`4a6834d`](https://github.com/GitoxideLabs/gitoxide/commit/4a6834de50298d3e23beab3a529f70cb72323c27))
+ * **Uncategorized**
+    - Review ([`84826ba`](https://github.com/GitoxideLabs/gitoxide/commit/84826baab4d6311ec502da18597931cc3a3fa404))
+    - Add `Url::original_path()` ([`57a13cf`](https://github.com/GitoxideLabs/gitoxide/commit/57a13cfe401669edbf71ab110eb89b607b42a30f))
+    - Match Git URL parsing edge cases. ([`4b62822`](https://github.com/GitoxideLabs/gitoxide/commit/4b62822bf56f8eff8886ed39c00ba1177db615a3))
+    - Accept scoped IPv6 URL literals. ([`5c01fc9`](https://github.com/GitoxideLabs/gitoxide/commit/5c01fc9cfc01bee0a7396c0660071f4bc1cb99da))
+    - Keep parsed HTTP paths decoded. ([`7ea6c37`](https://github.com/GitoxideLabs/gitoxide/commit/7ea6c37981e9c0b732f0b97cabad38deb6a6a919))
+    - Measure URL authorities after the scheme separator. ([`93c5398`](https://github.com/GitoxideLabs/gitoxide/commit/93c5398e1d9050cab30c21bffe4780d14b7ea2fc))
+    - Validate URL schemes and percent escapes. ([`97dce26`](https://github.com/GitoxideLabs/gitoxide/commit/97dce26f31f91077827d3a4caca0a5af536ad845))
+    - Preserve percent-encoded URL path delimiters. ([`2355905`](https://github.com/GitoxideLabs/gitoxide/commit/23559057b1ad6db03714f16aa7ba9bde041f55c8))
+    - Reject malformed URL authorities. ([`79b4c61`](https://github.com/GitoxideLabs/gitoxide/commit/79b4c613de30da93108ca948e36d732920dc91e6))
+    - Terminate URL authorities at query and fragment delimiters. ([`156b53d`](https://github.com/GitoxideLabs/gitoxide/commit/156b53de2b7d93087aceee623965110a19750d37))
+    - Merge pull request #2828 from GitoxideLabs/user-colon-tobstring ([`45ec08d`](https://github.com/GitoxideLabs/gitoxide/commit/45ec08d150f81894d945b5163bf84fd7e284ef41))
+    - Merge pull request #2812 from GitoxideLabs/report-july ([`ae8845a`](https://github.com/GitoxideLabs/gitoxide/commit/ae8845a47c4c87e0996a119822106cf09036340b))
+</details>
+
+## 0.37.0 (2026-07-23)
+
+### New Features (BREAKING)
+
+ - <csr-id-8bc70058ca6e94cc04c0e4db4140a883b0719e7e/> more convenient calling of `parse()`.
+   Possibly breaking, as calling code might now be ambiguous until fixed.
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 6 commits contributed to the release over the course of 8 calendar days.
+ - 8 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 0 issues like '(#ID)' were seen in commit messages
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **Uncategorized**
+    - Release gix-trace v0.1.21, gix-validate v0.11.3, gix-path v0.12.3, gix-utils v0.3.5, gix-config-value v0.19.0, gix-prompt v0.16.0, gix-sec v0.14.2, gix-url v0.37.0, gix-credentials v0.39.0, safety bump 18 crates ([`f0ec710`](https://github.com/GitoxideLabs/gitoxide/commit/f0ec71076aa1cef3181b77946ee556a89c651b8e))
+    - Merge pull request #2734 from GitoxideLabs/url-parse-convenience ([`e7af50e`](https://github.com/GitoxideLabs/gitoxide/commit/e7af50ea6c686593ba627fcf79fdb228a1f29193))
+    - More convenient calling of `parse()`. ([`8bc7005`](https://github.com/GitoxideLabs/gitoxide/commit/8bc70058ca6e94cc04c0e4db4140a883b0719e7e))
+    - Merge pull request #2722 from GitoxideLabs/reasons ([`c16b5a1`](https://github.com/GitoxideLabs/gitoxide/commit/c16b5a1892704b7c72a253bdd74a6848dd61032a))
+    - Replace lint allowances with expectations ([`43ff87a`](https://github.com/GitoxideLabs/gitoxide/commit/43ff87a73897b70313e3a58e7de82231be5b59ad))
+    - Merge pull request #2714 from GitoxideLabs/fix-credentials-parsing ([`cf3053a`](https://github.com/GitoxideLabs/gitoxide/commit/cf3053a3c18e2de788cdaa9f41b5bd343bdc0091))
+</details>
+
+## 0.36.2 (2026-07-15)
+
+### Other
+
+ - <csr-id-5d318ad7c70107f0ca5626b6083da89701acd47b/> Document lossy SCP-like SSH URL canonicalization
+
+### Commit Statistics
+
+<csr-read-only-do-not-edit/>
+
+ - 4 commits contributed to the release.
+ - 50 days passed between releases.
+ - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
+ - 1 unique issue was worked on: [#2467](https://github.com/GitoxideLabs/gitoxide/issues/2467)
+
+### Commit Details
+
+<csr-read-only-do-not-edit/>
+
+<details><summary>view details</summary>
+
+ * **[#2467](https://github.com/GitoxideLabs/gitoxide/issues/2467)**
+    - Document lossy SCP-like SSH URL canonicalization ([`5d318ad`](https://github.com/GitoxideLabs/gitoxide/commit/5d318ad7c70107f0ca5626b6083da89701acd47b))
+ * **Uncategorized**
+    - Release gix-path v0.12.2, gix-error v0.2.5, gix-utils v0.3.4, gix-date v0.15.6, gix-url v0.36.2, gix-credentials v0.38.2 ([`27aec47`](https://github.com/GitoxideLabs/gitoxide/commit/27aec474c113cc885d44631b329454dc1ad0fed2))
+    - Merge pull request #2681 from GitoxideLabs/lossy-url-conversion ([`b893e01`](https://github.com/GitoxideLabs/gitoxide/commit/b893e014d1c94152d60970caa4b699b2a5dceb11))
+    - Merge pull request #2618 from GitoxideLabs/report ([`f7d4f33`](https://github.com/GitoxideLabs/gitoxide/commit/f7d4f33b58503996ae90497b69ce4c3a757982ac))
+</details>
+
 ## 0.36.1 (2026-05-26)
 
 ### Commit Statistics
 
 <csr-read-only-do-not-edit/>
 
- - 8 commits contributed to the release over the course of 28 calendar days.
+ - 9 commits contributed to the release over the course of 28 calendar days.
  - 28 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
@@ -23,6 +191,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <details><summary>view details</summary>
 
  * **Uncategorized**
+    - Release gix-error v0.2.4, gix-date v0.15.4, gix-actor v0.41.1, gix-trace v0.1.20, gix-validate v0.11.2, gix-path v0.12.1, gix-utils v0.3.3, gix-features v0.48.1, gix-hash v0.25.1, gix-hashtable v0.15.1, gix-object v0.61.0, gix-glob v0.26.1, gix-quote v0.7.2, gix-attributes v0.33.1, gix-command v0.9.1, gix-packetline v0.21.4, gix-filter v0.31.0, gix-fs v0.21.2, gix-chunk v0.7.2, gix-commitgraph v0.37.1, gix-revwalk v0.32.0, gix-traverse v0.58.0, gix-worktree-stream v0.33.0, gix-archive v0.33.0, gix-bitmap v0.3.2, gix-tempfile v23.0.1, gix-lock v23.0.1, gix-index v0.52.0, gix-config-value v0.18.1, gix-pathspec v0.18.1, gix-ignore v0.21.1, gix-worktree v0.53.0, gix-imara-diff v0.2.2, gix-diff v0.64.0, gix-blame v0.14.0, gix-ref v0.64.0, gix-sec v0.14.1, gix-config v0.57.0, gix-prompt v0.15.1, gix-url v0.36.1, gix-credentials v0.38.1, gix-discover v0.52.0, gix-dir v0.26.0, gix-mailmap v0.33.1, gix-revision v0.46.0, gix-merge v0.17.0, gix-negotiate v0.32.0, gix-pack v0.71.0, gix-odb v0.81.0, gix-refspec v0.42.0, gix-shallow v0.12.1, gix-transport v0.57.1, gix-protocol v0.62.0, gix-status v0.31.0, gix-submodule v0.31.0, gix-worktree-state v0.31.0, gix v0.84.0, gix-fsck v0.22.0, gitoxide-core v0.58.0, gitoxide v0.54.0, safety bump 27 crates ([`10c58bb`](https://github.com/GitoxideLabs/gitoxide/commit/10c58bb56597d9335611da121aac21f9b09b6e5b))
     - Merge pull request #2575 from SarthakB11/fix/issue-2316 ([`4743361`](https://github.com/GitoxideLabs/gitoxide/commit/4743361e69238245b77f5687620b20652e62a23c))
     - Review ([`1980190`](https://github.com/GitoxideLabs/gitoxide/commit/19801900fdce7b7db3ab4da9866c44d7fea5598e))
     - Document why each fixture archive is .gitignored ([`e3d5a04`](https://github.com/GitoxideLabs/gitoxide/commit/e3d5a0474574dbb546a61eefc91a03c2df72df74))
@@ -40,7 +209,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 2 commits contributed to the release over the course of 2 calendar days.
- - 3 days passed between releases.
+ - 4 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -66,6 +235,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 6 commits contributed to the release.
+ - 61 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -156,7 +326,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 15 commits contributed to the release over the course of 30 calendar days.
- - 30 days passed between releases.
+ - 31 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 2 unique issues were worked on: [#2355](https://github.com/GitoxideLabs/gitoxide/issues/2355), [#2363](https://github.com/GitoxideLabs/gitoxide/issues/2363)
 
@@ -197,7 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 9 commits contributed to the release over the course of 20 calendar days.
- - 29 days passed between releases.
+ - 30 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -231,6 +401,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 6 commits contributed to the release.
+ - 30 days passed between releases.
  - 2 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -326,7 +497,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 8 commits contributed to the release over the course of 79 calendar days.
- - 79 days passed between releases.
+ - 80 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#2056](https://github.com/GitoxideLabs/gitoxide/issues/2056)
 
@@ -355,6 +526,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
+ - 1 day passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -379,6 +551,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 15 commits contributed to the release.
+ - 21 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#1962](https://github.com/GitoxideLabs/gitoxide/issues/1962)
 
@@ -416,6 +589,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 10 commits contributed to the release.
+ - 76 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -510,6 +684,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 8 commits contributed to the release.
+ - 33 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -692,6 +867,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 14 commits contributed to the release.
+ - 30 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -785,7 +961,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 8 commits contributed to the release over the course of 17 calendar days.
- - 20 days passed between releases.
+ - 21 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -815,6 +991,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
+ - 1 day passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -840,7 +1017,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 13 commits contributed to the release over the course of 19 calendar days.
- - 22 days passed between releases.
+ - 23 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -880,6 +1057,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 16 commits contributed to the release.
+ - 53 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 2 unique issues were worked on: [#1082](https://github.com/GitoxideLabs/gitoxide/issues/1082), [#1119](https://github.com/GitoxideLabs/gitoxide/issues/1119)
 
@@ -921,7 +1099,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 4 commits contributed to the release.
- - 1 day passed between releases.
+ - 2 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#1063](https://github.com/GitoxideLabs/gitoxide/issues/1063)
 
@@ -967,7 +1145,7 @@ open a new issue to help us making Gitoxide even more correct.
 <csr-read-only-do-not-edit/>
 
  - 19 commits contributed to the release over the course of 17 calendar days.
- - 17 days passed between releases.
+ - 18 days passed between releases.
  - 3 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1116,7 +1294,7 @@ open a new issue to help us making Gitoxide even more correct.
 <csr-read-only-do-not-edit/>
 
  - 28 commits contributed to the release over the course of 17 calendar days.
- - 30 days passed between releases.
+ - 31 days passed between releases.
  - 5 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1194,7 +1372,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
- - 19 days passed between releases.
+ - 20 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1219,7 +1397,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
- - 6 days passed between releases.
+ - 7 days passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1244,7 +1422,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 6 commits contributed to the release over the course of 10 calendar days.
- - 15 days passed between releases.
+ - 16 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1301,6 +1479,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 3 commits contributed to the release.
+ - 1 day passed between releases.
  - 0 commits were understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 
@@ -1333,6 +1512,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 7 commits contributed to the release.
+ - 47 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 1 unique issue was worked on: [#814](https://github.com/GitoxideLabs/gitoxide/issues/814)
 
@@ -1422,7 +1602,7 @@ A maintenance release without user-facing changes.
 <csr-read-only-do-not-edit/>
 
  - 6 commits contributed to the release over the course of 2 calendar days.
- - 8 days passed between releases.
+ - 9 days passed between releases.
  - 1 commit was understood as [conventional](https://www.conventionalcommits.org).
  - 0 issues like '(#ID)' were seen in commit messages
 

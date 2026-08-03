@@ -160,6 +160,15 @@ fn path_argument_safety() -> crate::Result {
     assert_eq!(url.path, "/-oProxyCommand=open$IFS-aCalculator");
     assert_eq!(url.path_argument_safe(), None, "An unsafe path is blocked");
 
+    for input in ["foo:path", "foo:-option"] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(
+            url.path_argument_safe(),
+            None,
+            "relative paths need validation at their command-line use site"
+        );
+    }
+
     Ok(())
 }
 
