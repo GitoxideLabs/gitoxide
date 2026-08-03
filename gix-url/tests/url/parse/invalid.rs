@@ -41,23 +41,33 @@ fn missing_port_despite_indication() {
 }
 
 #[test]
-fn port_zero_is_invalid() {
-    assert_matches!(parse("ssh://host.xz:0/path"), Err(Url { .. }));
+fn port_zero_is_accepted_for_git_compatibility() {
+    for input in [
+        "ssh://host.xz:0/path",
+        "ssh://[::1]:0/path",
+        "git://host.xz:0/path",
+        "git://[::1]:0/path",
+    ] {
+        let url = parse(input).expect("Git accepts port zero");
+        assert_eq!(url.port, Some(0), "port zero is retained: {input}");
+    }
 }
 
 #[test]
-fn port_too_large() {
-    assert_matches!(parse("ssh://host.xz:65536/path"), Err(Url { .. }));
-    assert_matches!(parse("ssh://host.xz:99999/path"), Err(Url { .. }));
-}
-
-#[test]
-fn invalid_port_format() {
-    assert_matches!(
-        parse("ssh://host.xz:abc/path"),
-        Err(Url { .. }),
-        "non-numeric ports must be rejected"
-    );
+fn textual_and_overflowing_ssh_and_git_ports_are_rejected_despite_git() {
+    for input in [
+        "ssh://host.xz:abc/path",
+        "git://host.xz:abc/path",
+        "ssh://host.xz:65536/path",
+        "ssh://host.xz:99999/path",
+        "git://host.xz:65536/path",
+    ] {
+        assert_matches!(
+            parse(input),
+            Err(Url { .. }),
+            "invalid ports are diagnosed instead of being treated as host text: {input}"
+        );
+    }
 }
 
 #[test]

@@ -337,6 +337,18 @@ fn scoped_ipv6_address_with_empty_port() -> crate::Result {
 }
 
 #[test]
+fn bracketed_host_is_percent_decoded_once() -> crate::Result {
+    let url = gix_url::parse("SSh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
+    assert_eq!(
+        url.host(),
+        Some("::81ssssssssssssssssssssssssssssssssssssss%85"),
+        "an escape produced by decoding must not be decoded again"
+    );
+    assert_eq!(url.path, "/00%85]://", "the path is decoded once as well");
+    Ok(())
+}
+
+#[test]
 fn percent_encoded_path_delimiters_are_decoded() -> crate::Result {
     let url = gix_url::parse("ssh://example.com/a%2Fb")?;
     assert_eq!(url.path, "/a/b", "Git decodes reserved escapes in SSH repository paths");

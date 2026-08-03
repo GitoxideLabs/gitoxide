@@ -35,14 +35,14 @@ impl From<Infallible> for Error {
     }
 }
 
-///
+/// The syntax used to interpret an input location.
 #[derive(Debug, Clone, Copy)]
 pub enum UrlKind {
-    ///
+    /// A URL containing a `scheme://` separator.
     Url,
-    ///
+    /// An SCP-like SSH location such as `user@host:path`.
     Scp,
-    ///
+    /// A local filesystem path.
     Local,
 }
 
@@ -102,11 +102,15 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
     let input_after_protocol = &input[protocol_end + "://".len()..];
+    let is_http = {
+        let scheme = &input[..protocol_end];
+        scheme.eq_ignore_ascii_case(b"http") || scheme.eq_ignore_ascii_case(b"https")
+    };
     let bytes_to_path = input_after_protocol
         .iter()
         .filter(|b| !b.is_ascii_whitespace())
         .skip_while(|b| **b == b'/' || **b == b'\\')
-        .position(|b| matches!(*b, b'/' | b'?' | b'#'))
+        .position(|b| *b == b'/' || is_http && matches!(*b, b'?' | b'#'))
         .unwrap_or(input_after_protocol.len());
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         return Err(Error::TooLong {
@@ -150,16 +154,10 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             if let Some(h2) = h.strip_prefix('[') {
                 if let Some(inner) = h2.strip_suffix("]:") {
                     // "[::1]:" → "::1"
-                    h = percent_encoding::percent_decode_str(inner)
-                        .decode_utf8()
-                        .expect("bracketed hosts were validated during parsing")
-                        .into_owned();
+                    h = inner.to_owned();
                 } else if let Some(inner) = h2.strip_suffix(']') {
                     // "[::1]" → "::1"
-                    h = percent_encoding::percent_decode_str(inner)
-                        .decode_utf8()
-                        .expect("bracketed hosts were validated during parsing")
-                        .into_owned();
+                    h = inner.to_owned();
                 }
             } else {
                 // Non-bracketed host: strip a single trailing colon

@@ -13,6 +13,12 @@ credential_urls=(
   "https://example.com/%3Fquery"
   "https://example.com/%23fragment"
   "https://example.com/%252F"
+  "https://host?@redirected/repo"
+  "https://host#@redirected/repo"
+  "https://example.com/a%20b"
+  "https://example.com/caf%C3%A9"
+  "https://[2001:db8::1]:8443/repo"
+  "https://example.com/%2f%3f%23%25"
 )
 
 # The contents and structure of this loop are an adaption
@@ -59,6 +65,40 @@ done
 tests_windows+=("file://c:/repo")
 tests_windows+=("c:repo")
 tests+=("ssh://[fe80::1%25Eth0]/repo")
+tests+=(
+  "ssh://host?@redirected/repo"
+  "ssh://host#@redirected/repo"
+  "ssh://host%2ename/repo"
+  "git://host%2ename/repo"
+  "ssh://host:0/repo"
+  "ssh://foo:bar:baz/repo"
+  "ssh://[not-ip]/repo"
+  "file://::1/repo"
+  "ssh://host:1/repo"
+  "ssh://host:65535/repo"
+  "ssh://user@[2001:db8::1]:2222/repo"
+  "ssh://user@2001:db8::1/repo"
+  "ssh://::1/repo"
+  "git://::1/repo"
+  "ssh://host/a%2Fb"
+  "ssh://host/%3Fquery"
+  "ssh://host/%23fragment"
+  "ssh://host/%252F"
+  "git://host/a%2Fb"
+)
+tests_unix+=(
+  "file:///repo"
+  "file://host/repo"
+  "file://localhost/repo"
+  "file://[::1]/repo"
+  "file://x:/repo"
+)
+tests_windows+=(
+  "file:///repo"
+  "file://host/repo"
+  "file://localhost/repo"
+  "file://[::1]/repo"
+)
 
 tests_unix+=("${tests[@]}")
 tests_windows+=("${tests[@]}")

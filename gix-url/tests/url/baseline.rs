@@ -6,6 +6,10 @@ fn parse_and_compare_baseline_urls() {
     let mut failed = 0;
     let mut expected_failures = 0;
     let total = baseline::URLS.len();
+    assert_ne!(
+        total, 0,
+        "baseline must contain expectations (425 at this time just FYI)"
+    );
 
     for (url, expected) in baseline::URLS.iter() {
         if baseline::is_expected_failure_on_windows(url) {
@@ -101,7 +105,9 @@ fn assert_urls_equal(expected: &baseline::GitDiagUrl<'_>, actual: &gix_url::Url)
     }
 
     if matches!(actual.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https) {
-        assert_eq!(actual.path.trim_with(|b| b == '/'), expected.path.unwrap_or_default());
+        let path = actual.path.strip_prefix(b"/").unwrap_or(&actual.path);
+        let path = path.strip_suffix(b"/").unwrap_or(path);
+        assert_eq!(path, expected.path.unwrap_or_default());
     } else {
         assert_eq!(actual.path, expected.path.unwrap_or_default());
     }

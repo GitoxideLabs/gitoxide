@@ -35,7 +35,9 @@ impl<'a> From<&'a str> for Scheme {
 }
 
 impl Scheme {
-    /// Return ourselves parseable name.
+    /// Return the canonical textual name of this scheme.
+    ///
+    /// Legacy `ssh+git` and `git+ssh` inputs are represented as [`Scheme::Ssh`] and therefore return `ssh`.
     pub fn as_str(&self) -> &str {
         use Scheme::*;
         match self {
