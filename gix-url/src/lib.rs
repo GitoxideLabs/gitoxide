@@ -193,7 +193,7 @@ pub struct Url {
     /// For a slash-prefixed path that will be passed intact to a command-line application, call
     /// [`Self::path_argument_safe()`]. Other path forms require validation appropriate to how they will be passed.
     pub path: BString,
-    /// The original parsed path when it contains percent escapes for reserved URL characters.
+    /// The original parsed path when it contains percent escapes.
     ///
     /// This lets serialization retain the encoded spelling while [`Self::path`] remains decoded. It is reused only
     /// while decoding it still produces the public path; constructing or mutating the public path encodes percent signs.
@@ -440,6 +440,18 @@ impl Url {
         }
     }
 
+    fn path_with_percent_escapes(&self) -> Option<&BStr> {
+        let encoded = self.path_with_percent_escapes.as_ref()?;
+        percent_encoding::percent_decode(encoded)
+            .eq(self.path.iter().copied())
+            .then_some(encoded.as_ref())
+    }
+
+    /// Return the original percent-escaped path if [Self::path] wasn't changed in the meantime, or [`Self::path`] otherwise.
+    pub fn original_path(&self) -> &BStr {
+        self.path_with_percent_escapes().unwrap_or(self.path.as_ref())
+    }
+
     /// Return a slash-prefixed path if the bytes after the slash can't be mistaken for a command-line argument.
     ///
     /// The leading slash must be present and must be passed to the command. Empty and non-slash-prefixed paths return
@@ -491,9 +503,9 @@ impl Url {
 impl Url {
     /// Write all URL components, including the password, to `out` in a form suitable for parsing again.
     ///
-    /// Parsed escapes for reserved path characters retain their spelling while [`Self::path`] is unchanged, but other escaping and
-    /// canonicalization can change the original input spelling. Invalid combinations created through public field
-    /// mutation may return an error.
+    /// Parsed escapes for reserved path characters retain their spelling while [`Self::path`] is unchanged, but other
+    /// escaping and canonicalization can change the original input spelling. Invalid combinations created through
+    /// public field mutation may return an error.
     pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         // Since alternative form doesn't employ any escape syntax, password and
         // port number cannot be encoded.
@@ -592,11 +604,7 @@ impl Url {
         if matches!(self.scheme, Scheme::Ssh | Scheme::Git) && !self.path.starts_with(b"/") {
             out.write_all(b"/")?;
         }
-        if let Some(encoded) = self
-            .path_with_percent_escapes
-            .as_ref()
-            .filter(|encoded| percent_encoding::percent_decode(encoded).eq(self.path.iter().copied()))
-        {
+        if let Some(encoded) = self.path_with_percent_escapes() {
             out.write_all(encoded)?;
         } else if matches!(self.scheme, Scheme::Http | Scheme::Https) {
             // We intentionally do not encode '?' and '#': ParsedUrl keeps them in `path`,
@@ -659,8 +667,8 @@ impl Url {
 
     /// Serialize all URL components, including the password, into a binary string.
     ///
-    /// Parsed escapes for reserved path characters retain their spelling while [Self::path] is unchanged, but other escaping and
-    /// canonicalization can change the original input spelling.
+    /// Parsed escapes for reserved path characters retain their spelling while [`Self::path`] is unchanged, but other
+    /// escaping and canonicalization can change the original input spelling.
     ///
     /// # Panics
     ///

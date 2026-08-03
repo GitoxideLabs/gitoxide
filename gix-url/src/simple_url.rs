@@ -10,7 +10,7 @@ pub(crate) struct ParsedUrl {
     pub host: Option<String>,     // Owned to allow normalization to lowercase
     pub port: Option<u16>,
     pub path: String, // Owned to allow percent-decoding
-    /// The original path when it contains escaped reserved characters, allowing lossless serialization.
+    /// The original path when it contains percent escapes, allowing lossless serialization.
     pub path_with_percent_escapes: Option<String>,
 }
 
@@ -57,24 +57,9 @@ fn percent_decode(s: &str) -> Result<String, UrlParseError> {
         .map_err(|_| UrlParseError::InvalidDomainCharacter)
 }
 
-/// Decode percent-encoded path bytes and retain the original spelling if it contains escaped reserved characters.
+/// Decode percent-encoded path bytes and retain the original spelling if it contains escapes.
 fn percent_decode_path(s: &str) -> Result<(String, Option<String>), UrlParseError> {
-    let input = s.as_bytes();
-    let mut has_percent_escapes = false;
-    let mut pos = 0;
-    while pos < input.len() {
-        if input[pos] == b'%' {
-            if let Some(value) = s.get(pos + 1..pos + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-                if value == b'%' || b":/?#[]@!$&'()*+,;=".contains(&value) {
-                    has_percent_escapes = true;
-                }
-                pos += 3;
-                continue;
-            }
-        }
-        pos += 1;
-    }
-    percent_decode(s).map(|path| (path, has_percent_escapes.then(|| s.to_owned())))
+    percent_decode(s).map(|path| (path, s.contains('%').then(|| s.to_owned())))
 }
 
 /// Validate and normalize the contents of a bracketed IPv6 host literal.

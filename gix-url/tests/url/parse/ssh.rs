@@ -349,9 +349,26 @@ fn bracketed_host_is_percent_decoded_once() -> crate::Result {
 }
 
 #[test]
-fn percent_encoded_path_delimiters_are_decoded() -> crate::Result {
-    let url = gix_url::parse("ssh://example.com/a%2Fb")?;
-    assert_eq!(url.path, "/a/b", "Git decodes reserved escapes in SSH repository paths");
+fn percent_encoded_paths_are_decoded_and_the_original_is_retained() -> crate::Result {
+    for (input, decoded_path, original_path, message) in [
+        (
+            "ssh://example.com/a%2Fb",
+            "/a/b",
+            "/a%2Fb",
+            "Git decodes reserved escapes in SSH repository paths",
+        ),
+        (
+            "ssh://example.com/a%20b",
+            "/a b",
+            "/a%20b",
+            "original paths are available independently of the URL scheme",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.path, decoded_path, "{message}");
+        assert_eq!(url.original_path(), original_path, "{message}");
+        assert_eq!(url.to_bstring(), input, "serialization remains lossless: {message}");
+    }
     Ok(())
 }
 

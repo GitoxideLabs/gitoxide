@@ -160,6 +160,11 @@ fn https_with_ipv6_user_and_port() -> crate::Result {
 fn percent_encoded_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/path/with%20spaces/file")?;
     assert_eq!(url.path, "/path/with spaces/file", "paths are now decoded");
+    assert_eq!(
+        url.original_path(),
+        "/path/with%20spaces/file",
+        "the encoded request path remains available"
+    );
     Ok(())
 }
 
@@ -167,6 +172,42 @@ fn percent_encoded_path() -> crate::Result {
 fn percent_encoded_international_path() -> crate::Result {
     let url = gix_url::parse("https://example.com/caf%C3%A9")?;
     assert_eq!(url.path, "/café", "international characters are decoded in path");
+    Ok(())
+}
+
+#[test]
+fn original_path_preserves_exact_spelling() -> crate::Result {
+    for (input, decoded_path, original_path, message) in [
+        (
+            "https://example.com/plain",
+            "/plain",
+            "/plain",
+            "a path without escapes falls back to the decoded path",
+        ),
+        (
+            "https://example.com/%41",
+            "/A",
+            "/%41",
+            "an unreserved escape retains its spelling",
+        ),
+        (
+            "https://example.com/%2f",
+            "//",
+            "/%2f",
+            "lowercase escape digits retain their case",
+        ),
+        (
+            "https://example.com/caf%C3%A9",
+            "/café",
+            "/caf%C3%A9",
+            "a multi-byte escape retains its complete spelling",
+        ),
+    ] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.path, decoded_path, "the public path is decoded: {message}");
+        assert_eq!(url.original_path(), original_path, "{message}");
+        assert_eq!(url.to_bstring(), input, "serialization remains lossless: {message}");
+    }
     Ok(())
 }
 
@@ -232,6 +273,11 @@ fn literal_percent_escape_text_from_parts_is_encoded() -> crate::Result {
 
     let mut parsed = gix_url::parse("https://example.com/a%2Fb")?;
     parsed.path = "/literal%2Ftext".into();
+    assert_eq!(
+        parsed.original_path(),
+        "/literal%2Ftext",
+        "mutating the path invalidates its encoded spelling"
+    );
     assert_eq!(
         parsed.to_bstring(),
         "https://example.com/literal%252Ftext",
