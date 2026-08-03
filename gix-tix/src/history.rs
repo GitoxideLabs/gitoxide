@@ -36,6 +36,21 @@ pub(crate) enum DecorationKind {
 }
 
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RefSnapshot {
+    pub view: HashMap<BString, gix::refs::Target>,
+    pub hidden: HashMap<BString, gix::refs::Target>,
+    pub view_tips: Vec<ObjectId>,
+    pub hidden_tips: Vec<ObjectId>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Refresh {
+    pub refs: RefSnapshot,
+    pub decorations: Decorations,
+    pub commits: LoadedCommits,
+}
 #[derive(Default)]
 pub(crate) struct Authors {
     strings: HashSet<&'static [u8]>,
@@ -178,6 +193,126 @@ pub(crate) fn load(
     }
     emit(Event::Complete);
     Ok(())
+}
+
+pub(crate) fn snapshot(repo: &gix::Repository, revisions: &[OsString], hidden: &[OsString]) -> Result<RefSnapshot> {
+    Ok(RefSnapshot {
+        view: referenced_refs(repo, revisions)?,
+        hidden: referenced_refs(repo, hidden)?,
+        view_tips: resolve_tips(repo, revisions)?.unwrap_or_default(),
+        hidden_tips: resolve_revisions(repo, hidden, "hidden ")?,
+    })
+}
+
+pub(crate) fn refresh(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+    hidden_revisions: &[OsString],
+    known: &HashSet<ObjectId>,
+    expand: &HashSet<ObjectId>,
+    authors: &SharedAuthors,
+) -> Result<Refresh> {
+    let refs = snapshot(repo, revisions, hidden_revisions)?;
+    let mut tips = refs.view_tips.clone();
+    tips.extend(refs.hidden_tips.iter().copied());
+    tips.extend(expand.iter().copied());
+    let mut rows = Vec::new();
+    let mut attributions = Vec::new();
+    if !tips.is_empty() {
+        let walk = repo
+            .rev_walk(tips)
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default()))
+            .selected(|id| !known.contains(id) || expand.contains(id))
+            .context("could not start incremental revision walk")?;
+        for info in walk {
+            let info = info.context("could not refresh revision history")?;
+            if known.contains(&info.id) {
+                continue;
+            }
+            let metadata = if info.generation.is_some() {
+                None
+            } else {
+                let object = info.object().context("could not read commit")?;
+                let mut authors = gix::features::threading::lock(authors);
+                Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+            };
+            let metadata_loaded = metadata.is_some();
+            let Metadata {
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                has_agent_marker,
+                signature,
+            } = metadata.unwrap_or_else(|| Metadata {
+                committer_time: Default::default(),
+                author: &EMPTY_AUTHOR,
+                attributions: 0..0,
+                title: BString::default(),
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
+            });
+            rows.push(Commit {
+                id: info.id,
+                parent_ids: info.parent_ids,
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                metadata_loaded,
+                has_agent_marker,
+                signature,
+            });
+        }
+    }
+    Ok(Refresh {
+        refs,
+        decorations: decorations(repo)?,
+        commits: LoadedCommits { rows, attributions },
+    })
+}
+
+fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
+    let implicit_head = OsString::from("HEAD");
+    let revisions = if revisions.is_empty() {
+        std::slice::from_ref(&implicit_head)
+    } else {
+        revisions
+    };
+    let mut out = HashMap::new();
+    for revision in revisions {
+        let revision = gix::path::os_str_into_bstr(revision)
+            .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+        let spec = repo
+            .rev_parse(revision)
+            .with_context(|| format!("could not parse revision {revision}"))?;
+        for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
+            insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+fn insert_ref_chain(repo: &gix::Repository, name: &BStr, out: &mut HashMap<BString, gix::refs::Target>) -> Result<()> {
+    let mut name = name.to_owned();
+    loop {
+        if out.contains_key(&name) {
+            return Ok(());
+        }
+        let reference = match repo.try_find_reference(name.as_bstr()) {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&err) => return Ok(()),
+            Err(err) => return Err(err).with_context(|| format!("could not read reference {name}")),
+        };
+        let Some(reference) = reference else {
+            return Ok(());
+        };
+        let target = reference.target().into_owned();
+        let next = target.try_name().map(|name| name.as_bstr().to_owned());
+        out.insert(name, target);
+        let Some(next) = next else { return Ok(()) };
+        name = next;
+    }
 }
 
 pub(crate) fn load_metadata(
@@ -354,7 +489,7 @@ impl Authors {
     }
 }
 
-fn decorations(repo: &gix::Repository) -> Result<Decorations> {
+pub(crate) fn decorations(repo: &gix::Repository) -> Result<Decorations> {
     let mut out = Decorations::new();
     for reference in repo
         .references()
@@ -362,7 +497,11 @@ fn decorations(repo: &gix::Repository) -> Result<Decorations> {
         .all()
         .context("could not iterate references")?
     {
-        let mut reference = reference.map_err(|err| anyhow::anyhow!("could not read reference: {err}"))?;
+        let mut reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
+        };
         let mut kind = decoration_kind(reference.name().as_bstr());
         if kind == DecorationKind::Tag {
             let annotated = match reference.try_id() {
@@ -395,6 +534,19 @@ fn decorations(repo: &gix::Repository) -> Result<Decorations> {
         });
     }
     Ok(out)
+}
+
+fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
+    loop {
+        if err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+        {
+            return true;
+        }
+        let Some(source) = err.source() else { return false };
+        err = source;
+    }
 }
 
 fn decoration_kind(name: &[u8]) -> DecorationKind {
@@ -437,6 +589,22 @@ mod tests {
             },
         )?;
         Ok(events)
+    }
+
+    #[test]
+    fn only_missing_ref_reads_are_ignored() {
+        let ref_error = |kind| gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
+            source: std::io::Error::from(kind),
+            path: "refs/heads/racing".into(),
+        };
+        assert!(
+            is_missing_ref(&ref_error(std::io::ErrorKind::NotFound)),
+            "a ref removed after iteration began is transient"
+        );
+        assert!(
+            !is_missing_ref(&ref_error(std::io::ErrorKind::PermissionDenied)),
+            "unrelated ref read errors remain actionable"
+        );
     }
 
     #[test]
@@ -513,6 +681,26 @@ mod tests {
         assert!(contains_agent_marker(b"subject\n\n--- agent\n"));
         assert!(contains_agent_marker(b"subject\n\n<!-- agent -->\n"));
         assert!(!contains_agent_marker(b"subject\n\nagent"));
+    }
+
+    #[test]
+    fn snapshots_references_and_symbolic_targets_from_revisions() -> gix_testtools::Result {
+        let fixture = fixture()?;
+        let repo = gix::open(fixture)?;
+        let implicit = snapshot(&repo, &[], &[])?;
+        assert!(
+            implicit.view.contains_key(b"HEAD".as_bstr()),
+            "an implicit revision watches HEAD"
+        );
+        assert!(
+            implicit.view.contains_key(b"refs/heads/main".as_bstr()),
+            "the symbolic target of HEAD is watched as well"
+        );
+
+        let explicit = snapshot(&repo, &[OsString::from("main")], &[OsString::from("topic")])?;
+        assert!(explicit.view.contains_key(b"refs/heads/main".as_bstr()));
+        assert!(explicit.hidden.contains_key(b"refs/heads/topic".as_bstr()));
+        Ok(())
     }
 
     #[test]
