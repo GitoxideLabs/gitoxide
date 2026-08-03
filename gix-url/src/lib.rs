@@ -560,13 +560,15 @@ impl Url {
             percent_encoding::utf8_percent_encode(s, encode_set).into()
         }
 
-        fn write_host(out: &mut dyn std::io::Write, host: &str, bracket: bool) -> std::io::Result<()> {
+        fn write_host(out: &mut dyn std::io::Write, host: &str, bracket: bool, scheme: &Scheme) -> std::io::Result<()> {
             if bracket {
                 out.write_all(b"[")?;
                 out.write_all(host.replace('%', "%25").as_bytes())?;
                 out.write_all(b"]")
-            } else {
+            } else if matches!(scheme, Scheme::File | Scheme::Http | Scheme::Https) {
                 out.write_all(host.as_bytes())
+            } else {
+                out.write_all(percent_encode(host, host.parse::<std::net::Ipv6Addr>().is_err()).as_bytes())
             }
         }
 
@@ -584,10 +586,10 @@ impl Url {
                     out.write_all(percent_encode(password, false).as_bytes())?;
                 }
                 out.write_all(b"@")?;
-                write_host(out, host, needs_brackets)?;
+                write_host(out, host, needs_brackets, &self.scheme)?;
             }
             (None, Some(host)) => {
-                write_host(out, host, needs_brackets)?;
+                write_host(out, host, needs_brackets, &self.scheme)?;
             }
             (None, None) => {}
             (Some(_user), None) => {

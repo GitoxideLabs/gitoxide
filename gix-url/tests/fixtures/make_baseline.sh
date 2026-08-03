@@ -55,7 +55,7 @@ for path in "repo" "re:po" "re/po"; do
     tests+=("./$protocol:$host/~$path")
   done
   # SCP like urls
-  for host in "user@name@host" "user_name@host" "host" "[::1]"; do
+  for host in "user@name@host" "user_name@host" "host" "[::1]" "[fe80::1%Eth0]"; do
     tests+=("$host:$path")
     tests+=("$host:/~$path")
   done

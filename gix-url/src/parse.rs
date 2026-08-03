@@ -205,7 +205,8 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     // should never differ in any other way (ssh URLs should not contain a query or fragment part).
     // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
     // determined above and can therefore skip parsing it here as well.
-    let url_string = format!("ssh://{host}");
+    // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
+    let url_string = format!("ssh://{}", host.replace('%', "%25"));
     let url = crate::simple_url::ParsedUrl::parse(&url_string).map_err(|source| Error::Url {
         url: input.to_owned(),
         kind: UrlKind::Scp,
