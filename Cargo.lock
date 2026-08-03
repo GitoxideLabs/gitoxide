@@ -2613,6 +2613,7 @@ dependencies = [
  "gix-utils",
  "percent-encoding",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 

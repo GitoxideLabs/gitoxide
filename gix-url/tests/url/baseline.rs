@@ -100,7 +100,11 @@ fn assert_urls_equal(expected: &baseline::GitDiagUrl<'_>, actual: &gix_url::Url)
         }
     }
 
-    assert_eq!(actual.path, expected.path.unwrap_or_default());
+    if matches!(actual.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https) {
+        assert_eq!(actual.path.trim_with(|b| b == '/'), expected.path.unwrap_or_default());
+    } else {
+        assert_eq!(actual.path, expected.path.unwrap_or_default());
+    }
 }
 
 #[expect(clippy::module_inception)]

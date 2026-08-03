@@ -29,6 +29,16 @@ use std::{borrow::Cow, path::PathBuf};
 use bstr::{BStr, BString};
 use gix_utils::AsBStr;
 
+const HTTP_PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+
 ///
 pub mod expand_path;
 
@@ -126,7 +136,7 @@ pub enum ArgumentSafety<'a> {
 /// Also note that URLs that fail to parse are typically stored in [the resulting error](parse::Error) type
 /// and printed in full using its display implementation.
 #[derive(PartialEq, Eq, Debug, Hash, Ord, PartialOrd, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Url {
     /// The URL scheme.
     pub scheme: Scheme,
@@ -171,12 +181,78 @@ pub struct Url {
     ///
     /// If this value is ever going to be passed to a command-line application, call [Self::path_argument_safe()] instead.
     pub path: BString,
-    /// The parsed path when it contains preserved percent escapes for reserved URL characters.
+    /// The original parsed path when it contains percent escapes for reserved URL characters.
     ///
-    /// This lets serialization distinguish preserved escapes from literal percent text in [`Self::path`]. Escapes are
-    /// reused only while both paths match; constructing or mutating the public path causes percent signs to be encoded.
+    /// This lets serialization retain the encoded spelling while [`Self::path`] remains decoded. It is reused only
+    /// while decoding it still produces the public path; constructing or mutating the public path encodes percent signs.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) path_with_percent_escapes: Option<BString>,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Url {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            scheme: Scheme,
+            user: Option<String>,
+            password: Option<String>,
+            host: Option<String>,
+            serialize_alternative_form: bool,
+            port: Option<u16>,
+            path: BString,
+            #[serde(default)]
+            path_with_percent_escapes: Option<BString>,
+        }
+
+        let mut fields = Fields::deserialize(deserializer)?;
+        if fields.path_with_percent_escapes.as_ref() == Some(&fields.path) {
+            fields.path_with_percent_escapes = Some(encode_legacy_http_path(&fields.path));
+            fields.path = percent_encoding::percent_decode(&fields.path)
+                .collect::<Vec<_>>()
+                .into();
+        }
+        Ok(Url {
+            scheme: fields.scheme,
+            user: fields.user,
+            password: fields.password,
+            host: fields.host,
+            serialize_alternative_form: fields.serialize_alternative_form,
+            port: fields.port,
+            path: fields.path,
+            path_with_percent_escapes: fields.path_with_percent_escapes,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+fn encode_legacy_http_path(path: &[u8]) -> BString {
+    let mut out = Vec::with_capacity(path.len());
+    let mut start = 0;
+    let mut pos = 0;
+    while pos + 2 < path.len() {
+        if path[pos] == b'%' && path[pos + 1].is_ascii_hexdigit() && path[pos + 2].is_ascii_hexdigit() {
+            out.extend(
+                percent_encoding::percent_encode(&path[start..pos], HTTP_PATH_ENCODE_SET)
+                    .to_string()
+                    .bytes(),
+            );
+            out.extend_from_slice(&path[pos..pos + 3]);
+            pos += 3;
+            start = pos;
+        } else {
+            pos += 1;
+        }
+    }
+    out.extend(
+        percent_encoding::percent_encode(&path[start..], HTTP_PATH_ENCODE_SET)
+            .to_string()
+            .bytes(),
+    );
+    out.into()
 }
 
 /// Instantiation
@@ -494,44 +570,19 @@ impl Url {
         if matches!(self.scheme, Scheme::Http | Scheme::Https) {
             // We intentionally do not encode '?' and '#': ParsedUrl keeps them in `path`,
             // and encoding would change routed endpoints for already parsed URLs.
-            const PATH_ENCODE_SET: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
-                .add(b' ')
-                .add(b'"')
-                .add(b'%')
-                .add(b'<')
-                .add(b'>')
-                .add(b'`')
-                .add(b'{')
-                .add(b'}');
-
-            let preserve_percent_escapes = self.path_with_percent_escapes.as_ref() == Some(&self.path);
-            let mut start = 0;
-            if preserve_percent_escapes {
-                let mut pos = start;
-                while pos + 2 < self.path.len() {
-                    if self.path[pos] == b'%'
-                        && self.path[pos + 1].is_ascii_hexdigit()
-                        && self.path[pos + 2].is_ascii_hexdigit()
-                    {
-                        write!(
-                            out,
-                            "{}",
-                            percent_encoding::percent_encode(&self.path[start..pos], PATH_ENCODE_SET)
-                        )?;
-                        let unchanged_percent_encoded_triplet = &self.path[pos..pos + 3];
-                        out.write_all(unchanged_percent_encoded_triplet)?;
-                        pos += 3;
-                        start = pos;
-                    } else {
-                        pos += 1;
-                    }
-                }
-            };
-            write!(
-                out,
-                "{}",
-                percent_encoding::percent_encode(&self.path[start..], PATH_ENCODE_SET)
-            )?;
+            if let Some(encoded) = self
+                .path_with_percent_escapes
+                .as_ref()
+                .filter(|encoded| percent_encoding::percent_decode(encoded).eq(self.path.iter().copied()))
+            {
+                out.write_all(encoded)?;
+            } else {
+                write!(
+                    out,
+                    "{}",
+                    percent_encoding::percent_encode(&self.path, HTTP_PATH_ENCODE_SET)
+                )?;
+            }
         } else {
             out.write_all(&self.path)?;
         }
@@ -607,6 +658,29 @@ impl Url {
 }
 
 /// This module contains extensions to the [Url] struct which are only intended to be used
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    #[test]
+    fn legacy_encoded_public_path_is_migrated() -> gix_testtools::Result {
+        for (input, legacy_path, decoded_path) in [
+            ("https://example.com/a%2Fb", "/a%2Fb", "/a/b"),
+            ("https://example.com/%20%25", "/ %25", "/ %"),
+        ] {
+            let mut legacy = crate::parse(input)?;
+            legacy.path = legacy_path.into();
+            legacy.path_with_percent_escapes = Some(legacy_path.into());
+
+            let migrated: crate::Url = serde_json::from_slice(&serde_json::to_vec(&legacy)?)?;
+            assert_eq!(
+                migrated.path, decoded_path,
+                "the public path is upgraded to decoded form"
+            );
+            assert_eq!(migrated.to_bstring(), input, "the encoded spelling remains lossless");
+        }
+        Ok(())
+    }
+}
+
 /// for testing code. Do not use this module in production! For all intents and purposes, the APIs of
 /// all functions and types exposed by this module are considered unstable and are allowed to break
 /// even in patch releases!

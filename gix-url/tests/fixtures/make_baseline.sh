@@ -7,6 +7,13 @@ tests=()
 tests_unix=()
 # urls only intended for testing on Windows
 tests_windows=()
+# HTTP URLs whose decoded paths are obtained through Git's credential plumbing.
+credential_urls=(
+  "https://example.com/a%2Fb/"
+  "https://example.com/%3Fquery"
+  "https://example.com/%23fragment"
+  "https://example.com/%252F"
+)
 
 # The contents and structure of this loop are an adaption
 # from git's own test suite (t/t5500-fetch-pack.sh).
@@ -71,5 +78,19 @@ do
   echo ";" # there are no `;` in the tested urls
   git -C temp-repo fetch-pack --diag-url "$url"
 done >git-baseline.windows
+
+# `fetch-pack --diag-url` doesn't support HTTP, so use Git's credential parser as the baseline oracle.
+for url in "${credential_urls[@]}"
+do
+  block=$(
+    echo ";"
+    echo "Diag: url=$url"
+    printf 'url=%s\n\n' "$url" |
+      git -c credential.useHttpPath=true \
+        -c 'credential.helper=!f() { echo username=baseline; echo password=baseline; }; f' credential fill |
+      sed -n 's/^protocol=/Diag: protocol=/p; s/^host=/Diag: hostandport=/p; s/^path=/Diag: path=/p'
+  )
+  printf '%s\n' "$block" | tee -a git-baseline.unix >>git-baseline.windows
+done
 
 rm -rf temp-repo

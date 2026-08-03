@@ -169,7 +169,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
     } else {
         url.host
     };
-    let path_with_percent_escapes = url.path_has_percent_escapes.then(|| path.clone());
+    let path_with_percent_escapes = url.path_with_percent_escapes.map(Into::into);
     Ok(crate::Url {
         serialize_alternative_form: false,
         path_with_percent_escapes,

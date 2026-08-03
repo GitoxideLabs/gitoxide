@@ -171,25 +171,32 @@ fn percent_encoded_international_path() -> crate::Result {
 }
 
 #[test]
-fn reserved_percent_encoded_path_octets_remain_encoded() -> crate::Result {
-    for (input, message) in [
-        ("https://example.com/a%2Fb", "an encoded slash remains path data"),
+fn reserved_percent_encoded_path_octets_remain_lossless() -> crate::Result {
+    for (input, expected_path, message) in [
+        (
+            "https://example.com/a%2Fb",
+            "/a/b",
+            "an encoded slash remains path data",
+        ),
         (
             "https://example.com/%3Fquery",
+            "/?query",
             "an encoded question mark does not start a query",
         ),
         (
             "https://example.com/%23fragment",
+            "/#fragment",
             "an encoded hash does not start a fragment",
         ),
         (
             "https://example.com/%252F",
+            "/%2F",
             "an encoded percent sign remains lossless",
         ),
     ] {
         let url = gix_url::parse(input)?;
         assert_eq!(url.to_bstring(), input, "{message}");
-        assert!(url.path.contains(&b'%'), "{message}");
+        assert_eq!(url.path, expected_path, "the public path is decoded: {message}");
     }
     Ok(())
 }
@@ -240,13 +247,13 @@ fn percent_encoded_path_roundtrips_in_lossless_serialization() -> crate::Result 
             "https://%20@%40.example.org/%20%25",
             "a single percent-encoded path segment roundtrips losslessly",
             "%40.example.org",
-            "/ %25",
+            "/ %",
         ),
         (
             "https://%20@%40.example.org/%20%25/%20%25",
             "multiple percent-encoded path segments roundtrip losslessly",
             "%40.example.org",
-            "/ %25/ %25",
+            "/ %/ %",
         ),
     ] {
         let url = gix_url::parse(input)?;
