@@ -28,7 +28,7 @@ gix-attributes = { version = "^0.34.0", path = "../gix-attributes", features = [
 gix-filter = { version = "^0.33.0", path = "../gix-filter" }
 gix-traverse = { version = "^0.60.0", path = "../gix-traverse" }
 gix-fs = { version = "^0.22.0", path = "../gix-fs" }
-gix-path = { version = "^0.12.3", path = "../gix-path" }
+gix-path = { version = "^0.12.4", path = "../gix-path" }
 
 gix-error = { version = "^0.2.5", path = "../gix-error" }
 parking_lot = "0.12.4"

@@ -59,8 +59,8 @@ gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 gix-object = { version = "^0.63.0", path = "../gix-object" }
 gix-filter = { version = "^0.33.0", path = "../gix-filter", optional = true }
 gix-worktree = { version = "^0.55.0", path = "../gix-worktree", default-features = false, features = ["attributes"], optional = true }
-gix-command = { version = "^0.9.1", path = "../gix-command", optional = true }
-gix-path = { version = "^0.12.3", path = "../gix-path", optional = true }
+gix-command = { version = "^0.9.2", path = "../gix-command", optional = true }
+gix-path = { version = "^0.12.4", path = "../gix-path", optional = true }
 gix-fs = { version = "^0.22.0", path = "../gix-fs", optional = true }
 gix-tempfile = { version = "^24.0.0", path = "../gix-tempfile", optional = true }
 gix-trace = { version = "^0.1.21", path = "../gix-trace", optional = true }
