@@ -71,12 +71,17 @@ impl ParsedUrl {
         // Find the end of the authority.
         let path_start = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
         let authority = &after_scheme[..path_start];
+        if authority.contains('\\') {
+            return Err(UrlParseError::InvalidDomainCharacter);
+        }
         let path = if path_start < after_scheme.len() {
             percent_decode(&after_scheme[path_start..])?
         } else {
             // No path specified - leave empty (caller can default to / if needed)
             String::new()
         };
+
+        let allow_unbracketed_ipv6 = matches!(scheme.as_str(), "git" | "ssh" | "git+ssh" | "ssh+git");
 
         // Parse authority: [user[:password]@]host[:port]
         let (username, password, host, port) = if let Some((user_info, host_port)) = authority.rsplit_once('@') {
@@ -94,7 +99,7 @@ impl ParsedUrl {
                 (percent_decode(user_info)?, None)
             };
 
-            let (h, p) = Self::parse_host_port(host_port)?;
+            let (h, p) = Self::parse_host_port(host_port, allow_unbracketed_ipv6)?;
             // If we have user info, we must have a host
             if h.is_none() {
                 return Err(UrlParseError::InvalidDomainCharacter);
@@ -102,7 +107,7 @@ impl ParsedUrl {
             (user, pass, h, p)
         } else {
             // No user info
-            let (h, p) = Self::parse_host_port(authority)?;
+            let (h, p) = Self::parse_host_port(authority, allow_unbracketed_ipv6)?;
             (String::new(), None, h, p)
         };
 
@@ -123,7 +128,10 @@ impl ParsedUrl {
         })
     }
 
-    fn parse_host_port(host_port: &str) -> Result<(Option<String>, Option<u16>), UrlParseError> {
+    fn parse_host_port(
+        host_port: &str,
+        allow_unbracketed_ipv6: bool,
+    ) -> Result<(Option<String>, Option<u16>), UrlParseError> {
         if host_port.is_empty() {
             return Ok((None, None));
         }
@@ -131,6 +139,9 @@ impl ParsedUrl {
         // Handle IPv6 addresses: [::1] or [::1]:port
         if host_port.starts_with('[') {
             if let Some(bracket_end) = host_port.find(']') {
+                if host_port[1..bracket_end].parse::<std::net::Ipv6Addr>().is_err() {
+                    return Err(UrlParseError::InvalidDomainCharacter);
+                }
                 let remaining = &host_port[bracket_end + 1..];
 
                 if remaining.is_empty() {
@@ -159,67 +170,79 @@ impl ParsedUrl {
             }
         }
 
-        // Handle regular host:port
-        // Use rfind to find the last colon
-        if let Some((before_last_colon, after_last_colon)) = host_port.rsplit_once(':') {
-            // Check if this looks like a port (all digits after colon)
-            // But avoid treating IPv6 addresses as host:port
-            // IPv6 addresses have colons in the part before the last colon (e.g., "::1" has "::" before the last ":")
-            let has_colon_before_last = before_last_colon.contains(':');
-            let is_all_digits_after =
-                !after_last_colon.is_empty() && after_last_colon.chars().all(|c| c.is_ascii_digit());
-
-            // Treat as port separator only if:
-            // 1. There's no colon before the last colon (normal host:port)
-            // 2. OR it's explicitly empty (host: with trailing colon)
-            if !has_colon_before_last {
-                if after_last_colon.is_empty() {
-                    // Empty port like "host:" - store host with trailing colon
-                    // This is needed for Git compatibility where "host:" != "host"
-                    return Ok((Some(Self::normalize_hostname(host_port)?), None));
-                } else if is_all_digits_after {
-                    let host = Self::normalize_hostname(before_last_colon)?;
-                    let port = after_last_colon
-                        .parse::<u16>()
-                        .map_err(|_| UrlParseError::InvalidPort)?;
-                    // Validate port is in valid range (1-65535, port 0 is invalid)
-                    if port == 0 {
-                        return Err(UrlParseError::InvalidPort);
-                    }
-                    return Ok((Some(host), Some(port)));
-                }
-            }
+        if allow_unbracketed_ipv6
+            && (host_port.parse::<std::net::Ipv6Addr>().is_ok()
+                || host_port
+                    .strip_suffix(':')
+                    .is_some_and(|host| host.parse::<std::net::Ipv6Addr>().is_ok()))
+        {
+            return Ok((Some(host_port.to_ascii_lowercase()), None));
         }
 
-        // No port, just host (including bare IPv6 addresses)
+        // Handle regular host:port. Unbracketed colons cannot be part of a host.
+        if let Some((before_last_colon, after_last_colon)) = host_port.rsplit_once(':') {
+            if before_last_colon.is_empty() || before_last_colon.contains(':') {
+                return Err(UrlParseError::InvalidDomainCharacter);
+            }
+            if after_last_colon.is_empty() {
+                // Empty port like "host:" - store host with trailing colon for Git compatibility.
+                let mut host = Self::normalize_hostname(before_last_colon)?;
+                host.push(':');
+                return Ok((Some(host), None));
+            }
+            if !after_last_colon.chars().all(|c| c.is_ascii_digit()) {
+                return Err(UrlParseError::InvalidPort);
+            }
+            let host = Self::normalize_hostname(before_last_colon)?;
+            let port = after_last_colon
+                .parse::<u16>()
+                .map_err(|_| UrlParseError::InvalidPort)?;
+            if port == 0 {
+                return Err(UrlParseError::InvalidPort);
+            }
+            return Ok((Some(host), Some(port)));
+        }
+
+        // No port, just host.
         Ok((Some(Self::normalize_hostname(host_port)?), None))
     }
 
-    /// Check if a string looks like a valid DNS hostname (for normalization purposes)
-    /// Valid DNS names contain only alphanumeric, hyphens, dots, underscores, and wildcards
     fn is_normalizable_hostname(host: &str) -> bool {
-        // Allow alphanumeric, -, ., _, and * (for patterns)
-        host.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '*'))
+        host.bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.' | b'_' | b'*'))
     }
 
-    /// Validate and possibly normalize a hostname
-    /// Valid DNS hostnames are normalized to lowercase
-    /// Hostnames containing ? or whitespace characters are rejected with an error
+    /// Validate a hostname and normalize DNS-like ASCII hostnames to lowercase.
+    /// Hostnames containing other permitted URL characters retain their original case.
     fn normalize_hostname(host: &str) -> Result<String, UrlParseError> {
-        // Reject invalid characters: ?, space, tab, newline, etc.
-        // These characters are forbidden in URLs per RFC 3986
-        if host.chars().any(|c| c == '?' || c.is_whitespace()) {
+        if !host.bytes().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    b'-' | b'.'
+                        | b'_'
+                        | b'~'
+                        | b'!'
+                        | b'$'
+                        | b'&'
+                        | b'\''
+                        | b'('
+                        | b')'
+                        | b'*'
+                        | b'+'
+                        | b','
+                        | b';'
+                        | b'='
+                        | b'%'
+                )
+        }) {
             return Err(UrlParseError::InvalidDomainCharacter);
         }
-
-        // Only normalize if it looks like a valid DNS hostname
-        // Preserve case for security checks if it contains special characters
-        if Self::is_normalizable_hostname(host) {
-            Ok(host.to_ascii_lowercase())
+        Ok(if Self::is_normalizable_hostname(host) {
+            host.to_ascii_lowercase()
         } else {
-            Ok(host.to_owned())
-        }
+            host.to_owned()
+        })
     }
 }
 
@@ -281,6 +304,40 @@ mod tests {
         assert_eq!(url.host.as_deref(), Some("[::1]"));
         assert_eq!(url.port, Some(8080));
         assert_eq!(url.path, "/path");
+    }
+
+    #[test]
+    fn git_schemes_allow_unbracketed_ipv6() {
+        for scheme in ["git", "ssh", "git+ssh", "ssh+git"] {
+            let url = ParsedUrl::parse(&format!("{scheme}://user@::1/repo"))
+                .expect("Git schemes allow unbracketed IPv6 hosts");
+            assert_eq!(url.host.as_deref(), Some("::1"), "the IPv6 address is the host");
+            assert_eq!(url.path, "/repo", "the path remains separate from the IPv6 host");
+        }
+    }
+
+    #[test]
+    fn malformed_authorities_are_rejected() {
+        for (url, message) in [
+            (
+                r"http://redirected.example\@original.example/repo",
+                "backslashes in the authority must be rejected",
+            ),
+            ("http://example.com:abc/", "non-numeric ports must be rejected"),
+            ("http://foo:bar:baz/", "unbracketed colons must be rejected"),
+            ("http://[not-ip]/", "bracketed hosts must be valid IPv6 addresses"),
+            ("http://bücher.example/", "non-ASCII hostnames must be rejected"),
+            ("http://::1/", "unbracketed IPv6 addresses must be rejected for HTTP"),
+        ] {
+            assert!(ParsedUrl::parse(url).is_err(), "{message}");
+        }
+    }
+
+    #[test]
+    fn utf8_user_information_is_accepted() {
+        let url = ParsedUrl::parse("ssh://jörg:passwörd@example.com/repo").expect("valid UTF-8 user information");
+        assert_eq!(url.username, "jörg", "the username is preserved");
+        assert_eq!(url.password.as_deref(), Some("passwörd"), "the password is preserved");
     }
 
     #[test]

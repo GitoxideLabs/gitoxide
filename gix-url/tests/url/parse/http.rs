@@ -173,8 +173,8 @@ fn percent_encoded_international_path() -> crate::Result {
 #[test]
 fn percent_encoded_path_roundtrips_in_lossless_serialization() -> crate::Result {
     for (input, expected_host, expected_path) in [
-        ("https://%20@%40:example.org/%20%25", "%40:example.org", "/ %"),
-        ("https://%20@%40:example.org/%20%25/%20%25", "%40:example.org", "/ %/ %"),
+        ("https://%20@%40.example.org/%20%25", "%40.example.org", "/ %"),
+        ("https://%20@%40.example.org/%20%25/%20%25", "%40.example.org", "/ %/ %"),
     ] {
         let url = gix_url::parse(input)?;
         let serialized = url.to_bstring();
