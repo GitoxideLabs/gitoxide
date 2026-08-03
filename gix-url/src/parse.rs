@@ -101,12 +101,13 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
 
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
-    let bytes_to_path = input[protocol_end + "://".len()..]
+    let input_after_protocol = &input[protocol_end + "://".len()..];
+    let bytes_to_path = input_after_protocol
         .iter()
         .filter(|b| !b.is_ascii_whitespace())
         .skip_while(|b| **b == b'/' || **b == b'\\')
         .position(|b| matches!(*b, b'/' | b'?' | b'#'))
-        .unwrap_or(input.len() - protocol_end);
+        .unwrap_or(input_after_protocol.len());
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         return Err(Error::TooLong {
             truncated_url: input[..(protocol_end + "://".len() + MAX_LEN).min(input.len())].into(),

@@ -293,3 +293,19 @@ fn query_and_fragment_delimiters_end_the_authority() -> crate::Result {
     }
     Ok(())
 }
+
+#[test]
+fn authority_length_limit_excludes_the_scheme_separator() -> crate::Result {
+    let at_limit = format!("https://{}", "a".repeat(1024));
+    assert_eq!(
+        gix_url::parse(&at_limit)?.host().map(str::len),
+        Some(1024),
+        "the full authority limit is accepted"
+    );
+    let over_limit = format!("https://{}", "a".repeat(1025));
+    assert!(
+        matches!(gix_url::parse(over_limit), Err(gix_url::parse::Error::TooLong { .. })),
+        "one byte beyond the authority limit is rejected"
+    );
+    Ok(())
+}
