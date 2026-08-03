@@ -38,6 +38,7 @@ use gix::{
     prelude::TreeDiffChangeExt,
 };
 use history::{Authors, Decorations, Event, SharedAuthors};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
 
 const EVENT_BATCH_SIZE: usize = 256;
@@ -45,6 +46,7 @@ const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
+const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 
 struct FillRepository<'a> {
     path: &'a Path,
@@ -464,6 +466,7 @@ fn event_loop(
         screen,
     } = options;
     let repository_path = repository.git_dir().to_owned();
+    let common_dir = repository.common_dir.clone().unwrap_or_else(|| repository_path.clone());
     let mut view_repository = gix::open(&repository_path).context("could not open repository for history view")?;
     view_repository.object_cache_size(None);
     let mailmap = view_repository.open_mailmap();
@@ -472,7 +475,9 @@ fn event_loop(
         .map_err(gix::Exn::into_error)
         .context("could not open Git notes")?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-    let (mut cancelled, mut receiver) = start_history(
+    let mut ref_snapshot = history::snapshot(&view_repository, &revisions, &hide)?;
+    let (mut ref_watcher, ref_events) = start_ref_watcher(&repository_path, &common_dir);
+    let (cancelled, receiver) = start_history(
         repository,
         &revisions,
         &hide,
@@ -480,7 +485,11 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.manual_refresh = ref_watcher.is_none();
     let mut lane_receiver = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<Result<history::Refresh>>> = None;
+    let mut refresh_pending = false;
+    let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
     let mut changes = None;
@@ -517,9 +526,21 @@ fn event_loop(
     let mut urgent = false;
     let mut inline_terminal = None;
     let mut history_requires_alternate_screen = false;
+    let mut resize_inline_pending = false;
+    let mut history_finished = false;
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
     let result: Result<Option<Duration>> = (|| loop {
+        while let Ok(event) = ref_events.try_recv() {
+            match event {
+                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => refresh_pending = true,
+                Ok(_) => {}
+                Err(_) => {
+                    ref_watcher = None;
+                    app.manual_refresh = true;
+                }
+            }
+        }
         if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             repeat_deadline = None;
             if app.changes_suppressed {
@@ -549,6 +570,9 @@ fn event_loop(
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
                     lane_receiver = None;
+                    history_requires_alternate_screen =
+                        history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
+                    resize_inline_pending = true;
                     dirty = true;
                     if quit_on_finish {
                         return Ok(app.lane_time);
@@ -557,6 +581,63 @@ fn event_loop(
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     anyhow::bail!("lane worker stopped unexpectedly")
+                }
+            }
+        }
+        if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok(result) => {
+                    let result = result?;
+                    decorations = result.decorations;
+                    let hidden_tips = if app.show_hidden {
+                        &[][..]
+                    } else {
+                        result.refs.hidden_tips.as_slice()
+                    };
+                    if let Some(rows) = app.start_refresh(result.commits, &result.refs.view_tips, hidden_tips) {
+                        lane_receiver = Some(start_lane_worker(rows));
+                    }
+                    refresh_receiver = None;
+                    dirty = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
+            }
+        }
+        if refresh_pending
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            let repository = gix::open_opts(&repository_path, gix::open::Options::isolated())
+                .context("could not inspect changed references")?;
+            let next = history::snapshot(&repository, &revisions, &hide)?;
+            let hidden_changed = next.hidden != ref_snapshot.hidden;
+            let tips_changed = next.view != ref_snapshot.view || hidden_changed;
+            ref_snapshot = next;
+            refresh_pending = false;
+            if tips_changed || refresh_expand_hidden {
+                let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
+                let expand = if refresh_expand_hidden || hidden_changed {
+                    app.hidden_ids()
+                } else {
+                    Default::default()
+                };
+                refresh_receiver = Some(start_history_refresh(
+                    repository_path.clone(),
+                    revisions.clone(),
+                    hidden,
+                    app.known_ids(),
+                    expand,
+                    gix::features::threading::OwnShared::clone(&authors),
+                ));
+                refresh_expand_hidden = false;
+                app.state = State::Loading;
+            } else {
+                let next = history::decorations(&repository)?;
+                if visible_decorations_changed(&decorations, &next, &app.rows) {
+                    decorations = next;
+                    dirty = true;
                 }
             }
         }
@@ -583,16 +664,11 @@ fn event_loop(
             continue;
         }
         let mut events = 0;
-        let mut resize_inline = false;
-        while events < EVENT_BATCH_SIZE {
+        let mut resize_inline = std::mem::take(&mut resize_inline_pending);
+        while !history_finished && events < EVENT_BATCH_SIZE {
             let message = match receiver.try_recv() {
                 Ok(message) => message,
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected)
-                    if matches!(app.state, State::Computing | State::Complete | State::Cancelled) =>
-                {
-                    break;
-                }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     anyhow::bail!("history worker stopped unexpectedly")
                 }
@@ -614,6 +690,7 @@ fn event_loop(
                     }
                 }
                 Event::Complete => {
+                    history_finished = true;
                     resize_inline = true;
                     history_requires_alternate_screen =
                         history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
@@ -621,7 +698,10 @@ fn event_loop(
                         lane_receiver = Some(start_lane_worker(rows));
                     }
                 }
-                Event::Cancelled => drop(app.update(Action::Cancelled)),
+                Event::Cancelled => {
+                    history_finished = true;
+                    drop(app.update(Action::Cancelled));
+                }
             }
         }
         sync_screen(
@@ -653,7 +733,13 @@ fn event_loop(
             dirty = false;
         }
         let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-        let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed(), repeat_timeout) {
+        let watcher_timeout = ref_watcher.as_ref().map(|_| REF_EVENT_INTERVAL);
+        let wake_after = match (repeat_timeout, watcher_timeout) {
+            (Some(repeat), Some(watcher)) => Some(repeat.min(watcher)),
+            (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
+            (None, None) => None,
+        };
+        let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
             Some(timeout) if event::poll(timeout)? => Some(event::read()?),
             Some(_) => None,
             None => Some(event::read()?),
@@ -733,18 +819,10 @@ fn event_loop(
                     execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
                 }
                 Effect::Reload(show_hidden) => {
-                    cancelled.store(true, Ordering::Relaxed);
-                    app.reload(show_hidden);
+                    app.show_hidden = show_hidden;
                     notes = open_notes(&repository_path)?;
-                    decorations.clear();
-                    let hidden = if show_hidden { &[][..] } else { hide.as_slice() };
-                    (cancelled, receiver) = start_history(
-                        gix::ThreadSafeRepository::open_opts(&repository_path, gix::open::Options::isolated())
-                            .context("could not reopen repository for history reload")?,
-                        &revisions,
-                        hidden,
-                        gix::features::threading::OwnShared::clone(&authors),
-                    );
+                    refresh_pending = true;
+                    refresh_expand_hidden = true;
                 }
                 Effect::OpenDiff(index) => {
                     let result = changes
@@ -889,6 +967,60 @@ fn start_history(
         }
     });
     (cancelled, receiver)
+}
+
+fn start_history_refresh(
+    repository_path: PathBuf,
+    revisions: Vec<OsString>,
+    hidden_revisions: Vec<OsString>,
+    known: std::collections::HashSet<gix::ObjectId>,
+    expand: std::collections::HashSet<gix::ObjectId>,
+    authors: SharedAuthors,
+) -> mpsc::Receiver<Result<history::Refresh>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = gix::open_opts(repository_path, gix::open::Options::isolated())
+            .context("could not reopen repository for history refresh")
+            .and_then(|mut repository| {
+                repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+                history::refresh(&repository, &revisions, &hidden_revisions, &known, &expand, &authors)
+            });
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn start_ref_watcher(
+    git_dir: &Path,
+    common_dir: &Path,
+) -> (
+    Option<RecommendedWatcher>,
+    mpsc::Receiver<notify::Result<notify::Event>>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    let Ok(mut watcher) = notify::recommended_watcher(move |event| {
+        let _ = sender.send(event);
+    }) else {
+        return (None, receiver);
+    };
+    let mut roots = vec![(common_dir.to_owned(), RecursiveMode::NonRecursive)];
+    if git_dir != common_dir {
+        roots.push((git_dir.to_owned(), RecursiveMode::NonRecursive));
+    }
+    for root in [common_dir.join("refs"), git_dir.join("refs")] {
+        if root.is_dir() && !roots.iter().any(|(path, _)| path == &root) {
+            roots.push((root, RecursiveMode::Recursive));
+        }
+    }
+    if roots.into_iter().all(|(path, mode)| watcher.watch(&path, mode).is_ok()) {
+        (Some(watcher), receiver)
+    } else {
+        (None, receiver)
+    }
+}
+
+fn visible_decorations_changed(old: &Decorations, new: &Decorations, rows: &[CommitRow]) -> bool {
+    rows.iter().any(|row| old.get(&row.id) != new.get(&row.id))
 }
 
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
@@ -1520,6 +1652,8 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('n') => Some(Action::ToggleName),
         KeyCode::Char('t') => Some(Action::ToggleTrailers),
         KeyCode::Char('m') => Some(Action::ToggleMailmap),
+        KeyCode::Char('R') => Some(Action::Refresh),
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
@@ -1927,6 +2061,16 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::ToggleRefs)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
+            Some(Action::Refresh),
+            "terminals which preserve lowercase shifted letters map Shift-R to refresh"
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE)),
+            Some(Action::Refresh),
+            "terminals which encode Shift-R as an uppercase letter map it to refresh"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
