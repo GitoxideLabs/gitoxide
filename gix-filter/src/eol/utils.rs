@@ -41,19 +41,21 @@ impl Stats {
     /// Gather statistics from the given `bytes`.
     ///
     /// Note that the entire buffer will be scanned.
+    ///
+    /// A trailing DOS end-of-file marker (`0x1a`) doesn't count towards [`non_printable`](Self::non_printable).
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let mut bytes = bytes.iter().peekable();
+        let mut iter = bytes.iter().peekable();
         let mut null = 0;
         let mut lone_cr = 0;
         let mut lone_lf = 0;
         let mut crlf = 0;
         let mut printable = 0;
         let mut non_printable = 0;
-        while let Some(b) = bytes.next() {
+        while let Some(b) = iter.next() {
             if *b == b'\r' {
-                match bytes.peek() {
+                match iter.peek() {
                     Some(n) if **n == b'\n' => {
-                        bytes.next();
+                        iter.next();
                         crlf += 1;
                     }
                     _ => lone_cr += 1,
@@ -78,6 +80,9 @@ impl Stats {
             } else {
                 printable += 1;
             }
+        }
+        if bytes.last() == Some(&0x1a) {
+            non_printable -= 1;
         }
 
         Self {

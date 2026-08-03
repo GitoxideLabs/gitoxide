@@ -61,6 +61,32 @@ fn detected_as_binary() -> crate::Result {
 }
 
 #[test]
+fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
+    let mut buf = Vec::new();
+    let changed = eol::convert_to_git(
+        b"a\r\nb\r\n\x1a",
+        AttributesDigest::TextAuto,
+        &mut buf,
+        &mut no_object_in_index,
+        Default::default(),
+    )
+    .expect("no error");
+    assert!(changed, "the DOS EOF marker doesn't stand in the way of conversion");
+    assert_eq!(buf.as_bstr(), "a\nb\n\x1a");
+
+    let changed = eol::convert_to_git(
+        b"a\r\nb\r\n\x1a\x1a",
+        AttributesDigest::TextAuto,
+        &mut buf,
+        &mut no_object_in_index,
+        Default::default(),
+    )
+    .expect("no error");
+    assert!(!changed, "a second marker isn't discounted, so this is binary");
+    Ok(())
+}
+
+#[test]
 fn fast_conversion_by_stripping_cr() -> crate::Result {
     let mut buf = Vec::new();
     let changed = eol::convert_to_git(
