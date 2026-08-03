@@ -185,6 +185,15 @@ mod tests {
             !can_reuse_identity("https://original:444/b", "http://original/a"),
             "upgrading the scheme does not allow changing the port"
         );
+        for delimiter in ['?', '#'] {
+            assert!(
+                !can_reuse_identity(
+                    &format!("https://redirected.org{delimiter}@original/b"),
+                    "https://original/a"
+                ),
+                "an authority terminated by {delimiter} must not reuse another host's identity"
+            );
+        }
     }
 
     #[test]

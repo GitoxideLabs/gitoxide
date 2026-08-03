@@ -68,8 +68,8 @@ impl ParsedUrl {
             return Err(UrlParseError::RelativeUrlWithoutBase);
         }
 
-        // Find path start (first '/' after scheme)
-        let path_start = after_scheme.find('/').unwrap_or(after_scheme.len());
+        // Find the end of the authority.
+        let path_start = after_scheme.find(['/', '?', '#']).unwrap_or(after_scheme.len());
         let authority = &after_scheme[..path_start];
         let path = if path_start < after_scheme.len() {
             percent_decode(&after_scheme[path_start..])?

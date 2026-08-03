@@ -105,7 +105,7 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         .iter()
         .filter(|b| !b.is_ascii_whitespace())
         .skip_while(|b| **b == b'/' || **b == b'\\')
-        .position(|b| *b == b'/')
+        .position(|b| matches!(*b, b'/' | b'?' | b'#'))
         .unwrap_or(input.len() - protocol_end);
     if bytes_to_path > MAX_LEN || protocol_end > MAX_LEN {
         return Err(Error::TooLong {

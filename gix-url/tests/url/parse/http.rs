@@ -198,3 +198,25 @@ fn query_and_fragment_delimiters_in_path_roundtrip() -> crate::Result {
     )?;
     Ok(())
 }
+
+#[test]
+fn query_and_fragment_delimiters_end_the_authority() -> crate::Result {
+    for input in ["https://host?@redirected/repo", "https://host#@redirected/repo"] {
+        let url = gix_url::parse(input)?;
+        assert_eq!(url.host(), Some("host"), "the authority ends at the delimiter");
+        assert_eq!(
+            &url.path,
+            &input["https://host".len()..],
+            "the remainder is kept in the path"
+        );
+    }
+    for delimiter in ['?', '#'] {
+        let input = format!("https://host{delimiter}{}", "x".repeat(1025));
+        assert_eq!(
+            gix_url::parse(input)?.host(),
+            Some("host"),
+            "the remainder does not count toward the authority length"
+        );
+    }
+    Ok(())
+}
