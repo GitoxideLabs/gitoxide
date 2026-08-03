@@ -77,6 +77,43 @@ fn percent_decode_path(s: &str) -> Result<(String, Option<String>), UrlParseErro
     percent_decode(s).map(|path| (path, has_percent_escapes.then(|| s.to_owned())))
 }
 
+/// Validate and normalize the contents of a bracketed IPv6 host literal.
+///
+/// The IPv6 address is lowercased. An optional zone identifier must be introduced by the URI-encoded `%25`
+/// delimiter and contain only unreserved or percent-encoded characters; its spelling is otherwise preserved.
+/// Brackets are not part of the input or output.
+///
+/// Examples:
+/// - `2001:DB8::1` becomes `2001:db8::1`.
+/// - `fe80::1%25Eth0` remains `fe80::1%25Eth0`.
+/// - `fe80::1%25` and `not-ip` are rejected with `None`.
+fn normalize_ipv6_literal(host: &str) -> Option<String> {
+    let Some((address, zone)) = host.split_once("%25") else {
+        return host
+            .parse::<std::net::Ipv6Addr>()
+            .is_ok()
+            .then(|| host.to_ascii_lowercase());
+    };
+    if address.parse::<std::net::Ipv6Addr>().is_err() || zone.is_empty() || percent_decode(zone).is_err() {
+        return None;
+    }
+    let mut pos = 0;
+    let bytes = zone.as_bytes();
+    while pos < bytes.len() {
+        if bytes[pos].is_ascii_alphanumeric() || matches!(bytes[pos], b'-' | b'.' | b'_' | b'~') {
+            pos += 1;
+        } else if bytes[pos] == b'%'
+            && bytes.get(pos + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(pos + 2).is_some_and(u8::is_ascii_hexdigit)
+        {
+            pos += 3;
+        } else {
+            return None;
+        }
+    }
+    Some(format!("{}%25{zone}", address.to_ascii_lowercase()))
+}
+
 impl ParsedUrl {
     /// Parse a URL string into its components.
     /// Expected format: scheme://[user[:password]@]host[:port]/path
@@ -183,29 +220,23 @@ impl ParsedUrl {
         // Handle IPv6 addresses: [::1] or [::1]:port
         if host_port.starts_with('[') {
             if let Some(bracket_end) = host_port.find(']') {
-                if host_port[1..bracket_end].parse::<std::net::Ipv6Addr>().is_err() {
-                    return Err(UrlParseError::InvalidDomainCharacter);
-                }
+                let host =
+                    normalize_ipv6_literal(&host_port[1..bracket_end]).ok_or(UrlParseError::InvalidDomainCharacter)?;
                 let remaining = &host_port[bracket_end + 1..];
 
                 if remaining.is_empty() {
-                    // IPv6 addresses are case-insensitive, normalize to lowercase
-                    let host = Some(host_port[..=bracket_end].to_ascii_lowercase());
-                    return Ok((host, None));
+                    return Ok((Some(format!("[{host}]")), None));
                 } else if let Some(port_str) = remaining.strip_prefix(':') {
                     if port_str.is_empty() {
                         // Empty port like "[::1]:" - preserve the trailing colon for Git compatibility
-                        let host = Some(host_port.to_ascii_lowercase());
-                        return Ok((host, None));
+                        return Ok((Some(format!("[{host}]:")), None));
                     }
                     let port = port_str.parse::<u16>().map_err(|_| UrlParseError::InvalidPort)?;
                     // Validate port is in valid range (1-65535, port 0 is invalid)
                     if port == 0 {
                         return Err(UrlParseError::InvalidPort);
                     }
-                    // IPv6 addresses are case-insensitive, normalize to lowercase
-                    let host = Some(host_port[..=bracket_end].to_ascii_lowercase());
-                    return Ok((host, Some(port)));
+                    return Ok((Some(format!("[{host}]")), Some(port)));
                 } else {
                     return Err(UrlParseError::InvalidDomainCharacter);
                 }
@@ -370,6 +401,11 @@ mod tests {
             ("http://example.com:abc/", "non-numeric ports must be rejected"),
             ("http://foo:bar:baz/", "unbracketed colons must be rejected"),
             ("http://[not-ip]/", "bracketed hosts must be valid IPv6 addresses"),
+            ("ssh://[fe80::1%25]/repo", "IPv6 zone identifiers must not be empty"),
+            (
+                "ssh://[fe80::1%25eth!0]/repo",
+                "IPv6 zone identifiers contain only unreserved or percent-encoded characters",
+            ),
             ("http://bücher.example/", "non-ASCII hostnames must be rejected"),
             ("http://::1/", "unbracketed IPv6 addresses must be rejected for HTTP"),
         ] {

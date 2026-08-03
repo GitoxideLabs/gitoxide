@@ -150,10 +150,16 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
             if let Some(h2) = h.strip_prefix('[') {
                 if let Some(inner) = h2.strip_suffix("]:") {
                     // "[::1]:" → "::1"
-                    h = inner.to_string();
+                    h = percent_encoding::percent_decode_str(inner)
+                        .decode_utf8()
+                        .expect("bracketed hosts were validated during parsing")
+                        .into_owned();
                 } else if let Some(inner) = h2.strip_suffix(']') {
                     // "[::1]" → "::1"
-                    h = inner.to_string();
+                    h = percent_encoding::percent_decode_str(inner)
+                        .decode_utf8()
+                        .expect("bracketed hosts were validated during parsing")
+                        .into_owned();
                 }
             } else {
                 // Non-bracketed host: strip a single trailing colon

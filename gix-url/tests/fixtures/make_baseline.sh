@@ -58,6 +58,7 @@ done
 # These two test cases are from git's test suite as well.
 tests_windows+=("file://c:/repo")
 tests_windows+=("c:repo")
+tests+=("ssh://[fe80::1%25Eth0]/repo")
 
 tests_unix+=("${tests[@]}")
 tests_windows+=("${tests[@]}")

@@ -306,6 +306,37 @@ fn ipv6_full_address() -> crate::Result {
 }
 
 #[test]
+fn scoped_ipv6_address() -> crate::Result {
+    let input = "ssh://[fe80::1%25Eth0]/repo";
+    let url = gix_url::parse(input)?;
+    assert_eq!(
+        url.host(),
+        Some("fe80::1%Eth0"),
+        "the zone identifier is decoded for SSH"
+    );
+    assert_eq!(url.to_bstring(), input, "the URI spelling remains encoded");
+    assert_eq!(gix_url::parse(url.to_bstring())?, url, "the scoped address roundtrips");
+    Ok(())
+}
+
+#[test]
+fn scoped_ipv6_address_with_empty_port() -> crate::Result {
+    let url = gix_url::parse("ssh://[fe80::1%25Eth0]:/repo")?;
+    assert_eq!(
+        url.host(),
+        Some("fe80::1%Eth0"),
+        "the bracketed host with an empty port is decoded"
+    );
+    assert_eq!(url.port, None, "an empty port is not represented");
+    assert_eq!(
+        url.to_bstring(),
+        "ssh://[fe80::1%25Eth0]/repo",
+        "serialization omits the empty port"
+    );
+    Ok(())
+}
+
+#[test]
 fn percent_encoded_path_delimiters_are_decoded() -> crate::Result {
     let url = gix_url::parse("ssh://example.com/a%2Fb")?;
     assert_eq!(url.path, "/a/b", "Git decodes reserved escapes in SSH repository paths");

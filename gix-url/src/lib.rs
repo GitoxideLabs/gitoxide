@@ -522,10 +522,21 @@ impl Url {
             percent_encoding::utf8_percent_encode(s, encode_set).into()
         }
 
+        fn write_host(out: &mut dyn std::io::Write, host: &str, bracket: bool) -> std::io::Result<()> {
+            if bracket {
+                out.write_all(b"[")?;
+                out.write_all(host.replace('%', "%25").as_bytes())?;
+                out.write_all(b"]")
+            } else {
+                out.write_all(host.as_bytes())
+            }
+        }
+
         out.write_all(self.scheme.as_str().as_bytes())?;
         out.write_all(b"://")?;
 
-        let needs_brackets = self.port.is_some() && self.host_needs_brackets();
+        let needs_brackets = self.host_needs_brackets()
+            && (self.port.is_some() || self.host.as_ref().is_some_and(|host| host.contains('%')));
 
         match (&self.user, &self.host) {
             (Some(user), Some(host)) => {
@@ -535,22 +546,10 @@ impl Url {
                     out.write_all(percent_encode(password, false).as_bytes())?;
                 }
                 out.write_all(b"@")?;
-                if needs_brackets {
-                    out.write_all(b"[")?;
-                }
-                out.write_all(host.as_bytes())?;
-                if needs_brackets {
-                    out.write_all(b"]")?;
-                }
+                write_host(out, host, needs_brackets)?;
             }
             (None, Some(host)) => {
-                if needs_brackets {
-                    out.write_all(b"[")?;
-                }
-                out.write_all(host.as_bytes())?;
-                if needs_brackets {
-                    out.write_all(b"]")?;
-                }
+                write_host(out, host, needs_brackets)?;
             }
             (None, None) => {}
             (Some(_user), None) => {
