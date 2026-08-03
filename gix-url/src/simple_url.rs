@@ -33,6 +33,21 @@ fn is_valid_scheme_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'
 }
 
+fn has_valid_percent_encoding(input: &str) -> bool {
+    let mut bytes = input.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%'
+            && !matches!(
+                (bytes.next(), bytes.next()),
+                (Some(a), Some(b)) if a.is_ascii_hexdigit() && b.is_ascii_hexdigit()
+            )
+        {
+            return false;
+        }
+    }
+    true
+}
+
 /// Decode a percent-encoded string, returning an error if the result is not valid UTF-8.
 /// Returns the original string if it contains no percent-encoding.
 fn percent_decode(s: &str) -> Result<String, UrlParseError> {
@@ -80,7 +95,7 @@ impl ParsedUrl {
     /// Expected format: scheme://[user[:password]@]host[:port]/path
     pub(crate) fn parse(input: &str) -> Result<Self, UrlParseError> {
         // Validate that the entire URL doesn't contain any whitespace (per RFC 3986)
-        if input.chars().any(char::is_whitespace) {
+        if input.chars().any(char::is_whitespace) || !has_valid_percent_encoding(input) {
             return Err(UrlParseError::InvalidDomainCharacter);
         }
 
@@ -99,7 +114,9 @@ impl ParsedUrl {
         }
 
         // Validate scheme characters (check original before lowercase conversion)
-        if !scheme_str.chars().all(is_valid_scheme_char) {
+        if !scheme_str.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+            || !scheme_str.chars().all(is_valid_scheme_char)
+        {
             return Err(UrlParseError::RelativeUrlWithoutBase);
         }
 
@@ -378,6 +395,24 @@ mod tests {
         let url = ParsedUrl::parse("ssh://jörg:passwörd@example.com/repo").expect("valid UTF-8 user information");
         assert_eq!(url.username, "jörg", "the username is preserved");
         assert_eq!(url.password.as_deref(), Some("passwörd"), "the password is preserved");
+    }
+
+    #[test]
+    fn malformed_schemes_and_percent_escapes_are_rejected() {
+        for url in [
+            "1http://example.com/",
+            "http://example.com/%",
+            "http://example.com/%2",
+            "http://example.com/%zz",
+            "http://user%zz@example.com/",
+            "http://example%zz.com/",
+        ] {
+            assert!(ParsedUrl::parse(url).is_err(), "invalid URL {url:?} must be rejected");
+        }
+        assert!(
+            ParsedUrl::parse("http://example.com/%2f").is_ok(),
+            "hex escapes are valid"
+        );
     }
 
     #[test]
