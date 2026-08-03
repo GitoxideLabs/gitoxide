@@ -153,7 +153,7 @@ fn absolute_location(request_url: &str, location: &str) -> Option<String> {
         out.push(':');
         out.push_str(&port.to_string());
     }
-    let request_path = request_url.path.to_str().ok()?;
+    let request_path = request_url.original_path().to_str().ok()?;
     out.push_str(&resolve_location_path(request_path, location));
     Some(out)
 }
@@ -664,6 +664,30 @@ mod absolute_location_tests {
             absolute_location(REQUEST_URL, "?service=git-receive-pack"),
             Some("http://example.com:8080/original/repo/info/refs?service=git-receive-pack".to_owned()),
             "query-only Location values replace the query while preserving the current request path"
+        );
+    }
+
+    #[test]
+    fn keeps_percent_encoded_separators_in_relative_locations() {
+        assert_eq!(
+            absolute_location(
+                "http://example.com/a%2Fb/info/refs?service=git-upload-pack",
+                "../objects/info/packs"
+            ),
+            Some("http://example.com/a%2Fb/objects/info/packs".to_owned()),
+            "relative redirects resolve against the encoded request path"
+        );
+    }
+
+    #[test]
+    fn keeps_percent_encoded_non_separators_in_relative_locations() {
+        assert_eq!(
+            absolute_location(
+                "http://example.com/a%20b/info/refs?service=git-upload-pack",
+                "../objects/info/packs"
+            ),
+            Some("http://example.com/a%20b/objects/info/packs".to_owned()),
+            "relative redirects use the original encoded request path"
         );
     }
 }
