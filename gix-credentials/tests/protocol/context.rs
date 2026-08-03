@@ -74,6 +74,11 @@ mod destructure_url_in_place {
     }
 
     #[test]
+    fn http_path_is_decoded_when_used() {
+        assert_eq_parts("https://example.com/a%2Fb/", "https", None, "example.com", "a/b", true);
+    }
+
+    #[test]
     fn protocol_and_host_with_path_without_url_constructs_full_url() {
         let mut ctx = Context {
             protocol: Some("https".into()),
