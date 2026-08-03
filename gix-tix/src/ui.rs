@@ -432,12 +432,20 @@ pub(crate) fn draw(
     for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
         footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
     }
-    let ref_label = match app.ref_mode {
-        RefMode::All => "r all refs",
-        RefMode::Default => "r refs",
-        RefMode::None => "r no refs",
-    };
-    footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
+    footer_spans.push(Span::raw(" · "));
+    if app.preview_author_copy && app.manual_refresh {
+        footer_spans.push(toggle(
+            "R refresh",
+            matches!(app.state, State::Complete | State::Cancelled),
+        ));
+    } else {
+        let ref_label = match app.ref_mode {
+            RefMode::All => "r all refs",
+            RefMode::Default => "r refs",
+            RefMode::None => "r no refs",
+        };
+        footer_spans.push(toggle(ref_label, app.ref_mode != RefMode::None));
+    }
     footer_spans.push(Span::raw(if app.preview_author_copy {
         " · Y copy author"
     } else {
@@ -1450,6 +1458,7 @@ mod tests {
             "the footer reflects the unfiltered view"
         );
 
+        app.manual_refresh = true;
         app.update(Action::PreviewAuthorCopy(true));
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         let row = rendered_row(&terminal);
@@ -1469,6 +1478,14 @@ mod tests {
         assert!(
             rendered_line(&terminal, 1).contains("Y copy author"),
             "the footer previews the shifted shortcut"
+        );
+        assert!(
+            rendered_line(&terminal, 1).contains("R refresh"),
+            "the footer previews the shifted refresh shortcut"
+        );
+        assert!(
+            !rendered_line(&terminal, 1).contains("r refs"),
+            "the shifted refresh shortcut replaces the reference toggle"
         );
         Ok(())
     }

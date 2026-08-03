@@ -205,6 +205,7 @@ pub(crate) enum Action {
     ToggleTrailers,
     ToggleMailmap,
     ToggleRefs,
+    Refresh,
     ToggleHidden,
     ToggleAlign,
     ToggleCommit,
@@ -235,7 +236,10 @@ pub(crate) enum Effect {
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
+    all_rows: HashMap<ObjectId, CommitRow>,
+    all_order: Vec<ObjectId>,
     hidden_rows: HashSet<ObjectId>,
+    pending_hidden_rows: Option<HashSet<ObjectId>>,
     titles: Vec<u8>,
     notes: HashMap<ObjectId, Vec<BString>>,
     graph: Option<Graph>,
@@ -288,13 +292,17 @@ pub(crate) struct App {
     reload_selection: Option<ObjectId>,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
+    pub(crate) manual_refresh: bool,
 }
 
 impl App {
     pub fn new(viewport_rows: usize) -> Self {
         App {
             rows: Vec::new(),
+            all_rows: HashMap::new(),
+            all_order: Vec::new(),
             hidden_rows: HashSet::new(),
+            pending_hidden_rows: None,
             titles: Vec::new(),
             notes: HashMap::new(),
             graph: None,
@@ -347,6 +355,7 @@ impl App {
             reload_selection: None,
             signature_failures: 0,
             signature_verification_running: false,
+            manual_refresh: false,
         }
     }
 
@@ -358,29 +367,15 @@ impl App {
     }
 
     pub(crate) fn extend_commits(&mut self, commits: impl Into<LoadedCommits>) {
-        let LoadedCommits { rows, attributions } = commits.into();
-        if self.state != State::Loading || rows.is_empty() {
+        let commits = commits.into();
+        if self.state != State::Loading || commits.rows.is_empty() {
             return;
         }
+        let rows = self.store_commits(commits);
         let was_empty = self.rows.is_empty();
-        self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
-        let attribution_base = self.attributions.len();
-        self.attributions.extend(attributions);
         self.rows.reserve(rows.len());
         for row in rows {
-            let start = self.titles.len();
-            self.titles.extend_from_slice(&row.title);
-            self.rows.push(Commit {
-                id: row.id,
-                parent_ids: row.parent_ids,
-                committer_time: row.committer_time,
-                author: row.author,
-                attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
-                title: start..self.titles.len(),
-                metadata_loaded: row.metadata_loaded,
-                has_agent_marker: row.has_agent_marker,
-                signature: row.signature,
-            });
+            self.rows.push(row);
         }
         if was_empty {
             self.estimated_lane_width = estimate_lane_width(&self.rows[..self.viewport_rows.min(self.rows.len())]);
@@ -403,6 +398,34 @@ impl App {
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
         }
+    }
+
+    fn store_commits(&mut self, commits: LoadedCommits) -> Vec<CommitRow> {
+        let LoadedCommits { rows, attributions } = commits;
+        self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
+        let attribution_base = self.attributions.len();
+        self.attributions.extend(attributions);
+        rows.into_iter()
+            .map(|row| {
+                let start = self.titles.len();
+                self.titles.extend_from_slice(&row.title);
+                let row = Commit {
+                    id: row.id,
+                    parent_ids: row.parent_ids,
+                    committer_time: row.committer_time,
+                    author: row.author,
+                    attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
+                    title: start..self.titles.len(),
+                    metadata_loaded: row.metadata_loaded,
+                    has_agent_marker: row.has_agent_marker,
+                    signature: row.signature,
+                };
+                if self.all_rows.insert(row.id, row.clone()).is_none() {
+                    self.all_order.push(row.id);
+                }
+                row
+            })
+            .collect()
     }
 
     pub(crate) fn extend_hidden_commits(&mut self, commits: impl Into<LoadedCommits>) {
@@ -446,6 +469,7 @@ impl App {
         row.metadata_loaded = true;
         row.has_agent_marker = has_agent_marker;
         row.signature = signature;
+        self.all_rows.insert(row.id, row.clone());
     }
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
@@ -569,6 +593,9 @@ impl App {
                     RefMode::None => RefMode::All,
                 };
             }
+            Action::Refresh if self.manual_refresh && matches!(self.state, State::Complete | State::Cancelled) => {
+                return vec![Effect::Reload(self.show_hidden)];
+            }
             Action::ToggleHidden
                 if self.has_hidden_filter && matches!(self.state, State::Complete | State::Cancelled) =>
             {
@@ -683,6 +710,61 @@ impl App {
         }
     }
 
+    pub(crate) fn known_ids(&self) -> HashSet<ObjectId> {
+        self.all_rows.keys().copied().collect()
+    }
+
+    pub(crate) fn hidden_ids(&self) -> HashSet<ObjectId> {
+        self.hidden_rows.clone()
+    }
+
+    pub(crate) fn start_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+    ) -> Option<Vec<CommitRow>> {
+        drop(self.store_commits(commits));
+
+        let visible = self.reachable_from(view_tips);
+        let hidden = self.reachable_from(hidden_tips);
+        let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
+        let boundary: HashSet<_> = if hidden_tips.is_empty() {
+            HashSet::new()
+        } else {
+            visible
+                .iter()
+                .filter_map(|id| self.all_rows.get(id))
+                .flat_map(|row| row.parent_ids.iter().copied())
+                .filter(|id| !visible.contains(id))
+                .collect()
+        };
+        let rows: Vec<_> = self
+            .all_order
+            .iter()
+            .filter(|id| visible.contains(*id) || boundary.contains(*id))
+            .filter_map(|id| self.all_rows.get(id).cloned())
+            .collect();
+        self.pending_hidden_rows = Some(boundary);
+        self.state = State::Computing;
+        self.follow_tail = false;
+        Some(rows)
+    }
+
+    fn reachable_from(&self, tips: &[ObjectId]) -> HashSet<ObjectId> {
+        let mut reachable = HashSet::new();
+        let mut pending = tips.to_vec();
+        while let Some(id) = pending.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            if let Some(row) = self.all_rows.get(&id) {
+                pending.extend(row.parent_ids.iter().copied());
+            }
+        }
+        reachable
+    }
+
     pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, graph: Graph, lane_time: Duration) {
         if self.state != State::Computing {
             return;
@@ -710,6 +792,9 @@ impl App {
             HashMap::new()
         };
         self.rows = rows;
+        if let Some(hidden) = self.pending_hidden_rows.take() {
+            self.hidden_rows = hidden;
+        }
         for row in &mut self.rows {
             if let Some(metadata) = metadata.get(&row.id) {
                 row.committer_time = metadata.committer_time;
@@ -723,7 +808,9 @@ impl App {
         }
         self.graph = Some(graph);
         self.lane_time = Some(lane_time);
-        self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
+        self.selected = selected
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+            .or_else(|| self.first_selectable());
         self.state = State::Complete;
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
@@ -731,10 +818,14 @@ impl App {
         self.ensure_visible();
     }
 
+    #[cfg(test)]
     pub(crate) fn reload(&mut self, show_hidden: bool) {
         self.reload_selection = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
         self.rows = Vec::new();
+        self.all_rows.clear();
+        self.all_order.clear();
         self.hidden_rows.clear();
+        self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
         self.graph = None;
@@ -770,6 +861,7 @@ impl App {
                 failed += 1;
                 SignatureState::Failed
             };
+            self.all_rows.insert(row.id, row.clone());
         }
         self.signature_verification_running = false;
         self.signature_failures = failed;
@@ -1440,6 +1532,45 @@ mod tests {
     }
 
     #[test]
+    fn refresh_projects_from_an_append_only_commit_cache() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[])
+            .expect("a refresh computes lanes");
+        assert_eq!(
+            app.rows.len(),
+            3,
+            "the current frame stays intact while lanes are computed"
+        );
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(2), id(1)]
+        );
+
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[])
+            .expect("a rewind reprojects cached topology");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(app.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [id(2), id(1)]);
+
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(4)], &[])
+            .expect("a fast-forward to retained commits needs no new objects");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(2), id(1)]
+        );
+    }
+
+    #[test]
     fn lane_computation_keeps_provisional_rows_interactive() {
         let mut app = App::new(2);
         app.extend_commits(vec![row(1), row(2)]);
@@ -1906,6 +2037,28 @@ mod tests {
         );
         complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(false)]);
+    }
+
+    #[test]
+    fn refresh_reloads_only_finished_history() {
+        let mut app = App::new(1);
+        app.manual_refresh = true;
+        assert!(
+            app.update(Action::Refresh).is_empty(),
+            "a running walk cannot be replaced"
+        );
+
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        assert_eq!(app.update(Action::Refresh), vec![Effect::Reload(false)]);
+
+        app.show_hidden = true;
+        app.state = State::Cancelled;
+        assert_eq!(
+            app.update(Action::Refresh),
+            vec![Effect::Reload(true)],
+            "refresh preserves the hidden-history setting"
+        );
     }
 
     #[test]
