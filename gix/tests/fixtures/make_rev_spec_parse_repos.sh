@@ -347,7 +347,7 @@ git init complex_graph
   git merge e i --allow-unrelated-histories || :
   { echo g && echo h && echo i && echo j && echo d && echo e && echo f && echo b; } > file
   git add file && git commit -m B
-  git tag -m b-tag b-tag && git branch b
+  git tag -m b-tag b-tag && git tag b-lightweight-tag && git branch b
 
   tick
   git checkout i
@@ -403,9 +403,21 @@ EOF
   baseline "a~2"
   baseline "e"
   baseline "a^^2"
+  baseline "g"
   baseline "j"
   baseline "b^3^2"
   baseline "a^^3^2"
+
+  # traversal from an annotated tag, which git peels to a commit first.
+  # `b-tag` is annotated and points at `b`, a merge commit with two parents.
+  baseline "b-tag^"
+  baseline "b-tag^1"
+  baseline "b-tag^2"
+  baseline "b-tag~1"
+  baseline "b-tag~2"
+  baseline "b-tag~0"
+  baseline "b-lightweight-tag~0"
+  baseline "b-tag^{/G}"
 
   # invalid
   baseline "^^"

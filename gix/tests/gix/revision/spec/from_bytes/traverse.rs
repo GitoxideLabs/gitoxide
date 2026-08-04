@@ -72,6 +72,28 @@ fn parent() {
 }
 
 #[test]
+fn tags_navigate_from_their_commit() -> crate::Result {
+    let repo = repo("complex_graph")?;
+    for (spec, expected) in [
+        ("b-tag^", "d"),
+        ("b-tag^1", "d"),
+        ("b-tag^2", "e"),
+        ("b-tag~1", "d"),
+        ("b-tag~2", "g"),
+        ("b-tag~0", "b"),
+        ("b-lightweight-tag~0", "b"),
+        ("b-tag^{/G}", "g"),
+    ] {
+        assert_eq!(
+            parse_spec(spec, &repo)?,
+            parse_spec(expected, &repo)?,
+            "{spec} navigates from the commit that the tag points at"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn ancestors() {
     let repo = repo("complex_graph").unwrap();
     assert_eq!(
