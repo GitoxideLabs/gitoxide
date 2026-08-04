@@ -13,10 +13,10 @@ pub fn merge_base(
         bail!("Only 'human' format is currently supported");
     }
     repo.object_cache_size_if_unset(50 * 1024 * 1024);
-    let first_id = repo.rev_parse_single(first.as_str())?;
+    let first_id = commit_id(&repo, first.as_str())?;
     let other_ids: Vec<_> = others
         .iter()
-        .map(|other| repo.rev_parse_single(other.as_str()).map(gix::Id::detach))
+        .map(|other| commit_id(&repo, other.as_str()))
         .collect::<Result<_, _>>()?;
 
     let cache = repo.commit_graph_if_enabled()?;
@@ -29,4 +29,8 @@ pub fn merge_base(
         writeln!(&mut out, "{id}")?;
     }
     Ok(())
+}
+
+fn commit_id(repo: &gix::Repository, revspec: &str) -> anyhow::Result<gix::ObjectId> {
+    Ok(repo.rev_parse_single(revspec)?.object()?.peel_to_commit()?.id)
 }
