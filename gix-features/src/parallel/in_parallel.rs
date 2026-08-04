@@ -210,7 +210,7 @@ where
 
     std::thread::scope({
         move |s| {
-            std::thread::Builder::new()
+            let watcher = std::thread::Builder::new()
                 .name("gitoxide.in_parallel_with_slice.watch-interrupts".into())
                 .spawn_scoped(s, {
                     move || loop {
@@ -219,7 +219,28 @@ where
                         }
 
                         match periodic() {
-                            Some(duration) => std::thread::sleep(duration),
+                            // Park rather than sleep. `stop_everything` is only set once
+                            // every worker has been joined, and this thread lives in the
+                            // same `std::thread::scope`, so a plain `sleep` is *appended*
+                            // to the call: the scope cannot return until this thread wakes
+                            // on its own. Parking keeps the requested interval exactly (a
+                            // spurious wake-up re-parks for the remainder) while letting
+                            // the joiner end the wait as soon as there is nothing left to
+                            // watch. It needs no mutex, because an `unpark` that arrives
+                            // before the `park_timeout` is remembered by the park token.
+                            Some(duration) => {
+                                let deadline = std::time::Instant::now() + duration;
+                                loop {
+                                    if stop_everything.load(Ordering::Relaxed) {
+                                        break;
+                                    }
+                                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                                    if remaining.is_zero() {
+                                        break;
+                                    }
+                                    std::thread::park_timeout(remaining);
+                                }
+                            }
                             None => {
                                 stop_everything.store(true, Ordering::Relaxed);
                                 break;
@@ -228,6 +249,7 @@ where
                     }
                 })
                 .expect("valid name");
+            let watcher = watcher.thread().clone();
 
             let input_len = input.len();
             struct Input<I>(*mut I)
@@ -295,18 +317,26 @@ where
                     Ok(Err((err, is_cause))) => {
                         // is-cause is race-free, and must be set on the first error.
                         if is_cause {
+                            // The failing consumer already set `stop_everything`; end the
+                            // watcher's current interval so an error is not held open for
+                            // one whole `periodic()`.
+                            watcher.unpark();
                             return Err(err);
                         }
                     }
                     Err(err) => {
                         // a panic happened, stop the world gracefully (even though we panic later)
                         stop_everything.store(true, Ordering::Relaxed);
+                        watcher.unpark();
                         std::panic::resume_unwind(err);
                     }
                 }
             }
 
             stop_everything.store(true, Ordering::Relaxed);
+            // Nothing left to watch. Without this the scope blocks until the watcher's own
+            // timer expires, adding a whole `periodic()` interval to every call.
+            watcher.unpark();
             Ok(results)
         }
     })
