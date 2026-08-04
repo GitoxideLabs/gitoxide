@@ -72,6 +72,26 @@ fn parent() {
 }
 
 #[test]
+fn annotated_tags_are_peeled_to_their_commit() -> crate::Result {
+    let repo = repo("complex_graph")?;
+    for (spec, expected) in [
+        ("b-tag^", "d"),
+        ("b-tag^1", "d"),
+        ("b-tag^2", "e"),
+        ("b-tag~1", "d"),
+        ("b-tag~2", "g"),
+        ("b-tag^{/G}", "g"),
+    ] {
+        assert_eq!(
+            parse_spec(spec, &repo)?,
+            parse_spec(expected, &repo)?,
+            "{spec} navigates from the commit that the annotated tag points at"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn ancestors() {
     let repo = repo("complex_graph").unwrap();
     assert_eq!(

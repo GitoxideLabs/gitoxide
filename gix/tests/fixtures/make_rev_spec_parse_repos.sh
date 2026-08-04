@@ -403,9 +403,19 @@ EOF
   baseline "a~2"
   baseline "e"
   baseline "a^^2"
+  baseline "g"
   baseline "j"
   baseline "b^3^2"
   baseline "a^^3^2"
+
+  # traversal from an annotated tag, which git peels to a commit first.
+  # `b-tag` is annotated and points at `b`, a merge commit with two parents.
+  baseline "b-tag^"
+  baseline "b-tag^1"
+  baseline "b-tag^2"
+  baseline "b-tag~1"
+  baseline "b-tag~2"
+  baseline "b-tag^{/G}"
 
   # invalid
   baseline "^^"
