@@ -41,30 +41,52 @@ pub enum Error {
 /// `./info/alternates` file into canonical paths and resolve relative paths with the help of the `current_dir`.
 /// If no alternate object database was resolved, the resulting `Vec` is empty (it is not an error
 /// if there are no alternates).
-/// It is an error once a repository is seen again as it would lead to a cycle.
+/// An object directory that was resolved before is skipped, and it is an error if an alternate points back
+/// into the chain of directories that is currently being followed, as that would form a cycle.
 pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>, Error> {
     let mut dirs = vec![(0, objects_directory.clone())];
     let mut out = Vec::new();
-    let mut seen = vec![gix_path::realpath_opts(&objects_directory, current_dir, MAX_SYMLINKS)?];
-    while let Some((depth, dir)) = dirs.pop() {
+    let mut seen = vec![(
+        gix_path::realpath_opts(&objects_directory, current_dir, MAX_SYMLINKS)?,
+        None,
+    )];
+    while let Some((idx, dir)) = dirs.pop() {
         match fs::read(dir.join("info").join("alternates")) {
             Ok(input) => {
                 for path in parse::content(&input)?.into_iter() {
                     let path = objects_directory.join(path);
                     let path_canonicalized = gix_path::realpath_opts(&path, current_dir, MAX_SYMLINKS)?;
-                    if seen.contains(&path_canonicalized) {
-                        return Err(Error::Cycle(seen));
+                    match seen.iter().position(|(dir, _)| *dir == path_canonicalized) {
+                        Some(seen_idx) => {
+                            if chain(&seen, idx).any(|ancestor| ancestor == seen_idx) {
+                                let mut cycle: Vec<_> = chain(&seen, idx).map(|idx| seen[idx].0.clone()).collect();
+                                cycle.reverse();
+                                return Err(Error::Cycle(cycle));
+                            }
+                        }
+                        None => {
+                            seen.push((path_canonicalized, Some(idx)));
+                            dirs.push((seen.len() - 1, path));
+                        }
                     }
-                    seen.push(path_canonicalized);
-                    dirs.push((depth + 1, path));
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
         }
-        if depth != 0 {
+        if idx != 0 {
             out.push(dir);
         }
     }
     Ok(out)
+}
+
+/// Yield `idx` and the indices of all directories it was reached through, starting at `idx`.
+fn chain(seen: &[(PathBuf, Option<usize>)], idx: usize) -> impl Iterator<Item = usize> + '_ {
+    let mut next = Some(idx);
+    std::iter::from_fn(move || {
+        let idx = next?;
+        next = seen[idx].1;
+        Some(idx)
+    })
 }
