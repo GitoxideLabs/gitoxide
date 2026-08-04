@@ -51,6 +51,7 @@ pub(crate) enum ChangeKind {
     Renamed,
     Copied,
     TypeChanged,
+    Unmerged,
 }
 
 impl ChangeKind {
@@ -62,13 +63,70 @@ impl ChangeKind {
             ChangeKind::Renamed => 'R',
             ChangeKind::Copied => 'C',
             ChangeKind::TypeChanged => 'T',
+            ChangeKind::Unmerged => 'U',
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangesMode {
+    #[default]
+    Tree,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangePane {
+    Tree,
+    Worktree,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangesLayout {
+    #[default]
+    SideBySide,
+    Stacked,
+}
+
+#[derive(Debug)]
+pub(crate) struct ChangesView {
+    pub selected: usize,
+    pub offset: usize,
+    pub horizontal_offset: usize,
+    pub error: Option<String>,
+    page: usize,
+    max: usize,
+    horizontal_page: usize,
+    horizontal_max: usize,
+}
+
+impl Default for ChangesView {
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            offset: 0,
+            horizontal_offset: 0,
+            error: None,
+            page: 1,
+            max: 0,
+            horizontal_page: 1,
+            horizontal_max: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangeGroup {
+    #[default]
+    Tree,
+    Staged,
+    Unstaged,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PathChange {
     pub kind: ChangeKind,
+    pub group: ChangeGroup,
     pub source: Option<BString>,
     pub path: BString,
     pub lines: Option<(u32, u32)>,
@@ -78,7 +136,7 @@ pub(crate) struct PathChange {
 pub(crate) struct Changes {
     pub parent: Option<ComparedParent>,
     pub paths: Vec<PathChange>,
-    pub diffs: Vec<gix::object::tree::diff::ChangeDetached>,
+    pub diffs: Vec<crate::FileChange>,
     pub lines_added: u64,
     pub lines_removed: u64,
 }
@@ -234,7 +292,7 @@ pub(crate) enum Effect {
     CopyId(ObjectId),
     CopyAuthor(&'static Author),
     Reload(bool),
-    OpenDiff(usize),
+    OpenDiff(ChangePane, usize),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -267,21 +325,18 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
-    pub show_changes: bool,
+    pub changes_mode: Option<ChangesMode>,
     pub(crate) changes_suppressed: bool,
-    pub(crate) changes_focused: bool,
-    pub(crate) changes_selected: usize,
-    pub(crate) changes_offset: usize,
-    pub(crate) changes_horizontal_offset: usize,
+    pub(crate) changes_focus: Option<ChangePane>,
+    pub(crate) changes_layout: ChangesLayout,
+    pub(crate) tree_changes_visible: bool,
+    pub(crate) worktree_changes_visible: bool,
+    pub(crate) tree_changes: ChangesView,
+    pub(crate) worktree_changes: ChangesView,
     pub(crate) changes_parent: usize,
-    pub(crate) diff_error: Option<String>,
     pub(crate) commit_offset: usize,
     commit_page: usize,
     commit_max: usize,
-    changes_page: usize,
-    changes_max: usize,
-    changes_horizontal_page: usize,
-    changes_horizontal_max: usize,
     pub(crate) show_selection_tail: bool,
     pub inline: bool,
     pub preview_author_copy: bool,
@@ -331,21 +386,18 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
-            show_changes: true,
+            changes_mode: Some(ChangesMode::Both),
             changes_suppressed: false,
-            changes_focused: false,
-            changes_selected: 0,
-            changes_offset: 0,
-            changes_horizontal_offset: 0,
+            changes_focus: None,
+            changes_layout: ChangesLayout::SideBySide,
+            tree_changes_visible: false,
+            worktree_changes_visible: false,
+            tree_changes: ChangesView::default(),
+            worktree_changes: ChangesView::default(),
             changes_parent: 0,
-            diff_error: None,
             commit_offset: 0,
             commit_page: 1,
             commit_max: 0,
-            changes_page: 1,
-            changes_max: 0,
-            changes_horizontal_page: 1,
-            changes_horizontal_max: 0,
             show_selection_tail: true,
             inline: false,
             preview_author_copy: false,
@@ -518,19 +570,19 @@ impl App {
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
-            Action::MoveUp if self.changes_focused => self.move_changes(1, false),
-            Action::MoveDown if self.changes_focused => self.move_changes(1, true),
+            Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
+            Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
             Action::MoveUp => self.move_reachable(false),
             Action::MoveDown => self.move_reachable(true),
             Action::ScrollLeft => {
-                if self.changes_focused {
+                if self.changes_focus.is_some() {
                     self.pan_changes(false);
                 } else if !self.cycle_junction_parent(false) {
                     self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
                 }
             }
             Action::ScrollRight => {
-                if self.changes_focused {
+                if self.changes_focus.is_some() {
                     self.pan_changes(true);
                 } else if !self.cycle_junction_parent(true) {
                     self.horizontal_offset = self
@@ -539,10 +591,14 @@ impl App {
                         .min(self.horizontal_max);
                 }
             }
-            Action::HalfPageUp if self.changes_focused => self.move_changes((self.changes_page / 2).max(1), false),
-            Action::HalfPageDown if self.changes_focused => self.move_changes((self.changes_page / 2).max(1), true),
-            Action::PageUp if self.changes_focused => self.move_changes(self.changes_page, false),
-            Action::PageDown if self.changes_focused => self.move_changes(self.changes_page, true),
+            Action::HalfPageUp if self.changes_focus.is_some() => {
+                self.move_changes((self.focused_changes().page / 2).max(1), false);
+            }
+            Action::HalfPageDown if self.changes_focus.is_some() => {
+                self.move_changes((self.focused_changes().page / 2).max(1), true);
+            }
+            Action::PageUp if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, false),
+            Action::PageDown if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, true),
             Action::PageUp if self.show_commit && self.commit_max > 0 => {
                 self.commit_offset = self.commit_offset.saturating_sub(self.commit_page);
             }
@@ -553,9 +609,10 @@ impl App {
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
-            Action::First if self.changes_focused => {
-                self.changes_selected = 0;
-                self.diff_error = None;
+            Action::First if self.changes_focus.is_some() => {
+                let changes = self.focused_changes_mut();
+                changes.selected = 0;
+                changes.error = None;
                 self.ensure_changes_visible();
             }
             Action::First => {
@@ -563,9 +620,10 @@ impl App {
                     self.select(index);
                 }
             }
-            Action::Last if self.changes_focused => {
-                self.changes_selected = self.changes_max;
-                self.diff_error = None;
+            Action::Last if self.changes_focus.is_some() => {
+                let changes = self.focused_changes_mut();
+                changes.selected = changes.max;
+                changes.error = None;
                 self.ensure_changes_visible();
             }
             Action::Last if self.last_selectable().is_some() => {
@@ -616,29 +674,40 @@ impl App {
             }
             Action::ToggleChanges => {
                 self.focus_feedback = None;
-                self.show_changes = !self.show_changes;
-                if !self.show_changes {
+                self.changes_mode = match self.changes_mode {
+                    Some(ChangesMode::Both) => Some(ChangesMode::Tree),
+                    Some(ChangesMode::Tree) => None,
+                    None => Some(ChangesMode::Both),
+                };
+                self.reset_changes_view();
+                self.changes_parent = 0;
+                if self.changes_mode.is_none() {
                     self.changes_suppressed = false;
-                    self.changes_focused = false;
-                    self.reset_changes_view();
+                    self.changes_focus = None;
                 }
             }
-            Action::ToggleChangesFocus if self.show_changes => {
-                self.changes_focused = !self.changes_focused;
-                if self.changes_focused {
+            Action::ToggleChangesFocus if self.changes_mode.is_some() => {
+                self.cycle_changes_focus();
+                if self.changes_focus.is_some() {
                     self.clear_preview_author_copy();
                 }
-                self.focus_feedback = Some(if self.changes_focused { "changes" } else { "history" });
+                self.focus_feedback = Some(match self.changes_focus {
+                    Some(ChangePane::Tree) => "tree changes",
+                    Some(ChangePane::Worktree) => "worktree changes",
+                    None => "history",
+                });
             }
             Action::CycleChangesParent => {
-                if self.show_changes {
+                if self.changes_focus == Some(ChangePane::Tree) {
                     self.changes_parent = self.changes_parent.saturating_add(1);
-                    self.diff_error = None;
+                    self.tree_changes.error = None;
                 }
             }
-            Action::OpenDiff if self.changes_focused => {
-                self.diff_error = None;
-                return vec![Effect::OpenDiff(self.changes_selected)];
+            Action::OpenDiff if self.changes_focus.is_some() => {
+                let pane = self.changes_focus.expect("focus was checked");
+                let changes = self.focused_changes_mut();
+                changes.error = None;
+                return vec![Effect::OpenDiff(pane, changes.selected)];
             }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
@@ -657,8 +726,8 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
-            Action::Cancel | Action::Quit if self.changes_focused => self.focus_history(),
-            Action::PreviewAuthorCopy(_) if self.changes_focused => {}
+            Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
+            Action::PreviewAuthorCopy(_) if self.changes_focus.is_some() => {}
             Action::PreviewAuthorCopy(value) => {
                 if value && !self.preview_author_copy {
                     self.reachability_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
@@ -896,11 +965,12 @@ impl App {
     }
 
     fn move_changes(&mut self, distance: usize, down: bool) {
-        self.diff_error = None;
-        self.changes_selected = if down {
-            self.changes_selected.saturating_add(distance).min(self.changes_max)
+        let changes = self.focused_changes_mut();
+        changes.error = None;
+        changes.selected = if down {
+            changes.selected.saturating_add(distance).min(changes.max)
         } else {
-            self.changes_selected.saturating_sub(distance)
+            changes.selected.saturating_sub(distance)
         };
         self.ensure_changes_visible();
     }
@@ -913,33 +983,35 @@ impl App {
     }
 
     pub(crate) fn focus_history(&mut self) {
-        self.changes_focused = false;
+        self.changes_focus = None;
         self.focus_feedback = None;
     }
 
     pub(crate) fn changes_visible(&self) -> bool {
-        self.show_changes && !self.changes_suppressed
+        self.changes_mode.is_some() && !self.changes_suppressed
     }
 
     fn ensure_changes_visible(&mut self) {
-        if self.changes_selected < self.changes_offset {
-            self.changes_offset = self.changes_selected;
-        } else if self.changes_selected >= self.changes_offset.saturating_add(self.changes_page) {
-            self.changes_offset = self.changes_selected + 1 - self.changes_page;
+        let changes = self.focused_changes_mut();
+        if changes.selected < changes.offset {
+            changes.offset = changes.selected;
+        } else if changes.selected >= changes.offset.saturating_add(changes.page) {
+            changes.offset = changes.selected + 1 - changes.page;
         }
-        self.changes_offset = self
-            .changes_offset
-            .min(self.changes_max.saturating_add(1).saturating_sub(self.changes_page));
+        changes.offset = changes
+            .offset
+            .min(changes.max.saturating_add(1).saturating_sub(changes.page));
     }
 
     fn pan_changes(&mut self, right: bool) {
-        self.changes_horizontal_offset = if right {
-            self.changes_horizontal_offset
-                .saturating_add(self.changes_horizontal_page)
-                .min(self.changes_horizontal_max)
+        let changes = self.focused_changes_mut();
+        changes.horizontal_offset = if right {
+            changes
+                .horizontal_offset
+                .saturating_add(changes.horizontal_page)
+                .min(changes.horizontal_max)
         } else {
-            self.changes_horizontal_offset
-                .saturating_sub(self.changes_horizontal_page)
+            changes.horizontal_offset.saturating_sub(changes.horizontal_page)
         };
     }
 
@@ -1130,30 +1202,87 @@ impl App {
 
     pub(crate) fn set_changes_bounds(
         &mut self,
+        pane: ChangePane,
         page: usize,
         len: usize,
         horizontal_page: usize,
         horizontal_max: usize,
     ) {
-        self.changes_page = page.max(1);
-        self.changes_max = len.saturating_sub(1);
+        let changes = self.changes_mut(pane);
+        changes.page = page.max(1);
+        changes.max = len.saturating_sub(1);
         if len == 0 {
-            self.changes_selected = 0;
-            self.changes_offset = 0;
+            changes.selected = 0;
+            changes.offset = 0;
         } else {
-            self.changes_selected = self.changes_selected.min(self.changes_max);
-            self.ensure_changes_visible();
+            changes.selected = changes.selected.min(changes.max);
+            if changes.selected < changes.offset {
+                changes.offset = changes.selected;
+            } else if changes.selected >= changes.offset.saturating_add(changes.page) {
+                changes.offset = changes.selected + 1 - changes.page;
+            }
+            changes.offset = changes
+                .offset
+                .min(changes.max.saturating_add(1).saturating_sub(changes.page));
         }
-        self.changes_horizontal_page = horizontal_page.max(1);
-        self.changes_horizontal_max = horizontal_max;
-        self.changes_horizontal_offset = self.changes_horizontal_offset.min(horizontal_max);
+        changes.horizontal_page = horizontal_page.max(1);
+        changes.horizontal_max = horizontal_max;
+        changes.horizontal_offset = changes.horizontal_offset.min(horizontal_max);
     }
 
     pub(crate) fn reset_changes_view(&mut self) {
-        self.diff_error = None;
-        self.changes_selected = 0;
-        self.changes_offset = 0;
-        self.changes_horizontal_offset = 0;
+        self.tree_changes = ChangesView::default();
+        self.worktree_changes = ChangesView::default();
+    }
+
+    pub(crate) fn changes(&self, pane: ChangePane) -> &ChangesView {
+        match pane {
+            ChangePane::Tree => &self.tree_changes,
+            ChangePane::Worktree => &self.worktree_changes,
+        }
+    }
+
+    pub(crate) fn changes_mut(&mut self, pane: ChangePane) -> &mut ChangesView {
+        match pane {
+            ChangePane::Tree => &mut self.tree_changes,
+            ChangePane::Worktree => &mut self.worktree_changes,
+        }
+    }
+
+    fn focused_changes(&self) -> &ChangesView {
+        self.changes(self.changes_focus.expect("changes are focused"))
+    }
+
+    fn focused_changes_mut(&mut self) -> &mut ChangesView {
+        self.changes_mut(self.changes_focus.expect("changes are focused"))
+    }
+
+    fn cycle_changes_focus(&mut self) {
+        let (first, second) = match self.changes_layout {
+            ChangesLayout::SideBySide => (ChangePane::Tree, ChangePane::Worktree),
+            ChangesLayout::Stacked => (ChangePane::Worktree, ChangePane::Tree),
+        };
+        let visible = |pane| match pane {
+            ChangePane::Tree => self.tree_changes_visible,
+            ChangePane::Worktree => self.worktree_changes_visible,
+        };
+        self.changes_focus = match self.changes_focus {
+            None if visible(first) => Some(first),
+            None if visible(second) => Some(second),
+            Some(current) if current == first && visible(second) => Some(second),
+            Some(_) | None => None,
+        };
+    }
+
+    pub(crate) fn set_changes_layout(&mut self, layout: ChangesLayout, tree_visible: bool, worktree_visible: bool) {
+        self.changes_layout = layout;
+        self.tree_changes_visible = tree_visible;
+        self.worktree_changes_visible = worktree_visible;
+        if self.changes_focus == Some(ChangePane::Tree) && !tree_visible {
+            self.changes_focus = worktree_visible.then_some(ChangePane::Worktree);
+        } else if self.changes_focus == Some(ChangePane::Worktree) && !worktree_visible {
+            self.changes_focus = tree_visible.then_some(ChangePane::Tree);
+        }
     }
 
     #[cfg(test)]
@@ -1532,6 +1661,10 @@ mod tests {
         app.finish_lane_computation(rows, graph, lane_time);
     }
 
+    fn show_tree_changes(app: &mut App) {
+        app.set_changes_layout(ChangesLayout::SideBySide, true, false);
+    }
+
     #[test]
     fn completion_orders_and_draws_merge_lanes() {
         let mut app = App::new(10);
@@ -1795,9 +1928,10 @@ mod tests {
         app.update(Action::PreviewAuthorCopy(true));
         assert!(app.preview_author_copy && app.reachable_rows.is_some());
 
+        show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         assert!(
-            app.changes_focused && !app.preview_author_copy && app.reachable_rows.is_none(),
+            app.changes_focus == Some(ChangePane::Tree) && !app.preview_author_copy && app.reachable_rows.is_none(),
             "entering the changes pane clears transient history navigation"
         );
 
@@ -1903,13 +2037,13 @@ mod tests {
         app.update(Action::PageDown);
         assert_eq!(app.commit_offset, 6);
 
-        app.changes_focused = true;
-        app.set_changes_bounds(2, 5, 1, 0);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.set_changes_bounds(ChangePane::Tree, 2, 5, 1, 0);
         app.update(Action::PageDown);
-        assert_eq!(app.changes_selected, 2, "focused changes retain paging priority");
+        assert_eq!(app.tree_changes.selected, 2, "focused changes retain paging priority");
         assert_eq!(app.commit_offset, 6);
 
-        app.changes_focused = false;
+        app.changes_focus = None;
         app.set_commit_bounds(3, 0);
         app.update(Action::PageDown);
         assert_eq!(app.selected, Some(2), "history paging resumes when the commit fits");
@@ -1947,53 +2081,62 @@ mod tests {
     fn focused_changes_redirect_navigation_to_the_path_viewport() {
         let mut app = App::new(2);
         app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
-        app.set_changes_bounds(4, 10, 20, 45);
+        app.set_changes_bounds(ChangePane::Tree, 4, 10, 20, 45);
+        show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
-        assert!(app.changes_focused);
-        assert_eq!(app.focus_feedback.take(), Some("changes"));
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+        assert_eq!(app.focus_feedback.take(), Some("tree changes"));
         app.update(Action::ToggleChangesFocus);
-        assert!(!app.changes_focused);
+        assert_eq!(app.changes_focus, None);
         assert_eq!(app.focus_feedback.take(), Some("history"));
         app.update(Action::ToggleChangesFocus);
 
         app.update(Action::MoveDown);
-        assert_eq!((app.changes_selected, app.changes_offset), (1, 0));
-        assert_eq!(app.update(Action::OpenDiff), vec![Effect::OpenDiff(1)]);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (1, 0));
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Tree, 1)]
+        );
         assert_eq!(
             app.selected,
             Some(0),
             "path selection leaves commit selection untouched"
         );
         app.update(Action::PageDown);
-        assert_eq!((app.changes_selected, app.changes_offset), (5, 2));
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (5, 2));
         app.update(Action::HalfPageDown);
-        assert_eq!((app.changes_selected, app.changes_offset), (7, 4));
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (7, 4));
         app.update(Action::Last);
-        assert_eq!((app.changes_selected, app.changes_offset), (9, 6));
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (9, 6));
         app.update(Action::First);
-        assert_eq!((app.changes_selected, app.changes_offset), (0, 0));
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (0, 0));
 
         app.update(Action::ScrollRight);
         app.update(Action::ScrollRight);
         app.update(Action::ScrollRight);
-        assert_eq!(app.changes_horizontal_offset, 45);
+        assert_eq!(app.tree_changes.horizontal_offset, 45);
         assert_eq!(app.horizontal_offset, 0, "path panning leaves the graph untouched");
         app.update(Action::ScrollLeft);
-        assert_eq!(app.changes_horizontal_offset, 25);
+        assert_eq!(app.tree_changes.horizontal_offset, 25);
 
         app.update(Action::ToggleChanges);
-        assert!(!app.changes_focused, "closing the panel returns focus to history");
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_focus, None, "closing the panel returns focus to history");
         assert!(app.update(Action::OpenDiff).is_empty());
-        assert_eq!(app.changes_selected, 0);
-        assert_eq!(app.changes_offset, 0);
-        assert_eq!(app.changes_horizontal_offset, 0);
+        assert_eq!(app.tree_changes.selected, 0);
+        assert_eq!(app.tree_changes.offset, 0);
+        assert_eq!(app.tree_changes.horizontal_offset, 0);
     }
 
     #[test]
     fn toggles_metadata_columns() {
         let mut app = App::new(1);
         assert!(app.show_trailers, "trailer attribution is visible by default");
-        assert!(app.show_changes, "changed paths are visible by default");
+        assert_eq!(
+            app.changes_mode,
+            Some(ChangesMode::Both),
+            "tree and worktree changes are visible by default"
+        );
 
         app.update(Action::ToggleDate);
         app.update(Action::ToggleEmail);
@@ -2018,10 +2161,62 @@ mod tests {
         assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
         assert!(app.show_commit);
-        assert!(!app.show_changes);
-        assert_eq!(app.changes_parent, 1);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+        assert_eq!(app.changes_parent, 0);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn cycles_both_tree_and_hidden_changes() {
+        let mut app = App::new(1);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both));
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+
+        app.changes_focus = Some(ChangePane::Tree);
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, None);
+        assert_eq!(app.changes_focus, None, "hiding changes returns focus to history");
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both));
+    }
+
+    #[test]
+    fn cycles_changes_focus_in_visual_order_and_keeps_navigation_independent() {
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        app.set_changes_bounds(ChangePane::Tree, 2, 4, 10, 20);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 4, 10, 20);
+        app.set_changes_layout(ChangesLayout::SideBySide, true, true);
+
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+        app.update(Action::MoveDown);
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.update(Action::MoveDown);
+        assert_eq!(app.tree_changes.selected, 1);
+        assert_eq!(app.worktree_changes.selected, 1);
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Worktree, 1)]
+        );
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, None);
+
+        app.set_changes_layout(ChangesLayout::Stacked, true, true);
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+
+        app.set_changes_layout(ChangesLayout::Stacked, false, true);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.set_changes_layout(ChangesLayout::Stacked, false, false);
+        assert_eq!(app.changes_focus, None);
     }
 
     #[test]
@@ -2118,15 +2313,16 @@ mod tests {
         complete(&mut app);
         app.update(Action::MoveDown);
         let selected = app.rows[app.selected.expect("a row is selected")].id;
-        app.set_changes_bounds(1, 3, 1, 2);
+        app.set_changes_bounds(ChangePane::Tree, 1, 3, 1, 2);
+        show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
         app.update(Action::MoveDown);
         app.update(Action::ScrollRight);
 
         app.reload(true);
-        assert!(!app.changes_focused, "reload returns focus to history");
-        assert_eq!(app.changes_selected, 0);
-        assert_eq!((app.changes_offset, app.changes_horizontal_offset), (0, 0));
+        assert_eq!(app.changes_focus, None, "reload returns focus to history");
+        assert_eq!(app.tree_changes.selected, 0);
+        assert_eq!((app.tree_changes.offset, app.tree_changes.horizontal_offset), (0, 0));
         app.extend_commits(vec![row(1), row(2), row(3)]);
         complete(&mut app);
         assert_eq!(
@@ -2167,10 +2363,11 @@ mod tests {
     #[test]
     fn pane_exit_keys_return_to_history_but_control_c_quits() {
         let mut app = App::new(1);
+        show_tree_changes(&mut app);
         app.update(Action::ToggleChangesFocus);
 
         assert!(app.update(Action::Quit).is_empty());
-        assert!(!app.changes_focused, "q returns focus to history");
+        assert_eq!(app.changes_focus, None, "q returns focus to history");
 
         app.update(Action::ToggleChangesFocus);
         assert_eq!(
@@ -2179,7 +2376,7 @@ mod tests {
             "Ctrl-C quits even while changes have focus"
         );
         assert!(app.update(Action::Cancel).is_empty());
-        assert!(!app.changes_focused, "Escape returns focus to history");
+        assert_eq!(app.changes_focus, None, "Escape returns focus to history");
         assert_eq!(
             app.state,
             State::Loading,
