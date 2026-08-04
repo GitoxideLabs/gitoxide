@@ -1,4 +1,7 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    path::{Component, PathBuf},
+};
 
 use gix_error::{ErrorExt, Exn, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
@@ -380,7 +383,12 @@ fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> Result<Cow<'a
     repo.prefix()
         .or_erased()?
         .ok_or_raise_erased(|| message("Relative path syntax can't be used outside of a worktree"))?;
-    repo.normalize_path(path).or_erased()
+    let path: PathBuf = gix_path::from_bstr(path)
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .collect();
+    let path = gix_path::into_bstr(path);
+    Ok(Cow::Owned(repo.normalize_path(path.as_ref()).or_erased()?.into_owned()))
 }
 
 fn handle_errors_and_replacements(

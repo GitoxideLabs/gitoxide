@@ -159,7 +159,14 @@ fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_tes
 
     let _cwd = gix_testtools::set_current_dir(&root)?;
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
-    for spec in ["HEAD:../this", ":../this"] {
+    for spec in [
+        "HEAD:../this",
+        ":../this",
+        "HEAD:./../this",
+        ":./../this",
+        ":0:./../this",
+        "HEAD:./../",
+    ] {
         assert!(
             probable_cause(repo.rev_parse_single(spec)).contains("leaves the repository"),
             "`{spec}` traverses above the worktree and must not resolve"
