@@ -44,37 +44,37 @@ pub enum Error {
 /// An object directory that was resolved before is skipped, and it is an error if an alternate points back
 /// into the chain of directories that is currently being followed, as that would form a cycle.
 pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Result<Vec<PathBuf>, Error> {
-    let mut dirs = vec![(0, objects_directory.clone())];
+    let mut dirs = vec![(None, objects_directory.clone())];
     let mut out = Vec::new();
-    let mut seen = vec![(
-        gix_path::realpath_opts(&objects_directory, current_dir, MAX_SYMLINKS)?,
-        None,
-    )];
-    while let Some((idx, dir)) = dirs.pop() {
+    let mut seen = Vec::new();
+    while let Some((parent_idx, dir)) = dirs.pop() {
+        let dir_canonicalized = gix_path::realpath_opts(&dir, current_dir, MAX_SYMLINKS)?;
+        if let Some(seen_idx) = seen.iter().position(|(seen_dir, _)| *seen_dir == dir_canonicalized) {
+            if let Some(parent_idx) = parent_idx {
+                if chain(&seen, parent_idx).any(|ancestor| ancestor == seen_idx) {
+                    let mut cycle: Vec<_> = chain(&seen, parent_idx)
+                        .take_while(|ancestor| *ancestor != seen_idx)
+                        .map(|idx| seen[idx].0.clone())
+                        .collect();
+                    cycle.push(seen[seen_idx].0.clone());
+                    cycle.reverse();
+                    return Err(Error::Cycle(cycle));
+                }
+            }
+            continue;
+        }
+        let idx = seen.len();
+        seen.push((dir_canonicalized, parent_idx));
         match fs::read(dir.join("info").join("alternates")) {
             Ok(input) => {
-                for path in parse::content(&input)?.into_iter() {
-                    let path = objects_directory.join(path);
-                    let path_canonicalized = gix_path::realpath_opts(&path, current_dir, MAX_SYMLINKS)?;
-                    match seen.iter().position(|(dir, _)| *dir == path_canonicalized) {
-                        Some(seen_idx) => {
-                            if chain(&seen, idx).any(|ancestor| ancestor == seen_idx) {
-                                let mut cycle: Vec<_> = chain(&seen, idx).map(|idx| seen[idx].0.clone()).collect();
-                                cycle.reverse();
-                                return Err(Error::Cycle(cycle));
-                            }
-                        }
-                        None => {
-                            seen.push((path_canonicalized, Some(idx)));
-                            dirs.push((seen.len() - 1, path));
-                        }
-                    }
+                for path in parse::content(&input)?.into_iter().rev() {
+                    dirs.push((Some(idx), objects_directory.join(path)));
                 }
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
         }
-        if idx != 0 {
+        if parent_idx.is_some() {
             out.push(dir);
         }
     }

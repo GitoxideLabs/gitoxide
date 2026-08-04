@@ -108,6 +108,35 @@ fn alternates_reachable_on_multiple_paths_are_not_a_cycle() -> crate::Result {
 }
 
 #[test]
+fn cycles_between_alternates_also_listed_by_the_root_are_detected() -> crate::Result {
+    let tmp = gix_testtools::tempfile::TempDir::new()?;
+    let tmp = tmp.path();
+    let (a, b) = alternate(tmp.join("a"), tmp.join("b"))?;
+    alternate(&b, &a)?;
+    let (from, _) = alternate_with_content(
+        tmp.join("from"),
+        &a,
+        [a.to_str().expect("valid UTF-8"), b.to_str().expect("valid UTF-8")]
+            .join("\n")
+            .into_bytes(),
+        None,
+    )?;
+
+    match alternate::resolve(from, &std::env::current_dir()?) {
+        Err(alternate::Error::Cycle(chain)) => assert_eq!(
+            chain
+                .into_iter()
+                .map(|p| p.file_name().expect("non-root").to_str().expect("utf8").to_owned())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "the traversed A -> B -> A edges form a cycle even when A and B were first seen as siblings"
+        ),
+        res => unreachable!("should be a cycle error: {res:?}"),
+    }
+    Ok(())
+}
+
+#[test]
 fn single_link_with_comment_before_path_and_ansi_c_escape() -> crate::Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     let non_alternate = tmp.path().join("actual");
