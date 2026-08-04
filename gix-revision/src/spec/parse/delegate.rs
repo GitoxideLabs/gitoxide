@@ -108,8 +108,7 @@ pub enum Traversal {
     /// Select the given parent commit of the currently selected commit, start at `1` for the first parent.
     /// The value will never be `0`.
     NthParent(usize),
-    /// Select the given ancestor of the currently selected commit, start at `1` for the first ancestor.
-    /// The value will never be `0`.
+    /// Select the given ancestor of the currently selected commit, with `0` meaning the commit itself.
     NthAncestor(usize),
 }
 

@@ -591,12 +591,10 @@ where
                     .and_then(|past_sep| try_parse_usize(past_sep.as_bstr()).transpose())
                     .transpose()?
                     .unwrap_or((1, 0));
-                if number != 0 {
-                    let traversal = delegate::Traversal::NthAncestor(number);
-                    delegate.traverse(traversal).or_raise(|| {
-                        Error::new_with_input(format!("delegate.traverse({traversal:?}) failed"), input)
-                    })?;
-                }
+                let traversal = delegate::Traversal::NthAncestor(number);
+                delegate
+                    .traverse(traversal)
+                    .or_raise(|| Error::new_with_input(format!("delegate.traverse({traversal:?}) failed"), input))?;
                 cursor += consumed;
             }
             b'^' => {
