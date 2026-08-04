@@ -96,6 +96,12 @@ pub(crate) struct ComparedParent {
     pub id: ObjectId,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectionRelation {
+    Tracking { ahead: usize, behind: usize },
+    Visible(usize),
+}
+
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Author {
     pub name: &'static BStr,
@@ -293,6 +299,7 @@ pub(crate) struct App {
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
     pub(crate) manual_refresh: bool,
+    pub(crate) selection_relation: Option<SelectionRelation>,
 }
 
 impl App {
@@ -356,6 +363,7 @@ impl App {
             signature_failures: 0,
             signature_verification_running: false,
             manual_refresh: false,
+            selection_relation: None,
         }
     }
 
@@ -716,6 +724,26 @@ impl App {
 
     pub(crate) fn hidden_ids(&self) -> HashSet<ObjectId> {
         self.hidden_rows.clone()
+    }
+
+    pub(crate) fn visible_ancestry_to_hidden(&self, tip: ObjectId) -> Option<usize> {
+        let mut pending = vec![tip];
+        let mut seen = HashSet::new();
+        let mut visible = 0;
+        let mut reached_hidden = false;
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if self.hidden_rows.contains(&id) {
+                reached_hidden = true;
+                continue;
+            }
+            let Some(row) = self.all_rows.get(&id) else { continue };
+            visible += 1;
+            pending.extend(row.parent_ids.iter().copied());
+        }
+        reached_hidden.then_some(visible)
     }
 
     pub(crate) fn start_refresh(
@@ -1567,6 +1595,28 @@ mod tests {
         assert_eq!(
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(4), id(3), id(2), id(1)]
+        );
+    }
+
+    #[test]
+    fn counts_distinct_visible_ancestry_only_when_it_reaches_hidden_history() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(4, &[3, 2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+        ]);
+        app.extend_hidden_commits(vec![row(1)]);
+
+        assert_eq!(app.visible_ancestry_to_hidden(id(4)), Some(3));
+        assert_eq!(app.visible_ancestry_to_hidden(id(3)), Some(1));
+        assert_eq!(app.visible_ancestry_to_hidden(id(1)), Some(0));
+
+        app.hidden_rows.clear();
+        assert_eq!(
+            app.visible_ancestry_to_hidden(id(4)),
+            None,
+            "without hidden history the fallback count has no useful base"
         );
     }
 
