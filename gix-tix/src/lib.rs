@@ -20,7 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use app::{Action, App, ChangeKind, Changes, CommitRow, ComparedParent, Effect, PathChange, State};
+use app::{Action, App, ChangeKind, Changes, CommitRow, ComparedParent, Effect, PathChange, SelectionRelation, State};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
@@ -37,7 +37,7 @@ use gix::{
     bstr::{BString, ByteSlice},
     prelude::TreeDiffChangeExt,
 };
-use history::{Authors, Decorations, Event, SharedAuthors};
+use history::{Authors, DecorationKind, Decorations, Event, SharedAuthors};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
 
@@ -52,6 +52,19 @@ struct FillRepository<'a> {
     path: &'a Path,
     retained: Option<gix::Repository>,
     retain: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectionRef {
+    name: BString,
+    upstream: Option<Option<gix::ObjectId>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SelectionRelationCache {
+    id: gix::ObjectId,
+    refs: Vec<SelectionRef>,
+    relation: Option<SelectionRelation>,
 }
 
 type LineCounts = Option<(u32, u32)>;
@@ -493,6 +506,7 @@ fn event_loop(
     let mut verification_receiver = None;
     let mut commit_message = None;
     let mut changes = None;
+    let mut selection_relation = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
     let mut line_diff_pool = None;
     let mut fill_repository = FillRepository {
@@ -519,6 +533,7 @@ fn event_loop(
         &mut notes,
         &mut commit_message,
         &mut changes,
+        &mut selection_relation,
         &mut line_diff_pool,
     )?;
     let mut last_draw = Instant::now();
@@ -569,6 +584,8 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
+                    selection_relation = None;
+                    app.selection_relation = None;
                     lane_receiver = None;
                     history_requires_alternate_screen =
                         history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
@@ -589,6 +606,8 @@ fn event_loop(
                 Ok(result) => {
                     let result = result?;
                     decorations = result.decorations;
+                    selection_relation = None;
+                    app.selection_relation = None;
                     let hidden_tips = if app.show_hidden {
                         &[][..]
                     } else {
@@ -635,7 +654,14 @@ fn event_loop(
                 app.state = State::Loading;
             } else {
                 let next = history::decorations(&repository)?;
-                if visible_decorations_changed(&decorations, &next, &app.rows) {
+                let relation_changed = selection_relation
+                    .as_ref()
+                    .is_some_and(|cached: &SelectionRelationCache| {
+                        selection_refs(&repository, cached.id, &next) != cached.refs
+                    });
+                if visible_decorations_changed(&decorations, &next, &app.rows) || relation_changed {
+                    selection_relation = None;
+                    app.selection_relation = None;
                     decorations = next;
                     dirty = true;
                 }
@@ -652,6 +678,7 @@ fn event_loop(
                 &mut notes,
                 &mut commit_message,
                 &mut changes,
+                &mut selection_relation,
                 &mut line_diff_pool,
             )?;
             last_draw = Instant::now();
@@ -727,6 +754,7 @@ fn event_loop(
                 &mut notes,
                 &mut commit_message,
                 &mut changes,
+                &mut selection_relation,
                 &mut line_diff_pool,
             )?;
             last_draw = Instant::now();
@@ -880,6 +908,7 @@ fn event_loop(
             &mut notes,
             &mut commit_message,
             &mut changes,
+            &mut selection_relation,
             &mut line_diff_pool,
         )?;
     }
@@ -1023,6 +1052,73 @@ fn visible_decorations_changed(old: &Decorations, new: &Decorations, rows: &[Com
     rows.iter().any(|row| old.get(&row.id) != new.get(&row.id))
 }
 
+fn selection_refs(repo: &gix::Repository, id: gix::ObjectId, decorations: &Decorations) -> Vec<SelectionRef> {
+    let mut refs: Vec<_> = decorations
+        .get(&id)
+        .into_iter()
+        .flatten()
+        .map(|decoration| {
+            let upstream = if decoration.kind == DecorationKind::Local {
+                let mut name = BString::from("refs/heads/");
+                name.extend_from_slice(&decoration.name);
+                repo.try_find_reference(name.as_bstr())
+                    .ok()
+                    .flatten()
+                    .and_then(|reference| reference.remote_tracking_ref_name(gix::remote::Direction::Fetch))
+                    .map(|name| {
+                        name.ok().and_then(|name| {
+                            repo.try_find_reference(name.as_bstr())
+                                .ok()
+                                .flatten()
+                                .and_then(|mut reference| reference.peel_to_id().ok().map(gix::Id::detach))
+                        })
+                    })
+            } else {
+                None
+            };
+            SelectionRef {
+                name: decoration.name.clone(),
+                upstream,
+            }
+        })
+        .collect();
+    refs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.upstream.cmp(&b.upstream)));
+    refs
+}
+
+fn selection_relation(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    refs: &[SelectionRef],
+    visible: Option<usize>,
+) -> Option<SelectionRelation> {
+    let has_upstream = refs.iter().any(|reference| reference.upstream.is_some());
+    for upstream in refs.iter().filter_map(|reference| reference.upstream.flatten()) {
+        let Ok(ahead) = count_exclusive_commits(repo, id, upstream) else {
+            continue;
+        };
+        let Ok(behind) = count_exclusive_commits(repo, upstream, id) else {
+            continue;
+        };
+        return Some(SelectionRelation::Tracking { ahead, behind });
+    }
+    (!has_upstream && !refs.is_empty())
+        .then_some(visible)
+        .flatten()
+        .map(SelectionRelation::Visible)
+}
+
+fn count_exclusive_commits(repo: &gix::Repository, tip: gix::ObjectId, hidden: gix::ObjectId) -> Result<usize> {
+    let mut walk = repo
+        .rev_walk([tip])
+        .with_hidden([hidden])
+        .all()
+        .context("could not compare branch with its upstream")?;
+    walk.try_fold(0usize, |count, info| {
+        info.context("could not traverse branch comparison").map(|_| count + 1)
+    })
+}
+
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
@@ -1034,6 +1130,7 @@ fn draw(
     notes: &mut gix::note::Platform,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     changes: &mut Option<(gix::ObjectId, usize, Changes)>,
+    selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
 ) -> Result<()> {
     app.viewport_rows = terminal
@@ -1065,9 +1162,16 @@ fn draw(
         app.set_notes(id, loaded);
     }
     let changes_visible = app.changes_visible();
-    let selected = (app.show_commit || changes_visible)
-        .then(|| app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id))
-        .flatten();
+    let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
+    app.selection_relation = selection_cache
+        .as_ref()
+        .filter(|cached| Some(cached.id) == selected_id)
+        .and_then(|cached| cached.relation);
+    let relation_to_load = matches!(app.state, State::Complete | State::Cancelled)
+        .then_some(selected_id)
+        .flatten()
+        .filter(|id| selection_cache.as_ref().is_none_or(|cached| cached.id != *id));
+    let selected = (app.show_commit || changes_visible).then_some(selected_id).flatten();
     let message_to_load = app
         .show_commit
         .then_some(selected)
@@ -1096,6 +1200,7 @@ fn draw(
     if app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
         || changes_to_load.is_some()
+        || relation_to_load.is_some()
     {
         let mut one_shot_repository = None;
         let repository = if fill_repository.retain {
@@ -1116,6 +1221,14 @@ fn draw(
         }
         if let Some(id) = message_to_load {
             *commit_message = Some((id, load_commit_message(repository, id)?));
+        }
+        if let Some(id) = relation_to_load {
+            repository.object_cache_size(OBJECT_CACHE_SIZE);
+            let refs = selection_refs(repository, id, decorations);
+            let relation = selection_relation(repository, id, &refs, app.visible_ancestry_to_hidden(id));
+            repository.object_cache_size(None);
+            *selection_cache = Some(SelectionRelationCache { id, refs, relation });
+            app.selection_relation = relation;
         }
         if let Some(id) = changes_to_load {
             repository.object_cache_size(OBJECT_CACHE_SIZE);
@@ -1702,6 +1815,90 @@ mod tests {
             load_commit_message(&repository, id)?.starts_with(b"topic\n\n--- agent\n\nCo-authored-by:"),
             "on-demand loading retains the full commit message"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn selection_relation_prefers_tracking_counts_and_handles_missing_upstreams() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let mut repository = gix::open(&fixture)?;
+        repository.object_cache_size(OBJECT_CACHE_SIZE);
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let tracking = SelectionRef {
+            name: "topic".into(),
+            upstream: Some(Some(main)),
+        };
+        assert_eq!(
+            selection_relation(&repository, topic, &[tracking.clone(), tracking], Some(99)),
+            Some(SelectionRelation::Tracking { ahead: 1, behind: 2 }),
+            "one upstream comparison wins over the visible-history fallback"
+        );
+        assert_eq!(
+            selection_relation(
+                &repository,
+                topic,
+                &[SelectionRef {
+                    name: "topic".into(),
+                    upstream: Some(None),
+                }],
+                Some(1),
+            ),
+            None,
+            "a configured but missing tracking ref does not masquerade as an untracked branch"
+        );
+        assert_eq!(
+            selection_relation(
+                &repository,
+                topic,
+                &[SelectionRef {
+                    name: "tag: topic".into(),
+                    upstream: None,
+                }],
+                Some(1),
+            ),
+            Some(SelectionRelation::Visible(1))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn selection_refs_resolve_the_configured_fetch_tracking_branch() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        for args in [
+            ["config", "remote.origin.url", "https://example.com/repo"],
+            ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"],
+            ["config", "branch.topic.remote", "origin"],
+            ["config", "branch.topic.merge", "refs/heads/main"],
+        ] {
+            let status = std::process::Command::new("git")
+                .current_dir(path)
+                .args(args)
+                .status()?;
+            assert!(status.success(), "git config prepares the tracking relationship");
+        }
+        let repository = gix::open(path)?;
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let status = std::process::Command::new("git")
+            .current_dir(path)
+            .args(["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()])
+            .status()?;
+        assert!(status.success(), "the configured tracking ref exists");
+        let repository = gix::open(path)?;
+        let refs = selection_refs(
+            &repository,
+            topic,
+            &Decorations::from([(
+                topic,
+                vec![history::Decoration {
+                    name: "topic".into(),
+                    kind: DecorationKind::Local,
+                }],
+            )]),
+        );
+        assert_eq!(refs[0].upstream, Some(Some(main)));
         Ok(())
     }
 

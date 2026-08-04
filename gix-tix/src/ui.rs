@@ -9,7 +9,10 @@ use ratatui::{
 
 use crate::{
     BuiltInDiff,
-    app::{App, AttributionKind, ChangeKind, Changes, CommitRow, CopyKind, NameMode, RefMode, SignatureState, State},
+    app::{
+        App, AttributionKind, ChangeKind, Changes, CommitRow, CopyKind, NameMode, RefMode, SelectionRelation,
+        SignatureState, State,
+    },
     history::{DecorationKind, Decorations},
 };
 
@@ -195,6 +198,15 @@ pub(crate) fn draw(
     .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
     let graph_offset = horizontal_offset.min(graph_max_offset);
+    let selection_info = selection_info_line(
+        app.changes_visible()
+            .then_some(changes)
+            .flatten()
+            .filter(|changes| changes.is_visible()),
+        app.selection_relation,
+    );
+    let selection_info_width = selection_info.width();
+    let mut selection_info_area = None;
 
     for (index, metadata) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
@@ -295,8 +307,25 @@ pub(crate) fn draw(
                 .x
                 .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
                 .saturating_add(1)
+                .saturating_add(u16::try_from(selection_info_width).unwrap_or(u16::MAX))
+                .saturating_add(1)
                 .min(body.right().saturating_sub(1));
-            frame.buffer_mut()[(marker_x, y)].set_style(style);
+            if selection_info_width > 0 {
+                let width = u16::try_from(selection_info_width)
+                    .unwrap_or(u16::MAX)
+                    .min(marker_x.saturating_sub(content.x).saturating_sub(2));
+                let area = Rect::new(marker_x.saturating_sub(width).saturating_sub(1), y, width, 1);
+                if width > 0 {
+                    frame.buffer_mut()[(area.x - 1, y)].set_symbol(" ");
+                    frame.render_widget(Paragraph::new(selection_info.clone()), area);
+                    selection_info_area = Some(area);
+                }
+            }
+            let buffer = frame.buffer_mut();
+            if marker_x > body.x {
+                buffer[(marker_x - 1, y)].set_symbol(" ");
+            }
+            buffer[(marker_x, y)].set_symbol(" ").set_style(style);
         }
         if !app.is_row_reachable(start + index) {
             for x in body.x..body.right() {
@@ -475,7 +504,60 @@ pub(crate) fn draw(
         frame
             .buffer_mut()
             .set_style(body, Style::default().add_modifier(Modifier::DIM));
+        if let Some(area) = selection_info_area {
+            frame.render_widget(Paragraph::new(selection_info), area);
+        }
     }
+}
+
+fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRelation>) -> Line<'static> {
+    let mut spans = Vec::new();
+    if let Some(changes) = changes {
+        spans.extend([
+            Span::styled(format!("+{}", changes.lines_added), selection_color(Color::Green)),
+            Span::raw(" "),
+            Span::styled(format!("-{}", changes.lines_removed), selection_color(Color::Red)),
+        ]);
+    }
+    match relation {
+        Some(SelectionRelation::Tracking { ahead, behind }) => {
+            if ahead > 0 {
+                push_selection_span(
+                    &mut spans,
+                    Span::styled(format!("⇡{ahead}"), selection_color(Color::Green)),
+                );
+            }
+            if behind > 0 {
+                if ahead == 0 {
+                    push_selection_span(
+                        &mut spans,
+                        Span::styled(format!("⇣{behind}"), selection_color(Color::Red)),
+                    );
+                } else {
+                    spans.push(Span::styled(format!("⇣{behind}"), selection_color(Color::Red)));
+                }
+            }
+        }
+        Some(SelectionRelation::Visible(commits)) => {
+            push_selection_span(
+                &mut spans,
+                Span::styled(format!("⇡{commits}"), selection_color(Color::Green)),
+            );
+        }
+        None => {}
+    }
+    Line::from(spans)
+}
+
+fn selection_color(color: Color) -> Style {
+    Style::default().fg(color).remove_modifier(Modifier::DIM)
+}
+
+fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
+    if !spans.is_empty() {
+        spans.push(Span::raw(" "));
+    }
+    spans.push(span);
 }
 
 fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, app: &mut App) {
@@ -1063,6 +1145,103 @@ mod tests {
     }
 
     #[test]
+    fn renders_selection_info_beside_the_right_marker_without_dimming_it() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(2);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "a subject which is deliberately too long".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app.selection_relation = Some(SelectionRelation::Tracking { ahead: 1, behind: 2 });
+        let changes = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                source: None,
+                path: "file".into(),
+                lines: Some((3, 4)),
+            }],
+            lines_added: 3,
+            lines_removed: 4,
+            ..Changes::default()
+        };
+        app.changes_focused = true;
+        let mut terminal = Terminal::new(TestBackend::new(38, 7))?;
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        let row = rendered_row(&terminal);
+        let info = "+3 -4 ⇡1⇣2";
+        let info_byte = row.find(info).expect("selection info wins over the long subject");
+        let info_x = row[..info_byte].chars().count() as u16;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer[(info_x - 1, 0)].symbol(),
+            " ",
+            "selection info has a left margin"
+        );
+        assert_eq!(buffer[(info_x, 0)].fg, Color::Green);
+        assert_eq!(buffer[(info_x + 3, 0)].fg, Color::Red);
+        assert!(!buffer[(info_x, 0)].modifier.contains(Modifier::DIM));
+        let spacer_x = info_x + info.chars().count() as u16;
+        assert_eq!(buffer[(spacer_x, 0)].symbol(), " ", "the marker has a left spacer");
+        assert!(
+            buffer[(spacer_x + 1, 0)].modifier.contains(Modifier::REVERSED),
+            "the right selection block follows the spacer"
+        );
+        assert_eq!(
+            buffer[(spacer_x + 1, 0)].symbol(),
+            " ",
+            "the right selection block never inverts text"
+        );
+
+        app.selection_relation = None;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(36, 0)].symbol(), " ", "a plain marker has a left spacer");
+        assert_eq!(buffer[(37, 0)].symbol(), " ", "a plain marker never inverts text");
+        assert!(buffer[(37, 0)].modifier.contains(Modifier::REVERSED));
+
+        app.show_selection_tail = false;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(!rendered_row(&terminal).contains(info));
+
+        let text = |relation| {
+            selection_info_line(None, relation)
+                .spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        };
+        assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 2 })), "⇣2");
+        assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 0 })), "");
+        Ok(())
+    }
+
+    #[test]
     fn renders_a_colored_file_diff_pager() -> Result<(), Box<dyn std::error::Error>> {
         let diff = BuiltInDiff::new(
             "M file".into(),
@@ -1339,7 +1518,7 @@ mod tests {
         for x in 30..44 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Green));
         }
-        expected[(selected_line.chars().count() as u16 + 1, 0)]
+        expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
         let commit = footer_text[..footer_text.find("o commit").expect("the commit toggle is present")]
             .chars()
