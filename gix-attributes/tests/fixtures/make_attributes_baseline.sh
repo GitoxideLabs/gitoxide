@@ -146,3 +146,17 @@ EOF
     baseline "$path"
   done
 )
+
+mkdir tokenisation
+(cd tokenisation
+  git init
+  : > user.attributes
+  {
+    # U+00A0 is part of the value, not a separator.
+    printf 'tokenisation text=auto\302\240eol=lf\n'
+    # An empty attribute name makes Git discard the entire line.
+    echo 'tokenisation text =lf eol=lf'
+  } > .gitattributes
+
+  baseline tokenisation
+)

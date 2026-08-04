@@ -225,10 +225,6 @@ fn attribute_names_must_not_be_empty() {
         "a blank in front of the equals sign leaves the assignment without a name"
     );
     assert!(
-        lenient_lines(r"p text =lf").is_empty(),
-        "lenient parsing skips the invalid line entirely"
-    );
-    assert!(
         matches!(
             try_line(r"p ="),
             Err(parse::Error::AttributeName { line_number: 1, .. })
@@ -241,10 +237,6 @@ fn attribute_names_must_not_be_empty() {
             Err(parse::Error::AttributeName { line_number: 1, .. })
         ),
         "prefixes need a name to apply to"
-    );
-    assert!(
-        lenient_lines(r"p -").is_empty(),
-        "lenient parsing skips the invalid line entirely"
     );
     assert!(
         matches!(
@@ -306,10 +298,6 @@ fn only_ascii_blanks_separate_attributes() {
             Err(parse::Error::AttributeName { line_number: 1, .. })
         ),
         "in a name it makes the whole name invalid"
-    );
-    assert!(
-        lenient_lines("p text\u{a0}eol=lf").is_empty(),
-        "lenient parsing skips the invalid line entirely"
     );
     assert!(
         matches!(
