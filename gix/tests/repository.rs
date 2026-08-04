@@ -119,14 +119,20 @@ fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> 
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
     let blob = repo.rev_parse_single("HEAD:this")?.detach();
     let tree = repo.rev_parse_single("HEAD^{tree}")?.detach();
-    for spec in ["HEAD:../../this", ":../../this", ":0:../../this"] {
+    for spec in [
+        "HEAD:../../this",
+        "HEAD:./.././../this",
+        ":../../this",
+        ":..//.././/this",
+        ":0:../../this",
+    ] {
         assert_eq!(
             repo.rev_parse_single(spec)?.detach(),
             blob,
             "`{spec}` consumes the CWD prefix to name the blob at the worktree root"
         );
     }
-    for spec in ["HEAD:../../", "HEAD:../.."] {
+    for spec in ["HEAD:../../", "HEAD:../..", "HEAD:./..//.."] {
         assert_eq!(
             repo.rev_parse_single(spec)?.detach(),
             tree,
@@ -136,11 +142,11 @@ fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> 
 
     std::env::set_current_dir(&root)?;
     let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
-    for spec in ["HEAD:./this", ":./this", ":0:./this"] {
+    for spec in ["HEAD:./this", "HEAD:././this", ":./this", ":0:./this"] {
         assert_eq!(
             repo.rev_parse_single(spec)?.detach(),
             blob,
-            "`{spec}` looks the path up relative to the CWD"
+            "`{spec}` looks the path up relative to the CWD, even if it's root"
         );
     }
     assert_eq!(
@@ -165,7 +171,7 @@ fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_tes
         "HEAD:./../this",
         ":./../this",
         ":0:./../this",
-        "HEAD:./../",
+        "HEAD:././../",
     ] {
         assert!(
             probable_cause(repo.rev_parse_single(spec)).contains("leaves the repository"),
