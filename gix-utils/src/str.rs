@@ -4,11 +4,56 @@ use std::{borrow::Cow, ffi::OsStr, path::Path};
 ///
 /// At the expense of extra-compute, it does nothing if there is no work to be done, returning the original input without allocating.
 pub fn precompose(s: Cow<'_, str>) -> Cow<'_, str> {
-    use unicode_normalization::{UnicodeNormalization, is_nfc};
+    use unicode_normalization::{char, is_nfc};
     if is_nfc(s.as_ref()) {
-        s
+        return s;
+    }
+
+    /// Compose filesystem-decomposed characters without the canonical reordering that full NFC performs.
+    /// Non-composable combining marks must retain their byte order to keep matching index entries.
+    ///
+    /// * `out` holds the characters emitted so far; composition replaces its starter, otherwise `ch` is appended.
+    /// * `starter` is the index of the latest class-zero character eligible for composition, if one exists.
+    /// * `max_class` is the highest combining class appended since the starter, used to block invalid composition.
+    /// * `ch` is the next canonically decomposed character to process.
+    ///
+    /// Returns `true` if `ch` was composed into the starter, or `false` if it was appended unchanged.
+    fn push(out: &mut Vec<char>, starter: &mut Option<usize>, max_class: &mut u8, ch: char) -> bool {
+        let class = char::canonical_combining_class(ch);
+        if let Some(starter) = *starter {
+            if *max_class == 0 || *max_class < class {
+                if let Some(composed) = char::compose(out[starter], ch) {
+                    out[starter] = composed;
+                    return true;
+                }
+            }
+        }
+        if class == 0 {
+            *starter = Some(out.len());
+            *max_class = 0;
+        } else {
+            *max_class = (*max_class).max(class);
+        }
+        out.push(ch);
+        false
+    }
+
+    let mut out = Vec::with_capacity(s.chars().count());
+    let mut starter = None;
+    let mut max_class = 0;
+    let mut changed = false;
+    for ch in s.chars() {
+        let mut first = true;
+        char::decompose_canonical(ch, |decomposed| {
+            changed |= !first || decomposed != ch;
+            first = false;
+            changed |= push(&mut out, &mut starter, &mut max_class, decomposed);
+        });
+    }
+    if changed {
+        Cow::Owned(out.into_iter().collect())
     } else {
-        Cow::Owned(s.as_ref().nfc().collect())
+        s
     }
 }
 
