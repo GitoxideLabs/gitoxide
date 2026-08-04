@@ -20,7 +20,10 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use app::{Action, App, ChangeKind, Changes, CommitRow, ComparedParent, Effect, PathChange, SelectionRelation, State};
+use app::{
+    Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, CommitRow, ComparedParent, Effect,
+    PathChange, SelectionRelation, State,
+};
 use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
@@ -45,6 +48,7 @@ const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
+const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -52,6 +56,34 @@ struct FillRepository<'a> {
     path: &'a Path,
     retained: Option<gix::Repository>,
     retain: bool,
+}
+
+struct WorktreeWatcher {
+    _watcher: RecommendedWatcher,
+    events: mpsc::Receiver<notify::Result<notify::Event>>,
+    workdir: PathBuf,
+    dot_git: PathBuf,
+    git_dir: PathBuf,
+    index: PathBuf,
+}
+
+impl WorktreeWatcher {
+    fn event_is_relevant(&self, event: &notify::Event) -> bool {
+        worktree_event_is_relevant(event, &self.workdir, &self.dot_git, &self.git_dir, &self.index)
+    }
+}
+
+fn worktree_event_is_relevant(
+    event: &notify::Event,
+    workdir: &Path,
+    dot_git: &Path,
+    git_dir: &Path,
+    index: &Path,
+) -> bool {
+    !matches!(event.kind, notify::EventKind::Access(_))
+        && event.paths.iter().any(|path| {
+            path == index || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
+        })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,17 +100,109 @@ struct SelectionRelationCache {
 }
 
 type LineCounts = Option<(u32, u32)>;
-type LineDiffResult = (usize, gix::object::tree::diff::ChangeDetached, Result<LineCounts>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DiffResource {
+    id: gix::ObjectId,
+    mode: gix::objs::tree::EntryMode,
+    path: BString,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FileChange {
+    Tree(gix::object::tree::diff::ChangeDetached),
+    Worktree {
+        old: Option<DiffResource>,
+        new: Option<DiffResource>,
+    },
+    Unavailable(&'static str),
+}
+
+type LineDiffResult = (usize, FileChange, Result<LineCounts>);
 
 struct LineDiffJob {
     index: usize,
-    change: gix::object::tree::diff::ChangeDetached,
+    change: FileChange,
 }
 
 struct LineDiffPool {
     jobs: Option<mpsc::Sender<LineDiffJob>>,
     results: mpsc::Receiver<LineDiffResult>,
     workers: Vec<std::thread::JoinHandle<()>>,
+}
+
+fn worktree_diff_cache(
+    repository: &gix::Repository,
+    mode: gix::diff::blob::pipeline::Mode,
+) -> Result<Option<gix::diff::blob::Platform>> {
+    let Some(workdir) = repository.workdir() else {
+        return Ok(None);
+    };
+    repository
+        .diff_resource_cache(
+            mode,
+            gix::diff::blob::pipeline::WorktreeRoots {
+                old_root: None,
+                new_root: Some(workdir.to_owned()),
+            },
+        )
+        .map(Some)
+        .context("could not initialize worktree diff resources")
+}
+
+fn set_worktree_resources(
+    repository: &gix::Repository,
+    cache: &mut gix::diff::blob::Platform,
+    old: Option<&DiffResource>,
+    new: Option<&DiffResource>,
+) -> Result<()> {
+    let fallback = old.or(new).context("a file diff needs at least one resource")?;
+    let old_resource = old.unwrap_or(fallback);
+    cache
+        .set_resource(
+            old.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            old_resource.mode.kind(),
+            old_resource.path.as_bstr(),
+            gix::diff::blob::ResourceKind::OldOrSource,
+            repository,
+        )
+        .context("could not prepare old worktree diff resource")?;
+    let new_resource = new.unwrap_or(fallback);
+    cache
+        .set_resource(
+            new.map_or_else(|| repository.object_hash().null(), |resource| resource.id),
+            new_resource.mode.kind(),
+            new_resource.path.as_bstr(),
+            gix::diff::blob::ResourceKind::NewOrDestination,
+            repository,
+        )
+        .context("could not prepare new worktree diff resource")?;
+    Ok(())
+}
+
+fn line_counts_for_change(
+    repository: &gix::Repository,
+    change: &FileChange,
+    tree_cache: &mut gix::diff::blob::Platform,
+    worktree_cache: Option<&mut gix::diff::blob::Platform>,
+) -> Result<LineCounts> {
+    let counts = match change {
+        FileChange::Tree(change) => change
+            .attach(repository, repository)
+            .diff(tree_cache)
+            .context("could not prepare line diff")?
+            .line_counts()
+            .context("could not count changed lines")?,
+        FileChange::Worktree { old, new } => {
+            let cache = worktree_cache.context("a working tree is required to count changed lines")?;
+            set_worktree_resources(repository, cache, old.as_ref(), new.as_ref())?;
+            gix::object::blob::diff::Platform { resource_cache: cache }
+                .line_counts()
+                .context("could not count worktree changed lines")?
+        }
+        FileChange::Unavailable(_) => None,
+    };
+    Ok(counts.map(|counts| (counts.insertions, counts.removals)))
 }
 
 impl LineDiffPool {
@@ -90,10 +214,12 @@ impl LineDiffPool {
         for _ in 0..parallelism {
             let mut repository = repository.to_thread_local();
             repository.object_cache_size(OBJECT_CACHE_SIZE);
-            let resource_cache = repository
+            let tree_cache = repository
                 .diff_resource_cache_for_tree_diff()
                 .context("could not initialize parallel line diffs")?;
-            worker_state.push((repository, resource_cache));
+            let worktree_cache = worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)
+                .context("could not initialize parallel worktree line diffs")?;
+            worker_state.push((repository, tree_cache, worktree_cache));
         }
 
         let (jobs, job_receiver) = mpsc::channel::<LineDiffJob>();
@@ -102,7 +228,7 @@ impl LineDiffPool {
         let (result_sender, results) = mpsc::channel();
         let workers = worker_state
             .into_iter()
-            .map(|(repository, mut resource_cache)| {
+            .map(|(repository, mut tree_cache, mut worktree_cache)| {
                 let job_receiver = gix::features::threading::OwnShared::clone(&job_receiver);
                 let result_sender = result_sender.clone();
                 std::thread::spawn(move || {
@@ -110,17 +236,12 @@ impl LineDiffPool {
                         let Ok(job) = gix::features::threading::lock(&job_receiver).recv() else {
                             break;
                         };
-                        let result = job
-                            .change
-                            .attach(&repository, &repository)
-                            .diff(&mut resource_cache)
-                            .context("could not prepare line diff")
-                            .and_then(|mut diff| {
-                                diff.line_counts()
-                                    .context("could not count changed lines")
-                                    .map(|counts| counts.map(|counts| (counts.insertions, counts.removals)))
-                            });
-                        resource_cache.clear_resource_cache_keep_allocation();
+                        let result =
+                            line_counts_for_change(&repository, &job.change, &mut tree_cache, worktree_cache.as_mut());
+                        tree_cache.clear_resource_cache_keep_allocation();
+                        if let Some(cache) = worktree_cache.as_mut() {
+                            cache.clear_resource_cache_keep_allocation();
+                        }
                         if result_sender.send((job.index, job.change, result)).is_err() {
                             break;
                         }
@@ -135,10 +256,7 @@ impl LineDiffPool {
         })
     }
 
-    fn line_counts(
-        &mut self,
-        changes: Vec<gix::object::tree::diff::ChangeDetached>,
-    ) -> Result<Vec<(gix::object::tree::diff::ChangeDetached, LineCounts)>> {
+    fn line_counts(&mut self, changes: Vec<FileChange>) -> Result<Vec<(FileChange, LineCounts)>> {
         let len = changes.len();
         let jobs = self.jobs.as_ref().context("line diff pool is shutting down")?;
         for (index, change) in changes.into_iter().enumerate() {
@@ -395,7 +513,7 @@ fn should_switch_screen(started_inline: bool, needs_alternate_screen: bool, in_a
 fn configure_initial_screen(app: &mut App, inline: bool) {
     app.inline = inline;
     if inline {
-        app.show_changes = false;
+        app.changes_mode = None;
     }
 }
 
@@ -441,7 +559,7 @@ fn sync_screen(
 ) -> Result<()> {
     let inline_height = inline_height(screen, terminal::size()?.1, app.rows.len());
     let needs_alternate_screen = needs_alternate_screen(
-        app.show_commit || app.show_changes,
+        app.show_commit || app.changes_mode.is_some(),
         history_requires_alternate_screen,
         inline_height,
     );
@@ -505,7 +623,10 @@ fn event_loop(
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
-    let mut changes = None;
+    let mut tree_changes = None;
+    let mut worktree_changes = None;
+    let mut worktree_watcher: Option<WorktreeWatcher> = None;
+    let mut worktree_refresh_deadline: Option<Instant> = None;
     let mut selection_relation = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
     let mut line_diff_pool = None;
@@ -518,7 +639,7 @@ fn event_loop(
     app.configure_hidden_filter(!hide.is_empty());
     sync_line_diff_pool(
         &mut line_diff_pool,
-        app.show_changes,
+        app.changes_mode.is_some(),
         &repository_path,
         line_diff_parallelism,
     )?;
@@ -532,7 +653,8 @@ fn event_loop(
         &mut fill_repository,
         &mut notes,
         &mut commit_message,
-        &mut changes,
+        &mut tree_changes,
+        &mut worktree_changes,
         &mut selection_relation,
         &mut line_diff_pool,
     )?;
@@ -546,6 +668,30 @@ fn event_loop(
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
     let result: Result<Option<Duration>> = (|| loop {
+        if let Some(watcher) = worktree_watcher.as_mut() {
+            while let Ok(event) = watcher.events.try_recv() {
+                match event {
+                    Ok(event) if watcher.event_is_relevant(&event) => {
+                        worktree_refresh_deadline = Some(Instant::now() + WORKTREE_EVENT_IDLE);
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        worktree_watcher = None;
+                        worktree_refresh_deadline = None;
+                        dirty = true;
+                        urgent = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if worktree_refresh_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            worktree_refresh_deadline = None;
+            invalidate_worktree_changes(&mut worktree_changes);
+            dirty = true;
+            urgent = true;
+        }
         while let Ok(event) = ref_events.try_recv() {
             match event {
                 Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => refresh_pending = true,
@@ -677,7 +823,8 @@ fn event_loop(
                 &mut fill_repository,
                 &mut notes,
                 &mut commit_message,
-                &mut changes,
+                &mut tree_changes,
+                &mut worktree_changes,
                 &mut selection_relation,
                 &mut line_diff_pool,
             )?;
@@ -753,7 +900,8 @@ fn event_loop(
                 &mut fill_repository,
                 &mut notes,
                 &mut commit_message,
-                &mut changes,
+                &mut tree_changes,
+                &mut worktree_changes,
                 &mut selection_relation,
                 &mut line_diff_pool,
             )?;
@@ -762,11 +910,13 @@ fn event_loop(
         }
         let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let watcher_timeout = ref_watcher.as_ref().map(|_| REF_EVENT_INTERVAL);
-        let wake_after = match (repeat_timeout, watcher_timeout) {
-            (Some(repeat), Some(watcher)) => Some(repeat.min(watcher)),
-            (Some(timeout), None) | (None, Some(timeout)) => Some(timeout),
-            (None, None) => None,
-        };
+        let worktree_timeout = worktree_refresh_deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .or_else(|| worktree_watcher.as_ref().map(|_| REF_EVENT_INTERVAL));
+        let wake_after = [repeat_timeout, watcher_timeout, worktree_timeout]
+            .into_iter()
+            .flatten()
+            .min();
         let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
             Some(timeout) if event::poll(timeout)? => Some(event::read()?),
             Some(_) => None,
@@ -801,7 +951,7 @@ fn event_loop(
             continue;
         }
         let action = action(key);
-        let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focused);
+        let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
         if repeats_history {
             fill_repository.retain = true;
             repeat_deadline = Some(Instant::now() + REPEAT_IDLE);
@@ -809,7 +959,7 @@ fn event_loop(
             fill_repository.retain = false;
             fill_repository.retained = None;
         }
-        if repeats_history && app.show_changes {
+        if repeats_history && app.changes_mode.is_some() {
             app.changes_suppressed = true;
         } else if key.kind != KeyEventKind::Repeat && app.changes_suppressed {
             app.changes_suppressed = false;
@@ -820,20 +970,32 @@ fn event_loop(
         let Some(action) = action else {
             continue;
         };
-        if action == Action::ToggleChangesFocus && !changes_focusable(changes.as_ref().map(|(_, _, changes)| changes)) {
-            continue;
-        }
         dirty = true;
         urgent = true;
+        let previous_changes_mode = app.changes_mode;
         let toggles_changes = action == Action::ToggleChanges;
+        let refreshes_worktree = action == Action::Refresh && app.changes_mode == Some(ChangesMode::Both);
         let effects = app.update(action);
+        if refreshes_worktree {
+            invalidate_worktree_changes(&mut worktree_changes);
+        }
         if toggles_changes {
             sync_line_diff_pool(
                 &mut line_diff_pool,
-                app.show_changes,
+                app.changes_mode.is_some(),
                 &repository_path,
                 line_diff_parallelism,
             )?;
+            if app.changes_mode == Some(ChangesMode::Both) {
+                invalidate_worktree_changes(&mut worktree_changes);
+                worktree_watcher = start_worktree_watcher(&view_repository);
+                if worktree_watcher.is_none() {
+                    app.worktree_changes.error = Some("worktree changes won't update automatically".into());
+                }
+            } else if previous_changes_mode == Some(ChangesMode::Both) {
+                worktree_watcher = None;
+                worktree_refresh_deadline = None;
+            }
         }
         for effect in effects {
             match effect {
@@ -852,10 +1014,13 @@ fn event_loop(
                     refresh_pending = true;
                     refresh_expand_hidden = true;
                 }
-                Effect::OpenDiff(index) => {
+                Effect::OpenDiff(pane, index) => {
+                    let changes = match pane {
+                        ChangePane::Tree => tree_changes.as_ref().map(|(_, _, changes)| changes),
+                        ChangePane::Worktree => worktree_changes.as_ref().map(|(_, changes)| changes),
+                    };
                     let result = changes
-                        .as_ref()
-                        .and_then(|(_, _, changes)| changes.diffs.get(index).zip(changes.paths.get(index)))
+                        .and_then(|changes| changes.diffs.get(index).zip(changes.paths.get(index)))
                         .context("selected path no longer has diff resources")
                         .and_then(|(change, path)| prepare_file_diff(&repository_path, change, path))
                         .and_then(|diff| match diff {
@@ -869,7 +1034,7 @@ fn event_loop(
                         });
                     match result {
                         Ok(true) => app.focus_history(),
-                        Err(err) => app.diff_error = Some(format!("{err:#}")),
+                        Err(err) => app.changes_mut(pane).error = Some(format!("{err:#}")),
                         Ok(false) => {}
                     }
                 }
@@ -907,7 +1072,8 @@ fn event_loop(
             &mut fill_repository,
             &mut notes,
             &mut commit_message,
-            &mut changes,
+            &mut tree_changes,
+            &mut worktree_changes,
             &mut selection_relation,
             &mut line_diff_pool,
         )?;
@@ -918,9 +1084,9 @@ fn event_loop(
 fn prepare_inline_exit(app: &mut App) {
     app.inline = true;
     app.show_commit = false;
-    app.show_changes = false;
+    app.changes_mode = None;
     app.changes_suppressed = false;
-    app.changes_focused = false;
+    app.changes_focus = None;
     app.reset_changes_view();
     app.show_selection_tail = false;
 }
@@ -1048,6 +1214,37 @@ fn start_ref_watcher(
     }
 }
 
+fn start_worktree_watcher(repository: &gix::Repository) -> Option<WorktreeWatcher> {
+    let workdir = repository.workdir()?.to_owned();
+    let index = repository.index_path();
+    let git_dir = repository.git_dir().to_owned();
+    let dot_git = workdir.join(gix::discover::DOT_GIT_DIR);
+    let (sender, events) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
+        let _ = sender.send(event);
+    })
+    .ok()?;
+    watcher.watch(&workdir, RecursiveMode::Recursive).ok()?;
+    let index_parent = index.parent()?;
+    if !index_parent.starts_with(&workdir) {
+        watcher.watch(index_parent, RecursiveMode::NonRecursive).ok()?;
+    }
+    Some(WorktreeWatcher {
+        _watcher: watcher,
+        events,
+        workdir,
+        dot_git,
+        git_dir,
+        index,
+    })
+}
+
+fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) {
+    if let Some((marker, _)) = changes {
+        *marker = usize::MAX;
+    }
+}
+
 fn visible_decorations_changed(old: &Decorations, new: &Decorations, rows: &[CommitRow]) -> bool {
     rows.iter().any(|row| old.get(&row.id) != new.get(&row.id))
 }
@@ -1129,11 +1326,12 @@ fn draw(
     fill_repository: &mut FillRepository<'_>,
     notes: &mut gix::note::Platform,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
-    changes: &mut Option<(gix::ObjectId, usize, Changes)>,
+    tree_changes: &mut Option<(gix::ObjectId, usize, Changes)>,
+    worktree_changes: &mut Option<(usize, Changes)>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
 ) -> Result<()> {
-    app.viewport_rows = terminal
+    let render_rows = terminal
         .get_frame()
         .area()
         .height
@@ -1141,9 +1339,10 @@ fn draw(
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
         return Ok(());
     }
+    app.viewport_rows = app.viewport_rows.min(render_rows.max(1));
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
-    let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
+    let end = start.saturating_add(render_rows).min(app.rows.len());
     for index in start..end {
         let id = app.rows[index].id;
         if app.notes_loaded(id) {
@@ -1171,7 +1370,9 @@ fn draw(
         .then_some(selected_id)
         .flatten()
         .filter(|id| selection_cache.as_ref().is_none_or(|cached| cached.id != *id));
-    let selected = (app.show_commit || changes_visible).then_some(selected_id).flatten();
+    let selected = (app.show_commit || app.changes_mode.is_some())
+        .then_some(selected_id)
+        .flatten();
     let message_to_load = app
         .show_commit
         .then_some(selected)
@@ -1180,26 +1381,36 @@ fn draw(
     if message_to_load.is_some() {
         app.reset_commit_view();
     }
-    if changes_visible && selected.is_some() && changes.as_ref().map(|(cached, _, _)| *cached) != selected {
+    if changes_visible && selected.is_some() && tree_changes.as_ref().map(|(cached, _, _)| *cached) != selected {
         app.changes_parent = 0;
     }
-    let changes_to_load = changes_visible.then_some(selected).flatten().filter(|id| {
-        changes
+    let tree_changes_to_load = (changes_visible && app.changes_mode.is_some())
+        .then_some(selected)
+        .flatten()
+        .filter(|id| {
+            tree_changes
+                .as_ref()
+                .is_none_or(|(cached, parent, _)| *cached != *id || *parent != app.changes_parent)
+        });
+    let worktree_changes_to_load = changes_visible
+        && app.changes_mode == Some(ChangesMode::Both)
+        && worktree_changes
             .as_ref()
-            .is_none_or(|(cached, parent, _)| cached != id || *parent != app.changes_parent)
-    });
-    if changes_to_load.is_some() {
+            .is_none_or(|(marker, _)| *marker == usize::MAX);
+    if tree_changes_to_load.is_some() || worktree_changes_to_load {
         app.reset_changes_view();
     }
     if !app.show_commit || selected.is_none() {
         *commit_message = None;
     }
-    if !app.show_changes || app.selected.is_none() {
-        *changes = None;
+    if app.changes_mode.is_none() {
+        *tree_changes = None;
+        *worktree_changes = None;
     }
     if app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
-        || changes_to_load.is_some()
+        || tree_changes_to_load.is_some()
+        || worktree_changes_to_load
         || relation_to_load.is_some()
     {
         let mut one_shot_repository = None;
@@ -1230,7 +1441,7 @@ fn draw(
             *selection_cache = Some(SelectionRelationCache { id, refs, relation });
             app.selection_relation = relation;
         }
-        if let Some(id) = changes_to_load {
+        if let Some(id) = tree_changes_to_load {
             repository.object_cache_size(OBJECT_CACHE_SIZE);
             let loaded = load_changes(
                 repository,
@@ -1243,12 +1454,47 @@ fn draw(
             repository.object_cache_size(None);
             let loaded = loaded?;
             app.changes_parent = loaded.parent.map_or(0, |parent| parent.index);
-            *changes = Some((id, app.changes_parent, loaded));
+            *tree_changes = Some((id, app.changes_parent, loaded));
+        }
+        if worktree_changes_to_load {
+            repository.object_cache_size(OBJECT_CACHE_SIZE);
+            let loaded = load_worktree_changes(
+                repository,
+                line_diff_pool
+                    .as_mut()
+                    .context("line diff pool is missing while the changes pane is visible")?,
+            );
+            repository.object_cache_size(None);
+            match loaded {
+                Ok(loaded) => {
+                    app.worktree_changes.error = None;
+                    *worktree_changes = Some((0, loaded));
+                }
+                Err(err) => {
+                    app.worktree_changes.error = Some(format!("status: {err:#}"));
+                    if let Some((marker, _)) = worktree_changes.as_mut() {
+                        *marker = 0;
+                    } else {
+                        *worktree_changes = Some((0, Changes::default()));
+                    }
+                }
+            }
         }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
-    let changes = changes.as_ref().map(|(_, _, changes)| changes);
-    terminal.draw(|frame| ui::draw(frame, app, decorations, mailmap, message, changes))?;
+    let tree_changes = tree_changes.as_ref().map(|(_, _, changes)| changes);
+    let worktree_changes = worktree_changes.as_ref().map(|(_, changes)| changes);
+    terminal.draw(|frame| {
+        ui::draw_with_worktree(
+            frame,
+            app,
+            decorations,
+            mailmap,
+            message,
+            tree_changes,
+            worktree_changes,
+        );
+    })?;
     Ok(())
 }
 
@@ -1267,11 +1513,7 @@ fn open_notes(repository_path: &Path) -> Result<gix::note::Platform> {
         .context("could not open Git notes")
 }
 
-fn prepare_file_diff(
-    repository_path: &Path,
-    change: &gix::object::tree::diff::ChangeDetached,
-    path: &PathChange,
-) -> Result<FileDiff> {
+fn prepare_file_diff(repository_path: &Path, change: &FileChange, path: &PathChange) -> Result<FileDiff> {
     let mut repository = gix::open(repository_path).context("could not open repository for file diff")?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
     prepare_file_diff_with_repository(&repository, change, path)
@@ -1279,26 +1521,45 @@ fn prepare_file_diff(
 
 fn prepare_file_diff_with_repository(
     repository: &gix::Repository,
-    change: &gix::object::tree::diff::ChangeDetached,
+    change: &FileChange,
     path: &PathChange,
 ) -> Result<FileDiff> {
+    if let FileChange::Unavailable(message) = change {
+        anyhow::bail!("{message}");
+    }
     let global_command = repository
         .config_snapshot()
         .trusted_program(gix::config::tree::Diff::EXTERNAL)
         .map(gix::path::os_string_into_bstring)
         .transpose()
         .context("external diff command is not representable on this platform")?;
-    let mut resources = repository
-        .diff_resource_cache(
+    let mut resources = match change {
+        FileChange::Tree(_) => repository
+            .diff_resource_cache(
+                gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+                Default::default(),
+            )
+            .context("could not initialize file diff")?,
+        FileChange::Worktree { .. } => worktree_diff_cache(
+            repository,
             gix::diff::blob::pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-            Default::default(),
-        )
-        .context("could not initialize file diff")?;
+        )?
+        .context("a working tree is required to show this diff")?,
+        FileChange::Unavailable(_) => unreachable!("handled above"),
+    };
     resources.options.skip_internal_diff_if_external_is_configured = true;
-    change
-        .attach(repository, repository)
-        .diff(&mut resources)
-        .context("could not prepare selected file")?;
+    match change {
+        FileChange::Tree(change) => {
+            change
+                .attach(repository, repository)
+                .diff(&mut resources)
+                .context("could not prepare selected file")?;
+        }
+        FileChange::Worktree { old, new } => {
+            set_worktree_resources(repository, &mut resources, old.as_ref(), new.as_ref())?;
+        }
+        FileChange::Unavailable(_) => unreachable!("handled above"),
+    }
     let prepared = resources.prepare_diff().context("could not prepare selected diff")?;
     match prepared.operation {
         gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
@@ -1368,37 +1629,41 @@ fn prepare_external_diff(
     ))
 }
 
-fn built_in_diff(
-    path: &PathChange,
-    change: &gix::object::tree::diff::ChangeDetached,
-    rendered: Option<BString>,
-    binary: bool,
-) -> BuiltInDiff {
-    use gix::object::tree::diff::ChangeDetached;
-
+fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
     let (old_path, new_path, old_mode, new_mode) = match change {
-        ChangeDetached::Addition { entry_mode, .. } => (None, Some(path.path.as_bstr()), None, Some(*entry_mode)),
-        ChangeDetached::Deletion { entry_mode, .. } => (Some(path.path.as_bstr()), None, Some(*entry_mode), None),
-        ChangeDetached::Modification {
+        FileChange::Tree(gix::object::tree::diff::ChangeDetached::Addition { entry_mode, .. }) => {
+            (None, Some(path.path.as_bstr()), None, Some(*entry_mode))
+        }
+        FileChange::Tree(gix::object::tree::diff::ChangeDetached::Deletion { entry_mode, .. }) => {
+            (Some(path.path.as_bstr()), None, Some(*entry_mode), None)
+        }
+        FileChange::Tree(gix::object::tree::diff::ChangeDetached::Modification {
             previous_entry_mode,
             entry_mode,
             ..
-        } => (
+        }) => (
             Some(path.path.as_bstr()),
             Some(path.path.as_bstr()),
             Some(*previous_entry_mode),
             Some(*entry_mode),
         ),
-        ChangeDetached::Rewrite {
+        FileChange::Tree(gix::object::tree::diff::ChangeDetached::Rewrite {
             source_entry_mode,
             entry_mode,
             ..
-        } => (
+        }) => (
             path.source.as_ref().map(|path| path.as_bstr()),
             Some(path.path.as_bstr()),
             Some(*source_entry_mode),
             Some(*entry_mode),
         ),
+        FileChange::Worktree { old, new } => (
+            old.as_ref().map(|resource| resource.path.as_bstr()),
+            new.as_ref().map(|resource| resource.path.as_bstr()),
+            old.as_ref().map(|resource| resource.mode),
+            new.as_ref().map(|resource| resource.mode),
+        ),
+        FileChange::Unavailable(_) => unreachable!("unavailable diffs aren't rendered"),
     };
     let display_path = |path: Option<&gix::bstr::BStr>, prefix: &str| -> BString {
         path.map_or_else(
@@ -1670,12 +1935,330 @@ fn load_changes(
         }
         out.paths.push(PathChange {
             kind,
+            group: ChangeGroup::Tree,
             source,
             path,
             lines: None,
         });
-        diffs.push(change);
+        diffs.push(FileChange::Tree(change));
     }
+    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
+        path.lines = lines;
+        if let Some((insertions, removals)) = lines {
+            out.lines_added += u64::from(insertions);
+            out.lines_removed += u64::from(removals);
+        }
+        out.diffs.push(change);
+    }
+    Ok(out)
+}
+
+fn entry_mode(mode: gix::index::entry::Mode) -> Result<gix::objs::tree::EntryMode> {
+    mode.to_tree_entry_mode()
+        .context("status entry cannot be represented in a tree")
+}
+
+fn staged_change(change: gix::diff::index::Change) -> Result<(PathChange, FileChange)> {
+    use gix::diff::index::Change;
+    use gix::object::tree::diff::ChangeDetached;
+
+    let (kind, source, path, diff) = match change {
+        Change::Addition {
+            location,
+            entry_mode: mode,
+            id,
+            ..
+        } => {
+            let entry_mode = entry_mode(mode)?;
+            let path = location.into_owned();
+            let diff = ChangeDetached::Addition {
+                location: path.clone(),
+                entry_mode,
+                relation: None,
+                id: id.into_owned(),
+            };
+            (ChangeKind::Added, None, path, diff)
+        }
+        Change::Deletion {
+            location,
+            entry_mode: mode,
+            id,
+            ..
+        } => {
+            let entry_mode = entry_mode(mode)?;
+            let path = location.into_owned();
+            let diff = ChangeDetached::Deletion {
+                location: path.clone(),
+                entry_mode,
+                relation: None,
+                id: id.into_owned(),
+            };
+            (ChangeKind::Deleted, None, path, diff)
+        }
+        Change::Modification {
+            location,
+            previous_entry_mode,
+            previous_id,
+            entry_mode: mode,
+            id,
+            ..
+        } => {
+            let previous_entry_mode = entry_mode(previous_entry_mode)?;
+            let current_entry_mode = entry_mode(mode)?;
+            let path = location.into_owned();
+            let kind = if previous_entry_mode.kind() == current_entry_mode.kind() {
+                ChangeKind::Modified
+            } else {
+                ChangeKind::TypeChanged
+            };
+            let diff = ChangeDetached::Modification {
+                location: path.clone(),
+                previous_entry_mode,
+                previous_id: previous_id.into_owned(),
+                entry_mode: current_entry_mode,
+                id: id.into_owned(),
+            };
+            (kind, None, path, diff)
+        }
+        Change::Rewrite {
+            source_location,
+            source_entry_mode,
+            source_id,
+            location,
+            entry_mode: mode,
+            id,
+            copy,
+            ..
+        } => {
+            let source_entry_mode = entry_mode(source_entry_mode)?;
+            let current_entry_mode = entry_mode(mode)?;
+            let source = source_location.into_owned();
+            let path = location.into_owned();
+            let diff = ChangeDetached::Rewrite {
+                source_location: source.clone(),
+                source_entry_mode,
+                source_relation: None,
+                source_id: source_id.into_owned(),
+                diff: None,
+                entry_mode: current_entry_mode,
+                id: id.into_owned(),
+                location: path.clone(),
+                relation: None,
+                copy,
+            };
+            (
+                if copy { ChangeKind::Copied } else { ChangeKind::Renamed },
+                Some(source),
+                path,
+                diff,
+            )
+        }
+    };
+    let unavailable = matches!(diff, ChangeDetached::Addition { entry_mode, .. } if entry_mode.is_commit())
+        || matches!(diff, ChangeDetached::Deletion { entry_mode, .. } if entry_mode.is_commit())
+        || matches!(diff, ChangeDetached::Modification { previous_entry_mode, entry_mode, .. } if previous_entry_mode.is_commit() || entry_mode.is_commit())
+        || matches!(diff, ChangeDetached::Rewrite { source_entry_mode, entry_mode, .. } if source_entry_mode.is_commit() || entry_mode.is_commit());
+    Ok((
+        PathChange {
+            kind,
+            group: ChangeGroup::Staged,
+            source,
+            path,
+            lines: None,
+        },
+        if unavailable {
+            FileChange::Unavailable("submodule changes don't have a file diff")
+        } else {
+            FileChange::Tree(diff)
+        },
+    ))
+}
+
+fn worktree_resource(entry: &gix::index::Entry, path: &gix::bstr::BStr) -> Result<DiffResource> {
+    Ok(DiffResource {
+        id: entry.id,
+        mode: entry_mode(entry.mode)?,
+        path: path.to_owned(),
+    })
+}
+
+fn unstaged_change(
+    item: gix::status::index_worktree::Item,
+    object_hash: gix::hash::Kind,
+) -> Result<Option<(PathChange, FileChange)>> {
+    use gix::status::index_worktree::Item;
+    use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
+
+    let (kind, source, path, diff) = match item {
+        Item::Modification {
+            entry,
+            rela_path,
+            status,
+            ..
+        } => {
+            let old = worktree_resource(&entry, rela_path.as_bstr())?;
+            match status {
+                EntryStatus::Conflict { .. } => (
+                    ChangeKind::Unmerged,
+                    None,
+                    rela_path,
+                    FileChange::Unavailable("an unmerged path has no single file diff"),
+                ),
+                EntryStatus::IntentToAdd => (
+                    ChangeKind::Added,
+                    None,
+                    rela_path.clone(),
+                    FileChange::Worktree {
+                        old: None,
+                        new: Some(DiffResource {
+                            id: entry.id.kind().null(),
+                            mode: old.mode,
+                            path: rela_path,
+                        }),
+                    },
+                ),
+                EntryStatus::NeedsUpdate(_) => return Ok(None),
+                EntryStatus::Change(Change::Removed) => (
+                    ChangeKind::Deleted,
+                    None,
+                    rela_path,
+                    FileChange::Worktree {
+                        old: Some(old),
+                        new: None,
+                    },
+                ),
+                EntryStatus::Change(Change::Type { worktree_mode }) => {
+                    let new_mode = entry_mode(worktree_mode)?;
+                    (
+                        ChangeKind::TypeChanged,
+                        None,
+                        rela_path.clone(),
+                        FileChange::Worktree {
+                            old: Some(old),
+                            new: Some(DiffResource {
+                                id: entry.id.kind().null(),
+                                mode: new_mode,
+                                path: rela_path,
+                            }),
+                        },
+                    )
+                }
+                EntryStatus::Change(Change::Modification {
+                    executable_bit_changed, ..
+                }) => {
+                    let mode = if executable_bit_changed {
+                        if old.mode.is_executable() {
+                            gix::objs::tree::EntryKind::Blob
+                        } else {
+                            gix::objs::tree::EntryKind::BlobExecutable
+                        }
+                        .into()
+                    } else {
+                        old.mode
+                    };
+                    (
+                        ChangeKind::Modified,
+                        None,
+                        rela_path.clone(),
+                        FileChange::Worktree {
+                            old: Some(old),
+                            new: Some(DiffResource {
+                                id: entry.id.kind().null(),
+                                mode,
+                                path: rela_path,
+                            }),
+                        },
+                    )
+                }
+                EntryStatus::Change(Change::SubmoduleModification(_)) => (
+                    ChangeKind::Modified,
+                    None,
+                    rela_path,
+                    FileChange::Unavailable("submodule changes don't have a file diff"),
+                ),
+            }
+        }
+        Item::DirectoryContents { entry, .. } => {
+            let mode = match entry.disk_kind {
+                Some(gix::dir::entry::Kind::File) => gix::objs::tree::EntryKind::Blob.into(),
+                Some(gix::dir::entry::Kind::Symlink) => gix::objs::tree::EntryKind::Link.into(),
+                _ => return Ok(None),
+            };
+            let path = entry.rela_path;
+            (
+                ChangeKind::Added,
+                None,
+                path.clone(),
+                FileChange::Worktree {
+                    old: None,
+                    new: Some(DiffResource {
+                        id: object_hash.null(),
+                        mode,
+                        path,
+                    }),
+                },
+            )
+        }
+        Item::Rewrite {
+            source,
+            dirwalk_entry,
+            copy,
+            ..
+        } => {
+            let source = source.rela_path().to_owned();
+            let path = dirwalk_entry.rela_path;
+            (
+                if copy { ChangeKind::Copied } else { ChangeKind::Renamed },
+                Some(source),
+                path,
+                FileChange::Unavailable("unstaged rewrite diffs aren't available"),
+            )
+        }
+    };
+    Ok(Some((
+        PathChange {
+            kind,
+            group: ChangeGroup::Unstaged,
+            source,
+            path,
+            lines: None,
+        },
+        diff,
+    )))
+}
+
+fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
+    let mut status = repository
+        .status(gix::progress::Discard)
+        .context("could not initialize worktree status")?
+        .untracked_files(gix::status::UntrackedFiles::Files)
+        .index_worktree_options_mut(|options| {
+            options.sorting = Some(gix::status::plumbing::index_as_worktree_with_renames::Sorting::ByPathCaseSensitive);
+        })
+        .into_iter(Vec::<BString>::new())
+        .context("could not start worktree status")?;
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+    for item in status.by_ref() {
+        match item.context("could not obtain worktree status")? {
+            gix::status::Item::TreeIndex(change) => staged.push(staged_change(change)?),
+            gix::status::Item::IndexWorktree(item) => {
+                if let Some(change) = unstaged_change(item, repository.object_hash())? {
+                    unstaged.push(change);
+                }
+            }
+        }
+    }
+    drop(status);
+    staged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
+    unstaged.sort_by(|(a, _), (b, _)| a.path.cmp(&b.path));
+    staged.extend(unstaged);
+
+    let (paths, diffs): (Vec<_>, Vec<_>) = staged.into_iter().unzip();
+    let mut out = Changes {
+        paths,
+        ..Changes::default()
+    };
     for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
         path.lines = lines;
         if let Some((insertions, removals)) = lines {
@@ -1777,10 +2360,6 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('y') => Some(Action::Copy),
         _ => None,
     }
-}
-
-fn changes_focusable(changes: Option<&Changes>) -> bool {
-    changes.is_some_and(Changes::is_visible)
 }
 
 fn repeats_viewport(action: &Action) -> bool {
@@ -1935,6 +2514,7 @@ mod tests {
             root.paths,
             [PathChange {
                 kind: ChangeKind::Added,
+                group: ChangeGroup::Tree,
                 source: None,
                 path: "root".into(),
                 lines: Some((1, 0)),
@@ -2011,12 +2591,14 @@ mod tests {
             [
                 PathChange {
                     kind: ChangeKind::Added,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: "topic".into(),
                     lines: Some((1, 0)),
                 },
                 PathChange {
                     kind: ChangeKind::Added,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: "topic-extra".into(),
                     lines: Some((1, 0)),
@@ -2040,6 +2622,7 @@ mod tests {
             first_parent.paths,
             [PathChange {
                 kind: ChangeKind::Added,
+                group: ChangeGroup::Tree,
                 source: None,
                 path: "merged".into(),
                 lines: Some((1, 0)),
@@ -2060,6 +2643,7 @@ mod tests {
             second_parent.paths,
             [PathChange {
                 kind: ChangeKind::Added,
+                group: ChangeGroup::Tree,
                 source: None,
                 path: "main".into(),
                 lines: Some((1, 0)),
@@ -2070,6 +2654,80 @@ mod tests {
             load_changes(&repository, merge, 2, line_diff_pool)?.parent,
             first_parent.parent,
             "parent selection wraps around"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn loads_staged_and_unstaged_worktree_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let path = fixture.path();
+        let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
+            std::process::Command::new("git")
+                .current_dir(path)
+                .args(["-c", "commit.gpgsign=false"])
+                .args(args)
+                .status()
+        };
+
+        assert!(git(&["switch", "-q", "-c", "conflict-other"])?.success());
+        std::fs::write(path.join("root"), "other\n")?;
+        assert!(git(&["commit", "-qam", "other"])?.success());
+        assert!(git(&["switch", "-q", "main"])?.success());
+        std::fs::write(path.join("root"), "ours\n")?;
+        assert!(git(&["commit", "-qam", "ours"])?.success());
+        assert!(
+            !git(&["merge", "--no-edit", "conflict-other"])?.success(),
+            "the fixture deliberately leaves an unresolved path"
+        );
+
+        std::fs::write(path.join("staged"), "staged\n")?;
+        std::fs::write(path.join("both"), "index\n")?;
+        assert!(git(&["add", "staged", "both"])?.success());
+        std::fs::write(path.join("both"), "index\nworktree\n")?;
+        std::fs::write(path.join("untracked"), "untracked\n")?;
+        std::fs::write(path.join(".git/info/exclude"), "ignored\n")?;
+        std::fs::write(path.join("ignored"), "ignored\n")?;
+
+        let repository = gix::open(path)?;
+        let mut line_diff_pool = LineDiffPool::new(path, 2)?;
+        let changes = load_worktree_changes(&repository, &mut line_diff_pool)?;
+        let rows: Vec<_> = changes
+            .paths
+            .iter()
+            .map(|change| (change.group, change.kind, change.path.to_string()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (ChangeGroup::Staged, ChangeKind::Added, "both".into()),
+                (ChangeGroup::Staged, ChangeKind::Added, "staged".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Added, ".mailmap".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Modified, "both".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Unmerged, "root".into()),
+                (ChangeGroup::Unstaged, ChangeKind::Added, "untracked".into()),
+            ],
+            "status is partitioned, path-sorted, includes conflicts and untracked files, and excludes ignored files"
+        );
+        assert!(changes.lines_added > 0, "available file diffs contribute line counts");
+        for (path, diff) in changes.paths.iter().zip(&changes.diffs) {
+            if path.kind != ChangeKind::Unmerged {
+                prepare_file_diff_with_repository(&repository, diff, path)
+                    .with_context(|| format!("{} should produce a staged or worktree diff", path.path))?;
+            }
+        }
+        let conflict = changes
+            .paths
+            .iter()
+            .position(|change| change.kind == ChangeKind::Unmerged)
+            .expect("the conflict is visible");
+        assert!(
+            prepare_file_diff_with_repository(&repository, &changes.diffs[conflict], &changes.paths[conflict])
+                .err()
+                .expect("conflicts cannot produce a single file diff")
+                .to_string()
+                .contains("no single file diff"),
+            "opening an unresolved path produces actionable feedback"
         );
         Ok(())
     }
@@ -2155,13 +2813,16 @@ mod tests {
         let mut inline = App::new(1);
         configure_initial_screen(&mut inline, true);
         assert!(inline.inline);
-        assert!(!inline.show_changes, "inline startup hides the default changes view");
+        assert_eq!(
+            inline.changes_mode, None,
+            "inline startup hides the default changes view"
+        );
         let mut alternate = App::new(1);
         configure_initial_screen(&mut alternate, false);
         assert!(!alternate.inline);
         assert!(
-            alternate.show_changes,
-            "alternate-screen startup keeps the default changes view"
+            alternate.changes_mode == Some(ChangesMode::Both),
+            "alternate-screen startup keeps the default tree and worktree changes view"
         );
 
         assert!(
@@ -2330,22 +2991,6 @@ mod tests {
     }
 
     #[test]
-    fn only_visible_changes_can_take_focus() {
-        assert!(!changes_focusable(None));
-        assert!(!changes_focusable(Some(&Changes::default())));
-        let changes = Changes {
-            paths: vec![PathChange {
-                kind: ChangeKind::Modified,
-                source: None,
-                path: "file".into(),
-                lines: None,
-            }],
-            ..Changes::default()
-        };
-        assert!(changes_focusable(Some(&changes)));
-    }
-
-    #[test]
     fn retains_the_fill_repository_only_for_repeated_viewport_navigation() {
         assert!(retains_fill_repository(
             KeyEventKind::Repeat,
@@ -2383,17 +3028,17 @@ mod tests {
     fn prepares_a_reduced_selection_after_leaving_the_alternate_screen() {
         let mut app = App::new(1);
         app.show_commit = true;
-        app.show_changes = true;
-        app.changes_focused = true;
+        app.changes_mode = Some(ChangesMode::Tree);
+        app.changes_focus = Some(ChangePane::Tree);
 
         prepare_inline_exit(&mut app);
 
         assert!(app.inline, "the final frame is drawn into the restored inline screen");
         assert!(
-            !app.show_commit && !app.show_changes,
+            !app.show_commit && app.changes_mode.is_none(),
             "alternate-screen panels are omitted from the final frame"
         );
-        assert!(!app.changes_focused, "the hidden panel no longer owns focus");
+        assert_eq!(app.changes_focus, None, "the hidden panel no longer owns focus");
         assert!(!app.show_selection_tail, "only the left selection marker remains");
     }
 
@@ -2466,5 +3111,47 @@ mod tests {
             Some(FRAME_INTERVAL.saturating_sub(Duration::from_millis(10))),
             "the earlier frame deadline takes precedence over repeat-idle restoration"
         );
+    }
+
+    #[test]
+    fn filters_worktree_watch_events_and_invalidates_cached_status() {
+        use notify::event::{AccessKind, ModifyKind};
+
+        let workdir = Path::new("/repo");
+        let dot_git = workdir.join(".git");
+        let git_dir = dot_git.clone();
+        let index = git_dir.join("index");
+        let modified =
+            |path: &Path| notify::Event::new(notify::EventKind::Modify(ModifyKind::Any)).add_path(path.to_owned());
+        assert!(worktree_event_is_relevant(
+            &modified(&workdir.join("src/lib.rs")),
+            workdir,
+            &dot_git,
+            &git_dir,
+            &index
+        ));
+        assert!(worktree_event_is_relevant(
+            &modified(&index),
+            workdir,
+            &dot_git,
+            &git_dir,
+            &index
+        ));
+        assert!(!worktree_event_is_relevant(
+            &modified(&git_dir.join("HEAD")),
+            workdir,
+            &dot_git,
+            &git_dir,
+            &index
+        ));
+        let access =
+            notify::Event::new(notify::EventKind::Access(AccessKind::Any)).add_path(workdir.join("src/lib.rs"));
+        assert!(!worktree_event_is_relevant(
+            &access, workdir, &dot_git, &git_dir, &index
+        ));
+
+        let mut changes = Some((0, Changes::default()));
+        invalidate_worktree_changes(&mut changes);
+        assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(usize::MAX));
     }
 }
