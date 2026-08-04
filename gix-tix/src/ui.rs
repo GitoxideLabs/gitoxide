@@ -10,8 +10,8 @@ use ratatui::{
 use crate::{
     BuiltInDiff,
     app::{
-        App, AttributionKind, ChangeKind, Changes, CommitRow, CopyKind, NameMode, RefMode, SelectionRelation,
-        SignatureState, State,
+        App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesLayout, ChangesMode, CommitRow,
+        CopyKind, NameMode, RefMode, SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -19,6 +19,113 @@ use crate::{
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ChangesPaneArea {
+    pane: ChangePane,
+    outer: Rect,
+}
+
+fn changes_pane_areas(
+    area: Rect,
+    max_height: u16,
+    tree: Option<(u16, usize)>,
+    worktree: Option<(u16, usize)>,
+) -> (ChangesLayout, Vec<ChangesPaneArea>, u16) {
+    match (tree, worktree) {
+        (None, None) => (ChangesLayout::SideBySide, Vec::new(), 0),
+        (Some((height, _)), None) => {
+            let height = height.min(max_height);
+            (
+                ChangesLayout::SideBySide,
+                vec![ChangesPaneArea {
+                    pane: ChangePane::Tree,
+                    outer: Rect::new(area.x, area.bottom().saturating_sub(height), area.width, height),
+                }],
+                height,
+            )
+        }
+        (None, Some((height, _))) => {
+            let height = height.min(max_height);
+            (
+                ChangesLayout::SideBySide,
+                vec![ChangesPaneArea {
+                    pane: ChangePane::Worktree,
+                    outer: Rect::new(area.x, area.bottom().saturating_sub(height), area.width, height),
+                }],
+                height,
+            )
+        }
+        (Some((tree_height, tree_title)), Some((worktree_height, worktree_title))) => {
+            let tree_width = area.width / 2;
+            let worktree_width = area.width.saturating_sub(tree_width);
+            if tree_title <= usize::from(tree_width) && worktree_title <= usize::from(worktree_width) {
+                let tree_height = tree_height.min(max_height);
+                let worktree_height = worktree_height.min(max_height);
+                let height = tree_height.max(worktree_height);
+                (
+                    ChangesLayout::SideBySide,
+                    vec![
+                        ChangesPaneArea {
+                            pane: ChangePane::Tree,
+                            outer: Rect::new(
+                                area.x,
+                                area.bottom().saturating_sub(tree_height),
+                                tree_width,
+                                tree_height,
+                            ),
+                        },
+                        ChangesPaneArea {
+                            pane: ChangePane::Worktree,
+                            outer: Rect::new(
+                                area.x.saturating_add(tree_width),
+                                area.bottom().saturating_sub(worktree_height),
+                                worktree_width,
+                                worktree_height,
+                            ),
+                        },
+                    ],
+                    height,
+                )
+            } else {
+                let total = tree_height.saturating_add(worktree_height);
+                let (worktree_height, tree_height) = if total <= max_height {
+                    (worktree_height, tree_height)
+                } else {
+                    let half = max_height / 2;
+                    if worktree_height <= half {
+                        (worktree_height, max_height.saturating_sub(worktree_height))
+                    } else if tree_height <= half {
+                        (max_height.saturating_sub(tree_height), tree_height)
+                    } else {
+                        (half.saturating_add(max_height % 2), half)
+                    }
+                };
+                let height = worktree_height.saturating_add(tree_height);
+                let tree_y = area.bottom().saturating_sub(tree_height);
+                (
+                    ChangesLayout::Stacked,
+                    vec![
+                        ChangesPaneArea {
+                            pane: ChangePane::Worktree,
+                            outer: Rect::new(
+                                area.x,
+                                tree_y.saturating_sub(worktree_height),
+                                area.width,
+                                worktree_height,
+                            ),
+                        },
+                        ChangesPaneArea {
+                            pane: ChangePane::Tree,
+                            outer: Rect::new(area.x, tree_y, area.width, tree_height),
+                        },
+                    ],
+                    height,
+                )
+            }
+        }
+    }
+}
 
 pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: usize, horizontal_offset: usize) {
     let [header, body, footer] =
@@ -59,13 +166,26 @@ pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: 
     );
 }
 
+#[cfg(test)]
 pub(crate) fn draw(
     frame: &mut Frame<'_>,
     app: &mut App,
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     commit_message: Option<&BStr>,
-    changes: Option<&Changes>,
+    tree_changes: Option<&Changes>,
+) {
+    draw_with_worktree(frame, app, decorations, mailmap, commit_message, tree_changes, None);
+}
+
+pub(crate) fn draw_with_worktree(
+    frame: &mut Frame<'_>,
+    app: &mut App,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    commit_message: Option<&BStr>,
+    tree_changes: Option<&Changes>,
+    worktree_changes: Option<&Changes>,
 ) {
     let [top_spacer, mut body, bottom_spacer, footer] = Layout::vertical([
         Constraint::Length(u16::from(app.inline)),
@@ -78,26 +198,44 @@ pub(crate) fn draw(
     frame.render_widget(Clear, bottom_spacer);
     let full_body = body;
     let compared_parent = if app.changes_visible() {
-        changes.and_then(|changes| changes.parent.map(|parent| parent.id))
+        tree_changes.and_then(|changes| changes.parent.map(|parent| parent.id))
     } else {
         None
     };
-    let changes_pane = app.changes_visible().then(|| {
-        let desired_height = changes.filter(|changes| changes.is_visible()).map_or(0, |changes| {
-            u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(3)
-        });
-        let max_height = frame.area().height / 2;
-        let height = desired_height.min(max_height);
-        let [commits, changes] = Layout::vertical([Constraint::Min(0), Constraint::Length(height)]).areas(full_body);
-        body = commits;
-        (
-            changes,
-            changes.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            }),
-        )
-    });
+    let tree_visible = app.changes_visible() && tree_changes.is_some_and(Changes::is_visible);
+    let worktree_visible =
+        app.changes_visible() && app.changes_mode == Some(ChangesMode::Both) && worktree_changes.is_some();
+    let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
+    let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
+    let pane_height = |changes: &Changes| u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(2);
+    let (changes_layout, changes_panes, _) = changes_pane_areas(
+        full_body,
+        frame.area().height / 2,
+        tree_visible.then(|| {
+            (
+                pane_height(tree_changes.expect("visible tree changes exist")),
+                tree_summary.as_ref().map_or(0, Line::width),
+            )
+        }),
+        worktree_visible.then(|| {
+            (
+                pane_height(worktree_changes.expect("visible worktree changes exist")),
+                worktree_summary.as_ref().map_or(0, Line::width),
+            )
+        }),
+    );
+    if app.changes_visible() {
+        app.set_changes_layout(
+            changes_layout,
+            changes_panes
+                .iter()
+                .any(|pane| pane.pane == ChangePane::Tree && pane.outer.height > 0),
+            changes_panes
+                .iter()
+                .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0)
+                && worktree_changes.is_some_and(Changes::is_visible),
+        );
+    }
     let commit_pane = app.show_commit.then(|| {
         let width = 80.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
@@ -110,17 +248,21 @@ pub(crate) fn draw(
             }),
         )
     });
-    app.viewport_rows = body.height as usize;
+    app.viewport_rows = changes_panes
+        .iter()
+        .map(|pane| pane.outer.y.saturating_sub(body.y))
+        .min()
+        .unwrap_or(body.height)
+        .max(1) as usize;
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
-    let end = start.saturating_add(app.viewport_rows).min(app.rows.len());
-    let lane_end = start.saturating_add(full_body.height as usize).min(app.rows.len());
-    let visible_rows = &app.rows[start..end];
+    let render_end = start.saturating_add(body.height as usize).min(app.rows.len());
+    let visible_rows = &app.rows[start..render_end];
     let has_verifiable_signatures = visible_rows.iter().enumerate().any(|(index, row)| {
         !app.is_row_hidden(start + index)
             && matches!(row.signature, SignatureState::Unverified | SignatureState::Verifying)
     });
-    let lanes = app.render_lanes(start..lane_end);
+    let lanes = app.render_lanes(start..render_end);
     let content = Rect::new(
         body.x.saturating_add(2),
         body.y,
@@ -200,7 +342,7 @@ pub(crate) fn draw(
     let graph_offset = horizontal_offset.min(graph_max_offset);
     let selection_info = selection_info_line(
         app.changes_visible()
-            .then_some(changes)
+            .then_some(tree_changes)
             .flatten()
             .filter(|changes| changes.is_visible()),
         app.selection_relation,
@@ -342,50 +484,78 @@ pub(crate) fn draw(
         }
     }
     app.set_horizontal_bounds(content.width as usize, max_offset);
-    if let Some((outer, area)) = changes_pane {
-        frame.render_widget(Clear, outer);
-        frame.render_widget(Block::new().borders(Borders::TOP), outer);
-        if let Some(changes) = changes.filter(|changes| changes.is_visible()) {
-            render_changes(frame, area, changes, app);
-            if app.changes_focused {
-                let status = Rect::new(
-                    outer.x.saturating_add(2),
-                    outer.bottom().saturating_sub(1),
-                    outer.width.saturating_sub(4),
-                    1,
-                );
-                let mut spans = Vec::new();
-                if let Some(parent) = changes.parent {
-                    spans.extend([
-                        Span::styled(
-                            format!(
-                                "vs parent {}/{} {}",
-                                parent.index + 1,
-                                parent.total,
-                                parent.id.to_hex_with_len(7)
-                            ),
-                            color(COMPARED_PARENT_COLOR),
-                        ),
-                        Span::raw(" · p next parent · "),
-                    ]);
-                }
-                if let Some(error) = &app.diff_error {
-                    spans.push(Span::styled(format!("diff: {error}"), color(Color::Red)));
-                } else {
-                    spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
-                }
-                spans.push(Span::raw(" · c to hide"));
-                frame.render_widget(
-                    Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
-                    status,
-                );
-            }
+    if app.changes_focus.is_some() {
+        frame
+            .buffer_mut()
+            .set_style(body, Style::default().add_modifier(Modifier::DIM));
+        if let Some(area) = selection_info_area {
+            frame.render_widget(Paragraph::new(selection_info), area);
         }
-        if !app.changes_focused {
+    }
+    for pane_area in &changes_panes {
+        let outer = pane_area.outer;
+        let pane = pane_area.pane;
+        let changes = match pane {
+            ChangePane::Tree => tree_changes.expect("visible tree changes exist"),
+            ChangePane::Worktree => worktree_changes.expect("visible worktree changes exist"),
+        };
+        let summary = match pane {
+            ChangePane::Tree => tree_summary.clone().expect("visible tree summary exists"),
+            ChangePane::Worktree => worktree_summary.clone().expect("visible worktree summary exists"),
+        };
+        let area = outer.inner(Margin {
+            horizontal: 2,
+            vertical: 1,
+        });
+        frame.render_widget(Clear, outer);
+        frame.render_widget(Block::new().borders(Borders::TOP).title(summary), outer);
+        render_changes(frame, area, changes, pane, app);
+        if app.changes_focus == Some(pane) {
+            let status = Rect::new(
+                outer.x.saturating_add(2),
+                outer.bottom().saturating_sub(1),
+                outer.width.saturating_sub(4),
+                1,
+            );
+            let mut spans = Vec::new();
+            if pane == ChangePane::Tree
+                && let Some(parent) = changes.parent
+            {
+                spans.extend([
+                    Span::styled(
+                        format!(
+                            "vs parent {}/{} {}",
+                            parent.index + 1,
+                            parent.total,
+                            parent.id.to_hex_with_len(7)
+                        ),
+                        color(COMPARED_PARENT_COLOR),
+                    ),
+                    Span::raw(" · p next parent · "),
+                ]);
+            }
+            if let Some(error) = &app.changes(pane).error {
+                spans.push(Span::styled(format!("diff: {error}"), color(Color::Red)));
+            } else {
+                spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
+            }
+            spans.push(Span::raw(match app.changes_mode {
+                Some(ChangesMode::Both) => " · c tree",
+                Some(ChangesMode::Tree) => " · c to hide",
+                None => "",
+            }));
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+                status,
+            );
+        } else {
             frame
                 .buffer_mut()
                 .set_style(outer, Style::default().add_modifier(Modifier::DIM));
         }
+    }
+    if changes_layout == ChangesLayout::SideBySide {
+        render_changes_divider(frame, &changes_panes, app);
     }
     if let Some((outer, area)) = commit_pane {
         frame.render_widget(Clear, outer);
@@ -425,18 +595,18 @@ pub(crate) fn draw(
         "{} commits{status} · ↑↓/jk move · h/l pan",
         app.rows.len()
     ))];
-    if app.changes_visible() && changes.is_some_and(Changes::is_visible) {
+    if app.tree_changes_visible || app.worktree_changes_visible {
         footer_spans.push(match app.focus_feedback.take() {
             Some(destination) => Span::raw(format!(" · Tab → {destination}")),
             None => Span::raw(" · Tab switch"),
         });
     }
-    if app.changes_focused {
+    if app.changes_focus.is_some() {
         footer_spans.push(Span::raw(" · q/Esc history"));
     }
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
-    footer_spans.extend([Span::raw(" · "), toggle("c changes", app.show_changes)]);
+    footer_spans.extend([Span::raw(" · "), toggle("c changes", app.changes_mode.is_some())]);
     if app.has_hidden_filter {
         footer_spans.extend([
             Span::raw(" · "),
@@ -493,20 +663,41 @@ pub(crate) fn draw(
             Span::styled("●", color(Color::Green)),
         ]);
     }
-    if !app.changes_focused {
+    if app.changes_focus.is_none() {
         if app.state == State::Loading {
             footer_spans.push(Span::raw(" · Esc cancel"));
         }
         footer_spans.push(Span::raw(" · q quit"));
     }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
-    if app.changes_focused {
-        frame
-            .buffer_mut()
-            .set_style(body, Style::default().add_modifier(Modifier::DIM));
-        if let Some(area) = selection_info_area {
-            frame.render_widget(Paragraph::new(selection_info), area);
-        }
+}
+
+fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &App) {
+    let Some(tree) = panes.iter().find(|pane| pane.pane == ChangePane::Tree) else {
+        return;
+    };
+    let Some(worktree) = panes.iter().find(|pane| pane.pane == ChangePane::Worktree) else {
+        return;
+    };
+    let x = worktree.outer.x;
+    let top = tree.outer.y.min(worktree.outer.y);
+    let bottom = tree.outer.bottom().max(worktree.outer.bottom());
+    let style = if app.changes_focus.is_none() {
+        Style::default().add_modifier(Modifier::DIM)
+    } else {
+        Style::default()
+    };
+    for y in top..bottom {
+        let symbol = if tree.outer.y == worktree.outer.y && y == tree.outer.y {
+            "┬"
+        } else if y == tree.outer.y {
+            if tree.outer.y < worktree.outer.y { "┐" } else { "┤" }
+        } else if y == worktree.outer.y {
+            if worktree.outer.y < tree.outer.y { "┌" } else { "├" }
+        } else {
+            "│"
+        };
+        frame.buffer_mut()[(x, y)].set_symbol(symbol).set_style(style);
     }
 }
 
@@ -560,47 +751,14 @@ fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
     spans.push(span);
 }
 
-fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, app: &mut App) {
-    if !changes.is_visible() || area.height == 0 {
-        app.set_changes_bounds(0, 0, area.width as usize, 0);
+fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: ChangePane, app: &mut App) {
+    if area.height == 0 {
+        app.set_changes_bounds(pane, 0, 0, area.width as usize, 0);
         return;
     }
-    let mut summary = Vec::new();
-    for kind in [
-        ChangeKind::Added,
-        ChangeKind::Modified,
-        ChangeKind::Deleted,
-        ChangeKind::Renamed,
-        ChangeKind::Copied,
-        ChangeKind::TypeChanged,
-    ] {
-        let count = changes.paths.iter().filter(|change| change.kind == kind).count();
-        if count == 0 {
-            continue;
-        }
-        if !summary.is_empty() {
-            summary.push(Span::raw("  "));
-        }
-        summary.push(Span::styled(
-            format!("{} = {count}", kind.letter()),
-            color(change_color(kind)),
-        ));
-    }
-    if !summary.is_empty() {
-        summary.push(Span::raw(" · "));
-    }
-    summary.extend([
-        Span::raw(format!("{} files changed · ", changes.paths.len())),
-        Span::styled(format!("+{}", changes.lines_added), color(Color::Green)),
-        Span::raw(" "),
-        Span::styled(format!("-{}", changes.lines_removed), color(Color::Red)),
-    ]);
-    frame.render_widget(
-        Paragraph::new(Line::from(summary)),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
-
-    let path_capacity = usize::from(area.height.saturating_sub(1));
+    let focused = app.changes_focus == Some(pane);
+    let selected_index = app.changes(pane).selected.min(changes.paths.len().saturating_sub(1));
+    let path_capacity = usize::from(area.height);
     let overflow = changes.paths.len() > 1 && changes.paths.len() > path_capacity;
     let visible_paths = if overflow {
         path_capacity.saturating_sub(1)
@@ -612,14 +770,14 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, app: &mu
         .iter()
         .enumerate()
         .map(|(index, change)| {
-            let selected = app.changes_focused && index == app.changes_selected;
+            let selected = focused && index == selected_index;
             let path_style = if selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
                 Style::default()
             };
             let mut spans = vec![
-                Span::styled(change.kind.letter().to_string(), color(change_color(change.kind))),
+                Span::styled(change.kind.letter().to_string(), color(path_change_color(change))),
                 Span::raw(" "),
             ];
             if let Some(source) = &change.source {
@@ -648,28 +806,29 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, app: &mu
         .max()
         .unwrap_or_default()
         .saturating_sub(area.width as usize);
-    app.set_changes_bounds(visible_paths, changes.paths.len(), area.width as usize, horizontal_max);
+    app.set_changes_bounds(
+        pane,
+        visible_paths,
+        changes.paths.len(),
+        area.width as usize,
+        horizontal_max,
+    );
+    let offset = app.changes(pane).offset;
+    let horizontal_offset = app.changes(pane).horizontal_offset;
     let path_area = Rect::new(
         area.x,
-        area.y.saturating_add(1),
+        area.y,
         area.width,
         u16::try_from(visible_paths).unwrap_or(u16::MAX),
     );
     frame.render_widget(
         Paragraph::new(Text::from(
-            lines
-                .into_iter()
-                .skip(app.changes_offset)
-                .take(visible_paths)
-                .collect::<Vec<_>>(),
+            lines.into_iter().skip(offset).take(visible_paths).collect::<Vec<_>>(),
         ))
-        .scroll((0, u16::try_from(app.changes_horizontal_offset).unwrap_or(u16::MAX))),
+        .scroll((0, u16::try_from(horizontal_offset).unwrap_or(u16::MAX))),
         path_area,
     );
-    let hidden = changes
-        .paths
-        .len()
-        .saturating_sub(app.changes_offset.saturating_add(visible_paths));
+    let hidden = changes.paths.len().saturating_sub(offset.saturating_add(visible_paths));
     if overflow && hidden > 0 {
         frame.render_widget(
             Paragraph::new(Line::styled(
@@ -693,7 +852,96 @@ fn change_color(kind: ChangeKind) -> Color {
         ChangeKind::Deleted => Color::Red,
         ChangeKind::Renamed | ChangeKind::Copied => Color::Cyan,
         ChangeKind::TypeChanged => Color::Magenta,
+        ChangeKind::Unmerged => Color::Red,
     }
+}
+
+fn path_change_color(change: &crate::app::PathChange) -> Color {
+    match change.group {
+        ChangeGroup::Tree => change_color(change.kind),
+        ChangeGroup::Staged => Color::Green,
+        ChangeGroup::Unstaged => Color::Red,
+    }
+}
+
+fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'static> {
+    let mut spans = match pane {
+        ChangePane::Tree => {
+            let id = app
+                .selected
+                .and_then(|index| app.rows.get(index))
+                .map_or_else(|| "-------".into(), |row| row.id.to_hex_with_len(7).to_string());
+            vec![Span::raw(format!("─ Tree {id} ── "))]
+        }
+        ChangePane::Worktree => vec![Span::raw("─ Worktree ── ")],
+    };
+    if pane == ChangePane::Worktree && changes.paths.is_empty() {
+        spans.extend([
+            Span::styled("+0", color(Color::Green)),
+            Span::raw(" "),
+            Span::styled("-0", color(Color::Red)),
+            Span::raw(" "),
+        ]);
+        return Line::from(spans);
+    }
+    let counts: Vec<_> = match pane {
+        ChangePane::Tree => {
+            let mut counts = Vec::new();
+            for kind in [
+                ChangeKind::Added,
+                ChangeKind::Modified,
+                ChangeKind::Deleted,
+                ChangeKind::Renamed,
+                ChangeKind::Copied,
+                ChangeKind::TypeChanged,
+            ] {
+                let count = changes.paths.iter().filter(|change| change.kind == kind).count();
+                if count == 0 {
+                    continue;
+                }
+                counts.push((kind.letter().to_string(), count, change_color(kind)));
+            }
+            counts
+        }
+        ChangePane::Worktree => {
+            let staged = changes
+                .paths
+                .iter()
+                .filter(|change| change.group == ChangeGroup::Staged)
+                .count();
+            let unstaged = changes.paths.len().saturating_sub(staged);
+            [
+                ("S".to_owned(), staged, Color::Green),
+                ("U".to_owned(), unstaged, Color::Red),
+            ]
+            .into_iter()
+            .filter(|(_, count, _)| *count > 0)
+            .collect()
+        }
+    };
+    let has_counts = !counts.is_empty();
+    let show_total = counts.len() != 1 || counts[0].1 != changes.paths.len();
+    for (index, (label, count, count_color)) in counts.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(" + "));
+        }
+        spans.push(Span::styled(format!("{label} {count}"), color(count_color)));
+    }
+    if show_total {
+        spans.push(Span::raw(format!(
+            "{}= {}",
+            if has_counts { " " } else { "" },
+            changes.paths.len()
+        )));
+    }
+    spans.extend([
+        Span::raw(" · "),
+        Span::styled(format!("+{}", changes.lines_added), color(Color::Green)),
+        Span::raw(" "),
+        Span::styled(format!("-{}", changes.lines_removed), color(Color::Red)),
+        Span::raw(" "),
+    ]);
+    Line::from(spans)
 }
 
 fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, notes: &[BString], offset: usize) -> usize {
@@ -1163,6 +1411,7 @@ mod tests {
         let changes = Changes {
             paths: vec![crate::app::PathChange {
                 kind: ChangeKind::Modified,
+                group: ChangeGroup::Tree,
                 source: None,
                 path: "file".into(),
                 lines: Some((3, 4)),
@@ -1171,7 +1420,7 @@ mod tests {
             lines_removed: 4,
             ..Changes::default()
         };
-        app.changes_focused = true;
+        app.changes_focus = Some(ChangePane::Tree);
         let mut terminal = Terminal::new(TestBackend::new(38, 7))?;
 
         terminal.draw(|frame| {
@@ -1896,70 +2145,6 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_changes_height_keeps_history_alignment_stable() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::new(11);
-        app.extend_commits(
-            (1..=8)
-                .map(|n| Commit {
-                    id: gix::ObjectId::Sha1([n; 20]),
-                    parent_ids: Default::default(),
-                    committer_time: gix::date::Time::default(),
-                    author: author(b"author", b"author@example.com"),
-                    attributions: 0..0,
-                    title: format!("subject {n}").into(),
-                    metadata_loaded: true,
-                    has_agent_marker: false,
-                    signature: SignatureState::Unsigned,
-                })
-                .collect::<Vec<_>>(),
-        );
-        complete(&mut app);
-        app.set_lane(6, "●──────── ");
-        let path = crate::app::PathChange {
-            kind: ChangeKind::Modified,
-            source: None,
-            path: "path".into(),
-            lines: None,
-        };
-        let changes = |len| Changes {
-            paths: vec![path.clone(); len],
-            ..Changes::default()
-        };
-        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
-
-        terminal.draw(|frame| {
-            super::draw(
-                frame,
-                &mut app,
-                &Decorations::new(),
-                &gix::mailmap::Snapshot::default(),
-                None,
-                Some(&changes(1)),
-            );
-        })?;
-        let short = rendered_line(&terminal, 0)
-            .find("0101010")
-            .expect("metadata is visible with a short changes pane");
-
-        terminal.draw(|frame| {
-            super::draw(
-                frame,
-                &mut app,
-                &Decorations::new(),
-                &gix::mailmap::Snapshot::default(),
-                None,
-                Some(&changes(8)),
-            );
-        })?;
-        assert_eq!(
-            rendered_line(&terminal, 0).find("0101010"),
-            Some(short),
-            "changes pane height does not move aligned history metadata"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn pages_overflowing_commit_messages_and_hides_the_status_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
     {
         let mut app = App::new(4);
@@ -2039,6 +2224,87 @@ mod tests {
     }
 
     #[test]
+    fn changing_the_changes_height_keeps_history_alignment_stable() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(11);
+        app.extend_commits(
+            (1..=10)
+                .map(|n| Commit {
+                    id: gix::ObjectId::Sha1([n; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: format!("subject {n}").into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        app.selected = Some(7);
+        app.ensure_visible();
+        let selection = app.selected;
+        app.set_lane(6, "●──────── ");
+        let path = crate::app::PathChange {
+            kind: ChangeKind::Modified,
+            group: ChangeGroup::Tree,
+            source: None,
+            path: "path".into(),
+            lines: None,
+        };
+        let changes = |len| Changes {
+            paths: vec![path.clone(); len],
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 12))?;
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes(1)),
+            );
+        })?;
+        let short = rendered_line(&terminal, 0)
+            .find("0101010")
+            .expect("metadata is visible with a short changes pane");
+        assert_eq!((app.selected, app.offset), (selection, 0));
+
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes(8)),
+            );
+        })?;
+        assert_eq!(
+            rendered_line(&terminal, 0).find("0404040"),
+            Some(short),
+            "changes pane height does not move aligned history metadata"
+        );
+        assert_eq!(
+            (app.selected, app.offset),
+            (selection, 3),
+            "the selected commit stays immediately above the taller changes pane"
+        );
+
+        app.update(Action::MoveDown);
+        assert_eq!(
+            (app.selected, app.offset),
+            (Some(8), 4),
+            "moving down advances the commit and scrolls history at the pane boundary"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn shows_changed_paths_in_a_bottom_pane_below_the_summary() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(6);
         app.extend_commits(vec![
@@ -2073,36 +2339,42 @@ mod tests {
             paths: vec![
                 crate::app::PathChange {
                     kind: ChangeKind::Added,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: "added".into(),
                     lines: Some((10, 0)),
                 },
                 crate::app::PathChange {
                     kind: ChangeKind::Modified,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: "modified".into(),
                     lines: Some((5, 2)),
                 },
                 crate::app::PathChange {
                     kind: ChangeKind::Deleted,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: "deleted".into(),
                     lines: Some((0, 7)),
                 },
                 crate::app::PathChange {
                     kind: ChangeKind::Renamed,
+                    group: ChangeGroup::Tree,
                     source: Some("old".into()),
                     path: "new".into(),
                     lines: Some((3, 3)),
                 },
                 crate::app::PathChange {
                     kind: ChangeKind::Copied,
+                    group: ChangeGroup::Tree,
                     source: Some("source".into()),
                     path: "copy".into(),
                     lines: Some((0, 0)),
                 },
                 crate::app::PathChange {
                     kind: ChangeKind::TypeChanged,
+                    group: ChangeGroup::Tree,
                     source: None,
                     path: format!("{}tail", "x".repeat(130)).into(),
                     lines: Some((24, 5)),
@@ -2126,12 +2398,12 @@ mod tests {
         })?;
 
         assert_eq!(
-            terminal.backend().buffer()[(20, 7)].symbol(),
+            terminal.backend().buffer()[(119, 7)].symbol(),
             "─",
             "the changes pane starts at the screen's halfway point"
         );
         assert!(
-            terminal.backend().buffer()[(20, 7)].modifier.contains(Modifier::DIM),
+            terminal.backend().buffer()[(119, 7)].modifier.contains(Modifier::DIM),
             "the inactive changes border is dimmed"
         );
         assert!(
@@ -2139,43 +2411,53 @@ mod tests {
                 && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
             "the focused history and its status use their normal intensity"
         );
-        let summary = rendered_line(&terminal, 8);
-        assert!(
-            summary.contains("A = 1  M = 1  D = 1  R = 1  C = 1  T = 1 · 6 files changed · +42 -17"),
-            "the pane starts with nonzero status and line aggregates"
+        let summary = rendered_line(&terminal, 7);
+        assert_eq!(
+            terminal.backend().buffer()[(0, 7)].symbol(),
+            "─",
+            "the tree title border reaches the left edge"
         );
-        let added_x = summary.find("A = 1").expect("added aggregate is visible") as u16;
-        let deleted_x = summary.find("D = 1").expect("deleted aggregate is visible") as u16;
-        assert_eq!(terminal.backend().buffer()[(added_x, 8)].fg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(deleted_x, 8)].fg, Color::Red);
         assert!(
-            terminal.backend().buffer()[(added_x, 8)]
+            summary.contains("Tree 0101010 ── A 1 + M 1 + D 1 + R 1 + C 1 + T 1 = 6 · +42 -17"),
+            "the top border contains the tree identity and aggregates"
+        );
+        let position = |needle| {
+            summary[..summary.find(needle).expect("aggregate is visible")]
+                .chars()
+                .count() as u16
+        };
+        let added_x = position("A 1");
+        let deleted_x = position("D 1");
+        assert_eq!(terminal.backend().buffer()[(added_x, 7)].fg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(deleted_x, 7)].fg, Color::Red);
+        assert!(
+            terminal.backend().buffer()[(added_x, 7)]
                 .modifier
                 .contains(Modifier::DIM),
             "the inactive summary is dimmed without losing its colors"
         );
         assert!(
-            rendered_line(&terminal, 9).contains("A added"),
-            "changed paths follow the summary in diff order"
+            rendered_line(&terminal, 8).contains("A added"),
+            "changed paths follow the summary border in diff order"
         );
-        let inactive_path = rendered_line(&terminal, 9);
+        let inactive_path = rendered_line(&terminal, 8);
         let inactive_x = inactive_path.find("A added").expect("changed path is visible") as u16;
         assert!(
-            terminal.backend().buffer()[(inactive_x, 9)]
+            terminal.backend().buffer()[(inactive_x, 8)]
                 .modifier
                 .contains(Modifier::DIM)
-                && terminal.backend().buffer()[(inactive_x + 2, 9)]
+                && terminal.backend().buffer()[(inactive_x + 2, 8)]
                     .modifier
                     .contains(Modifier::DIM),
             "the inactive change kind and path are dimmed"
         );
         assert!(
-            !rendered_line(&terminal, 9).contains("+10"),
+            !rendered_line(&terminal, 8).contains("+10"),
             "inactive panes do not display a path selection"
         );
         assert!(
-            rendered_line(&terminal, 13).contains("… 2 lines not shown"),
-            "the capped pane reports paths that do not fit"
+            rendered_line(&terminal, 13).contains("T "),
+            "reclaiming the summary row lets all paths fit"
         );
         assert!(
             !rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"),
@@ -2200,11 +2482,11 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 8).contains("files changed"),
+            !rendered_line(&terminal, 7).contains("files changed"),
             "repeated history navigation temporarily hides the changes pane"
         );
         assert!(
-            app.show_changes && !footer_is_dim(&terminal, "c changes"),
+            app.changes_mode.is_some() && !footer_is_dim(&terminal, "c changes"),
             "temporary suppression leaves the persistent changes setting enabled"
         );
         app.changes_suppressed = false;
@@ -2222,7 +2504,7 @@ mod tests {
             );
         })?;
         assert!(
-            !terminal.backend().buffer()[(20, 7)].modifier.contains(Modifier::DIM),
+            !terminal.backend().buffer()[(119, 7)].modifier.contains(Modifier::DIM),
             "the focused changes border uses its normal style"
         );
         assert!(
@@ -2239,7 +2521,7 @@ mod tests {
                 && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
             "the inactive history is dimmed without dimming the main status"
         );
-        assert!(rendered_line(&terminal, 15).contains("Tab → changes"));
+        assert!(rendered_line(&terminal, 15).contains("Tab → tree changes"));
         assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
         terminal.draw(|frame| {
             super::draw(
@@ -2256,51 +2538,51 @@ mod tests {
             "focus feedback lasts for one redraw"
         );
         assert!(
-            !terminal.backend().buffer()[(added_x, 8)]
+            !terminal.backend().buffer()[(added_x, 7)]
                 .modifier
                 .contains(Modifier::DIM)
                 && !terminal.backend().buffer()[(2, 14)].modifier.contains(Modifier::DIM),
             "the focused summary and status use their normal intensity"
         );
-        let selected = rendered_line(&terminal, 10);
+        let selected = rendered_line(&terminal, 9);
         assert!(selected.contains("M modified +5 -2"));
         let path_x = selected.find("modified").expect("selected path is visible") as u16;
         let kind_x = selected.find("M modified").expect("selected kind is visible") as u16;
         let added_x = selected.find("+5").expect("selected additions are visible") as u16;
         let removed_x = selected.find("-2").expect("selected removals are visible") as u16;
         assert!(
-            !terminal.backend().buffer()[(kind_x, 10)]
+            !terminal.backend().buffer()[(kind_x, 9)]
                 .modifier
                 .contains(Modifier::DIM)
-                && !terminal.backend().buffer()[(path_x, 10)]
+                && !terminal.backend().buffer()[(path_x, 9)]
                     .modifier
                     .contains(Modifier::DIM),
             "focused paths use their normal intensity"
         );
         assert!(
-            terminal.backend().buffer()[(path_x, 10)]
+            terminal.backend().buffer()[(path_x, 9)]
                 .modifier
                 .contains(Modifier::REVERSED),
             "the selected filepath is inverted"
         );
-        assert_eq!(terminal.backend().buffer()[(added_x, 10)].fg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(removed_x, 10)].fg, Color::Red);
+        assert_eq!(terminal.backend().buffer()[(added_x, 9)].fg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(removed_x, 9)].fg, Color::Red);
         assert!(
-            !terminal.backend().buffer()[(added_x, 10)]
+            !terminal.backend().buffer()[(added_x, 9)]
                 .modifier
                 .contains(Modifier::REVERSED),
             "the diff-line suffix keeps its normal background"
         );
         assert!(
-            !rendered_line(&terminal, 9).contains("+10"),
+            !rendered_line(&terminal, 8).contains("+10"),
             "only the selected path displays its line counts"
         );
-        assert!(rendered_line(&terminal, 13).contains("… 2 lines not shown"));
+        assert!(rendered_line(&terminal, 13).contains("T "));
         assert!(rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"));
 
         assert!(
-            rendered_line(&terminal, 14).contains("Enter diff · c to hide"),
-            "the visible changes pane advertises how to hide it"
+            rendered_line(&terminal, 14).contains("Enter diff · c tree"),
+            "the changes pane advertises the next cycle mode"
         );
 
         app.update(Action::Last);
@@ -2315,9 +2597,9 @@ mod tests {
                 Some(&changes),
             );
         })?;
-        assert_eq!(app.changes_horizontal_offset, 20);
+        assert_eq!(app.tree_changes.horizontal_offset, 20);
         assert!(
-            rendered_line(&terminal, 12).contains("tail"),
+            rendered_line(&terminal, 13).contains("tail"),
             "h/l pans long path rows while the summary remains fixed"
         );
         assert!(
@@ -2337,8 +2619,8 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&short_terminal, 5).contains("… 1 line not shown"),
-            "the overflow count follows the selected final path when no path row fits"
+            !rendered_line(&short_terminal, 5).contains("not shown"),
+            "the overflow count disappears once the selected final path is visible"
         );
 
         let mut merge_changes = changes.clone();
@@ -2358,12 +2640,12 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 8).starts_with("  A = 1"),
-            "parent context no longer crowds the aggregate summary"
+            rendered_line(&terminal, 7).contains("Tree 0101010 ── A 1"),
+            "parent context no longer crowds the aggregate border"
         );
         assert!(
             rendered_line(&terminal, 14)
-                .contains("vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · c to hide"),
+                .contains("vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · c tree"),
             "merge diffs keep parent controls alongside navigation"
         );
         let parent = rendered_line(&terminal, 1);
@@ -2397,6 +2679,188 @@ mod tests {
             " ",
             "the right commit pane is rendered over the bottom changes pane"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn summarizes_staged_and_unstaged_changes_in_the_top_border() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        let changes = Changes {
+            paths: vec![
+                crate::app::PathChange {
+                    kind: ChangeKind::Added,
+                    group: ChangeGroup::Staged,
+                    source: None,
+                    path: "same".into(),
+                    lines: Some((1, 0)),
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Unstaged,
+                    source: None,
+                    path: "same".into(),
+                    lines: Some((2, 1)),
+                },
+            ],
+            lines_added: 3,
+            lines_removed: 1,
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&changes),
+            );
+        })?;
+
+        let (header_y, header) = (0..8)
+            .map(|y| (y, rendered_line(&terminal, y)))
+            .find(|(_, line)| line.contains("Worktree"))
+            .expect("the worktree border is visible");
+        assert!(
+            header.contains("Worktree ── S 1 + U 1 = 2 · +3 -1"),
+            "the border distinguishes staged and unstaged rows: {header:?}"
+        );
+        let staged_y = header_y + 1;
+        let unstaged_y = header_y + 2;
+        let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
+        let unstaged_x = rendered_line(&terminal, unstaged_y).find('M').expect("unstaged letter") as u16;
+        assert_eq!(terminal.backend().buffer()[(staged_x, staged_y)].fg, Color::Green);
+        assert_eq!(terminal.backend().buffer()[(unstaged_x, unstaged_y)].fg, Color::Red);
+
+        let modified = Changes {
+            paths: (0..12)
+                .map(|index| crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: format!("file-{index}").into(),
+                    lines: Some((0, 0)),
+                })
+                .collect(),
+            ..Changes::default()
+        };
+        let summary = changes_summary(ChangePane::Tree, &app, &modified)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(summary.contains("M 12 · +0 -0"));
+        assert!(!summary.contains("= 12"), "a single term already expresses the total");
+
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&Changes::default()),
+            );
+        })?;
+        assert!(
+            (0..8).any(|y| rendered_line(&terminal, y).contains("Worktree ── +0 -0")),
+            "an enabled clean worktree remains visible as an empty block"
+        );
+        assert!(
+            !(0..8).any(|y| rendered_line(&terminal, y).contains("= 0")),
+            "a clean worktree has no empty aggregate"
+        );
+        assert!(!app.worktree_changes_visible, "an empty block is not focusable");
+        Ok(())
+    }
+
+    #[test]
+    fn lays_out_tree_and_worktree_changes_by_available_width() -> Result<(), Box<dyn std::error::Error>> {
+        let (layout, panes, height) = changes_pane_areas(Rect::new(0, 0, 120, 20), 10, Some((5, 30)), Some((3, 25)));
+        assert_eq!(layout, ChangesLayout::SideBySide);
+        assert_eq!(height, 5);
+        assert_eq!(panes[0].outer, Rect::new(0, 15, 60, 5));
+        assert_eq!(panes[1].outer, Rect::new(60, 17, 60, 3));
+
+        let (layout, panes, height) = changes_pane_areas(Rect::new(0, 0, 60, 20), 10, Some((8, 31)), Some((3, 31)));
+        assert_eq!(layout, ChangesLayout::Stacked);
+        assert_eq!(height, 10);
+        assert_eq!(
+            panes[0],
+            ChangesPaneArea {
+                pane: ChangePane::Worktree,
+                outer: Rect::new(0, 10, 60, 3),
+            }
+        );
+        assert_eq!(
+            panes[1],
+            ChangesPaneArea {
+                pane: ChangePane::Tree,
+                outer: Rect::new(0, 13, 60, 7),
+            }
+        );
+
+        let (_, panes, height) = changes_pane_areas(Rect::new(0, 0, 120, 20), 10, None, Some((3, 25)));
+        assert_eq!(height, 3);
+        assert_eq!(panes[0].outer, Rect::new(0, 17, 120, 3));
+
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        let path = |group, path: &'static str| Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group,
+                source: None,
+                path: path.into(),
+                lines: Some((1, 1)),
+            }],
+            lines_added: 1,
+            lines_removed: 1,
+            ..Changes::default()
+        };
+        let mut tree = path(ChangeGroup::Tree, "tree-file");
+        tree.paths.push(crate::app::PathChange {
+            kind: ChangeKind::Added,
+            group: ChangeGroup::Tree,
+            source: None,
+            path: "tree-file-2".into(),
+            lines: Some((0, 0)),
+        });
+        let worktree = path(ChangeGroup::Staged, "worktree-file");
+        let mut terminal = Terminal::new(TestBackend::new(120, 10))?;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&tree),
+                Some(&worktree),
+            );
+        })?;
+        let halves = |row: String| {
+            let left = row.chars().take(60).collect::<String>();
+            let right = row.chars().skip(60).collect::<String>();
+            (left, right)
+        };
+        let (left, _) = halves(rendered_line(&terminal, 5));
+        assert!(left.contains("Tree"));
+        let (left, right) = halves(rendered_line(&terminal, 6));
+        assert!(left.contains("tree-file"));
+        assert!(right.contains("Worktree"));
+        let (left, right) = halves(rendered_line(&terminal, 7));
+        assert!(left.contains("tree-file-2"));
+        assert!(right.contains("worktree-file"));
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(60, 5)].symbol(), "┐");
+        assert_eq!(buffer[(60, 6)].symbol(), "├");
+        assert_eq!(buffer[(60, 7)].symbol(), "│");
+        assert_eq!(buffer[(60, 8)].symbol(), "│");
         Ok(())
     }
 
