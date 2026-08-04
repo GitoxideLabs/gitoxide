@@ -269,7 +269,16 @@ fn given_attributes_are_made_available_in_given_order() -> crate::Result {
 
 #[test]
 fn macro_attributes_expand_only_when_macro_is_set() -> crate::Result {
-    let (mut group, mut collection, base, input) = baseline::user_attributes("macro-expansion")?;
+    assert_baseline("macro-expansion")
+}
+
+#[test]
+fn attribute_tokenisation_matches_git() -> crate::Result {
+    assert_baseline("tokenisation")
+}
+
+fn assert_baseline(name: &str) -> crate::Result {
+    let (mut group, mut collection, base, input) = baseline::user_attributes(name)?;
 
     let mut buf = Vec::new();
     group.add_patterns_file(
