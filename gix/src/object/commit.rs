@@ -147,6 +147,7 @@ impl<'repo> Commit<'repo> {
     /// let commit = repo.head_commit()?;
     /// let parent_ids: Vec<_> = commit.parent_ids().collect();
     ///
+    /// #[cfg(feature = "revision")]
     /// assert_eq!(parent_ids, vec![repo.rev_parse_single("HEAD~1")?]);
     /// # Ok(()) }
     /// ```
