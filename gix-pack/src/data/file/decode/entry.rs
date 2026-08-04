@@ -306,6 +306,10 @@ where
         let total_delta_data_size: usize = total_delta_data_size.try_into().map_err(|_| Error::OutOfMemory)?;
 
         let chain_len = chain.len();
+        let actual_base_size = match base_buffer_size {
+            Some(size) => size,
+            None => self.decoded_object_size(cursor.decompressed_size)?,
+        };
         let (first_buffer_end, second_buffer_end) = {
             let delta_start = base_buffer_size.unwrap_or(0);
 
@@ -321,6 +325,7 @@ where
             let mut instructions = &mut out[delta_range.clone()];
             let mut relative_delta_start = 0;
             let mut biggest_result_size = 0;
+            let mut expected_base_size = actual_base_size;
             for (delta_idx, delta) in chain.iter_mut().rev().enumerate() {
                 let (consumed_from_data_offset, consumed_out) = self.decompress_complete_entry_from_data_offset(
                     delta.data_offset,
@@ -335,13 +340,20 @@ where
                 let current_delta = &instructions[..consumed_out];
                 let (base_size, offset) = delta::decode_header_size(current_delta)?;
                 let mut bytes_consumed_by_header = offset;
-                biggest_result_size = biggest_result_size.max(base_size);
                 delta.base_size = self.decoded_object_size(base_size)?;
+                if delta.base_size != expected_base_size {
+                    return Err(delta::apply::Error::Corrupt {
+                        message: "delta base size does not match base object size",
+                    }
+                    .into());
+                }
+                biggest_result_size = biggest_result_size.max(base_size);
 
                 let (result_size, offset) = delta::decode_header_size(&current_delta[offset..])?;
                 bytes_consumed_by_header += offset;
                 biggest_result_size = biggest_result_size.max(result_size);
                 delta.result_size = self.decoded_object_size(result_size)?;
+                expected_base_size = delta.result_size;
 
                 // the absolute location into the instructions buffer, so we keep track of the end point of the last
                 delta.data.start = relative_delta_start + bytes_consumed_by_header;

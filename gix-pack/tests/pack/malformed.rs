@@ -135,6 +135,30 @@ fn empty_plain_object_is_accepted() -> crate::Result {
 }
 
 #[test]
+fn delta_with_mismatched_base_size_is_rejected_before_allocating_work_buffers() -> crate::Result {
+    let declared_base_size = 1_000_000;
+    let mut delta = encode_delta_size(declared_base_size);
+    delta.extend([1, 0x90, 1]);
+    let pack_data = ref_delta_pack(&delta)?;
+    let pack = data::File::from_data(pack_data, PathBuf::from("malformed.pack"), gix_hash::Kind::Sha1)?;
+    let entry = pack.entry(12)?;
+    let mut out = Vec::new();
+    let mut inflate = gix_zlib::Inflate::default();
+
+    let res = pack.decode_entry(entry, &mut out, &mut inflate, &resolve_external_blob, &mut cache::Never);
+
+    assert_err_message(
+        res,
+        "Corrupt delta data: delta base size does not match base object size",
+    );
+    assert!(
+        out.capacity() < declared_base_size as usize,
+        "the invalid declared base size must not determine work-buffer capacity"
+    );
+    Ok(())
+}
+
+#[test]
 fn in_pack_delta_base_with_mismatched_declared_size_is_rejected() -> crate::Result {
     let (pack_data, delta_offset) = ofs_delta_pack_with_mismatched_base_size()?;
     let pack = data::File::from_data(
@@ -150,7 +174,7 @@ fn in_pack_delta_base_with_mismatched_declared_size_is_rejected() -> crate::Resu
 
     assert_err_message(
         res,
-        "Pack entry is truncated: pack entry decompressed size does not match entry header",
+        "Corrupt delta data: delta base size does not match base object size",
     );
     Ok(())
 }
