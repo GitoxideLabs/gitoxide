@@ -280,8 +280,10 @@ fn normalize_inner<'a>(path: Cow<'a, Path>, current_dir: &Path, saturate_at_root
     let mut path = PathBuf::new();
     for component in components {
         if let ParentDir = component {
-            let path_was_dot = path == Path::new(".");
-            if path.as_os_str().is_empty() || path_was_dot {
+            while matches!(path.components().next_back(), Some(Component::CurDir)) {
+                path.pop();
+            }
+            if path.as_os_str().is_empty() {
                 path.push(current_dir_opt.take()?);
             }
             if !path.pop() && !saturate_at_root {

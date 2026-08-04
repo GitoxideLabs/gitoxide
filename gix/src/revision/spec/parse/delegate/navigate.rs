@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use gix_error::{ErrorExt, Exn, OptionExt, ResultExt, bail, message};
 use gix_hash::ObjectId;
 use gix_index::entry::Stage;
@@ -8,7 +10,7 @@ use gix_revision::spec::parse::{
 
 use crate::revision::spec::parse::delegate::peel;
 use crate::{
-    Object,
+    Object, Repository,
     bstr::{BStr, ByteSlice},
     ext::ObjectIdExt,
     object,
@@ -120,6 +122,8 @@ impl delegate::Navigate for Delegate<'_> {
                 }
             }
             PeelTo::Path(path) => {
+                let path = to_repo_relative_path(repo, path)?;
+                let path = path.as_ref();
                 let lookup_path = |obj: &ObjectId| {
                     let tree_id = peel(repo, obj, gix_object::Kind::Tree)?;
                     if path.is_empty() {
@@ -321,6 +325,8 @@ impl delegate::Navigate for Delegate<'_> {
             ),
         };
         self.unset_disambiguate_call();
+        let path = to_repo_relative_path(self.repo, path)?;
+        let path = path.as_ref();
         let index = self.repo.index().or_erased()?;
         match index.entry_by_path_and_stage(path, stage) {
             Some(entry) => {
@@ -363,6 +369,18 @@ impl delegate::Navigate for Delegate<'_> {
             }
         }
     }
+}
+
+/// Resolve `path` against the current working directory if it starts with `./` or `../`, and return it
+/// unchanged otherwise, matching the path syntax described in `gitrevisions(7)`.
+fn to_repo_relative_path<'a>(repo: &Repository, path: &'a BStr) -> Result<Cow<'a, BStr>, Exn> {
+    if !(path.starts_with_str("./") || path.starts_with_str("../")) {
+        return Ok(path.into());
+    }
+    repo.prefix()
+        .or_erased()?
+        .ok_or_raise_erased(|| message("Relative path syntax can't be used outside of a worktree"))?;
+    repo.normalize_path(path).or_erased()
 }
 
 fn handle_errors_and_replacements(

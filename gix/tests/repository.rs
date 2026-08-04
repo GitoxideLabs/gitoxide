@@ -107,3 +107,96 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
     }
     Ok(())
 }
+
+#[test]
+#[cfg(feature = "revision")]
+#[serial]
+fn revspec_paths_starting_with_a_dot_are_relative_to_the_current_directory() -> gix_testtools::Result {
+    let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
+    let nested = root.join("some/very");
+
+    let _cwd = gix_testtools::set_current_dir(&nested)?;
+    let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
+    let blob = repo.rev_parse_single("HEAD:this")?.detach();
+    let tree = repo.rev_parse_single("HEAD^{tree}")?.detach();
+    for spec in [
+        "HEAD:../../this",
+        "HEAD:./.././../this",
+        ":../../this",
+        ":..//.././/this",
+        ":0:../../this",
+    ] {
+        assert_eq!(
+            repo.rev_parse_single(spec)?.detach(),
+            blob,
+            "`{spec}` consumes the CWD prefix to name the blob at the worktree root"
+        );
+    }
+    for spec in ["HEAD:../../", "HEAD:../..", "HEAD:./..//.."] {
+        assert_eq!(
+            repo.rev_parse_single(spec)?.detach(),
+            tree,
+            "`{spec}` names the tree the CWD components resolve to"
+        );
+    }
+
+    std::env::set_current_dir(&root)?;
+    let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
+    for spec in ["HEAD:./this", "HEAD:././this", ":./this", ":0:./this"] {
+        assert_eq!(
+            repo.rev_parse_single(spec)?.detach(),
+            blob,
+            "`{spec}` looks the path up relative to the CWD, even if it's root"
+        );
+    }
+    assert_eq!(
+        repo.rev_parse_single("HEAD:./")?.detach(),
+        tree,
+        "`HEAD:./` names the tree of the CWD itself"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "revision")]
+#[serial]
+fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_testtools::Result {
+    let root = gix::path::realpath(gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?)?;
+
+    let _cwd = gix_testtools::set_current_dir(&root)?;
+    let repo = gix::discover_opts(".", Default::default(), gix::open::Options::isolated())?;
+    for spec in [
+        "HEAD:../this",
+        ":../this",
+        "HEAD:./../this",
+        ":./../this",
+        ":0:./../this",
+        "HEAD:././../",
+    ] {
+        assert!(
+            probable_cause(repo.rev_parse_single(spec)).contains("leaves the repository"),
+            "`{spec}` traverses above the worktree and must not resolve"
+        );
+    }
+
+    let repo = gix::open_opts(root.join("non-bare-without-worktree"), gix::open::Options::isolated())?;
+    assert!(
+        repo.rev_parse_single("HEAD:this").is_ok(),
+        "`HEAD:this` is repository-relative and resolves without a worktree"
+    );
+    for spec in ["HEAD:./this", ":./this"] {
+        assert!(
+            probable_cause(repo.rev_parse_single(spec)).contains("can't be used outside of a worktree"),
+            "`{spec}` has nothing to be relative to and must not resolve"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "revision")]
+fn probable_cause(res: Result<gix::Id<'_>, gix::revision::spec::parse::single::Error>) -> String {
+    match res.expect_err("the revspec must not resolve") {
+        gix::revision::spec::parse::single::Error::Parse(err) => err.probable_cause().to_string(),
+        err => panic!("expected a failure while parsing, got {err:?}"),
+    }
+}

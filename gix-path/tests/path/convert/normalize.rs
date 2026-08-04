@@ -27,6 +27,16 @@ fn special_cases_around_cwd() -> crate::Result {
         "'.' is handled specifically to not fail to swap in the CWD"
     );
     assert_eq!(
+        normalize(p("././../target").into(), &cwd).unwrap(),
+        cwd.parent().expect("current directory has a parent").join("target"),
+        "current-directory components don't consume parent-directory components"
+    );
+    assert_eq!(
+        normalize(p("././../target").into(), p("")),
+        None,
+        "current-directory components don't hide traversal above an empty root"
+    );
+    assert_eq!(
         normalize((&cwd).into(), &cwd).unwrap(),
         cwd,
         "absolute inputs yield absolute outputs"
