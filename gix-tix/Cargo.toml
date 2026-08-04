@@ -25,7 +25,7 @@ sha256 = ["gix/sha256"]
 [dependencies]
 anyhow = "1.0.98"
 crossterm = { version = "0.29.0", features = ["osc52"] }
-gix = { version = "^0.87.0", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "notes", "parallel", "revision", "command"] }
+gix = { version = "^0.87.0", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "notes", "parallel", "revision", "command", "status"] }
 notify = "8.2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 
