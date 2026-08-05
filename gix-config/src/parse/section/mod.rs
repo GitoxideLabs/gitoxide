@@ -27,9 +27,16 @@ mod types {
             ///
             pub mod $module {
                 /// The error returned when `TryFrom` is invoked to create an instance.
-                #[derive(Debug, thiserror::Error, Copy, Clone)]
-                #[error($err_doc)]
+                #[derive(Debug, Copy, Clone)]
                 pub struct Error;
+
+                impl std::fmt::Display for Error {
+                    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        f.write_str($err_doc)
+                    }
+                }
+
+                impl std::error::Error for Error {}
             }
 
             #[doc = $comment]

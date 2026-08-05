@@ -37,9 +37,20 @@ pub(crate) struct Span {
 /// Errors produced when a span cannot be represented.
 pub mod span {
     /// A span offset or length exceeded the supported 32-bit representation.
-    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, thiserror::Error)]
-    #[error("configuration data exceeds the supported span size of {} bytes", u32::MAX)]
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub struct Error;
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "configuration data exceeds the supported span size of {} bytes",
+                u32::MAX
+            )
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 /// A raw span whose semantic value may have required decoding while parsing.

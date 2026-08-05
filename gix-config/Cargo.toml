@@ -30,7 +30,7 @@ gix-ref = { version = "^0.66.0", path = "../gix-ref" }
 gix-glob = { version = "^0.27.0", path = "../gix-glob" }
 gix-utils = { version = "^0.3.5", path = "../gix-utils", features = ["bstr"] }
 
-thiserror = "2.0.18"
+gix-error = { version = "^0.2.5", path = "../gix-error" }
 unicode-bom = { version = "2.0.3" }
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.114", optional = true, default-features = false, features = ["derive"] }
