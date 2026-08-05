@@ -60,10 +60,9 @@ impl std::error::Error for Error {
 impl Error {
     /// Return `true` if retrying the fetch might succeed.
     pub fn can_retry(&self) -> bool {
-        use crate::transport::IsSpuriousError;
         match self {
             Error::FetchResponse(err) => err.can_retry(),
-            Error::Client(err) => err.is_spurious(),
+            Error::Client(err) => err.can_retry(),
             _ => gix_error::can_retry(self),
         }
     }

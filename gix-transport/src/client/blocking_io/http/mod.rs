@@ -8,6 +8,7 @@ use std::{
 
 use base64::Engine;
 use bstr::BStr;
+use gix_error::{ErrorExt, message};
 pub use traits::{Error, GetResponse, Http, PostBodyDataKind, PostResponse};
 
 use crate::{
@@ -294,11 +295,12 @@ impl<H: Http> Transport<H> {
                 name.eq_ignore_ascii_case("content-type") && value.trim() == wanted_content_type
             })
         }) {
-            return Err(client::Error::Http(Error::Detail {
-                description: format!(
+            return Err(client::Error::Http(
+                message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
-                ),
-            }));
+                )
+                .raise(),
+            ));
         }
         Ok(())
     }
@@ -418,13 +420,14 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
 
         if let Some(announced_service) = line.as_bstr().strip_prefix(b"# service=") {
             if announced_service != service.as_str().as_bytes() {
-                return Err(client::Error::Http(Error::Detail {
-                    description: format!(
+                return Err(client::Error::Http(
+                    message!(
                         "Expected to see service {:?}, but got {:?}",
                         service.as_str(),
                         announced_service
-                    ),
-                }));
+                    )
+                    .raise(),
+                ));
             }
 
             line_reader.as_read().read_to_end(&mut Vec::new())?;

@@ -40,11 +40,11 @@ mod error {
         },
     }
 
-    impl gix_protocol::transport::IsSpuriousError for Error {
+    impl Error {
         /// Return `true` if retrying might result in a different outcome due to IO working out differently.
-        fn is_spurious(&self) -> bool {
+        pub fn can_retry(&self) -> bool {
             match self {
-                Error::Connect(err) => err.is_spurious(),
+                Error::Connect(err) => err.iter().any(|frame| gix_error::can_retry(frame.error())),
                 _ => false,
             }
         }

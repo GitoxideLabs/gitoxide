@@ -44,10 +44,9 @@ impl std::error::Error for Error {
 
 impl Error {
     pub(crate) fn can_retry(&self) -> bool {
-        use crate::transport::IsSpuriousError;
         match self {
-            Error::Io(err) => err.is_spurious(),
-            Error::Transport(err) => err.is_spurious(),
+            Error::Io(err) => gix_error::can_retry(err),
+            Error::Transport(err) => err.can_retry(),
             _ => false,
         }
     }

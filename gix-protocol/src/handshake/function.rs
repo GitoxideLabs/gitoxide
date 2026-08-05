@@ -1,7 +1,6 @@
 use crate::bisync::bisync;
 use gix_error::{ErrorExt, ResultExt, message};
 use gix_features::{progress, progress::Progress};
-use gix_transport::IsSpuriousError;
 use gix_transport::{Service, client};
 
 use super::Error;
@@ -87,7 +86,7 @@ where
             Err(err) => Err(err),
         }
         .map_err(|err| {
-            if err.is_spurious() {
+            if err.can_retry() {
                 gix_error::RetryableError::new(err).and_raise(message("Transport handshake failed"))
             } else {
                 err.and_raise(message("Transport handshake failed"))
