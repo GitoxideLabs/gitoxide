@@ -45,7 +45,8 @@ impl crate::Repository {
                 expected_checksum: None,
                 alloc_limit_bytes: self.config.alloc_limit_bytes,
             },
-        )?;
+        )
+        .map_err(gix_error::Error::from_error)?;
 
         Ok(index)
     }
@@ -74,15 +75,10 @@ impl crate::Repository {
     pub fn index(&self) -> Result<worktree::Index, worktree::open_index::Error> {
         self.try_index().and_then(|opt| match opt {
             Some(index) => Ok(index),
-            None => Err(worktree::open_index::Error::IndexFile(
-                gix_index::file::init::Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!(
-                        "Could not find index file at '{index_path}' for opening.",
-                        index_path = self.index_path().display()
-                    ),
-                )),
-            )),
+            None => Err(gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+                "Could not find index file at '{index_path}' for opening.",
+                index_path = self.index_path().display()
+            )))),
         })
     }
 
@@ -117,14 +113,9 @@ impl crate::Repository {
         self.index.recent_snapshot(
             || self.index_path().metadata().and_then(|m| m.modified()).ok(),
             || {
-                self.open_index().map(Some).or_else(|err| match err {
-                    worktree::open_index::Error::IndexFile(gix_index::file::init::Error::Io(err))
-                        if err.kind() == std::io::ErrorKind::NotFound =>
-                    {
-                        Ok(None)
-                    }
-                    err => Err(err),
-                })
+                self.open_index()
+                    .map(Some)
+                    .or_else(|err| if err.is_not_found() { Ok(None) } else { Err(err) })
             },
         )
     }
@@ -155,7 +146,7 @@ impl crate::Repository {
     pub fn index_or_load_from_head(
         &self,
     ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head::Error> {
-        Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
+        Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => {
                 let tree = self.head_commit()?.tree_id().map_err(gix_error::Error::from_error)?;
@@ -185,7 +176,7 @@ impl crate::Repository {
     pub fn index_or_load_from_head_or_empty(
         &self,
     ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head_or_empty::Error> {
-        Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
+        Ok(match self.try_index()? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => match self.head()?.id() {
                 Some(id) => {

@@ -119,18 +119,7 @@ pub mod proxy;
 #[cfg(feature = "index")]
 pub mod open_index {
     /// The error returned by [`Worktree::open_index()`][crate::Worktree::open_index()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ConfigIndexThreads(#[from] crate::config::key::GenericErrorWithValue),
-        #[error(transparent)]
-        ConfigSkipHash(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        IndexFile(#[from] gix_index::file::init::Error),
-        #[error(transparent)]
-        IndexCorrupt(#[from] gix_index::file::verify::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl crate::Worktree<'_> {
         /// A shortcut to [`crate::Repository::open_index()`].
@@ -151,14 +140,7 @@ pub mod excludes {
     use crate::AttributeStack;
 
     /// The error returned by [`Worktree::excludes()`][crate::Worktree::excludes()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-        #[error(transparent)]
-        CreateCache(#[from] crate::config::exclude_stack::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl crate::Worktree<'_> {
         /// Configure a file-system cache checking if files below the repository are excluded.
@@ -187,14 +169,7 @@ pub mod attributes {
     use crate::{AttributeStack, Worktree};
 
     /// The error returned by [`Worktree::attributes()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-        #[error(transparent)]
-        CreateCache(#[from] crate::repository::attributes::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl<'repo> Worktree<'repo> {
         /// Configure a file-system cache checking if files below the repository are excluded or for querying their attributes.
@@ -221,7 +196,7 @@ pub mod attributes {
                     &index,
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
                 )
-                .map_err(|err| Error::CreateCache(gix_error::Error::from_error(err)))
+                .map_err(gix_error::Error::from_error)
         }
     }
 }
@@ -236,14 +211,7 @@ pub mod pathspec {
     };
 
     /// The error returned by [`Worktree::pathspec()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Init(#[from] crate::pathspec::init::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl<'repo> Worktree<'repo> {
         /// Configure pathspecs `patterns` to be matched against, with pathspec attributes read from the worktree and then from the index
@@ -270,7 +238,7 @@ pub mod pathspec {
                     self.parent.config.lenient_config,
                     Some(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT),
                 )
-                .map_err(|err| Error::Init(gix_error::Error::from(err)))?
+                .map_err(gix_error::Error::from)?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
             Ok(self.parent.pathspec(
                 true, /* empty patterns match prefix */

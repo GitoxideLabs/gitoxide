@@ -64,14 +64,7 @@ impl Default for Submodule {
 }
 
 /// The error returned by [status()](Repository::status).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    DirwalkOptions(#[from] config::boolean::Error),
-    #[error(transparent)]
-    ConfigureUntrackedFiles(#[from] config::key::GenericErrorWithValue),
-}
+pub type Error = gix_error::Error;
 
 /// Status
 impl Repository {

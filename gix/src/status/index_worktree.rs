@@ -240,15 +240,7 @@ mod submodule_status {
     }
 
     /// The error returned submodule status checks.
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        SubmoduleStatus(#[from] crate::submodule::status::Error),
-        #[error(transparent)]
-        IgnoreConfig(#[from] crate::submodule::config::Error),
-        #[error(transparent)]
-        DiffSubmoduleIgnoreConfig(#[from] config::key::GenericErrorWithValue),
-    }
+    pub type Error = gix_error::Error;
 
     impl gix_status::index_as_worktree::traits::SubmoduleStatus for BuiltinSubmoduleStatus {
         type Output = crate::submodule::Status;
@@ -288,7 +280,7 @@ mod submodule_status {
                         (ignore, check_dirty)
                     } else {
                         // If no global ignore is set, use the submodule's ignore setting.
-                        let ignore = sm.ignore()?.unwrap_or_default();
+                        let ignore = sm.ignore().map_err(gix_error::Error::from_error)?.unwrap_or_default();
                         (ignore, check_dirty)
                     }
                 }
