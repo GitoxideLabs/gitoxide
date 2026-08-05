@@ -32,6 +32,26 @@ mod threaded {
     use super::parallel;
 
     #[test]
+    fn periodic_duration_does_not_have_to_fit_in_an_instant() {
+        let watcher_and_worker = &Barrier::new(2);
+        parallel::in_parallel_with_slice(
+            &mut [()],
+            Some(1),
+            |_| (),
+            |_item, _state, _threads_left, _should_interrupt| {
+                watcher_and_worker.wait();
+                Ok::<_, ()>(())
+            },
+            || {
+                watcher_and_worker.wait();
+                Some(std::time::Duration::MAX)
+            },
+            std::convert::identity,
+        )
+        .expect("an effectively infinite polling interval can still be interrupted");
+    }
+
+    #[test]
     fn the_error_that_caused_the_stop_is_returned_even_if_other_threads_fail_on_interrupt() {
         // Regression test for the race behind issue #2701: a thread that observes the stop
         // signal and bails out with a reactive error (like `Interrupted`) must not mask the

@@ -176,18 +176,22 @@ where
     })
 }
 
-/// An experiment to have fine-grained per-item parallelization with built-in aggregation via thread state.
-/// This is only good for operations where near-random access isn't detrimental, so it's not usually great
-/// for file-io as it won't make use of sorted inputs well.
-/// Note that `periodic` is not guaranteed to be called in case other threads come up first and finish too fast.
-/// `consume(&mut item, &mut stat, &Scope, &threads_available, &should_interrupt)` is called for performing the actual computation.
-/// Note that `threads_available` should be decremented to start a thread that can steal your own work (as stored in `item`),
-/// which allows callees to implement their own work-stealing in case the work is distributed unevenly.
-/// Work stealing should only start after having processed at least one item to give all threads naturally operating on the slice
-/// some time to start. Starting threads while slice-workers are still starting up would lead to over-allocation of threads,
-/// which is why the number of threads left may turn negative. Once threads are started and stopped, be sure to adjust
-/// the thread-count accordingly.
-// TODO: better docs
+/// Process mutable `input` items concurrently and return one finalized value per worker, in worker order.
+///
+/// Workers claim individual items, so processing order is unspecified. This suits independent work with no
+/// locality requirements; workloads such as file I/O may benefit more from processing sorted chunks instead.
+///
+/// * `thread_limit` selects the worker count. `None` or `Some(0)` uses all available logical cores.
+/// * `new_thread_state(worker_index)` creates the state passed to that worker's `consume` calls.
+/// * `consume(item, state, threads_left, should_interrupt)` processes one item. Setting `should_interrupt`
+///   stops workers after their current item. The first error does the same and is returned.
+/// * `periodic` runs on a watcher thread. `Some(duration)` schedules its next call after that duration;
+///   `None` requests an interruption. It may never run if the workers finish first.
+/// * `state_to_rval` converts each worker's state after it stops successfully, including after interruption.
+///
+/// `threads_left` tracks capacity for nested work. A consumer may reserve capacity with `fetch_sub` before
+/// spawning work and must release it with `fetch_add` afterward. Do this only after consuming an item, as the
+/// slice workers may still be starting and can temporarily make the counter negative.
 pub fn in_parallel_with_slice<I, S, R, E>(
     input: &mut [I],
     thread_limit: Option<usize>,
@@ -210,7 +214,7 @@ where
 
     std::thread::scope({
         move |s| {
-            std::thread::Builder::new()
+            let watcher = std::thread::Builder::new()
                 .name("gitoxide.in_parallel_with_slice.watch-interrupts".into())
                 .spawn_scoped(s, {
                     move || loop {
@@ -219,7 +223,28 @@ where
                         }
 
                         match periodic() {
-                            Some(duration) => std::thread::sleep(duration),
+                            // Park rather than sleep. `stop_everything` is only set once
+                            // every worker has been joined, and this thread lives in the
+                            // same `std::thread::scope`, so a plain `sleep` is *appended*
+                            // to the call: the scope cannot return until this thread wakes
+                            // on its own. Parking keeps the requested interval exactly (a
+                            // spurious wake-up re-parks for the remainder) while letting
+                            // the joiner end the wait as soon as there is nothing left to
+                            // watch. It needs no mutex, because an `unpark` that arrives
+                            // before the `park_timeout` is remembered by the park token.
+                            Some(duration) => {
+                                let start = std::time::Instant::now();
+                                loop {
+                                    if stop_everything.load(Ordering::Relaxed) {
+                                        break;
+                                    }
+                                    let remaining = duration.saturating_sub(start.elapsed());
+                                    if remaining.is_zero() {
+                                        break;
+                                    }
+                                    std::thread::park_timeout(remaining);
+                                }
+                            }
                             None => {
                                 stop_everything.store(true, Ordering::Relaxed);
                                 break;
@@ -228,6 +253,7 @@ where
                     }
                 })
                 .expect("valid name");
+            let watcher = watcher.thread().clone();
 
             let input_len = input.len();
             struct Input<I>(*mut I)
@@ -295,18 +321,26 @@ where
                     Ok(Err((err, is_cause))) => {
                         // is-cause is race-free, and must be set on the first error.
                         if is_cause {
+                            // The failing consumer already set `stop_everything`; end the
+                            // watcher's current interval so an error is not held open for
+                            // one whole `periodic()`.
+                            watcher.unpark();
                             return Err(err);
                         }
                     }
                     Err(err) => {
                         // a panic happened, stop the world gracefully (even though we panic later)
                         stop_everything.store(true, Ordering::Relaxed);
+                        watcher.unpark();
                         std::panic::resume_unwind(err);
                     }
                 }
             }
 
             stop_everything.store(true, Ordering::Relaxed);
+            // Nothing left to watch. Without this the scope blocks until the watcher's own
+            // timer expires, adding a whole `periodic()` interval to every call.
+            watcher.unpark();
             Ok(results)
         }
     })

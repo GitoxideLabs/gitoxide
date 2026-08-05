@@ -87,10 +87,12 @@ mod not_parallel {
         }
     }
 
-    /// An experiment to have fine-grained per-item parallelization with built-in aggregation via thread state.
-    /// This is only good for operations where near-random access isn't detrimental, so it's not usually great
-    /// for file-io as it won't make use of sorted inputs well.
-    // TODO: better docs
+    /// Process mutable `input` items and return the finalized worker state.
+    ///
+    /// This is the single-threaded counterpart of the parallel implementation: `thread_limit` is ignored,
+    /// `new_thread_state` receives worker index `0`, and `consume` receives a zero `threads_left` counter.
+    /// After each item, `periodic` is called; `None` stops processing successfully, while its duration is ignored.
+    /// An error from `consume` stops processing and is returned without calling `state_to_rval`.
     pub fn in_parallel_with_slice<I, S, R, E>(
         input: &mut [I],
         _thread_limit: Option<usize>,
