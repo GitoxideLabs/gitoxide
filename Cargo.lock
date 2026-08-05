@@ -1533,7 +1533,6 @@ dependencies = [
  "smallvec",
  "sysinfo",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-forest 0.2.0",
  "tracing-subscriber",
