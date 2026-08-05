@@ -124,6 +124,7 @@
 //! | General-purpose error messages                                | [`Message`]           |
 //! | Validation/parsing, optionally storing the offending input   | [`ValidationError`]   |
 //! | Malformed or internally inconsistent data                     | [`CorruptionError`]   |
+//! | A requested resource does not exist                            | [`NotFoundError`]     |
 //!
 //! For example, a validation function with no callee errors returns `Result<_, ValidationError>`,
 //! while a function that wraps I/O errors during parsing could return `Result<_, Exn<ValidationError>>`.
@@ -347,7 +348,7 @@ pub use error::can_retry;
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 pub use concrete::chain::ChainedError;
-pub use concrete::classify::{CorruptionError, RetryableError};
+pub use concrete::classify::{CorruptionError, NotFoundError, RetryableError};
 pub use concrete::message::{Message, message};
 pub use concrete::validate::ValidationError;
 

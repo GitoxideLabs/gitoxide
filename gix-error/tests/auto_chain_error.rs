@@ -1,4 +1,4 @@
-use gix_error::{CorruptionError, Error, ErrorExt, RetryableError, message};
+use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, message};
 #[cfg(not(feature = "tree-error"))]
 use gix_error::{Exn, Message};
 use std::error::Error as _;
@@ -110,4 +110,11 @@ fn retryability_is_discovered_in_the_error_chain() {
 fn corruption_is_discovered_in_the_error_chain() {
     let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
     assert!(Error::from(corrupt).is_corrupted());
+}
+
+#[test]
+fn not_found_is_discovered_in_well_known_errors() {
+    let missing = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    assert!(Error::from(missing).is_not_found());
+    assert!(Error::from_error(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")).is_not_found());
 }

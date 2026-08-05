@@ -1,5 +1,5 @@
 use crate::{ErrorWithSource, debug_string, new_tree_error};
-use gix_error::{CorruptionError, Error, ErrorExt, RetryableError, ValidationError, message};
+use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, ValidationError, message};
 use std::error::Error as _;
 
 #[test]
@@ -163,4 +163,16 @@ fn corruption_is_discovered_in_the_error_chain() {
     assert!(Error::from(corrupt).is_corrupted());
 
     assert!(!Error::from(message("repository was not found").raise()).is_corrupted());
+}
+
+#[test]
+fn not_found_is_discovered_in_well_known_errors() {
+    let classified = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    assert!(Error::from(classified).is_not_found());
+
+    let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing index")
+        .and_raise(message("failed to open repository"));
+    assert!(Error::from(io).is_not_found());
+
+    assert!(!Error::from(message("permission denied").raise()).is_not_found());
 }

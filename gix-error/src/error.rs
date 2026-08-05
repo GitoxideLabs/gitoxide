@@ -26,6 +26,11 @@ mod _impl {
         pub fn is_corrupted(&self) -> bool {
             self.sources().any(super::is_corrupted)
         }
+
+        /// Return `true` if a requested resource was not found.
+        pub fn is_not_found(&self) -> bool {
+            self.sources().any(super::is_not_found)
+        }
     }
 
     pub(crate) enum Inner {
@@ -126,6 +131,12 @@ mod _impl {
             std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
                 .any(|err| super::is_corrupted(err.err.as_ref()))
         }
+
+        /// Return `true` if a requested resource was not found.
+        pub fn is_not_found(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_not_found(err.err.as_ref()))
+        }
     }
 
     impl Error {
@@ -200,6 +211,15 @@ fn is_retryable(err: &(dyn std::error::Error + 'static)) -> bool {
 
 fn is_corrupted(err: &(dyn std::error::Error + 'static)) -> bool {
     error_chain(err).any(|err| err.is::<crate::CorruptionError>())
+}
+
+fn is_not_found(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        err.is::<crate::NotFoundError>()
+            || err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    })
 }
 
 fn error_chain<'a>(

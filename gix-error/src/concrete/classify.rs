@@ -45,6 +45,48 @@ impl From<&'static str> for CorruptionError {
     }
 }
 
+/// An error indicating that a requested resource does not exist.
+#[derive(Debug)]
+pub struct NotFoundError {
+    /// The error message.
+    pub message: Cow<'static, str>,
+}
+
+impl NotFoundError {
+    /// Create a new instance that displays the given `message`.
+    pub fn new(message: impl Into<Cow<'static, str>>) -> Self {
+        NotFoundError {
+            message: message.into(),
+        }
+    }
+}
+
+impl Display for NotFoundError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message.as_ref())
+    }
+}
+
+impl std::error::Error for NotFoundError {}
+
+impl From<Message> for NotFoundError {
+    fn from(Message(msg): Message) -> Self {
+        NotFoundError::new(msg)
+    }
+}
+
+impl From<String> for NotFoundError {
+    fn from(msg: String) -> Self {
+        NotFoundError::new(msg)
+    }
+}
+
+impl From<&'static str> for NotFoundError {
+    fn from(msg: &'static str) -> Self {
+        NotFoundError::new(msg)
+    }
+}
+
 /// A transparent wrapper for dependency-specific errors known to be retryable.
 #[derive(Debug)]
 pub struct RetryableError(Box<dyn std::error::Error + Send + Sync + 'static>);
