@@ -542,23 +542,34 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     fn from(mut err: Exn<E>) -> Self {
+        let probable_cause = err.frame.probable_cause().and_then(|cause| {
+            err.frame
+                .iter_frames()
+                .position(|frame| std::ptr::addr_eq(frame, cause))
+        });
         let stack: VecDeque<_> = err.frame.children.drain(..).collect();
         let location = err.frame.location;
         ChainedError {
             err: err.into_box(),
             location,
-            source: recurse_source_frames(stack),
+            is_probable_cause: probable_cause.is_none(),
+            source: recurse_source_frames(stack, probable_cause, 1),
         }
     }
 }
 
-fn recurse_source_frames(mut stack: VecDeque<Frame>) -> Option<Box<ChainedError>> {
+fn recurse_source_frames(
+    mut stack: VecDeque<Frame>,
+    probable_cause: Option<usize>,
+    index: usize,
+) -> Option<Box<ChainedError>> {
     let frame = stack.pop_front()?;
     stack.extend(frame.children);
     Box::new(ChainedError {
         err: frame.error,
         location: frame.location,
-        source: recurse_source_frames(stack),
+        is_probable_cause: probable_cause == Some(index),
+        source: recurse_source_frames(stack, probable_cause, index + 1),
     })
     .into()
 }

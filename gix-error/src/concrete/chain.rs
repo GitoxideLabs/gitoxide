@@ -10,6 +10,11 @@ use std::panic::Location;
 pub struct ChainedError {
     pub(crate) err: Box<dyn std::error::Error + Send + Sync + 'static>,
     pub(crate) location: &'static Location<'static>,
+    #[cfg_attr(
+        not(all(feature = "auto-chain-error", not(feature = "tree-error"))),
+        allow(dead_code)
+    )]
+    pub(crate) is_probable_cause: bool,
     pub(crate) source: Option<Box<ChainedError>>,
 }
 

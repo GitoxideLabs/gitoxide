@@ -65,6 +65,17 @@ fn from_any_error() {
     assert_eq!(format!("{:#}", err.probable_cause()), "one");
 }
 
+#[test]
+fn probable_cause_survives_tree_flattening() {
+    let err = Error::from(
+        message("bottom")
+            .raise()
+            .raise(message("middle"))
+            .raise(message("top")),
+    );
+    assert_eq!(format!("{:#}", err.probable_cause()), "bottom");
+}
+
 #[cfg(not(feature = "tree-error"))]
 pub fn new_tree_error() -> Exn<Message> {
     let e1 = message("E1").raise();
