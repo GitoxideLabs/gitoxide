@@ -824,14 +824,14 @@ mod blocking_io {
         .map(drop)
         .expect_err("an existing .git directory must not be reused for clone");
 
-        assert!(
-            matches!(
-                err,
-                gix::clone::Error::Init(gix::init::Error::Init(gix::create::Error::DirectoryExists { ref path }))
-                    if *path == dot_git
-            ),
-            "unexpected error: {err}"
-        );
+        let gix::clone::Error::Init(init_err) = &err else {
+            panic!("unexpected error: {err}");
+        };
+        assert!(init_err.sources().any(|source| matches!(
+            source.downcast_ref::<gix_error::ValidationError>(),
+            Some(gix_error::ValidationError { input: Some(path), .. })
+                if path.as_bstr() == dot_git.to_string_lossy().as_bytes()
+        )));
         assert_eq!(std::fs::read(&existing_path)?, EXISTING_CONTENT);
         assert_eq!(std::fs::read(&head_path)?, EXISTING_HEAD_CONTENT);
         Ok(())
