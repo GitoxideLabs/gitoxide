@@ -58,6 +58,7 @@ uses `gix-error` (look at its `Cargo.toml`); if it does, follow the patterns bel
 
 Follow "purposeful conventional commits" style:
 
+- Write commit messages in Markdown, and use the body to share everything known about what motivated the change, not merely what changed
 - Use conventional commit prefixes ONLY if message should appear in changelog
 - Breaking changes MUST use `!` before the colon: `change!:`, `remove!:`, `rename!:`, or _scoped_ forms like `feat(gix-odb)!:`
 - Features/fixes visible to users: `feat:`, `fix:`

@@ -123,6 +123,8 @@
 //! |--------------------------------------------------------------|-----------------------|
 //! | General-purpose error messages                                | [`Message`]           |
 //! | Validation/parsing, optionally storing the offending input   | [`ValidationError`]   |
+//! | Malformed or internally inconsistent data                     | [`CorruptionError`]   |
+//! | A requested resource does not exist                            | [`NotFoundError`]     |
 //!
 //! For example, a validation function with no callee errors returns `Result<_, ValidationError>`,
 //! while a function that wraps I/O errors during parsing could return `Result<_, Exn<ValidationError>>`.
@@ -275,11 +277,12 @@
 //!
 //! ## Convert `Exn` to [`Error`] at public API boundaries
 //!
-//! Porcelain crates (like `gix`) should not expose [`Exn<Message>`](Exn) in their public API
-//! because it does not implement [`std::error::Error`], which makes it incompatible
-//! with `anyhow`, `Box<dyn Error>`, and the `?` operator in those contexts.
+//! Porcelain crates (like `gix`) should **not** expose [`Exn<Message>`](Exn) in their public API
+//! because it does not itself implement [`std::error::Error`].
 //!
-//! Instead, convert to [`Error`] (which does implement `std::error::Error`) at the boundary:
+//! Instead, convert to [`Error`] (which does implement `std::error::Error`) at the boundary.
+//! [`Exn`] also converts directly into `Box<dyn std::error::Error + Send + Sync>`, so `?` works
+//! without an explicit conversion when that is the receiving result's error type:
 //! ```rust,ignore
 //! // In the porcelain crate's error module:
 //! pub type Error = gix_error::Error;  // not gix_archive::Error (which is Exn<Message>)
@@ -320,7 +323,7 @@ pub use exn::{ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
 /// # Warning: `source()` information is stringified and type-erased
 ///
 /// All `source()` values when created with [`Error::from_error()`] are turned into frames,
-/// but lose their type information completely.
+/// but lose their type information completely. An existing `Error` is retained as a nested error instead.
 /// This is because they are only seen as reference and thus can't be stored.
 ///
 /// # The `auto-chain-error` feature
@@ -341,10 +344,12 @@ pub struct Error {
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
 mod error;
+pub use error::{DisplaySource, can_retry};
 
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 pub use concrete::chain::ChainedError;
+pub use concrete::classify::{CorruptionError, NotFoundError, RetryableError};
 pub use concrete::message::{Message, message};
 pub use concrete::validate::ValidationError;
 
