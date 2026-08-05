@@ -33,10 +33,12 @@ impl Repository {
                 } else {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
-            )?
+            )
+            .map_err(gix_error::Error::from_error)?
             .inner,
             worktree_roots,
-        )?)
+        )
+        .map_err(gix_error::Error::from_error)?)
     }
 
     /// Produce the changes that would need to be applied to `old_tree` to create `new_tree`.

@@ -162,11 +162,11 @@ impl<'repo> Reference<'repo> {
     /// instead.
     #[doc(alias = "peel", alias = "git2")]
     pub fn peel_to_kind(&mut self, kind: gix_object::Kind) -> Result<Object<'repo>, peel::to_kind::Error> {
-        let packed = self.repo.refs.cached_packed_buffer().map_err(|err| {
-            peel::to_kind::Error::FollowToObject(gix_ref::peel::to_object::Error::Follow(
-                file::find::existing::Error::Find(file::find::Error::PackedOpen(err)),
-            ))
-        })?;
+        let packed = self
+            .repo
+            .refs
+            .cached_packed_buffer()
+            .map_err(gix_error::Error::from_error)?;
         self.peel_to_kind_packed(kind, packed.as_ref().map(|p| &***p))
     }
 
@@ -221,7 +221,8 @@ impl<'repo> Reference<'repo> {
     ) -> Result<Object<'repo>, peel::to_kind::Error> {
         let target = self
             .inner
-            .follow_to_object_packed(&self.repo.refs, packed)?
+            .follow_to_object_packed(&self.repo.refs, packed)
+            .map_err(gix_error::Error::from_error)?
             .attach(self.repo);
         Ok(target.object()?.peel_to_kind(kind)?)
     }

@@ -138,20 +138,7 @@ pub mod is_dirty {
     use crate::Repository;
 
     /// The error returned by [Repository::is_dirty()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        StatusPlatform(#[from] crate::status::Error),
-        #[error(transparent)]
-        CreateStatusIterator(#[from] crate::status::into_iter::Error),
-        #[error(transparent)]
-        TreeIndexStatus(#[from] crate::status::tree_index::Error),
-        #[error(transparent)]
-        HeadTreeId(#[from] crate::reference::head_tree_id::Error),
-        #[error(transparent)]
-        OpenWorktreeIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl Repository {
         /// Returns `true` if the repository is dirty.
@@ -186,13 +173,15 @@ pub mod is_dirty {
                 }
             }
             let is_dirty = self
-                .status(gix_features::progress::Discard)?
+                .status(gix_features::progress::Discard)
+                .map_err(gix_error::Error::from_error)?
                 .index_worktree_rewrites(None)
                 .index_worktree_submodules(crate::status::Submodule::AsConfigured { check_dirty: true })
                 .index_worktree_options_mut(|opts| {
                     opts.dirwalk_options = None;
                 })
-                .into_index_worktree_iter(Vec::new())?
+                .into_index_worktree_iter(Vec::new())
+                .map_err(gix_error::Error::from_error)?
                 .take_while(Result::is_ok)
                 .next()
                 .is_some();

@@ -192,13 +192,14 @@ impl Submodule<'_> {
     /// wasn't yet committed. Note that `None` is also returned if the entry at the submodule path isn't a submodule.
     /// If `None`, but `Some()` when calling [`Self::index_id()`], then the submodule was just added without having committed the change.
     pub fn head_id(&self) -> Result<Option<gix_hash::ObjectId>, head_id::Error> {
-        let path = self.path()?;
+        let path = self.path().map_err(gix_error::Error::from_error)?;
         Ok(self
             .state
             .repo
             .head_commit()?
             .tree()?
-            .peel_to_entry_by_path(gix_path::from_bstring(path))?
+            .peel_to_entry_by_path(gix_path::from_bstring(path))
+            .map_err(gix_error::Error::from_error)?
             .and_then(|entry| (entry.mode().is_commit()).then_some(entry.inner.oid)))
     }
 
@@ -384,30 +385,11 @@ mod tests {
 pub mod status {
     use gix_submodule::config;
 
-    use super::{Status, head_id, index_id, open, state};
+    use super::Status;
     use crate::Submodule;
 
     /// The error returned by [Submodule::status()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        State(#[from] state::Error),
-        #[error(transparent)]
-        HeadId(#[from] head_id::Error),
-        #[error(transparent)]
-        IndexId(#[from] index_id::Error),
-        #[error(transparent)]
-        OpenRepository(#[from] open::Error),
-        #[error(transparent)]
-        IgnoreConfiguration(#[from] config::Error),
-        #[error(transparent)]
-        StatusPlatform(#[from] crate::status::Error),
-        #[error(transparent)]
-        StatusIter(#[from] crate::status::into_iter::Error),
-        #[error(transparent)]
-        NextStatusItem(#[from] crate::status::iter::Error),
-    }
+    pub type Error = gix_error::Error;
 
     impl Submodule<'_> {
         /// Return the status of the submodule.
@@ -447,7 +429,9 @@ pub mod status {
             )
                 -> crate::status::Platform<'a, gix_features::progress::Discard>,
         ) -> Result<Status, Error> {
-            let mut state = self.state_inner(ignore != config::Ignore::All)?;
+            let mut state = self
+                .state_inner(ignore != config::Ignore::All)
+                .map_err(gix_error::Error::from_error)?;
             if ignore == config::Ignore::All {
                 return Ok(Status {
                     state,
@@ -455,7 +439,7 @@ pub mod status {
                 });
             }
 
-            let index_id = self.index_id()?;
+            let index_id = self.index_id().map_err(gix_error::Error::from_error)?;
             if !state.repository_exists {
                 return Ok(Status {
                     state,
@@ -463,7 +447,7 @@ pub mod status {
                     ..Default::default()
                 });
             }
-            let sm_repo = match self.open()? {
+            let sm_repo = match self.open().map_err(gix_error::Error::from_error)? {
                 None => {
                     state.repository_exists = false;
                     return Ok(Status {
@@ -489,13 +473,18 @@ pub mod status {
             if !state.worktree_checkout {
                 return Ok(status);
             }
-            let statuses = adjust_options(sm_repo.status(gix_features::progress::Discard)?)
-                .index_worktree_options_mut(|opts| {
-                    if ignore == config::Ignore::Untracked {
-                        opts.dirwalk_options = None;
-                    }
-                })
-                .into_iter(None)?;
+            let statuses = adjust_options(
+                sm_repo
+                    .status(gix_features::progress::Discard)
+                    .map_err(gix_error::Error::from_error)?,
+            )
+            .index_worktree_options_mut(|opts| {
+                if ignore == config::Ignore::Untracked {
+                    opts.dirwalk_options = None;
+                }
+            })
+            .into_iter(None)
+            .map_err(gix_error::Error::from_error)?;
             let mut changes = Vec::new();
             for change in statuses {
                 changes.push(change?);

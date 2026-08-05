@@ -8,7 +8,7 @@ use gix_status::index_as_worktree::{Change, EntryStatus};
 use crate::{
     bstr::BString,
     config::cache::util::ApplyLeniencyDefault,
-    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus, tree_index},
+    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus},
     worktree::IndexPersistedOrInMemory,
 };
 
@@ -237,14 +237,7 @@ where
 }
 
 /// The error returned for each item returned by [`Iter`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    IndexWorktree(#[from] index_worktree::Error),
-    #[error(transparent)]
-    TreeIndex(#[from] tree_index::Error),
-}
+pub type Error = gix_error::Error;
 
 impl Iterator for Iter {
     type Item = Result<Item, Error>;

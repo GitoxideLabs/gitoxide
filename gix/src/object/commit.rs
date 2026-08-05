@@ -1,23 +1,8 @@
 use crate::{Commit, ObjectDetached, Tree, bstr, bstr::BStr};
 
 mod error {
-    use crate::object;
-
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindExistingObject(#[from] object::find::existing::Error),
-        #[error("The commit could not be decoded fully or partially")]
-        Decode(#[from] gix_object::decode::Error),
-        #[error("The commit date could not be parsed")]
-        ParseDate(#[from] gix_date::Error),
-        #[error("Expected object of type {}, but got {}", .expected, .actual)]
-        ObjectKind {
-            expected: gix_object::Kind,
-            actual: gix_object::Kind,
-        },
-    }
+    /// The error returned by commit accessors.
+    pub type Error = gix_error::Error;
 }
 
 pub use error::Error;
@@ -103,7 +88,11 @@ impl<'repo> Commit<'repo> {
     ///
     /// For the time at which it was authored, refer to `.author()?.time()`.
     pub fn time(&self) -> Result<gix_date::Time, Error> {
-        Ok(self.committer()?.time()?)
+        Ok(self
+            .committer()
+            .map_err(gix_error::Error::from_error)?
+            .time()
+            .map_err(gix_error::Error::from_error)?)
     }
 
     /// Decode the entire commit object and return it for accessing all commit information.
@@ -174,10 +163,11 @@ impl<'repo> Commit<'repo> {
     /// # Ok(()) }
     /// ```
     pub fn tree(&self) -> Result<Tree<'repo>, Error> {
-        match self.tree_id()?.object()?.try_into_tree() {
-            Ok(tree) => Ok(tree),
-            Err(crate::object::try_into::Error { actual, expected, .. }) => Err(Error::ObjectKind { actual, expected }),
-        }
+        self.tree_id()
+            .map_err(gix_error::Error::from_error)?
+            .object()?
+            .try_into_tree()
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Parse the commit and return the tree id it points to.

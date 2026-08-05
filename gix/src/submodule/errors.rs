@@ -14,24 +14,7 @@ pub mod open_modules_file {
 ///
 pub mod modules {
     /// The error returned by [Repository::modules()](crate::Repository::modules()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenModulesFile(#[from] crate::submodule::open_modules_file::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-        #[error("Could not find the .gitmodules file by id in the object database")]
-        FindExistingBlob(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        FindHeadRef(#[from] crate::reference::find::existing::Error),
-        #[error(transparent)]
-        PeelHeadRef(#[from] crate::head::peel::Error),
-        #[error(transparent)]
-        PeelObjectToCommit(#[from] crate::object::peel::to_kind::Error),
-        #[error(transparent)]
-        TreeFromCommit(#[from] crate::object::commit::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -134,16 +117,5 @@ pub mod index_id {
 ///
 pub mod head_id {
     /// The error returned by [Submodule::head_id()](crate::Submodule::head_id()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        HeadCommit(#[from] crate::reference::head_commit::Error),
-        #[error("Could not get tree of head commit")]
-        CommitTree(#[from] crate::object::commit::Error),
-        #[error("Could not peel tree to submodule path")]
-        PeelTree(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        PathConfiguration(#[from] gix_submodule::config::path::Error),
-    }
+    pub type Error = gix_error::Error;
 }

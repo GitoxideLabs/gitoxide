@@ -80,12 +80,12 @@ impl crate::Repository {
     ) -> Result<(gix_worktree_stream::Stream, gix_index::File), crate::repository::worktree_stream::Error> {
         use gix_odb::HeaderExt;
         let id = id.into();
-        let header = self.objects.header(id)?;
+        let header = self.objects.header(id).map_err(gix_error::Error::from_error)?;
         if !header.kind().is_tree() {
-            return Err(crate::repository::worktree_stream::Error::NotATree {
-                id,
-                actual: header.kind(),
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "Needed {id} to be a tree to turn into a workspace stream, got {}",
+                header.kind()
+            ))));
         }
 
         // TODO(perf): potential performance improvements could be to use the index at `HEAD` if possible (`index_from_head_tree…()`)
@@ -93,9 +93,13 @@ impl crate::Repository {
         //             an object cache between the copies of the ODB handles isn't trivial and needs a lock.
         let index = self.index_from_tree(&id)?;
         let mut cache = self
-            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)?
+            .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
+            .map_err(gix_error::Error::from_error)?
             .detach();
-        let pipeline = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
+        let pipeline = gix_filter::Pipeline::new(
+            self.command_context().map_err(gix_error::Error::from_error)?,
+            crate::filter::Pipeline::options(self)?,
+        );
         let objects = self.objects.clone().into_arc().expect("TBD error handling");
         let stream = gix_worktree_stream::from_tree(
             id,

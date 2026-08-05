@@ -46,23 +46,31 @@ impl Repository {
     ///
     // TODO(submodule): make it use an updated snapshot instead once we have `config()`.
     pub fn modules(&self) -> Result<Option<submodule::ModulesSnapshot>, submodule::modules::Error> {
-        match self.modules.recent_snapshot(
-            || {
-                self.modules_path()
-                    .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
-            },
-            || self.open_modules_file(),
-        )? {
+        match self
+            .modules
+            .recent_snapshot(
+                || {
+                    self.modules_path()
+                        .and_then(|path| path.metadata().and_then(|m| m.modified()).ok())
+                },
+                || self.open_modules_file(),
+            )
+            .map_err(gix_error::Error::from_error)?
+        {
             Some(m) => Ok(Some(m)),
             None => {
-                let id = match self.try_index()?.and_then(|index| {
-                    index
-                        .entry_by_path(submodule::MODULES_FILE.into())
-                        .map(|entry| entry.id)
-                }) {
+                let id = match self
+                    .try_index()
+                    .map_err(gix_error::Error::from_error)?
+                    .and_then(|index| {
+                        index
+                            .entry_by_path(submodule::MODULES_FILE.into())
+                            .map(|entry| entry.id)
+                    }) {
                     Some(id) => id,
                     None => match self
-                        .head()?
+                        .head()
+                        .map_err(gix_error::Error::from_error)?
                         .try_peel_to_id()?
                         .map(|id| -> Result<Option<_>, submodule::modules::Error> {
                             Ok(id
@@ -81,7 +89,8 @@ impl Repository {
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
                     gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(submodule::open_modules_file::Error::from)?
+                        .map_err(submodule::open_modules_file::Error::from)
+                        .map_err(gix_error::Error::from_error)?
                         .into(),
                 )))
             }

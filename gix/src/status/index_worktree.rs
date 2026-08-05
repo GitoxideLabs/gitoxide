@@ -596,12 +596,6 @@ pub mod iter {
                     crate::status::Item::IndexWorktree(item) => item,
                     crate::status::Item::TreeIndex(_) => unreachable!("BUG: we deactivated this kind of traversal"),
                 })
-                .map_err(|err| match err {
-                    crate::status::iter::Error::IndexWorktree(err) => err,
-                    crate::status::iter::Error::TreeIndex(_) => {
-                        unreachable!("BUG: we deactivated this kind of traversal")
-                    }
-                })
             })
         }
     }

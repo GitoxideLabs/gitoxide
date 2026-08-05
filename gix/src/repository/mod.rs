@@ -79,13 +79,7 @@ mod new_commit {
 ///
 mod new_commit_as {
     /// The error returned by [`new_commit_as(…)`](crate::Repository::new_commit_as()).
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        WriteObject(#[from] crate::object::write::Error),
-        #[error(transparent)]
-        FindCommit(#[from] crate::object::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -189,16 +183,7 @@ pub mod tree_merge_options {
 #[cfg(feature = "blob-diff")]
 pub mod diff_resource_cache {
     /// The error returned by [Repository::diff_resource_cache()](crate::Repository::diff_resource_cache()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not obtain resource cache for diffing")]
-        ResourceCache(#[from] crate::diff::resource_cache::Error),
-        #[error(transparent)]
-        Index(#[from] crate::repository::index_or_load_from_head_or_empty::Error),
-        #[error(transparent)]
-        AttributeStack(#[from] crate::config::attribute_stack::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -352,47 +337,14 @@ pub mod index_or_load_from_head {
 #[cfg(feature = "index")]
 pub mod index_or_load_from_head_or_empty {
     /// The error returned by [`Repository::index_or_load_from_head_or_empty()`](crate::Repository::index_or_load_from_head_or_empty()).
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ReadHead(#[from] crate::reference::find::existing::Error),
-        #[error(transparent)]
-        FindCommit(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        PeelToTree(#[from] crate::object::peel::to_kind::Error),
-        #[error(transparent)]
-        TreeId(#[from] gix_object::decode::Error),
-        #[error(transparent)]
-        TraverseTree(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "worktree-stream")]
 pub mod worktree_stream {
     /// The error returned by [`Repository::worktree_stream()`](crate::Repository::worktree_stream()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        FindTree(#[from] crate::object::find::existing::Error),
-        #[error(transparent)]
-        OpenTree(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        AttributesCache(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        FilterPipeline(#[from] crate::filter::pipeline::options::Error),
-        #[error(transparent)]
-        CommandContext(#[from] crate::config::command_context::Error),
-        #[error("Needed {id} to be a tree to turn into a workspace stream, got {actual}")]
-        NotATree {
-            id: gix_hash::ObjectId,
-            actual: gix_object::Kind,
-        },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

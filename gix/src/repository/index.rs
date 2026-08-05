@@ -155,7 +155,7 @@ impl crate::Repository {
     pub fn index_or_load_from_head(
         &self,
     ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head::Error> {
-        Ok(match self.try_index()? {
+        Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => {
                 let tree = self.head_commit()?.tree_id()?;
@@ -185,12 +185,19 @@ impl crate::Repository {
     pub fn index_or_load_from_head_or_empty(
         &self,
     ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head_or_empty::Error> {
-        Ok(match self.try_index()? {
+        Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
-            None => match self.head()?.id() {
+            None => match self.head().map_err(gix_error::Error::from_error)?.id() {
                 Some(id) => {
-                    let head_tree_id = id.object()?.peel_to_commit()?.tree_id()?;
-                    IndexPersistedOrInMemory::InMemory(self.index_from_tree(&head_tree_id)?)
+                    let head_tree_id = id
+                        .object()?
+                        .peel_to_commit()?
+                        .tree_id()
+                        .map_err(gix_error::Error::from_error)?;
+                    IndexPersistedOrInMemory::InMemory(
+                        self.index_from_tree(&head_tree_id)
+                            .map_err(gix_error::Error::from_error)?,
+                    )
                 }
                 None => IndexPersistedOrInMemory::InMemory(gix_index::File::from_state(
                     gix_index::State::new(self.object_hash()),

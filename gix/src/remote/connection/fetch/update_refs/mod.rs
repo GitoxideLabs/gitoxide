@@ -113,7 +113,10 @@ pub(crate) fn update(
         }
         let (mode, edit_index, type_change) = match local {
             Some(name) => {
-                let (mode, reflog_message, name, previous_value) = match repo.try_find_reference(name)? {
+                let (mode, reflog_message, name, previous_value) = match repo
+                    .try_find_reference(name)
+                    .map_err(gix_error::Error::from_error)?
+                {
                     Some(existing) => {
                         if let Some(wt_dirs) = checked_out_branches.get_mut(existing.name()) {
                             wt_dirs.sort();
@@ -220,11 +223,11 @@ pub(crate) fn update(
                                     PreviousValue::MustExistAndMatch(existing.target().into_owned()),
                                 )
                             }
-                            Err(err) => return Err(err.into()),
+                            Err(err) => return Err(gix_error::Error::from_error(err)),
                         }
                     }
                     None => {
-                        let name: gix_ref::FullName = name.try_into()?;
+                        let name: gix_ref::FullName = name.try_into().map_err(gix_error::Error::from_error)?;
                         let reflog_msg = match name.category() {
                             Some(gix_ref::Category::Tag) => "storing tag",
                             Some(gix_ref::Category::LocalBranch) => "storing head",
@@ -321,10 +324,8 @@ pub(crate) fn update(
     let edits = match dry_run {
         fetch::DryRun::No => {
             let _span = gix_trace::detail!("apply", edits = edits.len());
-            let (file_lock_fail, packed_refs_lock_fail) = repo
-                .config
-                .lock_timeout()
-                .map_err(crate::reference::edit::Error::from)?;
+            let (file_lock_fail, packed_refs_lock_fail) =
+                repo.config.lock_timeout().map_err(gix_error::Error::from_error)?;
             repo.refs
                 .transaction()
                 .packed_refs(
@@ -335,9 +336,13 @@ pub(crate) fn update(
                     }
                 )
                 .prepare(edits, file_lock_fail, packed_refs_lock_fail)
-                .map_err(crate::reference::edit::Error::from)?
-                .commit(repo.committer().transpose().map_err(|err| update::Error::EditReferences(crate::reference::edit::Error::ParseCommitterTime(err)))?)
-                .map_err(crate::reference::edit::Error::from)?
+                .map_err(gix_error::Error::from_error)?
+                .commit(
+                    repo.committer()
+                        .transpose()
+                        .map_err(gix_error::Error::from_error)?,
+                )
+                .map_err(gix_error::Error::from_error)?
         }
         fetch::DryRun::Yes => edits,
     };
@@ -402,7 +407,7 @@ fn new_value_by_remote(remote: &Source) -> Result<Target, update::Error> {
             match remote_id {
                 Some(desired_id) => Target::Object(desired_id.to_owned()),
                 // Unborn branches we create as such, with the location they point to on the remote which helps mirroring.
-                None => Target::Symbolic(target.try_into()?),
+                None => Target::Symbolic(target.try_into().map_err(gix_error::Error::from_error)?),
             }
         } else {
             Target::Object(remote_id.expect("unborn case handled earlier").to_owned())
@@ -422,7 +427,7 @@ fn insert_head(
         let mut cursor = head.try_into_referent();
         while let Some(ref_) = cursor {
             ref_chain.push(ref_.name().to_owned());
-            cursor = ref_.follow().transpose()?;
+            cursor = ref_.follow().transpose().map_err(gix_error::Error::from_error)?;
         }
         for name in ref_chain {
             out.entry(name).or_default().push(wd.to_owned());
@@ -434,8 +439,10 @@ fn insert_head(
 fn worktree_branches(repo: &Repository) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>, update::Error> {
     let mut map = BTreeMap::new();
     insert_head(repo.head().ok(), &mut map)?;
-    for proxy in repo.worktrees()? {
-        let repo = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+    for proxy in repo.worktrees().map_err(gix_error::Error::from_error)? {
+        let repo = proxy
+            .into_repo_with_possibly_inaccessible_worktree()
+            .map_err(gix_error::Error::from_error)?;
         insert_head(repo.head().ok(), &mut map)?;
     }
     Ok(map)

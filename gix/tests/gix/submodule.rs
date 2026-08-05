@@ -350,21 +350,22 @@ mod open {
         ));
 
         #[cfg(feature = "status")]
-        assert!(
-            matches!(
-                sm.status(gix::submodule::config::Ignore::None, false),
-                Err(submodule::status::Error::State(
-                    submodule::state::Error::GitDirTryOldForm(
-                        submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                            target: Some(target),
-                            source: None,
-                            ..
-                        }
-                    )
+        {
+            let err = sm
+                .status(gix::submodule::config::Ignore::None, false)
+                .expect_err("ignore=none fails as some submodules can't be opened");
+            assert!(matches!(
+                err.sources()
+                    .find_map(|err| err.downcast_ref::<submodule::state::Error>()),
+                Some(submodule::state::Error::GitDirTryOldForm(
+                    submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
+                        target: Some(target),
+                        source: None,
+                        ..
+                    }
                 )) if target.ends_with("missing")
-            ),
-            "ignore=none fails as some submodules can't be opened"
-        );
+            ));
+        }
 
         #[cfg(feature = "status")]
         {
@@ -404,21 +405,20 @@ mod open {
 
         #[cfg(feature = "status")]
         {
-            assert!(
-                matches!(
-                    sm.status(gix::submodule::config::Ignore::None, false),
-                    Err(submodule::status::Error::State(
-                        submodule::state::Error::GitDirTryOldForm(
-                            submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
-                                target: None,
-                                source: Some(_),
-                                ..
-                            }
-                        )
-                    ))
-                ),
-                "ignore=none fails as some submodules can't be opened"
-            );
+            let err = sm
+                .status(gix::submodule::config::Ignore::None, false)
+                .expect_err("ignore=none fails as some submodules can't be opened");
+            assert!(matches!(
+                err.sources()
+                    .find_map(|err| err.downcast_ref::<submodule::state::Error>()),
+                Some(submodule::state::Error::GitDirTryOldForm(
+                    submodule::git_dir_try_old_form::Error::InvalidGitDirFileTarget {
+                        target: None,
+                        source: Some(_),
+                        ..
+                    }
+                ))
+            ));
 
             let status = sm.status(gix::submodule::config::Ignore::All, false)?;
             assert_eq!(
