@@ -129,6 +129,11 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
     }
 
     split_on_non_escaped_char(input, b',', |keyword| {
+        // Git skips empty keywords instead of rejecting them, so `:(top,)`, `:(,top)` and
+        // `:(top,,icase)` are all valid there - see `parse_long_magic()` in `pathspec.c`.
+        if keyword.is_empty() {
+            return Ok(());
+        }
         let attr_prefix = b"attr:";
         match keyword {
             b"attr" => {}
@@ -165,18 +170,24 @@ fn split_on_non_escaped_char(
     split_char: u8,
     mut f: impl FnMut(&[u8]) -> Result<(), Error>,
 ) -> Result<(), Error> {
+    // Mirrors `strcspn_escaped()` in Git's `pathspec.c`: a backslash consumes the byte that
+    // follows it, so `\,` is a literal comma while `\\,` is an escaped backslash followed by a
+    // separator. Scanning byte-by-byte also lets a separator at index 0 be seen, which a
+    // two-byte window cannot.
     let mut i = 0;
     let mut last = 0;
-    for window in input.windows(2) {
-        i += 1;
-        if window[0] != b'\\' && window[1] == split_char {
-            let keyword = &input[last..i];
-            f(keyword)?;
+    while i < input.len() {
+        if input[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if input[i] == split_char {
+            f(&input[last..i])?;
             last = i + 1;
         }
+        i += 1;
     }
-    let last_keyword = &input[last..];
-    f(last_keyword)
+    f(&input[last..])
 }
 
 fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Error> {

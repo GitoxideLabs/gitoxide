@@ -75,6 +75,15 @@ baseline ':!(literal)some/*path'
 baseline ':(top,literal,icase,attr,exclude)some/path'
 baseline ':(top,glob,icase,attr,exclude)some/path'
 
+# empty_keywords_are_ignored
+baseline ':(top,)some/path'
+baseline ':(,top)some/path'
+baseline ':(top,,icase)some/path'
+baseline ':(,)some/path'
+baseline ':(,,)some/path'
+baseline ':(icase,)some/path'
+baseline ':(attr:someAttr,)some/path'
+
 # attributes_in_signature
 baseline ':(attr:someAttr)'
 baseline ':(attr:!someAttr)'
