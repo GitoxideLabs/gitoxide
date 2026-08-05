@@ -3,7 +3,7 @@ pub use gix_diff::*;
 
 ///
 pub mod options {
-    /// 
+    ///
     pub mod init {
         /// The error returned when instantiating [diff options](crate::diff::Options).
         pub type Error = gix_error::Error;

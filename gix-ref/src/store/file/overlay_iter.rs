@@ -412,10 +412,7 @@ impl file::Store {
             }
             Some(namespace) => {
                 let prefix = namespace.to_owned().into_namespaced_prefix(prefix);
-                let prefix = prefix
-                    .as_bstr()
-                    .try_into()
-                    .map_err(std::io::Error::other)?;
+                let prefix = prefix.as_bstr().try_into().map_err(std::io::Error::other)?;
                 let git_dir_info = IterInfo::from_prefix(self.git_dir(), prefix, self.precompose_unicode)?;
                 let common_dir_info = self
                     .common_dir()
