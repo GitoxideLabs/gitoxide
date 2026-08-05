@@ -2101,6 +2101,7 @@ dependencies = [
  "document-features",
  "gix-command",
  "gix-diff",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -2121,7 +2122,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]

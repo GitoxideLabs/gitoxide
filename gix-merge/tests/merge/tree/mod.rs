@@ -69,7 +69,8 @@ fn run_baseline() -> crate::Result {
             &odb,
             &mut |id| id.to_hex_with_len(7).to_string(),
             options.clone(),
-        )?
+        )
+        .map_err(|err| err.into_error())?
         .tree_merge;
 
         let actual_id = actual.tree.write(|tree| odb.write(tree))?;
@@ -177,7 +178,8 @@ fn run_baseline() -> crate::Result {
                 &odb,
                 &mut |id| id.to_hex_with_len(7).to_string(),
                 options.clone(),
-            )?
+            )
+            .map_err(|err| err.into_error())?
             .tree_merge;
 
             let actual_id = actual.tree.write(|tree| odb.write(tree))?;

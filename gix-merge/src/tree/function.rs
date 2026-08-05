@@ -2,6 +2,7 @@ use std::{borrow::Cow, convert::Infallible};
 
 use bstr::{BString, ByteSlice};
 use gix_diff::{tree::recorder::Location, tree_with_rewrites::Change};
+use gix_error::ResultExt;
 use gix_hash::ObjectId;
 use gix_object::{
     FindExt, tree,
@@ -90,14 +91,18 @@ where
     let theirs_needs_diff = base_tree != their_tree;
     let _span = gix_trace::coarse!("gix_merge::tree", ?base_tree, ?our_tree, ?their_tree, ?labels);
     let (mut base_buf, mut side_buf) = (Vec::new(), Vec::new());
-    let ancestor_tree = objects.find_tree(base_tree, &mut base_buf)?;
+    let ancestor_tree = objects
+        .find_tree(base_tree, &mut base_buf)
+        .or_raise(|| gix_error::message("Tree merge failed"))?;
     let mut editor = tree::Editor::new(ancestor_tree.to_owned(), objects, base_tree.kind());
     let ancestor_tree = gix_object::TreeRefIter::from_bytes(&base_buf, base_tree.kind());
     let tree_conflicts = options.tree_conflicts;
 
     let mut our_changes = Vec::new();
     if ours_needs_diff {
-        let our_tree = objects.find_tree_iter(our_tree, &mut side_buf)?;
+        let our_tree = objects
+            .find_tree_iter(our_tree, &mut side_buf)
+            .or_raise(|| gix_error::message("Tree merge failed"))?;
         gix_diff::tree_with_rewrites(
             ancestor_tree,
             our_tree,
@@ -112,7 +117,8 @@ where
                 location: Some(Location::Path),
                 rewrites: options.rewrites,
             },
-        )?;
+        )
+        .or_raise(|| gix_error::message("Tree merge failed"))?;
     }
 
     let mut our_tree = TreeNodes::new();
@@ -122,7 +128,9 @@ where
 
     let mut their_changes = Vec::new();
     if theirs_needs_diff {
-        let their_tree = objects.find_tree_iter(their_tree, &mut side_buf)?;
+        let their_tree = objects
+            .find_tree_iter(their_tree, &mut side_buf)
+            .or_raise(|| gix_error::message("Tree merge failed"))?;
         gix_diff::tree_with_rewrites(
             ancestor_tree,
             their_tree,
@@ -137,7 +145,8 @@ where
                 location: Some(Location::Path),
                 rewrites: options.rewrites,
             },
-        )?;
+        )
+        .or_raise(|| gix_error::message("Tree merge failed"))?;
     }
 
     let mut their_tree = TreeNodes::new();
@@ -255,9 +264,12 @@ where
                             )) {
                                 break 'outer;
                             }
-                            editor.remove(to_components(theirs.location()))?;
+                            editor
+                                .remove(to_components(theirs.location()))
+                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                         }
-                        apply_change(&mut editor, theirs, rewritten_location.as_ref().map(|t| &t.0))?;
+                        apply_change(&mut editor, theirs, rewritten_location.as_ref().map(|t| &t.0))
+                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                         their_changes[theirs_idx].mark_applied();
                     }
                     Some(candidate) => {
@@ -280,7 +292,8 @@ where
                                         their_changes,
                                     );
                                 } else {
-                                    apply_change(&mut editor, theirs, None)?;
+                                    apply_change(&mut editor, theirs, None)
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     their_changes[theirs_idx].mark_applied();
                                 }
                                 their_changes[theirs_idx].mark_processed();
@@ -334,11 +347,15 @@ where
                                 )?;
                                 match tree_conflicts {
                                     None => {
-                                        editor.upsert(toc(&renamed_location), mode.kind(), id.to_owned())?;
+                                        editor
+                                            .upsert(toc(&renamed_location), mode.kind(), id.to_owned())
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     }
                                     Some(ResolveWith::Ours) => {
                                         if outer_side.is_swapped() {
-                                            editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
+                                            editor
+                                                .upsert(to_components(location), mode.kind(), id.to_owned())
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         }
                                     }
                                     Some(ResolveWith::Ancestor) => {
@@ -369,7 +386,9 @@ where
                                 // We are writing on top of what was a file, a conflict we probably already saw and dealt with.
                                 let location = theirs.location();
                                 let (mode, id) = theirs.entry_mode_and_id();
-                                editor.upsert(to_components(location), mode.kind(), id.to_owned())?;
+                                editor
+                                    .upsert(to_components(location), mode.kind(), id.to_owned())
+                                    .or_raise(|| gix_error::message("Tree merge failed"))?;
                                 their_changes[theirs_idx].mark_applied();
                             } else {
                                 gix_trace::debug!(
@@ -472,7 +491,9 @@ where
                                         (merged_blob_id, Some(resolution))
                                     };
 
-                                    editor.remove(toc(our_location))?;
+                                    editor
+                                        .remove(toc(our_location))
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     pick_our_tree(side, our_tree, their_tree)
                                         .remove_existing_change(our_location.as_bstr());
                                     let final_location = their_rewritten_location.clone();
@@ -510,15 +531,25 @@ where
                                     match tree_conflicts {
                                         None => {
                                             // keep both states - 'our_location' is the previous location as well.
-                                            editor.upsert(toc(our_location), our_mode.kind(), *our_id)?;
-                                            editor.upsert(toc(their_location), their_mode.kind(), *their_id)?;
+                                            editor
+                                                .upsert(toc(our_location), our_mode.kind(), *our_id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
+                                            editor
+                                                .upsert(toc(their_location), their_mode.kind(), *their_id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         }
                                         Some(ResolveWith::Ours) => {
-                                            editor.remove(toc(source_location))?;
+                                            editor
+                                                .remove(toc(source_location))
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             if side.to_global(outer_side).is_swapped() {
-                                                editor.upsert(toc(their_location), their_mode.kind(), *their_id)?;
+                                                editor
+                                                    .upsert(toc(their_location), their_mode.kind(), *their_id)
+                                                    .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             } else {
-                                                editor.upsert(toc(our_location), our_mode.kind(), *our_id)?;
+                                                editor
+                                                    .upsert(toc(our_location), our_mode.kind(), *our_id)
+                                                    .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             }
                                         }
                                         Some(ResolveWith::Ancestor) => {}
@@ -579,7 +610,9 @@ where
                                 let merged_mode = merge_modes_prev(*our_mode, *their_mode, *previous_entry_mode)
                                     .expect("BUG: merge_modes() reports a valid mode, this one should do too");
 
-                                editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                editor
+                                    .upsert(toc(location), merged_mode.kind(), merged_blob_id)
+                                    .or_raise(|| gix_error::message("Tree merge failed"))?;
                                 if should_fail_on_conflict(Conflict::with_resolution(
                                     Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                         merged_blob: ContentMerge {
@@ -628,7 +661,9 @@ where
                                         (0, side),
                                         &options,
                                     )?;
-                                    editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                    editor
+                                        .upsert(toc(location), merged_mode.kind(), merged_blob_id)
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     Conflict::with_resolution(
                                         Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                             merged_blob: ContentMerge {
@@ -687,7 +722,9 @@ where
                                                 id: their_id,
                                                 relation: None,
                                             };
-                                            editor.upsert(toc(location), our_mode.kind(), our_id)?;
+                                            editor
+                                                .upsert(toc(location), our_mode.kind(), our_id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             tree_with_rename.remove_existing_change(location.as_bstr());
                                             push_deferred(
                                                 (new_change, None),
@@ -699,10 +736,14 @@ where
                                             match resolve {
                                                 ResolveWith::Ours => match outer_side {
                                                     Original => {
-                                                        editor.upsert(toc(location), our_mode.kind(), our_id)?;
+                                                        editor
+                                                            .upsert(toc(location), our_mode.kind(), our_id)
+                                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                     }
                                                     Swapped => {
-                                                        editor.upsert(toc(location), their_mode.kind(), their_id)?;
+                                                        editor
+                                                            .upsert(toc(location), their_mode.kind(), their_id)
+                                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                     }
                                                 },
                                                 ResolveWith::Ancestor => {
@@ -775,7 +816,9 @@ where
                                                 our_tree,
                                                 label_of_side_to_be_moved,
                                             )?;
-                                            editor.remove(toc(location))?;
+                                            editor
+                                                .remove(toc(location))
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             our_tree.remove_existing_change(location.as_bstr());
 
                                             let new_change = Change::Addition {
@@ -803,11 +846,15 @@ where
                                             match side.to_global(outer_side) {
                                                 Original => {
                                                     // ours is modification
-                                                    editor.upsert(toc(location), entry_mode.kind(), *id)?;
+                                                    editor
+                                                        .upsert(toc(location), entry_mode.kind(), *id)
+                                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                 }
                                                 Swapped => {
                                                     // ours is deletion
-                                                    editor.remove(toc(location))?;
+                                                    editor
+                                                        .remove(toc(location))
+                                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                 }
                                             }
                                             should_fail_on_conflict(Conflict::without_resolution(
@@ -832,7 +879,9 @@ where
                                     ];
                                     match tree_conflicts {
                                         None => {
-                                            editor.upsert(toc(location), entry_mode.kind(), *id)?;
+                                            editor
+                                                .upsert(toc(location), entry_mode.kind(), *id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         }
                                         Some(ResolveWith::Ours) => {
                                             let ours = match outer_side {
@@ -842,10 +891,14 @@ where
 
                                             match ours {
                                                 Change::Modification { .. } => {
-                                                    editor.upsert(toc(location), entry_mode.kind(), *id)?;
+                                                    editor
+                                                        .upsert(toc(location), entry_mode.kind(), *id)
+                                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                 }
                                                 Change::Deletion { .. } => {
-                                                    editor.remove(toc(location))?;
+                                                    editor
+                                                        .remove(toc(location))
+                                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                                 }
                                                 _ => unreachable!("parent-match assures this"),
                                             }
@@ -891,7 +944,9 @@ where
                                     Some(ResolveWith::Ancestor) => {}
                                     Some(ResolveWith::Ours) => {
                                         if outer_side.is_swapped() {
-                                            editor.upsert(toc(location), entry_mode.kind(), *id)?;
+                                            editor
+                                                .upsert(toc(location), entry_mode.kind(), *id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         }
                                         // we have already taken care of the 'root' of this -
                                         // everything that follows can safely be ignored
@@ -934,11 +989,17 @@ where
                                             (0, outer_side),
                                             &options,
                                         )?;
-                                        editor.remove(toc(our_source_location))?;
-                                        editor.remove(toc(their_source_location))?;
+                                        editor
+                                            .remove(toc(our_source_location))
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
+                                        editor
+                                            .remove(toc(their_source_location))
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         our_tree.remove_change(our_source_location.as_bstr());
                                         their_tree.remove_change(their_source_location.as_bstr());
-                                        editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                        editor
+                                            .upsert(toc(location), merged_mode.kind(), merged_blob_id)
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         if should_fail_on_conflict(Conflict::with_resolution(
                                             Resolution::OursModifiedTheirsModifiedThenBlobContentMerge {
                                                 merged_blob: ContentMerge {
@@ -960,9 +1021,13 @@ where
                                                     (their_source_location, their_mode, their_id, &mut *their_tree)
                                                 }
                                             };
-                                            editor.remove(toc(source))?;
+                                            editor
+                                                .remove(toc(source))
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             tree.remove_change(source.as_bstr());
-                                            editor.upsert(toc(location), mode.kind(), *id)?;
+                                            editor
+                                                .upsert(toc(location), mode.kind(), *id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         }
                                         if should_fail_on_conflict(Conflict::unknown((
                                             ours, theirs, Original, outer_side,
@@ -1016,26 +1081,40 @@ where
                                 };
                                 match tree_conflicts {
                                     None => {
-                                        editor.remove(toc(source_location))?;
+                                        editor
+                                            .remove(toc(source_location))
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         pick_our_tree(side, our_tree, their_tree)
                                             .remove_change(source_location.as_bstr());
-                                        editor.upsert(toc(location), our_mode.kind(), *our_id)?;
-                                        editor.upsert(toc(add_location), their_mode.kind(), *their_id)?;
+                                        editor
+                                            .upsert(toc(location), our_mode.kind(), *our_id)
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
+                                        editor
+                                            .upsert(toc(add_location), their_mode.kind(), *their_id)
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         ours_change_applied = true;
                                         theirs_change_applied = true;
                                     }
                                     Some(ResolveWith::Ours) => match side.to_global(outer_side) {
                                         Original => {
-                                            editor.remove(toc(source_location))?;
-                                            editor.upsert(toc(location), our_mode.kind(), *our_id)?;
+                                            editor
+                                                .remove(toc(source_location))
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
+                                            editor
+                                                .upsert(toc(location), our_mode.kind(), *our_id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             match side {
                                                 Original => ours_change_applied = true,
                                                 Swapped => theirs_change_applied = true,
                                             }
                                         }
                                         Swapped => {
-                                            editor.remove(toc(source_location))?;
-                                            editor.upsert(toc(add_location), their_mode.kind(), *their_id)?;
+                                            editor
+                                                .remove(toc(source_location))
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
+                                            editor
+                                                .upsert(toc(add_location), their_mode.kind(), *their_id)
+                                                .or_raise(|| gix_error::message("Tree merge failed"))?;
                                             match side {
                                                 Original => theirs_change_applied = true,
                                                 Swapped => ours_change_applied = true,
@@ -1085,7 +1164,9 @@ where
                                     merge_modes(*our_mode, *their_mode).expect("this case was assured earlier");
 
                                 if matches!(tree_conflicts, None | Some(ResolveWith::Ours)) {
-                                    editor.remove(toc(source_location))?;
+                                    editor
+                                        .remove(toc(source_location))
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     our_tree.remove_existing_change(source_location.as_bstr());
                                     their_tree.remove_existing_change(source_location.as_bstr());
                                 }
@@ -1233,7 +1314,9 @@ where
 
                                 match tree_conflicts {
                                     None | Some(ResolveWith::Ours) => {
-                                        editor.remove(toc(source_location))?;
+                                        editor
+                                            .remove(toc(source_location))
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         pick_our_tree(side, our_tree, their_tree)
                                             .remove_existing_change(source_location.as_bstr());
                                         match side {
@@ -1341,7 +1424,9 @@ where
                                         (id, Some(resolution))
                                     };
 
-                                    editor.remove(toc(source_location))?;
+                                    editor
+                                        .remove(toc(source_location))
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                     pick_our_tree(side, our_tree, their_tree).remove_change(source_location.as_bstr());
 
                                     if let Some(resolution) = resolution {
@@ -1361,7 +1446,9 @@ where
 
                                     // Because this constellation can only be found by the lookup tree, there is
                                     // no need to put it as addition, we know it's not going to intersect on the other side.
-                                    editor.upsert(toc(location), merged_mode.kind(), merged_blob_id)?;
+                                    editor
+                                        .upsert(toc(location), merged_mode.kind(), merged_blob_id)
+                                        .or_raise(|| gix_error::message("Tree merge failed"))?;
                                 } else {
                                     // We always remove the source from the tree - it might be re-added later.
                                     let ours_is_rename =
@@ -1369,7 +1456,9 @@ where
                                     let remove_rename_source =
                                         tree_conflicts.is_none() || ours_is_rename || add_location != source_location;
                                     if remove_rename_source {
-                                        editor.remove(toc(source_location))?;
+                                        editor
+                                            .remove(toc(source_location))
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         pick_our_tree(side, our_tree, their_tree)
                                             .remove_change(source_location.as_bstr());
                                     }
@@ -1404,7 +1493,9 @@ where
 
                                     let upsert_rename_destination = tree_conflicts.is_none() || ours_is_rename;
                                     if upsert_rename_destination {
-                                        editor.upsert(toc(location), our_mode.kind(), our_id)?;
+                                        editor
+                                            .upsert(toc(location), our_mode.kind(), our_id)
+                                            .or_raise(|| gix_error::message("Tree merge failed"))?;
                                         tree_with_rename.remove_existing_change(location.as_bstr());
                                     }
 
@@ -1499,7 +1590,7 @@ fn apply_our_resolution(
         Original => local_ours,
         Swapped => local_theirs,
     };
-    Ok(apply_change(editor, ours, None)?)
+    Ok(apply_change(editor, ours, None).or_raise(|| gix_error::message("Tree merge failed"))?)
 }
 
 fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {

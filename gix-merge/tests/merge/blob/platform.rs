@@ -24,13 +24,15 @@ mod merge {
     #[test]
     fn builtin_text_uses_binary_if_needed() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "a".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "a".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         let db = object_db();
         for (content, kind) in [
@@ -38,15 +40,19 @@ mod merge {
             ("theirs\0", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(
-                id,
-                EntryKind::Blob,
-                "path matters only for attribute lookup".into(),
-                kind,
-                &db,
-            )?;
+            platform
+                .set_resource(
+                    id,
+                    EntryKind::Blob,
+                    "path matters only for attribute lookup".into(),
+                    kind,
+                    &db,
+                )
+                .map_err(|err| err.into_error())?;
         }
-        let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
+        let mut platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             platform_ref.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -54,7 +60,9 @@ mod merge {
         );
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -62,7 +70,9 @@ mod merge {
         );
 
         platform_ref.options.resolve_binary_with = Some(builtin_driver::binary::ResolveWith::Theirs);
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Theirs, Resolution::CompleteWithAutoResolvedConflict),
@@ -74,13 +84,15 @@ mod merge {
     #[test]
     fn same_binaries_do_not_count_as_conflicted() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "a".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "a".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         let db = object_db();
         for (content, kind) in [
@@ -88,15 +100,19 @@ mod merge {
             ("any\0", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(
-                id,
-                EntryKind::Blob,
-                "path matters only for attribute lookup".into(),
-                kind,
-                &db,
-            )?;
+            platform
+                .set_resource(
+                    id,
+                    EntryKind::Blob,
+                    "path matters only for attribute lookup".into(),
+                    kind,
+                    &db,
+                )
+                .map_err(|err| err.into_error())?;
         }
-        let platform_ref = platform.prepare_merge(&db, Default::default())?;
+        let platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             platform_ref.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -104,7 +120,9 @@ mod merge {
         );
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Complete),
@@ -124,13 +142,15 @@ mod merge {
     fn builtin_with_conflict() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         let non_existing_ancestor_id = hex_to_id("ffffffffffffffffffffffffffffffffffffffff");
-        platform.set_resource(
-            non_existing_ancestor_id,
-            EntryKind::Blob,
-            "b".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                non_existing_ancestor_id,
+                EntryKind::Blob,
+                "b".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         let db = object_db();
         for (content, kind) in [
@@ -138,13 +158,19 @@ mod merge {
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform
+                .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
+                .map_err(|err| err.into_error())?;
         }
 
-        let mut platform_ref = platform.prepare_merge(&db, Default::default())?;
+        let mut platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(platform_ref.driver, DriverChoice::BuiltIn(BuiltinDriver::Text));
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
         assert_eq!(
             buf.as_bstr(),
@@ -160,7 +186,9 @@ theirs
             style: ConflictStyle::Diff3,
             marker_size: 3.try_into().unwrap(),
         };
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
 
         assert_eq!(
@@ -177,7 +205,9 @@ theirs
         );
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithOurs;
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict),
@@ -186,23 +216,31 @@ theirs
         assert_eq!(buf.as_bstr(), "ours");
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithTheirs;
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "theirs");
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithUnion;
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
         platform_ref.driver = DriverChoice::BuiltIn(BuiltinDriver::Union);
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::default();
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
         platform_ref.driver = DriverChoice::BuiltIn(BuiltinDriver::Binary);
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -246,7 +284,9 @@ theirs
             ),
         ] {
             platform_ref.options.resolve_binary_with = Some(resolve);
-            let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+            let res = platform_ref
+                .merge(&mut buf, default_labels(), &Default::default())
+                .map_err(|err| err.into_error())?;
             assert_eq!(res, (expected_pick, Resolution::CompleteWithAutoResolvedConflict));
             assert_eq!(platform_ref.buffer_by_pick(res.0).unwrap().unwrap().as_bstr(), expected);
 
@@ -277,13 +317,15 @@ theirs
             }],
             pipeline::Mode::ToGit,
         );
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "b".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "b".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         let db = object_db();
         for (content, kind) in [
@@ -291,12 +333,18 @@ theirs
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform
+                .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
+                .map_err(|err| err.into_error())?;
         }
 
-        let platform_ref = platform.prepare_merge(&db, Default::default())?;
+        let platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete), "merge drivers always merge ");
         let mut lines = cleaned_driver_lines(&buf)?;
         for tmp_file in lines.by_ref().take(3) {
@@ -320,9 +368,15 @@ theirs
         );
 
         let id = insert(&db, "binary\0")?;
-        platform.set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)?;
-        let platform_ref = platform.prepare_merge(&db, Default::default())?;
-        let res = platform_ref.merge(&mut buf, default_labels(), &Default::default())?;
+        platform
+            .set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)
+            .map_err(|err| err.into_error())?;
+        let platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
+        let res = platform_ref
+            .merge(&mut buf, default_labels(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -399,24 +453,30 @@ cat "%B" >> "%A""#
             ("theirs", ResourceKind::OtherOrTheirs),
         ] {
             let id = insert(&db, content)?;
-            platform.set_resource(id, EntryKind::Blob, "b".into(), kind, &db)?;
+            platform
+                .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
+                .map_err(|err| err.into_error())?;
         }
 
-        let platform_ref = platform.prepare_merge(&db, Default::default())?;
+        let platform_ref = platform
+            .prepare_merge(&db, Default::default())
+            .map_err(|err| err.into_error())?;
         let worktree = gix_testtools::tempfile::TempDir::new()?;
         let git_dir = worktree.path().join(".git");
         std::fs::create_dir(&git_dir)?;
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(
-            &mut buf,
-            default_labels(),
-            &gix_command::Context {
-                git_dir: Some(git_dir.clone()),
-                worktree_dir: Some(worktree.path().to_owned()),
-                ..Default::default()
-            },
-        )?;
+        let res = platform_ref
+            .merge(
+                &mut buf,
+                default_labels(),
+                &gix_command::Context {
+                    git_dir: Some(git_dir.clone()),
+                    worktree_dir: Some(worktree.path().to_owned()),
+                    ..Default::default()
+                },
+            )
+            .map_err(|err| err.into_error())?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete));
 
         let mut lines = buf.lines();
@@ -458,29 +518,37 @@ cat "%B" >> "%A""#
     #[test]
     fn missing_buffers_are_empty_buffers() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "just-set".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "just-set".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         // Two deletions
         for kind in [ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs] {
-            platform.set_resource(
-                gix_hash::Kind::Sha1.null(),
-                EntryKind::Blob,
-                "does not matter for driver".into(),
-                kind,
-                &gix_object::find::Never,
-            )?;
+            platform
+                .set_resource(
+                    gix_hash::Kind::Sha1.null(),
+                    EntryKind::Blob,
+                    "does not matter for driver".into(),
+                    kind,
+                    &gix_object::find::Never,
+                )
+                .map_err(|err| err.into_error())?;
         }
 
-        let platform_ref = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let platform_ref = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
 
         let mut buf = Vec::new();
-        let res = platform_ref.merge(&mut buf, Default::default(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut buf, Default::default(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -523,36 +591,46 @@ cat "%B" >> "%A""#
     fn one_buffer_too_large() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
         platform.filter.options.large_file_threshold_bytes = 9;
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "just-set".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "just-set".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
         platform.filter.roots.other_root = platform.filter.roots.common_ancestor_root.clone();
         platform.filter.roots.current_root = platform.filter.roots.common_ancestor_root.clone();
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "b".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "unspecified".into(),
-            ResourceKind::OtherOrTheirs,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "b".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "unspecified".into(),
+                ResourceKind::OtherOrTheirs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
-        let platform_ref = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let platform_ref = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(platform_ref.other.data, platform::resource::Data::TooLarge { size: 12 });
 
         let mut out = Vec::new();
-        let res = platform_ref.merge(&mut out, Default::default(), &Default::default())?;
+        let res = platform_ref
+            .merge(&mut out, Default::default(), &Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -604,28 +682,34 @@ mod prepare_merge {
     #[test]
     fn ancestor_and_current_and_other_do_not_exist() -> crate::Result {
         let mut platform = new_platform(None, pipeline::Mode::ToGit);
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "also-missing".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "also-missing".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "can't-be-found-in-odb".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::BlobExecutable,
-            "can't-be-found-in-odb".into(),
-            ResourceKind::OtherOrTheirs,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "can't-be-found-in-odb".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::BlobExecutable,
+                "can't-be-found-in-odb".into(),
+                ResourceKind::OtherOrTheirs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
         let state = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
@@ -661,30 +745,38 @@ mod prepare_merge {
             ],
             pipeline::Mode::ToGit,
         );
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "ancestor does not matter for attributes".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "ancestor does not matter for attributes".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "just-set".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::BlobExecutable,
-            "also does not matter for driver".into(),
-            ResourceKind::OtherOrTheirs,
-            &gix_object::find::Never,
-        )?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "just-set".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::BlobExecutable,
+                "also does not matter for driver".into(),
+                ResourceKind::OtherOrTheirs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
 
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -696,42 +788,54 @@ mod prepare_merge {
             "marker sizes are picked up from attributes as well"
         );
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "unset".into(),
-            ResourceKind::CommonAncestorOrBase,
-            &gix_object::find::Never,
-        )?;
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "unset".into(),
+                ResourceKind::CommonAncestorOrBase,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
             "`-merge` attribute means binary, but it looked up 'current' which is still at some bogus worktree path"
         );
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "unset".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "unset".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Binary),
             "`-merge` attribute means binary"
         );
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "unspecified".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "unspecified".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -739,7 +843,9 @@ mod prepare_merge {
         );
 
         platform.options.default_driver = Some("union".into());
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         let expected_idx = 3;
         assert_eq!(
             prepared.driver,
@@ -750,7 +856,9 @@ mod prepare_merge {
         assert_eq!(platform.drivers()[expected_idx].name, "union");
 
         platform.options.default_driver = Some("binary".into());
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Binary),
@@ -758,21 +866,27 @@ mod prepare_merge {
         );
 
         platform.options.default_driver = Some("Binary".into());
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
             "'merge.default' is case-sensitive"
         );
 
-        platform.set_resource(
-            gix_hash::Kind::Sha1.null(),
-            EntryKind::Blob,
-            "b".into(),
-            ResourceKind::CurrentOrOurs,
-            &gix_object::find::Never,
-        )?;
-        let prepared = platform.prepare_merge(&gix_object::find::Never, Default::default())?;
+        platform
+            .set_resource(
+                gix_hash::Kind::Sha1.null(),
+                EntryKind::Blob,
+                "b".into(),
+                ResourceKind::CurrentOrOurs,
+                &gix_object::find::Never,
+            )
+            .map_err(|err| err.into_error())?;
+        let prepared = platform
+            .prepare_merge(&gix_object::find::Never, Default::default())
+            .map_err(|err| err.into_error())?;
         let expected_idx = 0;
         assert_eq!(prepared.driver, DriverChoice::Index(expected_idx));
         assert_eq!(
@@ -781,14 +895,16 @@ mod prepare_merge {
             "by default, even if recursive is specified, it doesn't look it up"
         );
 
-        let prepared = platform.prepare_merge(
-            &gix_object::find::Never,
-            gix_merge::blob::platform::merge::Options {
-                is_virtual_ancestor: true,
-                resolve_binary_with: None,
-                ..Default::default()
-            },
-        )?;
+        let prepared = platform
+            .prepare_merge(
+                &gix_object::find::Never,
+                gix_merge::blob::platform::merge::Options {
+                    is_virtual_ancestor: true,
+                    resolve_binary_with: None,
+                    ..Default::default()
+                },
+            )
+            .map_err(|err| err.into_error())?;
         let expected_idx = 1;
         assert_eq!(prepared.driver, DriverChoice::Index(expected_idx));
         assert_eq!(
