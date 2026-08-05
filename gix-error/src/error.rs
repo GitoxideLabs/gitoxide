@@ -9,7 +9,8 @@ mod _impl {
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
             let root = self.inner.frame();
-            root.probable_cause().unwrap_or(root).error()
+            let cause = root.probable_cause().unwrap_or(root).error();
+            cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
@@ -134,9 +135,10 @@ mod _impl {
         /// Return the error that is most likely the root cause, based on heuristics.
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
-            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+            let cause = std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
                 .find(|err| err.is_probable_cause)
-                .map_or(self as &(dyn std::error::Error + 'static), |err| err.err.as_ref())
+                .map_or(self as &(dyn std::error::Error + 'static), |err| err.err.as_ref());
+            cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.

@@ -147,11 +147,16 @@ fn classification_survives_raising_a_converted_error() {
 fn raising_a_converted_error_preserves_stored_types() {
     let converted =
         Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from_error(converted);
     let err = Error::from(converted.and_raise(message("revision parsing failed")));
 
     assert!(
-        err.sources().any(|source| source.is::<ValidationError>()),
+        err.sources().any(<dyn std::error::Error>::is::<ValidationError>),
         "the nested Error retains its typed frames"
+    );
+    assert!(
+        err.probable_cause().is::<ValidationError>(),
+        "probable_cause() returns the stored error, not a string-backed copy"
     );
 }
 

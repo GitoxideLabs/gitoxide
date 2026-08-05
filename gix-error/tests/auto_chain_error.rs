@@ -139,7 +139,7 @@ fn validation_is_discovered_in_the_error_chain() {
 
     let err = Error::from(ValidationError::new("typed").and_raise(message("context")));
     assert!(
-        err.sources().any(|source| source.is::<ValidationError>()),
+        err.sources().any(<dyn std::error::Error>::is::<ValidationError>),
         "sources() exposes the stored error types in chain mode"
     );
 }
@@ -156,6 +156,7 @@ fn classification_survives_raising_a_converted_error() {
 fn raising_a_converted_error_preserves_stored_types() {
     let converted =
         Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from_error(converted);
     let raised = converted.and_raise(message("revision parsing failed"));
     insta::assert_debug_snapshot!(raised, @r#"
     revision parsing failed
@@ -167,8 +168,12 @@ fn raising_a_converted_error_preserves_stored_types() {
     let raised = Error::from(raised);
 
     assert!(
-        raised.sources().any(|source| source.is::<ValidationError>()),
+        raised.sources().any(<dyn std::error::Error>::is::<ValidationError>),
         "the nested Error retains its typed frames"
+    );
+    assert!(
+        raised.probable_cause().is::<ValidationError>(),
+        "probable_cause() returns the stored error, not a string-backed copy"
     );
 }
 
