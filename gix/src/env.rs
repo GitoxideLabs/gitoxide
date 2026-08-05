@@ -111,7 +111,9 @@ pub mod collate {
             /// Return true if repository corruption caused the failure.
             pub fn is_corrupted(&self) -> bool {
                 match self {
-                    Error::Open(crate::open::Error::NotARepository { .. } | crate::open::Error::Config(_)) => true,
+                    Error::Open(err) => {
+                        err.is_not_found() || err.sources().any(|source| source.is::<crate::config::Error>())
+                    }
                     #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]
                     Error::PrepareFetch(crate::remote::fetch::prepare::Error::RefMap(
                         // Configuration couldn't be accessed or was incomplete.

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error};
+use std::borrow::Cow;
 
 use gix::bstr::BString;
 
@@ -354,7 +354,10 @@ fn non_bare_split_worktree_invalid_worktree_path_boolean() -> crate::Result {
     )
     .unwrap_err();
     assert_eq!(
-        err.source().expect("present").to_string(),
+        err.sources()
+            .find(|source| source.is::<gix::config::Error>())
+            .expect("configuration error present")
+            .to_string(),
         "The key \"core.worktree\" (possibly from GIT_WORK_TREE) was invalid",
         "in strict mode, we fail just like git does"
     );
@@ -371,10 +374,10 @@ fn non_bare_split_worktree_invalid_worktree_path_empty() -> crate::Result {
     )
     .unwrap_err();
     assert!(
-        matches!(
-            err,
-            gix::open::Error::Config(gix::config::Error::PathInterpolation { .. })
-        ),
+        err.sources().any(|source| matches!(
+            source.downcast_ref(),
+            Some(gix::config::Error::PathInterpolation { .. })
+        )),
         "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it"
     );
     Ok(())
@@ -450,7 +453,8 @@ mod not_a_repository {
             let name = format!("not-a-repo-{name}");
             let repo_path = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?.join(name);
             let err = gix::open_opts(&repo_path, gix::open::Options::isolated()).unwrap_err();
-            assert!(matches!(err, gix::open::Error::NotARepository { path, .. } if path == repo_path));
+            assert!(err.is_not_found());
+            assert!(err.to_string().contains(&repo_path.display().to_string()));
         }
         Ok(())
     }
@@ -471,10 +475,8 @@ mod object_format_extension {
             let err = named_subrepo_opts("make_config_repos.sh", name, gix::open::Options::isolated())
                 .expect_err("a v0 repository setting extensions.objectFormat must be rejected");
             assert!(
-                matches!(
-                    err,
-                    gix::open::Error::Config(gix::config::Error::ObjectFormatRequiresV1)
-                ),
+                err.sources()
+                    .any(|source| matches!(source.downcast_ref(), Some(gix::config::Error::ObjectFormatRequiresV1))),
                 "objectFormat on a v0 repository must be rejected, got {err:?} for {name}"
             );
         }
@@ -490,10 +492,10 @@ mod object_format_extension {
         )
         .expect_err("future repository format versions must be rejected");
         assert!(
-            matches!(
-                err,
-                gix::open::Error::Config(gix::config::Error::UnsupportedRepositoryFormatVersion { version: 2 })
-            ),
+            err.sources().any(|source| matches!(
+                source.downcast_ref(),
+                Some(gix::config::Error::UnsupportedRepositoryFormatVersion { version: 2 })
+            )),
             "future repository format versions must be rejected before interpreting extensions, got {err:?}"
         );
         Ok(())
@@ -517,7 +519,7 @@ mod open_path_as_is {
     #[test]
     fn worktrees_cannot_be_opened() -> crate::Result {
         let err = repo_opts("make_basic_repo.sh", open_path_as_is()).unwrap_err();
-        assert!(matches!(err, gix::open::Error::NotARepository { .. }));
+        assert!(err.is_not_found());
         Ok(())
     }
 

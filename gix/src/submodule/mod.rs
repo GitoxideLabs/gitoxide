@@ -328,8 +328,8 @@ impl Submodule<'_> {
                 }
                 Ok(Some(repo))
             }
-            Err(crate::open::Error::NotARepository { .. }) => Ok(None),
-            Err(err) => Err(err.into()),
+            Err(err) if err.is_not_found() => Ok(None),
+            Err(err) => Err(crate::submodule::open::Error::OpenRepository(err)),
         }
     }
 

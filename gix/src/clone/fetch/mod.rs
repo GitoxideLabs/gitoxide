@@ -78,7 +78,7 @@ pub enum Error {
     },
     #[cfg(feature = "sha256")]
     #[error("Failed to reopen the local repository after adopting the remote's object format")]
-    ReopenWithObjectHash(#[from] crate::open::Error),
+    ReopenWithObjectHash(crate::open::Error),
     #[cfg(feature = "sha256")]
     #[error("Failed to transfer in-memory configuration after adopting the remote's object format")]
     TransferInMemoryConfig(#[from] gix_config::file::init::Error),

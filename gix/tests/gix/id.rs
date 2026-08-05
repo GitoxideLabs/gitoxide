@@ -35,17 +35,16 @@ fn prefix() -> crate::Result {
         "By default gitoxide acts like `libgit2` here and we prefer to be lenient when possible"
     );
 
+    let err = gix::open_opts(
+        work_dir,
+        gix::open::Options::isolated()
+            .strict_config(true)
+            .config_overrides(Some(BString::from("core.abbrev=invalid"))),
+    )
+    .expect_err("invalid core.abbrev must fail");
     assert!(
-        matches!(
-            gix::open_opts(
-                work_dir,
-                gix::open::Options::isolated()
-                    .strict_config(true)
-                    .config_overrides(Some(BString::from("core.abbrev=invalid")))
-            )
-            .unwrap_err(),
-            gix::open::Error::Config(gix::config::Error::CoreAbbrev(_))
-        ),
+        err.sources()
+            .any(|source| matches!(source.downcast_ref(), Some(gix::config::Error::CoreAbbrev(_)))),
         "an empty core.abbrev fails the open operation in strict config mode, emulating git behaviour"
     );
     Ok(())
