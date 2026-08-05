@@ -449,9 +449,7 @@ pub mod status {
             )
                 -> crate::status::Platform<'a, gix_features::progress::Discard>,
         ) -> Result<Status, Error> {
-            let mut state = self
-                .state_inner(ignore != config::Ignore::All)
-                .map_err(gix_error::Error::from_error)?;
+            let mut state = self.state_inner(ignore != config::Ignore::All)?;
             if ignore == config::Ignore::All {
                 return Ok(Status {
                     state,
@@ -459,7 +457,7 @@ pub mod status {
                 });
             }
 
-            let index_id = self.index_id().map_err(gix_error::Error::from_error)?;
+            let index_id = self.index_id()?;
             if !state.repository_exists {
                 return Ok(Status {
                     state,
@@ -467,7 +465,7 @@ pub mod status {
                     ..Default::default()
                 });
             }
-            let sm_repo = match self.open().map_err(gix_error::Error::from_error)? {
+            let sm_repo = match self.open()? {
                 None => {
                     state.repository_exists = false;
                     return Ok(Status {
@@ -493,18 +491,13 @@ pub mod status {
             if !state.worktree_checkout {
                 return Ok(status);
             }
-            let statuses = adjust_options(
-                sm_repo
-                    .status(gix_features::progress::Discard)
-                    .map_err(gix_error::Error::from_error)?,
-            )
-            .index_worktree_options_mut(|opts| {
-                if ignore == config::Ignore::Untracked {
-                    opts.dirwalk_options = None;
-                }
-            })
-            .into_iter(None)
-            .map_err(gix_error::Error::from_error)?;
+            let statuses = adjust_options(sm_repo.status(gix_features::progress::Discard)?)
+                .index_worktree_options_mut(|opts| {
+                    if ignore == config::Ignore::Untracked {
+                        opts.dirwalk_options = None;
+                    }
+                })
+                .into_iter(None)?;
             let mut changes = Vec::new();
             for change in statuses {
                 changes.push(change?);

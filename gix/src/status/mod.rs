@@ -166,15 +166,13 @@ pub mod is_dirty {
                 }
             }
             let is_dirty = self
-                .status(gix_features::progress::Discard)
-                .map_err(gix_error::Error::from_error)?
+                .status(gix_features::progress::Discard)?
                 .index_worktree_rewrites(None)
                 .index_worktree_submodules(crate::status::Submodule::AsConfigured { check_dirty: true })
                 .index_worktree_options_mut(|opts| {
                     opts.dirwalk_options = None;
                 })
-                .into_index_worktree_iter(Vec::new())
-                .map_err(gix_error::Error::from_error)?
+                .into_index_worktree_iter(Vec::new())?
                 .take_while(Result::is_ok)
                 .next()
                 .is_some();

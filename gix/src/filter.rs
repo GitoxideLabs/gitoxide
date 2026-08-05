@@ -94,10 +94,7 @@ impl<'repo> Pipeline<'repo> {
     /// Create a new instance by extracting all necessary information and configuration from a `repo` along with `cache` for accessing
     /// attributes. The `index` is used for some filters which may access it under very specific circumstances.
     pub fn new(repo: &'repo Repository, cache: gix_worktree::Stack) -> Result<Self, pipeline::options::Error> {
-        let pipeline = gix_filter::Pipeline::new(
-            repo.command_context().map_err(gix_error::Error::from_error)?,
-            Self::options(repo)?,
-        );
+        let pipeline = gix_filter::Pipeline::new(repo.command_context()?, Self::options(repo)?);
         Ok(Pipeline {
             inner: pipeline,
             cache,
@@ -239,13 +236,9 @@ impl Pipeline<'_> {
             })?;
             let file_for_git = self.convert_to_git(file, rela_path_as_path.as_ref(), index)?;
             let id = match file_for_git {
-                ToGitOutcome::Unchanged(mut file) => repo
-                    .write_blob_stream(&mut file)
-                    .map_err(gix_error::Error::from_error)?,
-                ToGitOutcome::Buffer(buf) => repo.write_blob(buf).map_err(gix_error::Error::from_error)?,
-                ToGitOutcome::Process(mut read) => repo
-                    .write_blob_stream(&mut read)
-                    .map_err(gix_error::Error::from_error)?,
+                ToGitOutcome::Unchanged(mut file) => repo.write_blob_stream(&mut file)?,
+                ToGitOutcome::Buffer(buf) => repo.write_blob(buf)?,
+                ToGitOutcome::Process(mut read) => repo.write_blob_stream(&mut read)?,
             };
 
             let kind = if gix_fs::is_executable(&md) {

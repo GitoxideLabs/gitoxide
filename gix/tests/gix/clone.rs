@@ -1034,10 +1034,7 @@ mod blocking_io {
         let err = missing
             .fetch_only(gix::progress::Discard, &AtomicBool::default())
             .expect_err("missing full references fail");
-        assert!(
-            matches!(err, gix::clone::fetch::Error::RevisionMissing { .. }),
-            "the missing revision is reported directly: {err}"
-        );
+        assert!(err.is_not_found(), "the missing revision is reported directly: {err}");
 
         let tree_id = remote_repo
             .find_reference("refs/heads/a")?
@@ -1054,10 +1051,7 @@ mod blocking_io {
         let err = tree
             .fetch_only(gix::progress::Discard, &AtomicBool::default())
             .expect_err("tree revisions cannot become HEAD");
-        assert!(
-            matches!(err, gix::clone::fetch::Error::PeelRevision(_)),
-            "non-commit revisions are rejected: {err}"
-        );
+        assert!(err.is_validation(), "non-commit revisions are rejected: {err}");
         Ok(())
     }
 

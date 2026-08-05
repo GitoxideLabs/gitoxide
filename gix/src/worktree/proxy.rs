@@ -96,8 +96,7 @@ impl Proxy<'_> {
                 base.display()
             )));
         }
-        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), self.parent.options.clone())
-            .map_err(gix_error::Error::from_error)?;
+        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), self.parent.options.clone())?;
         Ok(repo.into())
     }
 }

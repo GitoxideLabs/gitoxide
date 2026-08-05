@@ -30,15 +30,12 @@ pub mod set_target_id {
                     )));
                 }
                 Target::Object(current_id) => {
-                    let changed = self
-                        .repo
-                        .reference(
-                            self.name(),
-                            id,
-                            PreviousValue::MustExistAndMatch(Target::Object(current_id.to_owned())),
-                            reflog_message,
-                        )
-                        .map_err(gix_error::Error::from_error)?;
+                    let changed = self.repo.reference(
+                        self.name(),
+                        id,
+                        PreviousValue::MustExistAndMatch(Target::Object(current_id.to_owned())),
+                        reflog_message,
+                    )?;
                     *self = changed;
                 }
             }

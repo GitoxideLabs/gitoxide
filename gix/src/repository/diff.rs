@@ -39,7 +39,6 @@ impl Repository {
             .inner,
             worktree_roots,
         )
-        .map_err(gix_error::Error::from_error)
     }
 
     /// Produce the changes that would need to be applied to `old_tree` to create `new_tree`.
@@ -56,9 +55,7 @@ impl Repository {
         new_tree: impl Into<Option<&'a Tree<'new_repo>>>,
         options: impl Into<Option<crate::diff::Options>>,
     ) -> Result<Vec<crate::object::tree::diff::ChangeDetached>, diff_tree_to_tree::Error> {
-        let mut cache = self
-            .diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())
-            .map_err(gix_error::Error::from_error)?;
+        let mut cache = self.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
         let opts = options
             .into()
             .map_or_else(|| crate::diff::Options::from_configuration(&self.config), Ok)?

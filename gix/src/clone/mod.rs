@@ -166,8 +166,7 @@ impl PrepareFetch {
                 url.to_bstring()
             )))
         })?;
-        repo.committer_or_set_generic_fallback()
-            .map_err(gix_error::Error::from_error)?;
+        repo.committer_or_set_generic_fallback()?;
         Ok(PrepareFetch {
             url,
             #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]

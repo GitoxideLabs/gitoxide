@@ -69,7 +69,7 @@ impl crate::Repository {
             remote::Direction::Push => {
                 let remote = match self.branch_remote(name.shorten(), direction)? {
                     Ok(r) => r,
-                    Err(err) => return Some(Err(gix_error::Error::from_error(err))),
+                    Err(err) => return Some(Err(err)),
                 };
                 if remote.push_specs.is_empty() {
                     let push_default =
@@ -273,15 +273,13 @@ impl crate::Repository {
         direction: remote::Direction,
     ) -> Option<Result<crate::Remote<'_>, remote::find::existing::Error>> {
         let name = self.branch_remote_name(short_branch_name, direction)?;
-        self.try_find_remote(name.as_bstr())
-            .map(|res| res.map_err(gix_error::Error::from_error))
-            .or_else(|| match name {
-                remote::Name::Url(url) => gix_url::parse(&url)
-                    .map_err(gix_error::Error::from_error)
-                    .and_then(|url| self.remote_at(url))
-                    .into(),
-                remote::Name::Symbol(_) => None,
-            })
+        self.try_find_remote(name.as_bstr()).or_else(|| match name {
+            remote::Name::Url(url) => gix_url::parse(&url)
+                .map_err(gix_error::Error::from_error)
+                .and_then(|url| self.remote_at(url))
+                .into(),
+            remote::Name::Symbol(_) => None,
+        })
     }
 }
 

@@ -369,7 +369,6 @@ impl crate::Repository {
         };
         let tag_id = self.write_object(&tag)?;
         self.tag_reference(name, tag_id, constraint)
-            .map_err(gix_error::Error::from_error)
     }
 
     /// Similar to [`commit(…)`](crate::Repository::commit()), but allows to create the commit with `committer` and `author` specified.
@@ -453,8 +452,7 @@ impl crate::Repository {
                 deref: true,
             }),
             Some(committer),
-        )
-        .map_err(gix_error::Error::from_error)?;
+        )?;
         Ok(commit_id)
     }
 

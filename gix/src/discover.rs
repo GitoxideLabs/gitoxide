@@ -37,7 +37,7 @@ impl ThreadSafeRepository {
         options.current_dir = Some(
             gix_fs::current_dir(false).map_err(|err| gix_error::Error::from_error(upwards::Error::CurrentDir(err)))?,
         );
-        Self::open_from_paths(git_dir, worktree_dir, options).map_err(gix_error::Error::from_error)
+        Self::open_from_paths(git_dir, worktree_dir, options)
     }
 
     /// Try to open a git repository directly from the environment.
@@ -83,8 +83,7 @@ impl ThreadSafeRepository {
         }
 
         if std::env::var_os("GIT_DIR").is_some() {
-            return Self::open_with_environment_overrides(directory.as_ref(), trust_map)
-                .map_err(gix_error::Error::from_error);
+            return Self::open_with_environment_overrides(directory.as_ref(), trust_map);
         }
 
         options = apply_additional_environment(options.apply_environment());

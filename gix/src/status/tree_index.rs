@@ -58,10 +58,7 @@ impl Repository {
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         let _span = gix_trace::coarse!("gix::tree_index_status");
-        let tree_index: gix_index::State = self
-            .index_from_tree(tree_id)
-            .map_err(gix_error::Error::from_error)?
-            .into();
+        let tree_index: gix_index::State = self.index_from_tree(tree_id)?.into();
         let rewrites = match renames {
             TrackRenames::AsConfigured => {
                 let (mut rewrites, mut is_configured) = crate::diff::utils::new_rewrites_inner(

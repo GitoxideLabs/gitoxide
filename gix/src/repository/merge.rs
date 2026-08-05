@@ -23,9 +23,7 @@ impl Repository {
         &self,
         worktree_roots: gix_merge::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_merge::blob::Platform, merge_resource_cache::Error> {
-        let index = self
-            .index_or_load_from_head_or_empty()
-            .map_err(gix_error::Error::from_error)?;
+        let index = self.index_or_load_from_head_or_empty()?;
         let mode = {
             let renormalize = tree::Merge::RENORMALIZE
                 .enrich_error(self.config.resolved.boolean(tree::Merge::RENORMALIZE))
@@ -49,21 +47,12 @@ impl Repository {
             )
             .map_err(gix_error::Error::from_error)?
             .inner;
-        let filter = gix_filter::Pipeline::new(
-            self.command_context().map_err(gix_error::Error::from_error)?,
-            crate::filter::Pipeline::options(self)?,
-        );
-        let filter = gix_merge::blob::Pipeline::new(
-            worktree_roots,
-            filter,
-            self.config
-                .merge_pipeline_options()
-                .map_err(gix_error::Error::from_error)?,
-        );
+        let filter = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
+        let filter = gix_merge::blob::Pipeline::new(worktree_roots, filter, self.config.merge_pipeline_options()?);
         let options = gix_merge::blob::platform::Options {
             default_driver: self.config.resolved.string(tree::Merge::DEFAULT),
         };
-        let drivers = self.config.merge_drivers().map_err(gix_error::Error::from_error)?;
+        let drivers = self.config.merge_drivers()?;
         Ok(gix_merge::blob::Platform::new(filter, mode, attrs, drivers, options))
     }
 
@@ -112,7 +101,7 @@ impl Repository {
         Ok(gix_merge::tree::Options {
             rewrites,
             blob_merge: self.blob_merge_options()?,
-            blob_merge_command_ctx: self.command_context().map_err(gix_error::Error::from_error)?,
+            blob_merge_command_ctx: self.command_context()?,
             fail_on_conflict: None,
             marker_size_multiplier: 0,
             symlink_conflicts: None,
@@ -145,9 +134,7 @@ impl Repository {
         labels: gix_merge::blob::builtin_driver::text::Labels<'_>,
         options: crate::merge::tree::Options,
     ) -> Result<crate::merge::tree::Outcome<'_>, merge_trees::Error> {
-        let mut diff_cache = self
-            .diff_resource_cache_for_tree_diff()
-            .map_err(gix_error::Error::from_error)?;
+        let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let gix_merge::tree::Outcome {
             tree,
@@ -202,9 +189,7 @@ impl Repository {
         labels: gix_merge::blob::builtin_driver::text::Labels<'_>,
         options: crate::merge::commit::Options,
     ) -> Result<crate::merge::commit::Outcome<'_>, merge_commits::Error> {
-        let mut diff_cache = self
-            .diff_resource_cache_for_tree_diff()
-            .map_err(gix_error::Error::from_error)?;
+        let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
         let commit_graph = self.commit_graph_if_enabled()?;
         let mut graph = self.revision_graph(commit_graph.as_ref());
@@ -282,8 +267,7 @@ impl Repository {
             .ok_or_else(|| gix_error::Error::from_error(gix_error::message("No commit was provided as merge-base")))?;
         let Some(second) = merge_bases.pop() else {
             let tree_id = self
-                .find_commit(first)
-                .map_err(gix_error::Error::from_error)?
+                .find_commit(first)?
                 .tree_id()
                 .map_err(gix_error::Error::from_error)?;
             let commit_id = first.attach(self);
@@ -294,9 +278,7 @@ impl Repository {
             });
         };
 
-        let mut diff_cache = self
-            .diff_resource_cache_for_tree_diff()
-            .map_err(gix_error::Error::from_error)?;
+        let mut diff_cache = self.diff_resource_cache_for_tree_diff()?;
         let mut blob_merge = self.merge_resource_cache(Default::default())?;
 
         let gix_merge::commit::virtual_merge_base::Outcome {

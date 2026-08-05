@@ -182,11 +182,7 @@ impl Platform<'_, '_> {
     /// may be diminished. In real-world scenarios where blobs are mostly unique, that's not an issue though.
     pub fn stats(&mut self, other: &Tree<'_>) -> Result<Stats, stats::Error> {
         // let (mut number_of_files, mut lines_added, mut lines_removed) = (0, 0, 0);
-        let mut resource_cache = self
-            .lhs
-            .repo
-            .diff_resource_cache_for_tree_diff()
-            .map_err(gix_error::Error::from_error)?;
+        let mut resource_cache = self.lhs.repo.diff_resource_cache_for_tree_diff()?;
 
         let (mut files_changed, mut lines_added, mut lines_removed) = (0, 0, 0);
         self.for_each_to_obtain_tree(other, |change| {

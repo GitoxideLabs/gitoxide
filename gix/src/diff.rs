@@ -213,14 +213,9 @@ pub(crate) mod utils {
             },
             gix_diff::blob::Pipeline::new(
                 roots,
-                gix_filter::Pipeline::new(
-                    repo.command_context().map_err(gix_error::Error::from_error)?,
-                    crate::filter::Pipeline::options(repo)?,
-                ),
-                repo.config.diff_drivers().map_err(gix_error::Error::from_error)?,
-                repo.config
-                    .diff_pipeline_options()
-                    .map_err(gix_error::Error::from_error)?,
+                gix_filter::Pipeline::new(repo.command_context()?, crate::filter::Pipeline::options(repo)?),
+                repo.config.diff_drivers()?,
+                repo.config.diff_pipeline_options()?,
             ),
             mode,
             attr_stack,

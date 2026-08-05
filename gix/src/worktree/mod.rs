@@ -191,12 +191,10 @@ pub mod attributes {
         /// Like [attributes()][Self::attributes()], but without access to exclude/ignore information.
         pub fn attributes_only(&self) -> Result<AttributeStack<'repo>, Error> {
             let index = self.index()?;
-            self.parent
-                .attributes_only(
-                    &index,
-                    gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-                )
-                .map_err(gix_error::Error::from_error)
+            self.parent.attributes_only(
+                &index,
+                gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
+            )
         }
     }
 }

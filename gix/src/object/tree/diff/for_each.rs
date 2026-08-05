@@ -58,9 +58,7 @@ impl<'old> Platform<'_, 'old> {
         let mut storage;
         let cache = match resource_cache {
             None => {
-                storage = repo
-                    .diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())
-                    .map_err(gix_error::Error::from_error)?;
+                storage = repo.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
                 &mut storage
             }
             Some(cache) => cache,

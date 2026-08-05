@@ -178,24 +178,21 @@ where
                         self.index_worktree_options.dirwalk_options.as_ref(),
                     )?;
                     let mut items = Vec::new();
-                    let tree_index = self
-                        .repo
-                        .tree_index_status(
-                            &tree_id,
-                            &index,
-                            Some(&mut pathspec),
-                            self.tree_index_renames,
-                            |change, _, _| {
-                                items.push(change.into_owned().into());
-                                let action = if should_interrupt.load(Ordering::Acquire) {
-                                    std::ops::ControlFlow::Break(())
-                                } else {
-                                    std::ops::ControlFlow::Continue(())
-                                };
-                                Ok::<_, std::convert::Infallible>(action)
-                            },
-                        )
-                        .map_err(gix_error::Error::from_error)?;
+                    let tree_index = self.repo.tree_index_status(
+                        &tree_id,
+                        &index,
+                        Some(&mut pathspec),
+                        self.tree_index_renames,
+                        |change, _, _| {
+                            items.push(change.into_owned().into());
+                            let action = if should_interrupt.load(Ordering::Acquire) {
+                                std::ops::ControlFlow::Break(())
+                            } else {
+                                std::ops::ControlFlow::Continue(())
+                            };
+                            Ok::<_, std::convert::Infallible>(action)
+                        },
+                    )?;
                     (items, Some(tree_index))
                 }
                 None => (Vec::new(), None),

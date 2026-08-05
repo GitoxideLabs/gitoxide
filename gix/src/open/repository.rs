@@ -267,8 +267,7 @@ impl ThreadSafeRepository {
             lenient_config,
             api_config_overrides,
             cli_config_overrides,
-        )
-        .map_err(gix_error::Error::from_error)?;
+        )?;
 
         // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
         let configured_worktree = config

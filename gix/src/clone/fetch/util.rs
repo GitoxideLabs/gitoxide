@@ -146,9 +146,7 @@ pub fn update_head(
     let revision_head_id = revision
         .map(|revision| -> Result<gix_hash::ObjectId, Error> {
             let mapping = find_revision(ref_map, revision)?;
-            let id = mapping.remote.peeled_id().ok_or_else(|| Error::RevisionMissing {
-                wanted: revision.to_ref().source().expect("validated revision").to_owned(),
-            })?;
+            let id = mapping.remote.peeled_id().ok_or_else(|| revision_missing(revision))?;
             Ok(repo.find_object(id)?.peel_to_commit()?.id)
         })
         .transpose()?;
@@ -268,7 +266,7 @@ pub fn update_head(
 
 /// Find the mapping produced by the exact refspec used to request `revision`.
 ///
-/// Returns [`Error::RevisionMissing`] if the remote did not map that refspec.
+/// Returns an error if the remote did not map that refspec.
 pub(super) fn find_revision<'a>(
     ref_map: &'a crate::remote::fetch::RefMap,
     revision: &gix_refspec::RefSpec,
@@ -282,9 +280,14 @@ pub(super) fn find_revision<'a>(
                 .get(&ref_map.refspecs, &ref_map.extra_refspecs)
                 .is_some_and(|spec| spec == revision)
         })
-        .ok_or_else(|| Error::RevisionMissing {
-            wanted: revision.to_ref().source().expect("validated revision").to_owned(),
-        })
+        .ok_or_else(|| revision_missing(revision))
+}
+
+fn revision_missing(revision: &gix_refspec::RefSpec) -> Error {
+    gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+        "The remote didn't have the requested revision {:?}",
+        revision.to_ref().source().expect("validated revision")
+    )))
 }
 
 /// Resolve `ref_name` to its object ID and full name among the mapped remote references.

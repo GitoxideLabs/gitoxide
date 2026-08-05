@@ -92,10 +92,7 @@ impl crate::Repository {
             .attributes_only(&index, gix_worktree::stack::state::attributes::Source::IdMapping)
             .map_err(gix_error::Error::from_error)?
             .detach();
-        let pipeline = gix_filter::Pipeline::new(
-            self.command_context().map_err(gix_error::Error::from_error)?,
-            crate::filter::Pipeline::options(self)?,
-        );
+        let pipeline = gix_filter::Pipeline::new(self.command_context()?, crate::filter::Pipeline::options(self)?);
         let objects = self.objects.clone().into_arc().expect("TBD error handling");
         let stream = gix_worktree_stream::from_tree(
             id,
