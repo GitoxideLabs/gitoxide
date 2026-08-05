@@ -1,32 +1,67 @@
 /// The error returned by the [`parse()`][crate::parse()] function.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Empty refspecs are invalid")]
     Empty,
-    #[error("Negative refspecs cannot have destinations as they exclude sources")]
     NegativeWithDestination,
-    #[error("Negative specs must not be empty")]
     NegativeEmpty,
-    #[error("Negative specs must not be object hashes")]
     NegativeObjectHash,
     /// Retained for compatibility; partial negative ref names are accepted and this is no longer returned.
-    #[error("Negative specs must be full ref names, starting with \"refs/\"")]
     NegativePartialName,
     /// Retained for compatibility; negative ref patterns containing one `*` are accepted and this is no longer returned.
-    #[error("Negative glob patterns are not allowed")]
     NegativeGlobPattern,
     /// Retained for compatibility; invalid fetch destinations are reported as [`Error::ReferenceName`] instead.
-    #[error("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")]
     InvalidFetchDestination,
-    #[error("Cannot push into an empty destination")]
     PushToEmpty,
-    #[error("refspec patterns may only contain a single '*' character, found {pattern:?}")]
-    PatternUnsupported { pattern: bstr::BString },
-    #[error("Both sides of a two-sided specification need a pattern, like 'a/*:b/*'")]
+    PatternUnsupported {
+        pattern: bstr::BString,
+    },
     PatternUnbalanced,
-    #[error(transparent)]
-    ReferenceName(#[from] gix_validate::reference::name::Error),
+    ReferenceName(gix_validate::reference::name::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Empty => f.write_str("Empty refspecs are invalid"),
+            Error::NegativeWithDestination => {
+                f.write_str("Negative refspecs cannot have destinations as they exclude sources")
+            }
+            Error::NegativeEmpty => f.write_str("Negative specs must not be empty"),
+            Error::NegativeObjectHash => f.write_str("Negative specs must not be object hashes"),
+            Error::NegativePartialName => f.write_str("Negative specs must be full ref names, starting with \"refs/\""),
+            Error::NegativeGlobPattern => f.write_str("Negative glob patterns are not allowed"),
+            Error::InvalidFetchDestination => {
+                f.write_str("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")
+            }
+            Error::PushToEmpty => f.write_str("Cannot push into an empty destination"),
+            Error::PatternUnsupported { pattern } => {
+                write!(
+                    f,
+                    "refspec patterns may only contain a single '*' character, found {pattern:?}"
+                )
+            }
+            Error::PatternUnbalanced => {
+                f.write_str("Both sides of a two-sided specification need a pattern, like 'a/*:b/*'")
+            }
+            Error::ReferenceName(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ReferenceName(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<gix_validate::reference::name::Error> for Error {
+    fn from(err: gix_validate::reference::name::Error) -> Self {
+        Error::ReferenceName(err)
+    }
 }
 
 /// Define how the parsed refspec should be used.

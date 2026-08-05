@@ -1774,7 +1774,6 @@ dependencies = [
  "gix-path",
  "libc",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2171,7 +2170,6 @@ dependencies = [
  "serde",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2311,6 +2309,7 @@ dependencies = [
  "futures-lite",
  "gix-credentials",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-lock",
@@ -2379,7 +2378,6 @@ dependencies = [
  "gix-validate",
  "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2442,12 +2440,12 @@ name = "gix-shallow"
 version = "0.13.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-hash",
  "gix-lock",
  "nonempty",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]

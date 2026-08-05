@@ -42,16 +42,18 @@ pub enum Update {
 /// isn't a shallow clone.
 pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<gix_hash::ObjectId>>, read::Error> {
     use bstr::ByteSlice;
+    use gix_error::{ErrorExt, ResultExt, message};
     let buf = match std::fs::read(shallow_file) {
         Ok(buf) => buf,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
+        Err(err) => return Err(err.and_raise(message("Could not open shallow file for reading"))),
     };
 
     let mut commits = buf
         .lines()
         .map(gix_hash::ObjectId::from_hex)
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+        .or_raise(|| message("Could not decode a line in shallow file as hex-encoded object hash"))?;
 
     commits.sort();
     Ok(nonempty::NonEmpty::from_vec(commits))
@@ -61,6 +63,8 @@ pub fn read(shallow_file: &std::path::Path) -> Result<Option<nonempty::NonEmpty<
 pub mod write {
     pub(crate) mod function {
         use std::io::Write;
+
+        use gix_error::{ErrorExt, ResultExt, message};
 
         use super::Error;
         use crate::Update;
@@ -90,7 +94,7 @@ pub mod write {
             if shallow_commits.is_empty() {
                 if let Err(err) = std::fs::remove_file(file.resource_path()) {
                     if err.kind() != std::io::ErrorKind::NotFound {
-                        return Err(err.into());
+                        return Err(err.and_raise(message("Could not remove an empty shallow file")));
                     }
                 }
                 drop(file);
@@ -99,39 +103,27 @@ pub mod write {
             shallow_commits.sort();
             let mut buf = Vec::<u8>::new();
             for commit in shallow_commits {
-                commit.write_hex_to(&mut buf).map_err(Error::Io)?;
+                commit
+                    .write_hex_to(&mut buf)
+                    .or_raise(|| message("Failed to write object id to shallow file"))?;
                 buf.push(b'\n');
             }
-            file.write_all(&buf).map_err(Error::Io)?;
-            file.flush().map_err(Error::Io)?;
-            file.commit()?;
+            file.write_all(&buf)
+                .or_raise(|| message("Failed to write object id to shallow file"))?;
+            file.flush()
+                .or_raise(|| message("Failed to write object id to shallow file"))?;
+            file.commit().or_raise(|| message("Could not commit shallow file"))?;
             Ok(())
         }
     }
 
     /// The error returned by [`write()`](crate::write()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Commit(#[from] gix_lock::commit::Error<gix_lock::File>),
-        #[error("Could not remove an empty shallow file")]
-        RemoveEmpty(#[from] std::io::Error),
-        #[error("Failed to write object id to shallow file")]
-        Io(std::io::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 pub use write::function::write;
 
 ///
 pub mod read {
     /// The error returned by [`read`](crate::read()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not open shallow file for reading")]
-        Io(#[from] std::io::Error),
-        #[error("Could not decode a line in shallow file as hex-encoded object hash")]
-        DecodeHash(#[from] gix_hash::decode::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
