@@ -39,7 +39,11 @@ impl Iterator for Lines<'_> {
                 (crate::Kind::Precious, false)
             } else {
                 let second = line.get(1);
-                if first == b'!' && second == Some(&b'$') {
+                // Negating a precious entry is contradictory, but that's only true while `$` means
+                // precious. Without that support `$` is an ordinary character, and Git parses
+                // `!$foo` as a negation of the literal `$foo` - dropping it would make the
+                // backward-compatible mode reject a valid line.
+                if self.support_precious && first == b'!' && second == Some(&b'$') {
                     gix_trace::error!(
                         "Line {} starts with !$ which is not allowed ('{}')",
                         self.line_no,

@@ -25,8 +25,11 @@ fn precious() {
             pat("$starts-with-dollar", Mode::NO_SUB_DIR, 2),
             pat("$*.html", Mode::NO_SUB_DIR, 4),
             pat("foo.html", Mode::NO_SUB_DIR | Mode::NEGATIVE, 6),
+            pat("$foo.html", Mode::NO_SUB_DIR | Mode::NEGATIVE, 9),
             pat("$!/*", Mode::empty(), 12),
-        ]
+        ],
+        "without precious support `$` is an ordinary character, so `!$foo.html` is the plain \
+         negation that Git sees - only the precious mode has a reason to reject it"
     );
 }
 
