@@ -474,46 +474,129 @@ mod error {
     };
 
     /// The error returned by various [`Transaction`][super::Transaction] methods.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The packed ref buffer could not be loaded")]
-        Packed(#[from] packed::buffer::open::Error),
-        #[error("The lock for the packed-ref file could not be obtained")]
-        PackedTransactionAcquire(#[source] gix_lock::acquire::Error),
-        #[error("The packed transaction could not be prepared")]
-        PackedTransactionPrepare(#[from] packed::transaction::prepare::Error),
-        #[error("The packed ref file could not be parsed")]
-        PackedFind(#[from] packed::find::Error),
-        #[error("Edit preprocessing failed with an error")]
-        PreprocessingFailed(#[source] std::io::Error),
-        #[error("A lock could not be obtained for reference {full_name:?}")]
+        Packed(packed::buffer::open::Error),
+        PackedTransactionAcquire(gix_lock::acquire::Error),
+        PackedTransactionPrepare(packed::transaction::prepare::Error),
+        PackedFind(packed::find::Error),
+        PreprocessingFailed(std::io::Error),
         LockAcquire {
             source: gix_lock::acquire::Error,
             full_name: BString,
         },
-        #[error("An IO error occurred while applying an edit")]
-        Io(#[from] std::io::Error),
-        #[error("The reference {full_name:?} for deletion did not exist or could not be parsed")]
-        DeleteReferenceMustExist { full_name: BString },
-        #[error(
-            "Reference {full_name:?} was not supposed to exist when writing it with value {new:?}, but actual content was {actual:?}"
-        )]
+        Io(std::io::Error),
+        DeleteReferenceMustExist {
+            full_name: BString,
+        },
         MustNotExist {
             full_name: BString,
             actual: Target,
             new: Target,
         },
-        #[error("Reference {full_name:?} was supposed to exist with value {expected}, but didn't.")]
-        MustExist { full_name: BString, expected: Target },
-        #[error("The reference {full_name:?} should have content {expected}, actual content was {actual}")]
+        MustExist {
+            full_name: BString,
+            expected: Target,
+        },
         ReferenceOutOfDate {
             full_name: BString,
             expected: Target,
             actual: Target,
         },
-        #[error("Could not read reference")]
-        ReferenceDecode(#[from] file::loose::reference::decode::Error),
+        ReferenceDecode(file::loose::reference::decode::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Packed(_) => f.write_str("The packed ref buffer could not be loaded"),
+                Error::PackedTransactionAcquire(_) => {
+                    f.write_str("The lock for the packed-ref file could not be obtained")
+                }
+                Error::PackedTransactionPrepare(_) => f.write_str("The packed transaction could not be prepared"),
+                Error::PackedFind(_) => f.write_str("The packed ref file could not be parsed"),
+                Error::PreprocessingFailed(_) => f.write_str("Edit preprocessing failed with an error"),
+                Error::LockAcquire { full_name, .. } => {
+                    write!(f, "A lock could not be obtained for reference {full_name:?}")
+                }
+                Error::Io(_) => f.write_str("An IO error occurred while applying an edit"),
+                Error::DeleteReferenceMustExist { full_name } => {
+                    write!(
+                        f,
+                        "The reference {full_name:?} for deletion did not exist or could not be parsed"
+                    )
+                }
+                Error::MustNotExist { full_name, actual, new } => write!(
+                    f,
+                    "Reference {full_name:?} was not supposed to exist when writing it with value {new:?}, but actual content was {actual:?}"
+                ),
+                Error::MustExist { full_name, expected } => {
+                    write!(
+                        f,
+                        "Reference {full_name:?} was supposed to exist with value {expected}, but didn't."
+                    )
+                }
+                Error::ReferenceOutOfDate {
+                    full_name,
+                    expected,
+                    actual,
+                } => write!(
+                    f,
+                    "The reference {full_name:?} should have content {expected}, actual content was {actual}"
+                ),
+                Error::ReferenceDecode(_) => f.write_str("Could not read reference"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Packed(err) => Some(err),
+                Error::PackedTransactionAcquire(err) => Some(err),
+                Error::PackedTransactionPrepare(err) => Some(err),
+                Error::PackedFind(err) => Some(err),
+                Error::PreprocessingFailed(err) => Some(err),
+                Error::LockAcquire { source, .. } => Some(source),
+                Error::Io(err) => Some(err),
+                Error::DeleteReferenceMustExist { .. }
+                | Error::MustNotExist { .. }
+                | Error::MustExist { .. }
+                | Error::ReferenceOutOfDate { .. } => None,
+                Error::ReferenceDecode(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<packed::buffer::open::Error> for Error {
+        fn from(err: packed::buffer::open::Error) -> Self {
+            Error::Packed(err)
+        }
+    }
+
+    impl From<packed::transaction::prepare::Error> for Error {
+        fn from(err: packed::transaction::prepare::Error) -> Self {
+            Error::PackedTransactionPrepare(err)
+        }
+    }
+
+    impl From<packed::find::Error> for Error {
+        fn from(err: packed::find::Error) -> Self {
+            Error::PackedFind(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<file::loose::reference::decode::Error> for Error {
+        fn from(err: file::loose::reference::decode::Error) -> Self {
+            Error::ReferenceDecode(err)
+        }
     }
 }
 

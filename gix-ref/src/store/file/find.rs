@@ -424,13 +424,37 @@ pub mod existing {
         use crate::store_impl::file::find;
 
         /// The error returned by [file::Store::find_existing()][crate::file::Store::find()].
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("An error occurred while trying to find a reference")]
-            Find(#[from] find::Error),
-            #[error("The ref partially named {name:?} could not be found")]
+            Find(find::Error),
             NotFound { name: PathBuf },
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Error::Find(_) => f.write_str("An error occurred while trying to find a reference"),
+                    #[allow(clippy::unnecessary_debug_formatting)]
+                    // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
+                    Error::NotFound { name } => write!(f, "The ref partially named {name:?} could not be found"),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::Find(err) => Some(err),
+                    Error::NotFound { .. } => None,
+                }
+            }
+        }
+
+        impl From<find::Error> for Error {
+            fn from(err: find::Error) -> Self {
+                Error::Find(err)
+            }
         }
     }
 }
@@ -441,22 +465,74 @@ mod error {
     use crate::{file, store_impl::packed};
 
     /// The error returned by [file::Store::find()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The ref name or path is not a valid ref name")]
-        RefnameValidation(#[from] crate::name::Error),
-        #[error("The ref file {path:?} could not be read in full")]
-        ReadFileContents { source: io::Error, path: PathBuf },
-        #[error("The reference at \"{relative_path}\" could not be instantiated")]
+        RefnameValidation(crate::name::Error),
+        ReadFileContents {
+            source: io::Error,
+            path: PathBuf,
+        },
         ReferenceCreation {
             source: file::loose::reference::decode::Error,
             relative_path: PathBuf,
         },
-        #[error("A packed ref lookup failed")]
-        PackedRef(#[from] packed::find::Error),
-        #[error("Could not open the packed refs buffer when trying to find references.")]
-        PackedOpen(#[from] packed::buffer::open::Error),
+        PackedRef(packed::find::Error),
+        PackedOpen(packed::buffer::open::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::RefnameValidation(_) => f.write_str("The ref name or path is not a valid ref name"),
+                #[allow(clippy::unnecessary_debug_formatting)]
+                // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
+                Error::ReadFileContents { path, .. } => {
+                    write!(f, "The ref file {path:?} could not be read in full")
+                }
+                Error::ReferenceCreation { relative_path, .. } => {
+                    write!(
+                        f,
+                        "The reference at \"{}\" could not be instantiated",
+                        relative_path.display()
+                    )
+                }
+                Error::PackedRef(_) => f.write_str("A packed ref lookup failed"),
+                Error::PackedOpen(_) => {
+                    f.write_str("Could not open the packed refs buffer when trying to find references.")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::RefnameValidation(err) => Some(err),
+                Error::ReadFileContents { source, .. } => Some(source),
+                Error::ReferenceCreation { source, .. } => Some(source),
+                Error::PackedRef(err) => Some(err),
+                Error::PackedOpen(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<crate::name::Error> for Error {
+        fn from(err: crate::name::Error) -> Self {
+            Error::RefnameValidation(err)
+        }
+    }
+
+    impl From<packed::find::Error> for Error {
+        fn from(err: packed::find::Error) -> Self {
+            Error::PackedRef(err)
+        }
+    }
+
+    impl From<packed::buffer::open::Error> for Error {
+        fn from(err: packed::buffer::open::Error) -> Self {
+            Error::PackedOpen(err)
+        }
     }
 
     impl From<Infallible> for Error {

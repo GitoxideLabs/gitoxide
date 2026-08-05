@@ -279,13 +279,41 @@ pub(crate) fn buffer_into_transaction(
 ///
 pub mod prepare {
     /// The error used in [`Transaction::prepare(…)`][crate::file::Transaction::prepare()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Could not close a lock which won't ever be committed")]
-        CloseLock(#[from] std::io::Error),
-        #[error("The lookup of an object failed while peeling it")]
-        Resolve(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
+        CloseLock(std::io::Error),
+        Resolve(Box<dyn std::error::Error + Send + Sync + 'static>),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::CloseLock(_) => f.write_str("Could not close a lock which won't ever be committed"),
+                Error::Resolve(_) => f.write_str("The lookup of an object failed while peeling it"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::CloseLock(err) => Some(err),
+                Error::Resolve(err) => Some(&**err),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::CloseLock(err)
+        }
+    }
+
+    impl From<Box<dyn std::error::Error + Send + Sync + 'static>> for Error {
+        fn from(err: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+            Error::Resolve(err)
+        }
     }
 }
 
@@ -294,14 +322,49 @@ pub mod commit {
     use crate::store_impl::packed;
 
     /// The error used in [`Transaction::commit(…)`][crate::file::Transaction::commit()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Changes to the resource could not be committed")]
-        Commit(#[from] gix_lock::commit::Error<gix_lock::File>),
-        #[error("Some references in the packed refs buffer could not be parsed")]
-        Iteration(#[from] packed::iter::Error),
-        #[error("Failed to write a ref line to the packed ref file")]
-        Io(#[from] std::io::Error),
+        Commit(gix_lock::commit::Error<gix_lock::File>),
+        Iteration(packed::iter::Error),
+        Io(std::io::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Commit(_) => f.write_str("Changes to the resource could not be committed"),
+                Error::Iteration(_) => f.write_str("Some references in the packed refs buffer could not be parsed"),
+                Error::Io(_) => f.write_str("Failed to write a ref line to the packed ref file"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Commit(err) => Some(err),
+                Error::Iteration(err) => Some(err),
+                Error::Io(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<gix_lock::commit::Error<gix_lock::File>> for Error {
+        fn from(err: gix_lock::commit::Error<gix_lock::File>) -> Self {
+            Error::Commit(err)
+        }
+    }
+
+    impl From<packed::iter::Error> for Error {
+        fn from(err: packed::iter::Error) -> Self {
+            Error::Iteration(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 }
