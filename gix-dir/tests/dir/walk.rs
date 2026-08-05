@@ -4033,6 +4033,62 @@ fn decomposed_unicode_in_root_is_returned_precomposed() -> crate::Result {
 }
 
 #[test]
+fn precompose_unicode_preserves_noncanonical_combining_mark_order() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("noncanonical-combining-mark-order.sh")?.join("tracked");
+
+    let ((_out, _root), entries) = collect(&root, None, |keep, ctx| {
+        walk(
+            &root,
+            ctx,
+            walk::Options {
+                precompose_unicode: true,
+                ..options()
+            },
+            keep,
+        )
+    });
+
+    assert_eq!(
+        entries,
+        [],
+        "clean tracked files must not be emitted as untracked after precomposition"
+    );
+    Ok(())
+}
+
+#[test]
+fn precompose_unicode_preserves_untracked_noncanonical_combining_mark_order() -> crate::Result {
+    let root = gix_testtools::scripted_fixture_read_only("noncanonical-combining-mark-order.sh")?.join("untracked");
+
+    let ((_out, _root), entries) = collect(&root, None, |keep, ctx| {
+        walk(
+            &root,
+            ctx,
+            walk::Options {
+                precompose_unicode: true,
+                ..options()
+            },
+            keep,
+        )
+    });
+
+    assert_eq!(
+        entries,
+        [
+            entry("ا\u{651}\u{64f}", Untracked, File),
+            #[allow(clippy::unicode_not_nfc)]
+            entry(
+                "مُنَاقَشَةُ سُبُلِ اِسْتِخْدَامِ اللُّغَةِ فِي النُّظُمِ الْقَائِمَةِ، وَلَا سِيَّمَا فِي التَّطْبِيقَاتِ الْحَاسُوبِيَّةِ",
+                Untracked,
+                File
+            ),
+        ],
+        "both fixture filenames must be emitted byte-for-byte as untracked"
+    );
+    Ok(())
+}
+
+#[test]
 fn untracked_and_ignored_collapse_mix() {
     let root = fixture("untracked-and-ignored-for-collapse");
     let ((out, _root), entries) = collect(&root, None, |keep, ctx| {
