@@ -30,7 +30,6 @@ gix-worktree = { version = "^0.55.0", path = "../gix-worktree", default-features
 gix-traverse = { version = "^0.60.0", path = "../gix-traverse" }
 
 smallvec = "1.15.1"
-thiserror = "2.0.18"
 
 [dev-dependencies]
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
