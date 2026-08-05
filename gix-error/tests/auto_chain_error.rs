@@ -1,6 +1,6 @@
-use gix_error::{Error, message};
+use gix_error::{Error, ErrorExt, RetryableError, message};
 #[cfg(not(feature = "tree-error"))]
-use gix_error::{ErrorExt, Exn, Message};
+use gix_error::{Exn, Message};
 use std::error::Error as _;
 
 #[cfg(not(feature = "tree-error"))]
@@ -93,4 +93,15 @@ pub fn debug_string(input: impl std::fmt::Debug) -> String {
 
 fn fixup_paths(input: String) -> String {
     if cfg!(windows) { input.replace('\\', "/") } else { input }
+}
+
+#[test]
+fn retryability_is_discovered_in_the_error_chain() {
+    let retryable =
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow").and_raise(message("network operation failed"));
+    assert!(Error::from(retryable).can_retry());
+
+    let dependency_specific =
+        RetryableError::new(message("HTTP/2 stream failed")).and_raise(message("network operation failed"));
+    assert!(Error::from(dependency_specific).can_retry());
 }
