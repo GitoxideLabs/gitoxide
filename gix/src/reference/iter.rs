@@ -38,7 +38,10 @@ impl<'repo> Platform<'repo> {
     /// Even broken or otherwise unparsable or inaccessible references are returned and have to be handled by the caller on a
     /// case by case basis.
     pub fn all(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.all()?))
+        Ok(Iter::new(
+            self.repo,
+            self.platform.all().map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     /// Return an iterator over all references that match the given `prefix`.
@@ -48,14 +51,22 @@ impl<'repo> Platform<'repo> {
         &self,
         prefix: impl TryInto<&'a RelativePath, Error = gix_path::relative_path::Error>,
     ) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(prefix.try_into()?)?))
+        let prefix = prefix.try_into().map_err(gix_error::Error::from_error)?;
+        Ok(Iter::new(
+            self.repo,
+            self.platform.prefixed(prefix).map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     /// Return an iterator over all references that are tags.
     ///
     /// They are all prefixed with `refs/tags`.
     pub fn tags(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.prefixed(b"refs/tags/".try_into()?)?))
+        let prefix = b"refs/tags/".try_into().map_err(gix_error::Error::from_error)?;
+        Ok(Iter::new(
+            self.repo,
+            self.platform.prefixed(prefix).map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     // TODO: tests
@@ -63,16 +74,20 @@ impl<'repo> Platform<'repo> {
     ///
     /// They are all prefixed with `refs/heads`.
     pub fn local_branches(&self) -> Result<Iter<'_, 'repo>, init::Error> {
+        let prefix = b"refs/heads/".try_into().map_err(gix_error::Error::from_error)?;
         Ok(Iter::new(
             self.repo,
-            self.platform.prefixed(b"refs/heads/".try_into()?)?,
+            self.platform.prefixed(prefix).map_err(gix_error::Error::from_error)?,
         ))
     }
 
     // TODO: tests
     /// Return an iterator over all local pseudo references.
     pub fn pseudo(&self) -> Result<Iter<'_, 'repo>, init::Error> {
-        Ok(Iter::new(self.repo, self.platform.pseudo()?))
+        Ok(Iter::new(
+            self.repo,
+            self.platform.pseudo().map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     // TODO: tests
@@ -80,9 +95,10 @@ impl<'repo> Platform<'repo> {
     ///
     /// They are all prefixed with `refs/remotes`.
     pub fn remote_branches(&self) -> Result<Iter<'_, 'repo>, init::Error> {
+        let prefix = b"refs/remotes/".try_into().map_err(gix_error::Error::from_error)?;
         Ok(Iter::new(
             self.repo,
-            self.platform.prefixed(b"refs/remotes/".try_into()?)?,
+            self.platform.prefixed(prefix).map_err(gix_error::Error::from_error)?,
         ))
     }
 }
@@ -127,14 +143,7 @@ impl<'r> Iterator for Iter<'_, 'r> {
 ///
 pub mod init {
     /// The error returned by [`Platform::all()`](super::Platform::all()) or [`Platform::prefixed()`](super::Platform::prefixed()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        RelativePath(#[from] gix_path::relative_path::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 /// The error returned by [references()][crate::Repository::references()].

@@ -53,7 +53,9 @@ impl Repository {
         new_tree: impl Into<Option<&'a Tree<'new_repo>>>,
         options: impl Into<Option<crate::diff::Options>>,
     ) -> Result<Vec<crate::object::tree::diff::ChangeDetached>, diff_tree_to_tree::Error> {
-        let mut cache = self.diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())?;
+        let mut cache = self
+            .diff_resource_cache(gix_diff::blob::pipeline::Mode::ToGit, Default::default())
+            .map_err(gix_error::Error::from_error)?;
         let opts = options
             .into()
             .map_or_else(|| crate::diff::Options::from_configuration(&self.config), Ok)?
@@ -74,7 +76,8 @@ impl Repository {
                 Ok(std::ops::ControlFlow::Continue(()))
             },
             opts,
-        )?;
+        )
+        .map_err(gix_error::Error::from_error)?;
         Ok(out)
     }
 

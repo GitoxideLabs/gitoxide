@@ -24,8 +24,8 @@ impl crate::Repository {
         &self,
         id: impl Into<ObjectId>,
     ) -> Result<object::tree::Editor<'_>, crate::repository::edit_tree::Error> {
-        let tree = self.find_tree(id)?;
-        Ok(tree.edit()?)
+        let tree = self.find_tree(id).map_err(gix_error::Error::from_error)?;
+        tree.edit()
     }
 }
 
@@ -348,12 +348,16 @@ impl crate::Repository {
             target: target.as_ref().into(),
             target_kind,
             name: name.as_ref().into(),
-            tagger: tagger.map(|t| t.to_owned()).transpose()?,
+            tagger: tagger
+                .map(|t| t.to_owned())
+                .transpose()
+                .map_err(gix_error::Error::from_error)?,
             message: message.as_ref().into(),
             pgp_signature: None,
         };
-        let tag_id = self.write_object(&tag)?;
-        self.tag_reference(name, tag_id, constraint).map_err(Into::into)
+        let tag_id = self.write_object(&tag).map_err(gix_error::Error::from_error)?;
+        self.tag_reference(name, tag_id, constraint)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Similar to [`commit(…)`](crate::Repository::commit()), but allows to create the commit with `committer` and `author` specified.
@@ -370,12 +374,12 @@ impl crate::Repository {
     ) -> Result<Id<'_>, commit::Error>
     where
         Name: TryInto<FullName, Error = E>,
-        commit::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
         self.commit_as_inner(
             committer.into(),
             author.into(),
-            reference.try_into()?,
+            reference.try_into().map_err(gix_error::Error::from_error)?,
             message.as_ref(),
             tree.into(),
             parents.into_iter().map(Into::into).collect(),
@@ -408,7 +412,7 @@ impl crate::Repository {
             extra_headers: Default::default(),
         };
 
-        let commit_id = self.write_object(&commit)?;
+        let commit_id = self.write_object(&commit).map_err(gix_error::Error::from_error)?;
         self.edit_references_as(
             Some(RefEdit {
                 change: Change::Update {
@@ -437,7 +441,8 @@ impl crate::Repository {
                 deref: true,
             }),
             Some(committer),
-        )?;
+        )
+        .map_err(gix_error::Error::from_error)?;
         Ok(commit_id)
     }
 
@@ -468,10 +473,16 @@ impl crate::Repository {
     ) -> Result<Id<'_>, commit::Error>
     where
         Name: TryInto<FullName, Error = E>,
-        commit::Error: From<E>,
+        E: std::error::Error + Send + Sync + 'static,
     {
-        let author = self.author().ok_or(commit::Error::AuthorMissing)??;
-        let committer = self.committer().ok_or(commit::Error::CommitterMissing)??;
+        let author = self
+            .author()
+            .ok_or_else(|| gix_error::Error::from_error(gix_error::message("Author identity is not configured")))?
+            .map_err(gix_error::Error::from_error)?;
+        let committer = self
+            .committer()
+            .ok_or_else(|| gix_error::Error::from_error(gix_error::message("Committer identity is not configured")))?
+            .map_err(gix_error::Error::from_error)?;
         self.commit_as(committer, author, reference, message, tree, parents)
     }
 

@@ -462,12 +462,10 @@ fn run_assertions(main_repo: gix::Repository, should_be_bare: bool) {
             );
             repo
         } else {
+            let err = actual.clone().into_repo().unwrap_err().to_string();
             assert!(
-                matches!(
-                    actual.clone().into_repo(),
-                    Err(gix::worktree::proxy::into_repo::Error::MissingWorktree { .. })
-                ),
-                "missing bases are detected"
+                err.starts_with("Worktree at '") && err.ends_with("' is inaccessible"),
+                "missing bases are detected, but got: {err}"
             );
             actual.clone().into_repo_with_possibly_inaccessible_worktree().unwrap()
         };

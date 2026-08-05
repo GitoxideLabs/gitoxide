@@ -130,23 +130,13 @@ pub mod merge {
     ///
     pub mod pipeline_options {
         /// The error produced when obtaining options needed to fill in [gix_merge::blob::pipeline::Options].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            BigFileThreshold(#[from] crate::config::unsigned_integer::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     ///
     pub mod drivers {
         /// The error produced when obtaining a list of [Drivers](gix_merge::blob::Driver).
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            ConfigBoolean(#[from] crate::config::boolean::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 }
 
@@ -170,14 +160,7 @@ pub mod diff {
     ///
     pub mod pipeline_options {
         /// The error produced when obtaining options needed to fill in [gix_diff::blob::pipeline::Options].
-        #[derive(Debug, thiserror::Error)]
-        #[expect(missing_docs)]
-        pub enum Error {
-            #[error(transparent)]
-            FilesystemCapabilities(#[from] crate::config::boolean::Error),
-            #[error(transparent)]
-            BigFileThreshold(#[from] crate::config::unsigned_integer::Error),
-        }
+        pub type Error = gix_error::Error;
     }
 
     ///
@@ -240,6 +223,10 @@ pub mod command_context {
 
     /// The error produced when collecting all information relevant to spawned commands,
     /// obtained via [Repository::command_context()](crate::Repository::command_context()).
+    // TODO(review): kept concrete because `checkout_options::Error` and `worktree_stream::Error`
+    //                already embed the erased `filter::pipeline::options::Error`; erasing this one
+    //                would give them a second `From<gix::Error>`. `checkout_options` in turn has to
+    //                stay concrete because `cache/access.rs` matches its variants.
     #[derive(Debug, thiserror::Error)]
     #[expect(missing_docs)]
     pub enum Error {
@@ -303,9 +290,7 @@ pub mod protocol {
 ///
 pub mod ssh_connect_options {
     /// The error produced when obtaining ssh connection configuration.
-    #[derive(Debug, thiserror::Error)]
-    #[error(transparent)]
-    pub struct Error(#[from] super::key::GenericErrorWithValue);
+    pub type Error = gix_error::Error;
 }
 
 ///

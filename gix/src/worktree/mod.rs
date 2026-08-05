@@ -221,7 +221,7 @@ pub mod attributes {
                     &index,
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
                 )
-                .map_err(|err| Error::CreateCache(err.into()))
+                .map_err(|err| Error::CreateCache(gix_error::Error::from_error(err)))
         }
     }
 }
@@ -270,7 +270,11 @@ pub mod pathspec {
                     self.parent.config.lenient_config,
                     Some(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT),
                 )
-                .map_err(|err| Error::Init(crate::pathspec::init::Error::Defaults(err.into())))?
+                .map_err(|err| {
+                    Error::Init(gix_error::Error::from_error(
+                        crate::repository::pathspec_defaults_ignore_case::Error::from(err),
+                    ))
+                })?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
             Ok(self.parent.pathspec(
                 true, /* empty patterns match prefix */

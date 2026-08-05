@@ -9,19 +9,8 @@ use crate::{
 
 #[expect(missing_docs)]
 pub mod into_repo {
-    use std::path::PathBuf;
-
     /// The error returned by [`Proxy::into_repo()`][super::Proxy::into_repo()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Open(#[from] crate::open::Error),
-        #[error("Worktree at '{}' is inaccessible", .base.display())]
-        MissingWorktree { base: PathBuf },
-        #[error(transparent)]
-        MissingGitDirFile(#[from] std::io::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 impl<'repo> Proxy<'repo> {
@@ -100,11 +89,15 @@ impl Proxy<'_> {
     ///
     /// Note that it won't fail if the worktree doesn't exist.
     pub fn into_repo(self) -> Result<Repository, into_repo::Error> {
-        let base = self.base()?;
+        let base = self.base().map_err(gix_error::Error::from_error)?;
         if !base.is_dir() {
-            return Err(into_repo::Error::MissingWorktree { base });
+            return Err(gix_error::Error::from_error(gix_error::message!(
+                "Worktree at '{}' is inaccessible",
+                base.display()
+            )));
         }
-        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), self.parent.options.clone())?;
+        let repo = ThreadSafeRepository::open_from_paths(self.git_dir, base.into(), self.parent.options.clone())
+            .map_err(gix_error::Error::from_error)?;
         Ok(repo.into())
     }
 }
