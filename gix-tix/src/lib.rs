@@ -52,8 +52,9 @@ const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 
-struct FillRepository<'a> {
-    path: &'a Path,
+struct FillRepository {
+    path: PathBuf,
+    bare: bool,
     retained: Option<gix::Repository>,
     retain: bool,
 }
@@ -206,8 +207,8 @@ fn line_counts_for_change(
 }
 
 impl LineDiffPool {
-    fn new(repository_path: &Path, parallelism: usize) -> Result<Self> {
-        let repository = gix::open(repository_path)
+    fn new(repository_path: &Path, bare: bool, parallelism: usize) -> Result<Self> {
+        let repository = open_repository(repository_path, bare, false)
             .context("could not open repository for parallel line diffs")?
             .into_sync();
         let mut worker_state = Vec::with_capacity(parallelism);
@@ -217,8 +218,11 @@ impl LineDiffPool {
             let tree_cache = repository
                 .diff_resource_cache_for_tree_diff()
                 .context("could not initialize parallel line diffs")?;
-            let worktree_cache = worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)
-                .context("could not initialize parallel worktree line diffs")?;
+            let worktree_cache = if bare {
+                None
+            } else {
+                worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)?
+            };
             worker_state.push((repository, tree_cache, worktree_cache));
         }
 
@@ -299,10 +303,11 @@ fn sync_line_diff_pool(
     pool: &mut Option<LineDiffPool>,
     visible: bool,
     repository_path: &Path,
+    bare: bool,
     parallelism: usize,
 ) -> Result<()> {
     if visible && pool.is_none() {
-        *pool = Some(LineDiffPool::new(repository_path, parallelism.max(1))?);
+        *pool = Some(LineDiffPool::new(repository_path, bare, parallelism.max(1))?);
     } else if !visible {
         *pool = None;
     }
@@ -596,18 +601,19 @@ fn event_loop(
         hide,
         screen,
     } = options;
-    let repository_path = repository.git_dir().to_owned();
-    let common_dir = repository.common_dir.clone().unwrap_or_else(|| repository_path.clone());
+    let mut repository_path = repository.git_dir().to_owned();
+    let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let mut view_repository = gix::open(&repository_path).context("could not open repository for history view")?;
+    let mut repository_is_bare = view_repository.workdir().is_none();
     view_repository.object_cache_size(None);
-    let mailmap = view_repository.open_mailmap();
+    let mut mailmap = view_repository.open_mailmap();
     let mut notes = view_repository
         .notes()
         .map_err(gix::Exn::into_error)
         .context("could not open Git notes")?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let mut ref_snapshot = history::snapshot(&view_repository, &revisions, &hide)?;
-    let (mut ref_watcher, ref_events) = start_ref_watcher(&repository_path, &common_dir);
+    let (mut ref_watcher, mut ref_events) = start_ref_watcher(&repository_path, &common_dir);
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
@@ -631,16 +637,19 @@ fn event_loop(
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
     let mut line_diff_pool = None;
     let mut fill_repository = FillRepository {
-        path: &repository_path,
+        path: repository_path.clone(),
+        bare: repository_is_bare,
         retained: None,
         retain: false,
     };
     configure_initial_screen(&mut app, started_inline);
+    app.set_worktree_changes_available(!repository_is_bare);
     app.configure_hidden_filter(!hide.is_empty());
     sync_line_diff_pool(
         &mut line_diff_pool,
         app.changes_mode.is_some(),
         &repository_path,
+        repository_is_bare,
         line_diff_parallelism,
     )?;
     let mut decorations = Decorations::new();
@@ -774,8 +783,46 @@ fn event_loop(
             && lane_receiver.is_none()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
-            let repository = gix::open_opts(&repository_path, gix::open::Options::isolated())
-                .context("could not inspect changed references")?;
+            let repository = match open_repository(&repository_path, repository_is_bare, true) {
+                Ok(repository) => repository,
+                Err(_err) if worktree_repository_is_gone(&repository_path) => {
+                    let mut recovered = recover_common_repository(&common_dir)
+                        .context("could not recover after the worktree repository disappeared")?;
+                    recovered.object_cache_size(None);
+                    repository_path.clone_from(&common_dir);
+                    repository_is_bare = true;
+                    mailmap = recovered.open_mailmap();
+                    notes = recovered
+                        .notes()
+                        .map_err(gix::Exn::into_error)
+                        .context("could not reopen Git notes after worktree removal")?;
+                    view_repository = recovered;
+                    fill_repository.path.clone_from(&repository_path);
+                    fill_repository.bare = true;
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    app.set_worktree_changes_available(false);
+                    worktree_watcher = None;
+                    worktree_refresh_deadline = None;
+                    worktree_changes = None;
+                    line_diff_pool = None;
+                    sync_line_diff_pool(
+                        &mut line_diff_pool,
+                        app.changes_mode.is_some(),
+                        &repository_path,
+                        true,
+                        line_diff_parallelism,
+                    )?;
+                    let (watcher, events) = start_ref_watcher(&repository_path, &repository_path);
+                    ref_watcher = watcher;
+                    ref_events = events;
+                    app.manual_refresh = ref_watcher.is_none();
+                    app.notice = Some("worktree removed; using the common repository without worktree changes".into());
+                    open_repository(&repository_path, true, true)
+                        .context("could not inspect common repository references")?
+                }
+                Err(err) => return Err(err).context("could not inspect changed references"),
+            };
             let next = history::snapshot(&repository, &revisions, &hide)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed;
@@ -790,6 +837,7 @@ fn event_loop(
                 };
                 refresh_receiver = Some(start_history_refresh(
                     repository_path.clone(),
+                    repository_is_bare,
                     revisions.clone(),
                     hidden,
                     app.known_ids(),
@@ -996,6 +1044,7 @@ fn event_loop(
                 &mut line_diff_pool,
                 app.changes_mode.is_some(),
                 &repository_path,
+                repository_is_bare,
                 line_diff_parallelism,
             )?;
             if app.changes_mode == Some(ChangesMode::Both) {
@@ -1022,7 +1071,7 @@ fn event_loop(
                 }
                 Effect::Reload(show_hidden) => {
                     app.show_hidden = show_hidden;
-                    notes = open_notes(&repository_path)?;
+                    notes = open_notes(&repository_path, repository_is_bare)?;
                     refresh_pending = true;
                     refresh_expand_hidden = true;
                 }
@@ -1034,7 +1083,9 @@ fn event_loop(
                     let result = changes
                         .and_then(|changes| changes.diffs.get(index).zip(changes.paths.get(index)))
                         .context("selected path no longer has diff resources")
-                        .and_then(|(change, path)| prepare_file_diff(&repository_path, change, path))
+                        .and_then(|(change, path)| {
+                            prepare_file_diff(&repository_path, repository_is_bare, change, path)
+                        })
                         .and_then(|diff| match diff {
                             FileDiff::External(command) => {
                                 run_external_diff(terminal, command, enhanced_keyboard).map(|()| false)
@@ -1051,7 +1102,11 @@ fn event_loop(
                     }
                 }
                 Effect::VerifySignatures(ids) => {
-                    verification_receiver = Some(start_signature_verification(repository_path.clone(), ids));
+                    verification_receiver = Some(start_signature_verification(
+                        repository_path.clone(),
+                        repository_is_bare,
+                        ids,
+                    ));
                 }
                 Effect::Quit => return Ok(None),
             }
@@ -1070,11 +1125,17 @@ fn event_loop(
     let restore = inline_terminal
         .map(|inline| leave_alternate_screen(terminal, inline, enhanced_keyboard))
         .transpose();
-    let outcome = result?;
     restore.context("could not restore the inline terminal")?;
+    let outcome = result?;
     if outcome.is_none() && started_inline {
         prepare_inline_exit(&mut app);
-        sync_line_diff_pool(&mut line_diff_pool, false, &repository_path, line_diff_parallelism)?;
+        sync_line_diff_pool(
+            &mut line_diff_pool,
+            false,
+            &repository_path,
+            repository_is_bare,
+            line_diff_parallelism,
+        )?;
         draw(
             terminal,
             &mut app,
@@ -1115,11 +1176,12 @@ type SignatureVerification = (gix::ObjectId, bool);
 
 fn start_signature_verification(
     repository_path: PathBuf,
+    bare: bool,
     ids: Vec<gix::ObjectId>,
 ) -> mpsc::Receiver<Vec<SignatureVerification>> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let results = match gix::open(repository_path) {
+        let results = match open_repository(&repository_path, bare, false) {
             Ok(mut repository) => {
                 repository.object_cache_size(None);
                 ids.into_iter()
@@ -1178,6 +1240,7 @@ fn start_history(
 
 fn start_history_refresh(
     repository_path: PathBuf,
+    bare: bool,
     revisions: Vec<OsString>,
     hidden_revisions: Vec<OsString>,
     known: std::collections::HashSet<gix::ObjectId>,
@@ -1186,7 +1249,7 @@ fn start_history_refresh(
 ) -> mpsc::Receiver<Result<history::Refresh>> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = gix::open_opts(repository_path, gix::open::Options::isolated())
+        let result = open_repository(&repository_path, bare, true)
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
@@ -1335,7 +1398,7 @@ fn draw(
     decorations: &Decorations,
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
-    fill_repository: &mut FillRepository<'_>,
+    fill_repository: &mut FillRepository,
     notes: &mut gix::note::Platform,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     tree_changes: &mut Option<(gix::ObjectId, usize, Changes)>,
@@ -1429,10 +1492,10 @@ fn draw(
         let repository = if fill_repository.retain {
             match &mut fill_repository.retained {
                 Some(repository) => repository,
-                slot @ None => slot.insert(open_fill_repository(fill_repository.path)?),
+                slot @ None => slot.insert(open_fill_repository(&fill_repository.path, fill_repository.bare)?),
             }
         } else {
-            one_shot_repository.insert(open_fill_repository(fill_repository.path)?)
+            one_shot_repository.insert(open_fill_repository(&fill_repository.path, fill_repository.bare)?)
         };
         for index in start..end {
             if app.rows[index].metadata_loaded {
@@ -1510,14 +1573,53 @@ fn draw(
     Ok(())
 }
 
-fn open_fill_repository(repository_path: &Path) -> Result<gix::Repository> {
-    let mut repository = gix::open(repository_path).context("could not open repository for history view")?;
+fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result<gix::Repository> {
+    let options = if isolated {
+        gix::open::Options::isolated()
+    } else {
+        gix::open::Options::default()
+    }
+    .open_path_as_is(bare);
+    let options = if bare {
+        options.cli_overrides(["core.bare=true"])
+    } else {
+        options
+    };
+    Ok(gix::open_opts(repository_path, options)?)
+}
+
+fn recover_common_repository(common_dir: &Path) -> Result<gix::Repository> {
+    std::env::set_current_dir(common_dir).with_context(|| {
+        format!(
+            "could not change directory to common repository at {}",
+            common_dir.display()
+        )
+    })?;
+    open_repository(common_dir, true, false)
+        .with_context(|| format!("could not open common repository at {} as bare", common_dir.display()))
+}
+
+fn normalize_common_dir(common_dir: PathBuf) -> Result<PathBuf> {
+    let current_dir = std::env::current_dir().context("could not obtain current directory")?;
+    gix::path::normalize(common_dir.into(), &current_dir)
+        .map(Into::into)
+        .context("common repository path could not be normalized")
+}
+
+fn worktree_repository_is_gone(repository_path: &Path) -> bool {
+    !repository_path.is_dir() || std::env::current_dir().is_err()
+}
+
+fn open_fill_repository(repository_path: &Path, bare: bool) -> Result<gix::Repository> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository for history view")?;
     repository.object_cache_size(None);
     Ok(repository)
 }
 
-fn open_notes(repository_path: &Path) -> Result<gix::note::Platform> {
-    let mut repository = gix::open(repository_path).context("could not open repository for Git notes")?;
+fn open_notes(repository_path: &Path, bare: bool) -> Result<gix::note::Platform> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository for Git notes")?;
     repository.object_cache_size(None);
     repository
         .notes()
@@ -1525,8 +1627,9 @@ fn open_notes(repository_path: &Path) -> Result<gix::note::Platform> {
         .context("could not open Git notes")
 }
 
-fn prepare_file_diff(repository_path: &Path, change: &FileChange, path: &PathChange) -> Result<FileDiff> {
-    let mut repository = gix::open(repository_path).context("could not open repository for file diff")?;
+fn prepare_file_diff(repository_path: &Path, bare: bool, change: &FileChange, path: &PathChange) -> Result<FileDiff> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository for file diff")?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
     prepare_file_diff_with_repository(&repository, change, path)
 }
@@ -2508,15 +2611,15 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = gix::open_opts(&fixture, gix::open::Options::isolated())?;
         let mut line_diff_pool = None;
-        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, 2)?;
+        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, false, 2)?;
         assert_eq!(
             line_diff_pool.as_ref().map(|pool| pool.workers.len()),
             Some(2),
             "showing changes creates the requested worker pool"
         );
-        sync_line_diff_pool(&mut line_diff_pool, false, &fixture, 2)?;
+        sync_line_diff_pool(&mut line_diff_pool, false, &fixture, false, 2)?;
         assert!(line_diff_pool.is_none(), "hiding changes destroys the worker pool");
-        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, 2)?;
+        sync_line_diff_pool(&mut line_diff_pool, true, &fixture, false, 2)?;
         let line_diff_pool = line_diff_pool
             .as_mut()
             .expect("showing changes recreates the worker pool");
@@ -2676,6 +2779,56 @@ mod tests {
     }
 
     #[test]
+    fn configures_a_common_repository_as_bare_for_tree_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let git_dir = gix::open(&fixture)?.git_dir().to_owned();
+        let repository = open_repository(&git_dir, true, false)?;
+
+        assert_eq!(
+            repository.config_snapshot().boolean("core.bare"),
+            Some(true),
+            "repository configuration suppresses worktree operations"
+        );
+        assert!(
+            LineDiffPool::new(&git_dir, true, 1).is_ok(),
+            "tree changes remain available without a worktree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn detects_a_removed_per_worktree_repository_even_if_the_current_directory_resolves() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        assert!(
+            std::env::current_dir().is_ok(),
+            "the process directory remains available"
+        );
+        let missing = fixture.join("missing-worktree-git-dir");
+        assert!(worktree_repository_is_gone(&missing));
+        let Err(err) = recover_common_repository(&missing) else {
+            panic!("a missing common repository cannot be recovered")
+        };
+        assert!(
+            format!("{err:#}").contains("could not change directory to common repository"),
+            "recovery failures retain actionable context"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normalizes_a_common_directory_through_a_missing_per_worktree_directory() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
+        let git_dir = gix::open(&fixture)?.git_dir().to_owned();
+        let indirect = git_dir.join("worktrees/missing/../..");
+        assert!(
+            !git_dir.join("worktrees/missing").exists(),
+            "the intermediate path is absent"
+        );
+        assert_eq!(normalize_common_dir(indirect)?, git_dir);
+        Ok(())
+    }
+
+    #[test]
     fn loads_staged_and_unstaged_worktree_changes() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let path = fixture.path();
@@ -2707,7 +2860,7 @@ mod tests {
         std::fs::write(path.join("ignored"), "ignored\n")?;
 
         let repository = gix::open(path)?;
-        let mut line_diff_pool = LineDiffPool::new(path, 2)?;
+        let mut line_diff_pool = LineDiffPool::new(path, false, 2)?;
         let changes = load_worktree_changes(&repository, &mut line_diff_pool)?;
         let rows: Vec<_> = changes
             .paths
