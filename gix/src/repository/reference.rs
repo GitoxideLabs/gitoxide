@@ -243,8 +243,11 @@ impl crate::Repository {
     /// assert_eq!(head.decode()?.message, "c2\n");
     /// assert_eq!(repo.head_tree_id()?, head.tree_id()?);
     ///
-    /// let previous = repo.rev_parse_single("HEAD^")?;
-    /// assert_ne!(previous, head.id);
+    /// #[cfg(feature = "revision")]
+    /// {
+    ///     let previous = repo.rev_parse_single("HEAD^")?;
+    ///     assert_ne!(previous, head.id);
+    /// }
     /// # Ok(()) }
     /// ```
     pub fn head_commit(&self) -> Result<crate::Commit<'_>, reference::head_commit::Error> {

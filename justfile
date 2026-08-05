@@ -233,6 +233,8 @@ doc-tests:
     cargo test --workspace --doc --no-fail-fast
     # `cargo nextest` doesn't run doctests, so cover feature-gated examples explicitly here.
     cargo test -p gix-packetline --doc --features blocking-io --no-fail-fast
+    cargo test -p gix --doc --no-default-features --no-fail-fast
+    cargo test -p gix --doc --no-default-features --features revision --no-fail-fast
 
 # These tests aren't run by default as they are flaky (even locally)
 unit-tests-flaky:
