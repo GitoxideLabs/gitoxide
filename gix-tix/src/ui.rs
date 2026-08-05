@@ -592,8 +592,8 @@ pub(crate) fn draw_with_worktree(
         State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(format!(
-        "{} commits{status} · ↑↓/jk move · h/l pan",
-        app.rows.len()
+        "{}{status} · ↑↓/jk move · h/l pan",
+        history_position(app)
     ))];
     if app.tree_changes_visible || app.worktree_changes_visible {
         footer_spans.push(match app.focus_feedback.take() {
@@ -670,6 +670,13 @@ pub(crate) fn draw_with_worktree(
         footer_spans.push(Span::raw(" · q quit"));
     }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+}
+
+fn history_position(app: &App) -> String {
+    match (app.state, app.selected) {
+        (State::Complete, Some(selected)) => format!("#{}", app.rows.len().saturating_sub(selected)),
+        _ => format!("{} commits", app.rows.len()),
+    }
 }
 
 fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app: &App) {
@@ -1393,6 +1400,40 @@ mod tests {
     }
 
     #[test]
+    fn counts_commits_until_the_graph_is_complete_then_tracks_the_selected_row() {
+        let mut app = App::new(3);
+        app.extend_commits(
+            (1..=3)
+                .map(|byte| Commit {
+                    id: gix::ObjectId::Sha1([byte; 20]),
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(history_position(&app), "3 commits");
+
+        let rows = app
+            .start_lane_computation()
+            .expect("a loading app starts lane computation");
+        assert_eq!(history_position(&app), "3 commits");
+        let (rows, lanes, lane_time) = crate::app::compute_lanes(rows);
+        app.finish_lane_computation(rows, lanes, lane_time);
+
+        assert_eq!(history_position(&app), "#3");
+        app.update(Action::MoveDown);
+        assert_eq!(history_position(&app), "#2");
+        app.update(Action::MoveDown);
+        assert_eq!(history_position(&app), "#1");
+    }
+
+    #[test]
     fn renders_selection_info_beside_the_right_marker_without_dimming_it() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(2);
         app.extend_commits(vec![Commit {
@@ -1742,7 +1783,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "1 commits · ↑↓/jk move · h/l pan · [ align · o commit · c changes · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "#1 · ↑↓/jk move · h/l pan · [ align · o commit · c changes · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -1794,7 +1835,7 @@ mod tests {
             rendered_line(&inline_terminal, 2).trim().is_empty(),
             "inline mode separates the commits from the status line"
         );
-        assert!(rendered_line(&inline_terminal, 3).starts_with("1 commits"));
+        assert!(rendered_line(&inline_terminal, 3).starts_with("#1"));
         app.inline = false;
 
         let row = terminal.backend().buffer();
