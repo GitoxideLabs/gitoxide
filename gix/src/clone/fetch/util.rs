@@ -1,5 +1,6 @@
 use std::io::Write;
 
+use gix_error::ErrorExt;
 use gix_ref::{
     Category, FullNameRef, PartialName,
     transaction::{LogChange, RefLog},
@@ -27,7 +28,7 @@ pub fn append_remote_to_local_config_file(
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
     remote.save_as_to(remote_name, &mut config)?;
 
-    write_to_local_config(&config, WriteMode::Append)?;
+    write_to_local_config(&config, WriteMode::Append).map_err(gix_error::Error::from_error)?;
     Ok(config)
 }
 
@@ -55,27 +56,32 @@ pub(super) fn reinitialize_with_object_hash(
     let git_dir = repo.git_dir();
     let config_path = git_dir.join("config");
 
-    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
+        .map_err(gix_error::Error::from_error)?;
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
     config
         .section_mut("core", None)
         .expect("freshly initialized repository has a core section")
-        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })?;
+        .set("repositoryformatversion", if is_sha256 { "1" } else { "0" })
+        .map_err(gix_error::Error::from_error)?;
     if is_sha256 {
         config
             .section_mut_or_create_new("extensions", None)
             .expect("valid section name")
-            .set("objectformat", object_hash.to_string())?;
+            .set("objectformat", object_hash.to_string())
+            .map_err(gix_error::Error::from_error)?;
     } else {
         // In a freshly initialized repository, this section exists solely to carry `objectformat`.
         config.remove_section("extensions", None);
     }
-    let mut lock =
-        gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)?;
-    config.write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)?;
-    lock.commit()?;
+    let mut lock = gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
+        .map_err(gix_error::Error::from_error)?;
+    config
+        .write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)
+        .map_err(gix_error::Error::from_error)?;
+    lock.commit().map_err(gix_error::Error::from_error)?;
 
     Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())?.to_thread_local())
 }
@@ -181,10 +187,13 @@ pub fn update_head(
     };
     match head_ref {
         Some(referent) => {
-            let referent: gix_ref::FullName = referent.try_into().map_err(|err| Error::InvalidHeadRef {
-                head_ref_name: referent.to_owned(),
-                source: err,
-            })?;
+            let referent: gix_ref::FullName =
+                gix_ref::FullName::try_from(referent).map_err(|err: gix_validate::reference::name::Error| {
+                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                        "The remote HEAD points to an invalid reference",
+                        referent.to_owned(),
+                    )))
+                })?;
             repo.refs
                 .transaction()
                 .packed_refs(gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(
@@ -217,16 +226,9 @@ pub fn update_head(
                     gix_lock::acquire::Fail::Immediately,
                     gix_lock::acquire::Fail::Immediately,
                 )
-                .map_err(gix_error::Error::from_error)
-                .map_err(Error::HeadUpdate)?
-                .commit(
-                    repo.committer()
-                        .transpose()
-                        .map_err(gix_error::Error::from)
-                        .map_err(Error::HeadUpdate)?,
-                )
-                .map_err(gix_error::Error::from_error)
-                .map_err(Error::HeadUpdate)?;
+                .map_err(gix_error::Error::from_error)?
+                .commit(repo.committer().transpose().map_err(gix_error::Error::from)?)
+                .map_err(gix_error::Error::from_error)?;
 
             if let Some(head_peeled_id) = head_peeled_id {
                 let mut log = reflog_message();
@@ -239,8 +241,7 @@ pub fn update_head(
                     },
                     name: head,
                     deref: false,
-                })
-                .map_err(Error::HeadUpdate)?;
+                })?;
             }
 
             setup_branch_config(repo, referent.as_ref(), head_peeled_id, remote_name)?;
@@ -258,8 +259,7 @@ pub fn update_head(
                 },
                 name: head,
                 deref: false,
-            })
-            .map_err(Error::HeadUpdate)?;
+            })?;
         }
     }
     Ok(())
@@ -316,12 +316,16 @@ pub(super) fn find_custom_refname<'a>(
         return Ok((item.target, item.full_ref_name));
     }
     if !requested_name.starts_with(b"refs/") {
-        let branch_name = Category::LocalBranch.to_full_name(requested_name)?;
+        let branch_name = Category::LocalBranch
+            .to_full_name(requested_name)
+            .map_err(gix_error::Error::from_error)?;
         if let Some(item) = find_item(branch_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
 
-        let tag_name = Category::Tag.to_full_name(requested_name)?;
+        let tag_name = Category::Tag
+            .to_full_name(requested_name)
+            .map_err(gix_error::Error::from_error)?;
         if let Some(item) = find_item(tag_name.as_bstr()) {
             return Ok((item.target, item.full_ref_name));
         }
@@ -329,26 +333,39 @@ pub(super) fn find_custom_refname<'a>(
 
     let res = group.match_lhs(filtered_items.iter().copied());
     match res.mappings.len() {
-        0 => Err(Error::RefNameMissing {
-            wanted: ref_name.clone(),
-        }),
+        0 => Err(gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+            "The remote didn't have any ref that matched '{requested_name}'"
+        )))),
         1 => {
             let item = filtered_items[res.mappings[0]
                 .item_index
                 .expect("we map by name only and have no object-id in refspec")];
             Ok((item.target, item.full_ref_name))
         }
-        _ => Err(Error::RefNameAmbiguous {
-            wanted: ref_name.clone(),
-            candidates: res
+        _ => {
+            let candidates = res
                 .mappings
                 .into_iter()
                 .filter_map(|m| match m.lhs {
                     gix_refspec::match_group::SourceRef::FullName(name) => Some(name.into_owned()),
                     gix_refspec::match_group::SourceRef::ObjectId(_) => None,
                 })
-                .collect(),
-        }),
+                .collect::<Vec<_>>();
+            Err(gix_error::Error::from_error(
+                gix_error::ValidationError::new_with_input(
+                    format!(
+                        "The remote has {} refs for '{requested_name}', try to use a specific name: {}",
+                        candidates.len(),
+                        candidates
+                            .iter()
+                            .filter_map(|name| name.to_str().ok())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    ref_name.as_ref().as_bstr().to_owned(),
+                ),
+            ))
+        }
     }
 }
 
@@ -386,9 +403,13 @@ fn setup_branch_config(
         let mut section = config
             .new_section("branch", short_name)
             .expect("section header name is always valid per naming rules, our input branch name is valid");
-        section.push("remote", remote_name)?;
-        section.push("merge", branch.as_bstr())?;
-        write_to_local_config(&config, WriteMode::Overwrite)?;
+        section
+            .push("remote", remote_name)
+            .map_err(gix_error::Error::from_error)?;
+        section
+            .push("merge", branch.as_bstr())
+            .map_err(gix_error::Error::from_error)?;
+        write_to_local_config(&config, WriteMode::Overwrite).map_err(gix_error::Error::from_error)?;
         config.commit().expect("configuration we set is valid");
     }
     Ok(())

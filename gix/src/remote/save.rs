@@ -5,19 +5,7 @@ use gix_utils::AsBStr;
 pub type Error = gix_error::Error;
 
 /// The error returned by [`Remote::save_as_to()`].
-///
-/// Note that this type should rather be in the `as` module, but cannot be as it's part of the Rust syntax.
-// Note that this stays an enum: `clone::fetch::Error` already embeds the erased
-// `config::overrides::Error`, so erasing this one too would derive `From<gix_error::Error>` twice
-// for that type.
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum AsError {
-    #[error(transparent)]
-    Save(#[from] Error),
-    #[error(transparent)]
-    Name(#[from] crate::remote::name::Error),
-}
+pub type AsError = gix_error::Error;
 
 /// Serialize into git-config.
 impl Remote<'_> {

@@ -224,10 +224,7 @@ mod find_remote {
             );
         }
         assert!(count > 0, "should have seen more than one commit");
-        assert!(matches!(
-            repo.find_remote("unknown").unwrap_err(),
-            gix::remote::find::existing::Error::NotFound { .. }
-        ));
+        assert!(repo.find_remote("unknown").unwrap_err().is_not_found());
         Ok(())
     }
 

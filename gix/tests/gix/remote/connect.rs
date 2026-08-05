@@ -11,13 +11,7 @@ mod blocking_io {
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
-                assert!(matches!(
-                    remote.connect(Fetch).err(),
-                    Some(gix::remote::connect::Error::ProtocolDenied {
-                        url: _,
-                        scheme: gix::url::Scheme::File
-                    })
-                ));
+                assert!(remote.connect(Fetch).err().expect("protocol is denied").is_validation());
             }
         }
 

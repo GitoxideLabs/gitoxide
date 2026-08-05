@@ -1,5 +1,6 @@
 #![allow(clippy::result_large_err)]
 use crate::{bstr::BString, remote};
+use gix_error::ErrorExt;
 
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
@@ -52,34 +53,43 @@ pub struct PrepareFetch {
 /// Errors returned by [`PrepareFetch::with_revision()`].
 pub mod with_revision {
     /// An invalid revision for a single-revision clone.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Parse(#[from] gix_refspec::parse::Error),
-        #[error("A clone revision must be HEAD, a full reference name, or a full object ID, got {revision:?}")]
+        Parse(gix_refspec::parse::Error),
         Invalid { revision: crate::bstr::BString },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Parse(err) => err.fmt(f),
+                Error::Invalid { revision } => write!(
+                    f,
+                    "A clone revision must be HEAD, a full reference name, or a full object ID, got {revision:?}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Parse(err) => Some(err),
+                Error::Invalid { .. } => None,
+            }
+        }
+    }
+
+    impl From<gix_refspec::parse::Error> for Error {
+        fn from(err: gix_refspec::parse::Error) -> Self {
+            Error::Parse(err)
+        }
     }
 }
 
 /// The error returned by [`PrepareFetch::new()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    Config(crate::config::Error),
-    #[error(transparent)]
-    Init(#[from] crate::init::Error),
-    #[error(transparent)]
-    CommitterOrFallback(crate::config::commit_signature::Error),
-    #[error(transparent)]
-    UrlParse(#[from] gix_url::parse::Error),
-    #[error("Failed to turn a the relative file url \"{}\" into an absolute one", url.to_bstring())]
-    CanonicalizeUrl {
-        url: gix_url::Url,
-        source: gix_path::realpath::Error,
-    },
-}
+pub type Error = gix_error::Error;
 
 /// Instantiation
 impl PrepareFetch {
@@ -109,7 +119,9 @@ impl PrepareFetch {
         gix_url::parse::Error: From<E>,
     {
         Self::new_inner(
-            url.try_into().map_err(gix_url::parse::Error::from)?,
+            url.try_into()
+                .map_err(gix_url::parse::Error::from)
+                .map_err(gix_error::Error::from_error)?,
             path.as_ref(),
             kind,
             create_opts,
@@ -136,15 +148,13 @@ impl PrepareFetch {
             crate::create::Kind::WithWorktree => path.join(gix_discover::DOT_GIT_DIR),
             crate::create::Kind::Bare => path.to_owned(),
         };
-        let config = crate::config(Some(&git_dir), &open_opts).map_err(Error::Config)?;
+        let config = crate::config(Some(&git_dir), &open_opts)?;
         if crate::config::cache::util::config_bool_opt(
             &config,
             &crate::config::tree::Core::SYMLINKS,
             "core.symlinks",
             open_opts.lenient_config,
-        )
-        .map_err(Error::Config)?
-            == Some(false)
+        )? == Some(false)
         {
             open_opts.api_config_overrides.push("core.symlinks=false".into());
         }
@@ -159,13 +169,14 @@ impl PrepareFetch {
         };
 
         let mut repo = crate::ThreadSafeRepository::init_opts(path, kind, create_opts, open_opts)?.to_thread_local();
-        url.canonicalize(repo.options.current_dir_or_empty())
-            .map_err(|err| Error::CanonicalizeUrl {
-                url: url.clone(),
-                source: err,
-            })?;
+        url.canonicalize(repo.options.current_dir_or_empty()).map_err(|err| {
+            gix_error::Error::from(err.and_raise(gix_error::message!(
+                "Failed to turn the relative file url {:?} into an absolute one",
+                url.to_bstring()
+            )))
+        })?;
         repo.committer_or_set_generic_fallback()
-            .map_err(Error::CommitterOrFallback)?;
+            .map_err(gix_error::Error::from_error)?;
         Ok(PrepareFetch {
             url,
             #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]

@@ -201,7 +201,12 @@ impl ThreadSafeRepository {
             lossy_config,
             lenient_config,
         )
-        .map_err(gix_error::Error::from_error)?;
+        .map_err(|err| {
+            use gix_error::ErrorExt;
+            gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(
+                "Repository configuration could not be loaded",
+            )))
+        })?;
 
         if repo_config.precompose_unicode {
             git_dir = gix_utils::str::precompose_path(git_dir.into()).into_owned();

@@ -1518,7 +1518,6 @@ dependencies = [
  "futures-lite",
  "gix",
  "gix-archive",
- "gix-error",
  "gix-fsck",
  "gix-pack",
  "gix-status",
@@ -1611,7 +1610,6 @@ dependencies = [
  "signal-hook 0.4.4",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]

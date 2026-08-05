@@ -2,6 +2,7 @@ use crate::{
     Remote,
     remote::{Connection, connection::AuthenticateFn, connection::ConnectionDetached},
 };
+use gix_error::ErrorExt;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
@@ -151,7 +152,9 @@ fn configured_credentials_for_current_url(repo: crate::Repository) -> Authentica
                 .config_snapshot()
                 .credential_helpers(gix_url::parse(&url)?)
                 .map_err(|source| gix_credentials::protocol::Error::ConfigureCredentialHelpers {
-                    source: Box::new(source),
+                    source: Box::new(gix_error::Error::from(source.and_raise(
+                        gix_error::CorruptionError::new("Credential helper configuration is invalid"),
+                    ))),
                 })?;
             let outcome = cascade.invoke(action, prompt_opts.clone());
             previous_cascade_and_prompt = Some((cascade, prompt_opts));

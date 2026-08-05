@@ -79,10 +79,7 @@ fn not_configured() -> crate::Result {
     assert_eq!(branch.remote(gix::remote::Direction::Fetch).transpose()?, None);
     assert_eq!(head.into_remote(gix::remote::Direction::Fetch).transpose()?, None);
     assert!(
-        matches!(
-            repo.find_fetch_remote(None),
-            Err(gix::remote::find::for_fetch::Error::ExactlyOneRemoteNotAvailable)
-        ),
+        repo.find_fetch_remote(None).unwrap_err().is_not_found(),
         "there is no remote to be found"
     );
 

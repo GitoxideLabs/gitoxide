@@ -9,7 +9,7 @@ use crate::{OutputFormat, net, pack::receive::protocol::fetch::negotiate};
 use gix::protocol::transport::client::async_io::connect;
 #[cfg(feature = "blocking-client")]
 use gix::protocol::transport::client::blocking_io::connect;
-use gix::{DynNestedProgress, config::tree::Key, protocol::bisync, remote::fetch::Error};
+use gix::{DynNestedProgress, config::tree::Key, protocol::bisync};
 pub use gix::{
     NestedProgress, Progress,
     hash::ObjectId,
@@ -99,11 +99,16 @@ where
     let refmap = fetch_refmap.fetch_blocking(&mut progress, &mut transport.inner, trace_packetlines)?;
 
     if refmap.is_missing_required_mapping() {
-        return Err(Error::NoMapping {
-            refspecs: refmap.refspecs.clone(),
-            num_remote_refs: refmap.remote_refs.len(),
-        }
-        .into());
+        anyhow::bail!(
+            "None of the refspec(s) {} matched any of the {} refs on the remote",
+            refmap
+                .refspecs
+                .iter()
+                .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            refmap.remote_refs.len()
+        );
     }
 
     let mut negotiate = Negotiate { refmap: &refmap };

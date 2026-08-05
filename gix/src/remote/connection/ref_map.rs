@@ -1,44 +1,14 @@
+use gix_error::ErrorExt;
 use gix_features::progress::Progress;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
 #[cfg(feature = "blocking-network-client")]
 use gix_transport::client::blocking_io::Transport;
 
-use crate::{
-    bstr::BString,
-    remote::{Connection, connection::ConnectionDetached, fetch},
-};
+use crate::remote::{Connection, connection::ConnectionDetached, fetch};
 
 /// The error returned by [`Connection::ref_map()`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    InitRefMap(#[from] gix_protocol::fetch::refmap::init::Error),
-    #[error("Failed to configure the transport before connecting to {url:?}")]
-    GatherTransportConfig {
-        url: BString,
-        source: crate::config::transport::Error,
-    },
-    #[error("Failed to configure the transport layer")]
-    ConfigureTransport(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
-    Handshake(#[from] gix_protocol::handshake::Error),
-    #[error(transparent)]
-    Transport(#[from] gix_protocol::transport::client::Error),
-    #[error(transparent)]
-    ConfigureCredentials(#[from] crate::config::credential_helpers::Error),
-}
-
-impl Error {
-    pub(crate) fn can_retry(&self) -> bool {
-        match self {
-            Error::Transport(err) => err.can_retry(),
-            Error::Handshake(err) => err.iter().any(|frame| gix_error::can_retry(frame.error())),
-            _ => false,
-        }
-    }
-}
+pub type Error = gix_error::Error;
 
 /// For use in [`Connection::ref_map()`].
 #[derive(Debug, Clone)]
@@ -145,13 +115,17 @@ where
         if self.transport_options.is_none() {
             self.transport_options = repo
                 .transport_options(url.as_ref(), self.remote.name().map(crate::remote::Name::as_bstr))
-                .map_err(|err| Error::GatherTransportConfig {
-                    source: err,
-                    url: url.into_owned(),
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(format!(
+                        "Failed to configure the transport before connecting to {url:?}"
+                    ))))
                 })?;
         }
         if let Some(config) = self.transport_options.as_ref() {
-            self.transport.inner.configure(&**config)?;
+            self.transport
+                .inner
+                .configure(&**config)
+                .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,
@@ -160,26 +134,32 @@ where
             handshake_parameters,
             &mut progress,
         )
-        .await?;
+        .await
+        .map_err(gix_error::Error::from)?;
 
         let context = fetch::refmap::init::Context {
             fetch_refspecs: self.remote.fetch_specs.clone(),
             extra_refspecs,
         };
 
-        let fetch_refmap = handshake.prepare_lsrefs_or_extract_refmap(
-            repo.config.user_agent_tuple(),
-            prefix_from_spec_as_filter_on_remote,
-            context,
-        )?;
+        let fetch_refmap = handshake
+            .prepare_lsrefs_or_extract_refmap(
+                repo.config.user_agent_tuple(),
+                prefix_from_spec_as_filter_on_remote,
+                context,
+            )
+            .map_err(gix_error::Error::from_error)?;
 
         #[cfg(feature = "async-network-client")]
         let ref_map = fetch_refmap
             .fetch_async(progress, &mut self.transport.inner, self.trace)
-            .await?;
+            .await
+            .map_err(gix_error::Error::from_error)?;
 
         #[cfg(feature = "blocking-network-client")]
-        let ref_map = fetch_refmap.fetch_blocking(progress, &mut self.transport.inner, self.trace)?;
+        let ref_map = fetch_refmap
+            .fetch_blocking(progress, &mut self.transport.inner, self.trace)
+            .map_err(gix_error::Error::from_error)?;
 
         self.handshake = Some(handshake);
         Ok(ref_map)

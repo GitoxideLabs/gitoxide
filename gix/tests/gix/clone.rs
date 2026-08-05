@@ -283,12 +283,10 @@ mod blocking_io {
         .fetch_only(gix::progress::Discard, &AtomicBool::default())
         .unwrap_err();
         assert!(
-            matches!(
-                err,
-                gix::clone::fetch::Error::Fetch(gix::remote::fetch::Error::Fetch(
-                    gix_protocol::fetch::Error::RejectShallowRemote
-                ))
-            ),
+            err.sources().any(|source| matches!(
+                source.downcast_ref::<gix_protocol::fetch::Error>(),
+                Some(gix_protocol::fetch::Error::RejectShallowRemote)
+            )),
             "we can avoid fetching from remotes with this setting"
         );
         Ok(())
@@ -824,10 +822,7 @@ mod blocking_io {
         .map(drop)
         .expect_err("an existing .git directory must not be reused for clone");
 
-        let gix::clone::Error::Init(init_err) = &err else {
-            panic!("unexpected error: {err}");
-        };
-        assert!(init_err.sources().any(|source| matches!(
+        assert!(err.sources().any(|source| matches!(
             source.downcast_ref::<gix_error::ValidationError>(),
             Some(gix_error::ValidationError { input: Some(path), .. })
                 if path.as_bstr() == dot_git.to_string_lossy().as_bytes()
@@ -1328,10 +1323,7 @@ fn clone_and_destination_must_be_empty() -> crate::Result {
         restricted(),
     ) {
         Ok(_) => unreachable!("this should fail as the directory isn't empty"),
-        Err(err) => assert!(
-            err.to_string()
-                .starts_with("Refusing to initialize the non-empty directory as ")
-        ),
+        Err(err) => assert!(err.is_validation()),
     }
     Ok(())
 }
@@ -1349,10 +1341,7 @@ fn clone_with_worktree_and_destination_must_be_empty() -> crate::Result {
     )
     .map(drop)
     .expect_err("this should fail as the directory isn't empty");
-    assert!(
-        err.to_string()
-            .starts_with("Refusing to initialize the non-empty directory as ")
-    );
+    assert!(err.is_validation());
     Ok(())
 }
 
