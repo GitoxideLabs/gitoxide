@@ -1,1 +1,5 @@
-Error: Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument
+Error: Transport handshake failed, at gix-protocol/src/handshake/function.rs:92
+
+Caused by:
+    0: SSH invocation failed, at gix-protocol/src/handshake/function.rs:92
+    1: Host name '-oProxyCommand=open$IFS-aCalculator' could be mistaken for a command-line argument, at gix-protocol/src/handshake/function.rs:92
