@@ -28,7 +28,7 @@ impl<'a> TryFrom<&'a BStr> for NameRef<'a> {
 
     fn try_from(attr: &'a BStr) -> Result<Self, Self::Error> {
         fn attr_valid(attr: &BStr) -> bool {
-            if attr.first() == Some(&b'-') {
+            if attr.is_empty() || attr.first() == Some(&b'-') {
                 return false;
             }
 
@@ -87,13 +87,15 @@ impl<'de> serde::Deserialize<'de> for Name {
         struct NameDef(String);
 
         let NameDef(value) = <NameDef as serde::Deserialize>::deserialize(deserializer)?;
-        Ok(Name(OwnShared::from(value)))
+        NameRef::try_from(value.as_bytes().as_bstr())
+            .map(NameRef::to_owned)
+            .map_err(serde::de::Error::custom)
     }
 }
 
 /// The error returned by [`parse::Iter`][crate::parse::Iter].
 #[derive(Debug, thiserror::Error)]
-#[error("Attribute has non-ascii characters or starts with '-': {attribute}")]
+#[error("Invalid attribute name: {attribute}")]
 pub struct Error {
     /// The attribute that failed to parse.
     pub attribute: BString,

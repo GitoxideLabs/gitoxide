@@ -156,7 +156,13 @@ mkdir tokenisation
     printf 'tokenisation text=auto\302\240eol=lf\n'
     # An empty attribute name makes Git discard the entire line.
     echo 'tokenisation text =lf eol=lf'
+    # The exact macro prefix is a pattern, and builtin_* is reserved in attribute files.
+    echo '[attr] bare-pattern'
+    echo 'reserved builtin_custom valid'
   } > .gitattributes
 
   baseline tokenisation
+  baseline a
+  baseline z
+  baseline reserved
 )
