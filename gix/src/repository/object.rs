@@ -510,9 +510,19 @@ impl crate::Repository {
         tree: impl Into<ObjectId>,
         parents: impl IntoIterator<Item = impl Into<ObjectId>>,
     ) -> Result<Commit<'_>, new_commit::Error> {
-        let author = self.author().ok_or(new_commit::Error::AuthorMissing)??;
-        let committer = self.committer().ok_or(new_commit::Error::CommitterMissing)??;
-        Ok(self.new_commit_as(committer, author, message, tree, parents)?)
+        let author = self
+            .author()
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::ValidationError::new("Author identity is not configured"))
+            })?
+            .map_err(gix_error::Error::from)?;
+        let committer = self
+            .committer()
+            .ok_or_else(|| {
+                gix_error::Error::from_error(gix_error::ValidationError::new("Committer identity is not configured"))
+            })?
+            .map_err(gix_error::Error::from)?;
+        self.new_commit_as(committer, author, message, tree, parents)
     }
 
     /// Create a nwe commit object with `message` referring to `tree` with `parents`, using the specified

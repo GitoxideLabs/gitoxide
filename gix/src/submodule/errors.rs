@@ -32,7 +32,7 @@ pub mod is_active {
         #[error(transparent)]
         InitPathspecDefaults(#[from] gix_pathspec::defaults::from_environment::Error),
         #[error(transparent)]
-        ObtainIndex(#[from] crate::repository::index_or_load_from_head::Error),
+        ObtainIndex(crate::repository::index_or_load_from_head::Error),
     }
 }
 
@@ -110,7 +110,7 @@ pub mod index_id {
         #[error(transparent)]
         PathConfiguration(#[from] gix_submodule::config::path::Error),
         #[error(transparent)]
-        Index(#[from] crate::repository::index_or_load_from_head::Error),
+        Index(crate::repository::index_or_load_from_head::Error),
     }
 }
 

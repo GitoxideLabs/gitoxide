@@ -158,7 +158,7 @@ impl crate::Repository {
         Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
             None => {
-                let tree = self.head_commit()?.tree_id()?;
+                let tree = self.head_commit()?.tree_id().map_err(gix_error::Error::from_error)?;
                 IndexPersistedOrInMemory::InMemory(self.index_from_tree(&tree)?)
             }
         })
@@ -194,10 +194,7 @@ impl crate::Repository {
                         .peel_to_commit()?
                         .tree_id()
                         .map_err(gix_error::Error::from_error)?;
-                    IndexPersistedOrInMemory::InMemory(
-                        self.index_from_tree(&head_tree_id)
-                            .map_err(gix_error::Error::from_error)?,
-                    )
+                    IndexPersistedOrInMemory::InMemory(self.index_from_tree(&head_tree_id)?)
                 }
                 None => IndexPersistedOrInMemory::InMemory(gix_index::File::from_state(
                     gix_index::State::new(self.object_hash()),
@@ -211,13 +208,15 @@ impl crate::Repository {
     ///
     /// Note that this is an expensive operation as it requires recursively traversing the entire tree to unpack it into the index.
     pub fn index_from_tree(&self, tree: &gix_hash::oid) -> Result<gix_index::File, super::index_from_tree::Error> {
+        use gix_error::ResultExt;
         Ok(gix_index::File::from_state(
-            gix_index::State::from_tree(tree, self, self.config.protect_options()?).map_err(|err| {
-                super::index_from_tree::Error::IndexFromTree {
-                    id: tree.into(),
-                    source: err,
-                }
-            })?,
+            gix_index::State::from_tree(
+                tree,
+                self,
+                self.config.protect_options().map_err(gix_error::Error::from)?,
+            )
+            .or_raise(|| gix_error::message!("Could not create index from tree at {tree}"))
+            .map_err(gix_error::Error::from)?,
             self.git_dir().join("index"),
         ))
     }

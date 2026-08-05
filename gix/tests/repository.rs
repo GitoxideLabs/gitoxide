@@ -69,11 +69,10 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
         "absolute paths inside the worktree become repository-relative"
     );
     assert!(
-        matches!(
-            repo.normalize_path("../../outside"),
-            Err(gix::repository::normalize_path::Error::OutsideOfRepository { .. })
-        ),
-        "relative paths cannot traverse above the worktree"
+        repo.normalize_path("../../outside")
+            .expect_err("relative paths cannot traverse above the worktree")
+            .is_validation(),
+        "leaving the worktree is a validation error"
     );
 
     assert_eq!(
@@ -92,19 +91,18 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
     let outside = root.parent().expect("fixture has a parent").to_owned();
     let outside_as_bstr = gix::path::into_bstr(outside.clone());
 
-    match repo
+    let err = repo
         .normalize_path(&outside_as_bstr)
-        .expect_err("an absolute path outside the repository must fail")
-    {
-        gix::repository::normalize_path::Error::AbsolutePathOutsideOfRepository {
-            path,
-            root: actual_root,
-        } => {
-            assert_eq!(path, outside, "the rejected path is retained");
-            assert_eq!(actual_root, root, "the repository root is retained");
-        }
-        err => panic!("expected an absolute-path-outside error, got {err:?}"),
-    }
+        .expect_err("an absolute path outside the repository must fail");
+    assert!(err.is_validation(), "an outside path is a validation error");
+    assert!(
+        err.to_string().contains(&outside.display().to_string()),
+        "the rejected path is retained in the message"
+    );
+    assert!(
+        err.to_string().contains(&root.display().to_string()),
+        "the repository root is retained in the message"
+    );
     Ok(())
 }
 

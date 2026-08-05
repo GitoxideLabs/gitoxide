@@ -63,17 +63,7 @@ mod worktree;
 ///
 mod new_commit {
     /// The error returned by [`new_commit(…)`](crate::Repository::new_commit()).
-    #[derive(Debug, thiserror::Error)]
-    pub enum Error {
-        #[error(transparent)]
-        ParseTime(#[from] crate::config::time::Error),
-        #[error("Committer identity is not configured")]
-        CommitterMissing,
-        #[error("Author identity is not configured")]
-        AuthorMissing,
-        #[error(transparent)]
-        NewCommitAs(#[from] crate::repository::new_commit_as::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -217,120 +207,45 @@ pub mod commit_graph_if_enabled {
 #[cfg(feature = "index")]
 pub mod index_from_tree {
     /// The error returned by [Repository::index_from_tree()](crate::Repository::index_from_tree).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not create index from tree at {id}")]
-        IndexFromTree {
-            id: gix_hash::ObjectId,
-            source: gix_index::init::from_tree::Error,
-        },
-        #[error("Couldn't obtain configuration for core.protect*")]
-        BooleanConfig(#[from] crate::config::boolean::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod branch_remote_ref_name {
     /// The error returned by [Repository::branch_remote_ref_name()](crate::Repository::branch_remote_ref_name()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The configured name of the remote ref to merge wasn't valid")]
-        ValidateFetchRemoteRefName(#[from] gix_validate::reference::name::Error),
-        #[error(transparent)]
-        PushDefault(#[from] crate::config::key::GenericErrorWithValue),
-        #[error(transparent)]
-        FindPushRemote(#[from] crate::remote::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod branch_remote_tracking_ref_name {
     /// The error returned by [Repository::branch_remote_tracking_ref_name()](crate::Repository::branch_remote_tracking_ref_name()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The name of the tracking reference was invalid")]
-        ValidateTrackingRef(#[from] gix_validate::reference::name::Error),
-        #[error("Could not get the remote reference to translate into the local tracking branch")]
-        RemoteRef(#[from] super::branch_remote_ref_name::Error),
-        #[error("Couldn't find remote to obtain fetch-specs for mapping to the tracking reference")]
-        FindRemote(#[from] crate::remote::find::existing::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod upstream_branch_and_remote_name_for_tracking_branch {
     /// The error returned by [Repository::upstream_branch_and_remote_name_for_tracking_branch()](crate::Repository::upstream_branch_and_remote_for_tracking_branch()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The input branch '{}' needs to be a remote tracking branch", full_name.as_bstr())]
-        BranchCategory { full_name: gix_ref::FullName },
-        #[error(transparent)]
-        FindRemote(#[from] crate::remote::find::existing::Error),
-        #[error("Found ambiguous remotes without 1:1 mapping or more than one match: {}", remotes.iter()
-                                                                            .map(|r| r.as_bstr().to_string())
-                                                                            .collect::<Vec<_>>().join(", "))]
-        AmbiguousRemotes { remotes: Vec<crate::remote::Name<'static>> },
-        #[error(transparent)]
-        ValidateUpstreamBranch(#[from] gix_ref::name::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod normalize_path {
     /// The error returned by [Repository::normalize_path()](crate::Repository::normalize_path()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Realpath(#[from] gix_path::realpath::Error),
-        #[error("The path '{}' leaves the repository", path.display())]
-        OutsideOfRepository { path: std::path::PathBuf },
-        #[error(
-            "The absolute path '{}' is not inside the repository at '{}'",
-            path.display(),
-            root.display()
-        )]
-        AbsolutePathOutsideOfRepository {
-            path: std::path::PathBuf,
-            root: std::path::PathBuf,
-        },
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "attributes")]
 pub mod pathspec_defaults_ignore_case {
     /// The error returned by [Repository::pathspec_defaults_ignore_case()](crate::Repository::pathspec_defaults_inherit_ignore_case()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Filesystem configuration could not be obtained to learn about case sensitivity")]
-        FilesystemConfig(#[from] crate::config::boolean::Error),
-        #[error(transparent)]
-        Defaults(#[from] gix_pathspec::defaults::from_environment::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 #[cfg(feature = "index")]
 pub mod index_or_load_from_head {
     /// The error returned by [`Repository::index_or_load_from_head()`](crate::Repository::index_or_load_from_head()).
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        HeadCommit(#[from] crate::reference::head_commit::Error),
-        #[error(transparent)]
-        TreeId(#[from] gix_object::decode::Error),
-        #[error(transparent)]
-        TraverseTree(#[from] crate::repository::index_from_tree::Error),
-        #[error(transparent)]
-        OpenIndex(#[from] crate::worktree::open_index::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///

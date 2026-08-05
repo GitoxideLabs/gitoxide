@@ -63,7 +63,7 @@ impl<'repo> SharedState<'repo> {
             let platform = self
                 .modules
                 .is_active_platform(&self.repo.config.resolved, self.repo.config.pathspec_defaults()?)?;
-            let index = self.index()?;
+            let index = self.index().map_err(is_active::Error::ObtainIndex)?;
             let attributes = self
                 .repo
                 .attributes_only(
@@ -181,7 +181,8 @@ impl Submodule<'_> {
         let path = self.path()?;
         Ok(self
             .state
-            .index()?
+            .index()
+            .map_err(index_id::Error::Index)?
             .entry_by_path(BStr::new(&path))
             .and_then(|entry| (entry.mode == gix_index::entry::Mode::COMMIT).then_some(entry.id)))
     }

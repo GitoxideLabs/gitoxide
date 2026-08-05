@@ -270,11 +270,7 @@ pub mod pathspec {
                     self.parent.config.lenient_config,
                     Some(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT),
                 )
-                .map_err(|err| {
-                    Error::Init(gix_error::Error::from_error(
-                        crate::repository::pathspec_defaults_ignore_case::Error::from(err),
-                    ))
-                })?
+                .map_err(|err| Error::Init(gix_error::Error::from(err)))?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
             Ok(self.parent.pathspec(
                 true, /* empty patterns match prefix */
