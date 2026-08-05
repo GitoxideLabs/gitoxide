@@ -18,6 +18,41 @@ fn repeated_matcher_keywords() {
 }
 
 #[test]
+fn empty_keywords_are_ignored() {
+    let input = vec![
+        (
+            ":(top,)some/path",
+            pat_with_path_and_sig("some/path", MagicSignature::TOP),
+        ),
+        (
+            ":(,top)some/path",
+            pat_with_path_and_sig("some/path", MagicSignature::TOP),
+        ),
+        (
+            ":(top,,icase)some/path",
+            pat_with_path_and_sig("some/path", MagicSignature::TOP | MagicSignature::ICASE),
+        ),
+        (":(,)some/path", pat_with_path("some/path")),
+        (":(,,)some/path", pat_with_path("some/path")),
+        (
+            ":(icase,)some/path",
+            pat_with_path_and_sig("some/path", MagicSignature::ICASE),
+        ),
+        (
+            ":(attr:someAttr,)some/path",
+            pat(
+                "some/path",
+                MagicSignature::empty(),
+                SearchMode::ShellGlob,
+                vec![("someAttr", State::Set)],
+            ),
+        ),
+    ];
+
+    check_valid_inputs(input);
+}
+
+#[test]
 fn glob_negations_are_always_literal() {
     check_valid_inputs([("!a", pat_with_path("!a")), (r"\!a", pat_with_path(r"\!a"))]);
 }
