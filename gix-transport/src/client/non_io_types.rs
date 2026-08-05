@@ -156,6 +156,7 @@ mod error {
         pub fn can_retry(&self) -> bool {
             match self {
                 Error::Io(err) => gix_error::can_retry(err),
+                #[cfg(feature = "http-client")]
                 Error::Http(err) => err.can_retry(),
                 _ => false,
             }
