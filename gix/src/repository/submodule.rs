@@ -21,17 +21,15 @@ impl Repository {
         let metadata = match std::fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(gix_error::Error::from_error(err)),
         };
         if metadata.file_type().is_symlink() {
             return Ok(None);
         }
-        let buf = std::fs::read(&path)?;
-        Ok(Some(gix_submodule::File::from_bytes(
-            &buf,
-            path,
-            &self.config.resolved,
-        )?))
+        let buf = std::fs::read(&path).map_err(gix_error::Error::from_error)?;
+        Ok(Some(
+            gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Error::from_error)?,
+        ))
     }
 
     /// Return a shared [`.gitmodules` file](submodule::File) which is updated automatically if the in-memory snapshot
@@ -89,7 +87,6 @@ impl Repository {
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
                     gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(submodule::open_modules_file::Error::from)
                         .map_err(gix_error::Error::from_error)?
                         .into(),
                 )))

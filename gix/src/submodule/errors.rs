@@ -1,14 +1,7 @@
 ///
 pub mod open_modules_file {
     /// The error returned by [Repository::open_modules_file()](crate::Repository::open_modules_file()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Configuration(#[from] gix_submodule::init::Error),
-        #[error("Could not read '.gitmodules' file")]
-        Io(#[from] std::io::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
@@ -20,98 +13,37 @@ pub mod modules {
 ///
 pub mod is_active {
     /// The error returned by [Submodule::is_active()](crate::Submodule::is_active()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        InitIsActivePlatform(#[from] gix_submodule::is_active_platform::Error),
-        #[error(transparent)]
-        QueryIsActive(#[from] gix_config::value::Error),
-        #[error(transparent)]
-        InitAttributes(#[from] crate::config::attribute_stack::Error),
-        #[error(transparent)]
-        InitPathspecDefaults(#[from] gix_pathspec::defaults::from_environment::Error),
-        #[error(transparent)]
-        ObtainIndex(crate::repository::index_or_load_from_head::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod fetch_recurse {
     /// The error returned by [Submodule::fetch_recurse()](crate::Submodule::fetch_recurse()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        ModuleBoolean(#[from] gix_submodule::config::Error),
-        #[error(transparent)]
-        ConfigurationFallback(#[from] crate::config::key::GenericErrorWithValue),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod open {
     /// The error returned by [Submodule::open()](crate::Submodule::open()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenRepository(#[from] crate::open::Error),
-        #[error(transparent)]
-        GitDir(#[from] crate::submodule::git_dir_try_old_form::Error),
-        #[error(transparent)]
-        PathConfiguration(#[from] gix_submodule::config::path::Error),
-        #[error(transparent)]
-        WorktreeDirInaccessible(#[from] std::io::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod git_dir_try_old_form {
     /// The error returned by [Submodule::git_dir_try_old_form()](crate::Submodule::git_dir_try_old_form()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        PathConfiguration(#[from] gix_submodule::config::path::Error),
-        #[error("The gitdir file at '{}' contains an invalid gitdir target: {:?}", .gitdir_file.display(), .target)]
-        InvalidGitDirFileTarget {
-            gitdir_file: std::path::PathBuf,
-            target: Option<std::path::PathBuf>,
-            #[source]
-            source: Option<gix_discover::path::from_gitdir_file::Error>,
-        },
-        #[error(transparent)]
-        GitDir(#[from] gix_validate::submodule::name::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod state {
     /// The error returned by [Submodule::state()](crate::Submodule::state()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        GitDirTryOldForm(#[from] crate::submodule::git_dir_try_old_form::Error),
-        #[error(transparent)]
-        GitDir(#[from] gix_validate::submodule::name::Error),
-        #[error(transparent)]
-        PathConfiguration(#[from] gix_submodule::config::path::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
 pub mod index_id {
     /// The error returned by [Submodule::index_id()](crate::Submodule::index_id()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        PathConfiguration(#[from] gix_submodule::config::path::Error),
-        #[error(transparent)]
-        Index(crate::repository::index_or_load_from_head::Error),
-    }
+    pub type Error = gix_error::Error;
 }
 
 ///
