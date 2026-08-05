@@ -16,7 +16,6 @@ pub enum Error {
     HashFile(gix_hash::io::Error),
     ReadLink(std::io::Error),
     ConvertToGit(gix_filter::pipeline::convert::to_git::Error),
-    RewriteTracker(gix_diff::rewrites::tracker::emit::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -32,7 +31,6 @@ impl std::fmt::Display for Error {
             Error::HashFile(err) => std::fmt::Display::fmt(err, f),
             Error::ReadLink(_) => f.write_str("Could not read worktree link content"),
             Error::ConvertToGit(err) => std::fmt::Display::fmt(err, f),
-            Error::RewriteTracker(err) => std::fmt::Display::fmt(err, f),
         }
     }
 }
@@ -45,7 +43,6 @@ impl std::error::Error for Error {
             Error::SpawnThread(err) => err.source(),
             Error::HashFile(err) => err.source(),
             Error::ConvertToGit(err) => err.source(),
-            Error::RewriteTracker(err) => err.source(),
             _ => None,
         }
     }
@@ -60,12 +57,6 @@ impl From<crate::index_as_worktree::Error> for Error {
 impl From<gix_filter::pipeline::convert::to_git::Error> for Error {
     fn from(err: gix_filter::pipeline::convert::to_git::Error) -> Self {
         Error::ConvertToGit(err)
-    }
-}
-
-impl From<gix_diff::rewrites::tracker::emit::Error> for Error {
-    fn from(err: gix_diff::rewrites::tracker::emit::Error) -> Self {
-        Error::RewriteTracker(err)
     }
 }
 

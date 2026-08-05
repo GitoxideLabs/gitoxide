@@ -88,7 +88,8 @@ mod encode_to_worktree {
     fn shift_jis() -> crate::Result {
         let input = "ハローワールド";
         let mut buf = Vec::new();
-        worktree::encode_to_worktree(input.as_bytes(), encoding_rs::SHIFT_JIS, &mut buf)?;
+        worktree::encode_to_worktree(input.as_bytes(), encoding_rs::SHIFT_JIS, &mut buf)
+            .map_err(|err| err.into_error())?;
 
         let mut re_encoded = Vec::new();
         worktree::encode_to_git(&buf, encoding_rs::SHIFT_JIS, &mut re_encoded, RoundTripCheck::Fail)?;

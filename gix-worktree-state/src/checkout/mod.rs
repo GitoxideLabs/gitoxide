@@ -88,8 +88,6 @@ pub enum Error {
         path: std::path::PathBuf,
     },
     Filter(gix_filter::pipeline::convert::to_worktree::Error),
-    FilterListDelayed(gix_filter::driver::delayed::list::Error),
-    FilterFetchDelayed(gix_filter::driver::delayed::fetch::Error),
     FilterPathUnknown {
         rela_path: BString,
     },
@@ -112,8 +110,6 @@ impl std::fmt::Display for Error {
                 path.display()
             ),
             Error::Filter(err) => std::fmt::Display::fmt(err, f),
-            Error::FilterListDelayed(err) => std::fmt::Display::fmt(err, f),
-            Error::FilterFetchDelayed(err) => std::fmt::Display::fmt(err, f),
             Error::FilterPathUnknown { rela_path } => write!(
                 f,
                 "The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it"
@@ -132,8 +128,6 @@ impl std::error::Error for Error {
             Error::Io(err) => Some(err),
             Error::Find { err, .. } => Some(err),
             Error::Filter(err) => err.source(),
-            Error::FilterListDelayed(err) => err.source(),
-            Error::FilterFetchDelayed(err) => err.source(),
             _ => None,
         }
     }
@@ -152,8 +146,6 @@ macro_rules! from_error {
 from_error!(std::time::SystemTimeError, Time);
 from_error!(std::io::Error, Io);
 from_error!(gix_filter::pipeline::convert::to_worktree::Error, Filter);
-from_error!(gix_filter::driver::delayed::list::Error, FilterListDelayed);
-from_error!(gix_filter::driver::delayed::fetch::Error, FilterFetchDelayed);
 
 mod chunk;
 mod entry;

@@ -133,8 +133,6 @@ pub mod convert_to_mergeable {
         FindObject(#[from] gix_object::find::existing_object::Error),
         #[error(transparent)]
         ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-        #[error(transparent)]
-        ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
         #[error("Memory allocation failed")]
         OutOfMemory(#[from] TryReserveError),
     }

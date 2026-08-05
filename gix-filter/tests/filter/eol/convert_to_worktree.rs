@@ -12,7 +12,8 @@ fn no_conversion_if_attribute_digest_does_not_allow_it() -> crate::Result {
         AttributesDigest::TextInput,
         AttributesDigest::TextAutoInput,
     ] {
-        let changed = eol::convert_to_worktree(b"hi\nho", digest, &mut buf, Default::default())?;
+        let changed = eol::convert_to_worktree(b"hi\nho", digest, &mut buf, Default::default())
+            .map_err(|err| err.into_error())?;
         assert!(!changed, "the digest doesn't allow for CRLF changes");
     }
     Ok(())
@@ -32,7 +33,8 @@ fn no_conversion_if_configuration_does_not_allow_it() -> crate::Result {
                 eol: Some(Mode::Lf),
             },
         ] {
-            let changed = eol::convert_to_worktree(b"hi\nho", digest, &mut buf, config)?;
+            let changed =
+                eol::convert_to_worktree(b"hi\nho", digest, &mut buf, config).map_err(|err| err.into_error())?;
             assert!(!changed, "the configuration doesn't allow for changes");
         }
     }
@@ -64,7 +66,8 @@ fn no_conversion_if_nothing_to_do() -> crate::Result {
             "designated binary is never handled",
         ),
     ] {
-        let changed = eol::convert_to_worktree(input, digest, &mut buf, Default::default())?;
+        let changed =
+            eol::convert_to_worktree(input, digest, &mut buf, Default::default()).map_err(|err| err.into_error())?;
         assert!(!changed, "{msg}");
     }
     Ok(())
@@ -78,7 +81,8 @@ fn each_nl_is_replaced_with_crnl() -> crate::Result {
         AttributesDigest::TextCrlf,
         &mut buf,
         Default::default(),
-    )?;
+    )
+    .map_err(|err| err.into_error())?;
     assert!(
         changed,
         "the buffer has to be changed as it is explicitly demanded and has newlines to convert"
@@ -95,7 +99,8 @@ fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
         AttributesDigest::TextAutoCrlf,
         &mut buf,
         Default::default(),
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     assert!(changed, "the DOS EOF marker doesn't stand in the way of conversion");
     assert_eq!(buf.as_bstr(), "a\r\nb\r\n\x1a");
 
@@ -104,7 +109,8 @@ fn trailing_dos_eof_marker_is_not_detected_as_binary() -> crate::Result {
         AttributesDigest::TextAutoCrlf,
         &mut buf,
         Default::default(),
-    )?;
+    )
+    .map_err(gix_error::Exn::into_error)?;
     assert!(!changed, "a second marker isn't discounted, so this is binary");
     Ok(())
 }
@@ -117,7 +123,8 @@ fn existing_crnl_are_not_replaced_for_safety_nor_are_lone_cr() -> crate::Result 
         AttributesDigest::TextCrlf,
         &mut buf,
         Default::default(),
-    )?;
+    )
+    .map_err(|err| err.into_error())?;
     assert!(changed);
     assert_eq!(buf.as_bstr(), "hi\r\n\r\nho\r\nend\r");
     Ok(())

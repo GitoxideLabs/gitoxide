@@ -1917,6 +1917,7 @@ dependencies = [
  "encoding_rs",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-hash",
  "gix-object",
@@ -1928,7 +1929,6 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
