@@ -1667,7 +1667,6 @@ dependencies = [
  "gix-trace",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -1944,13 +1943,13 @@ version = "0.22.0"
 dependencies = [
  "bstr",
  "crossbeam-channel",
+ "gix-error",
  "gix-features",
  "gix-path",
  "gix-utils",
  "is_ci",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1984,12 +1983,12 @@ version = "0.26.0"
 dependencies = [
  "document-features",
  "faster-hex",
+ "gix-error",
  "gix-features",
  "gix-testtools",
  "serde",
  "sha1-checked",
  "sha2",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2074,7 +2073,6 @@ dependencies = [
  "gix-tempfile",
  "gix-utils",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2249,13 +2247,13 @@ dependencies = [
  "faster-hex",
  "futures-io",
  "futures-lite",
+ "gix-error",
  "gix-hash",
  "gix-odb",
  "gix-pack",
  "gix-trace",
  "pin-project-lite",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2267,7 +2265,6 @@ dependencies = [
  "gix-trace",
  "gix-validate",
  "serial_test",
- "thiserror 2.0.18",
  "windows 0.62.2",
  "winreg",
 ]
@@ -2615,13 +2612,13 @@ dependencies = [
  "assert_matches",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
  "gix-testtools",
  "gix-utils",
  "percent-encoding",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2713,7 +2710,6 @@ version = "0.1.0"
 dependencies = [
  "bstr",
  "serde",
- "thiserror 2.0.18",
  "zlib-rs",
 ]
 

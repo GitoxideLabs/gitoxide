@@ -50,14 +50,25 @@ pub mod decode {
     use crate::{SIZE_OF_SHA256_DIGEST, SIZE_OF_SHA256_HEX_DIGEST};
 
     /// An error returned by [`ObjectId::from_hex()`][crate::ObjectId::from_hex()]
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("A hash sized {0} hexadecimal characters is invalid")]
         InvalidHexEncodingLength(usize),
-        #[error("Invalid character encountered")]
         Invalid,
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidHexEncodingLength(len) => {
+                    write!(f, "A hash sized {len} hexadecimal characters is invalid")
+                }
+                Error::Invalid => f.write_str("Invalid character encountered"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 
     /// Hash decoding
     impl ObjectId {

@@ -94,9 +94,20 @@ impl<'de> serde::Deserialize<'de> for Name {
 }
 
 /// The error returned by [`parse::Iter`][crate::parse::Iter].
-#[derive(Debug, thiserror::Error)]
-#[error("Invalid attribute name: {attribute}")]
+#[derive(Debug)]
 pub struct Error {
     /// The attribute that failed to parse.
     pub attribute: BString,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Attribute has non-ascii characters or starts with '-': {}",
+            self.attribute
+        )
+    }
+}
+
+impl std::error::Error for Error {}

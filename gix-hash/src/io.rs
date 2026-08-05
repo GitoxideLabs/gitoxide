@@ -1,13 +1,41 @@
 use crate::hasher;
 
 /// The error type for I/O operations that compute hashes.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
-    #[error("Failed to hash data")]
-    Hasher(#[from] hasher::Error),
+    Io(std::io::Error),
+    Hasher(hasher::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(err) => std::fmt::Display::fmt(err, f),
+            Error::Hasher(_) => f.write_str("Failed to hash data"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => err.source(),
+            Error::Hasher(err) => Some(err),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Error::Io(source)
+    }
+}
+
+impl From<hasher::Error> for Error {
+    fn from(source: hasher::Error) -> Self {
+        Error::Hasher(source)
+    }
 }
 
 pub(super) mod _impl {

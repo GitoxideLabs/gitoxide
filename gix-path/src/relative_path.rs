@@ -37,15 +37,44 @@ impl RelativePath {
 }
 
 /// The error used in [`RelativePath`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("A RelativePath is not allowed to be absolute")]
     IsAbsolute,
-    #[error(transparent)]
-    ContainsInvalidComponent(#[from] gix_validate::path::component::Error),
-    #[error(transparent)]
-    IllegalUtf8(#[from] crate::Utf8Error),
+    ContainsInvalidComponent(gix_validate::path::component::Error),
+    IllegalUtf8(crate::Utf8Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IsAbsolute => f.write_str("A RelativePath is not allowed to be absolute"),
+            Error::ContainsInvalidComponent(err) => std::fmt::Display::fmt(err, f),
+            Error::IllegalUtf8(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::IsAbsolute => None,
+            Error::ContainsInvalidComponent(err) => std::error::Error::source(err),
+            Error::IllegalUtf8(err) => std::error::Error::source(err),
+        }
+    }
+}
+
+impl From<gix_validate::path::component::Error> for Error {
+    fn from(source: gix_validate::path::component::Error) -> Self {
+        Error::ContainsInvalidComponent(source)
+    }
+}
+
+impl From<crate::Utf8Error> for Error {
+    fn from(source: crate::Utf8Error) -> Self {
+        Error::IllegalUtf8(source)
+    }
 }
 
 fn relative_path_from_value_and_path<'a>(path_bstr: &'a BStr, path: &Path) -> Result<&'a RelativePath, Error> {

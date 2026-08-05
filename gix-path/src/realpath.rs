@@ -1,19 +1,42 @@
 /// The error returned by [`realpath()`][super::realpath()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("The maximum allowed number {} of symlinks in path is exceeded", .max_symlinks)]
     MaxSymlinksExceeded { max_symlinks: u8 },
-    #[error("Cannot resolve symlinks in path with more than {max_symlink_checks} components (takes too long)")]
     ExcessiveComponentCount { max_symlink_checks: usize },
-    #[error(transparent)]
     ReadLink(std::io::Error),
-    #[error(transparent)]
     CurrentWorkingDir(std::io::Error),
-    #[error("Empty is not a valid path")]
     EmptyPath,
-    #[error("Ran out of path components while following parent component '..'")]
     MissingParent,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::MaxSymlinksExceeded { max_symlinks } => {
+                write!(
+                    f,
+                    "The maximum allowed number {max_symlinks} of symlinks in path is exceeded"
+                )
+            }
+            Error::ExcessiveComponentCount { max_symlink_checks } => write!(
+                f,
+                "Cannot resolve symlinks in path with more than {max_symlink_checks} components (takes too long)"
+            ),
+            Error::ReadLink(err) | Error::CurrentWorkingDir(err) => std::fmt::Display::fmt(err, f),
+            Error::EmptyPath => f.write_str("Empty is not a valid path"),
+            Error::MissingParent => f.write_str("Ran out of path components while following parent component '..'"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ReadLink(err) | Error::CurrentWorkingDir(err) => std::error::Error::source(err),
+            _ => None,
+        }
+    }
 }
 
 /// The default amount of symlinks we may follow when resolving a path in [`realpath()`][crate::realpath()].

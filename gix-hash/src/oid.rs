@@ -72,12 +72,7 @@ impl std::fmt::Debug for oid {
 }
 
 /// The error returned when trying to convert a byte slice to an [`oid`] or [`ObjectId`]
-#[expect(missing_docs)]
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("Cannot instantiate git hash from a digest of length {0}")]
-    InvalidByteSliceLength(usize),
-}
+pub type Error = gix_error::ValidationError;
 
 /// Conversion
 impl oid {
@@ -99,7 +94,9 @@ impl oid {
                     &*(std::ptr::from_ref::<[u8]>(digest) as *const oid)
                 },
             ),
-            len => Err(Error::InvalidByteSliceLength(len)),
+            len => Err(Error::new(format!(
+                "Cannot instantiate git hash from a digest of length {len}"
+            ))),
         }
     }
 

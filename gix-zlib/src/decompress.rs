@@ -5,18 +5,27 @@ use zlib_rs::InflateError;
 use crate::{Decompress, FlushDecompress, Status};
 ///
 /// The error produced by [`Decompress::decompress()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum DecompressError {
-    #[error("stream error")]
     StreamError,
-    #[error("Not enough memory")]
     InsufficientMemory,
-    #[error("Invalid input data")]
     DataError,
-    #[error("Decompressing this input requires a dictionary")]
     NeedDict,
 }
+
+impl std::fmt::Display for DecompressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            DecompressError::StreamError => "stream error",
+            DecompressError::InsufficientMemory => "Not enough memory",
+            DecompressError::DataError => "Invalid input data",
+            DecompressError::NeedDict => "Decompressing this input requires a dictionary",
+        })
+    }
+}
+
+impl std::error::Error for DecompressError {}
 
 impl Default for Decompress {
     fn default() -> Self {

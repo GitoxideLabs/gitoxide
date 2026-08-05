@@ -15,17 +15,26 @@ pub(crate) struct ParsedUrl {
 }
 
 /// Minimal parse error type to replace url::ParseError
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UrlParseError {
-    #[error("relative URL without a base")]
     RelativeUrlWithoutBase,
-    #[error("invalid port number - must be between 1-65535")]
     InvalidPort,
-    #[error("invalid domain character")]
     InvalidDomainCharacter,
-    #[error("Scheme requires host")]
     SchemeRequiresHost,
 }
+
+impl std::fmt::Display for UrlParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            UrlParseError::RelativeUrlWithoutBase => "relative URL without a base",
+            UrlParseError::InvalidPort => "invalid port number - must be between 1-65535",
+            UrlParseError::InvalidDomainCharacter => "invalid domain character",
+            UrlParseError::SchemeRequiresHost => "Scheme requires host",
+        })
+    }
+}
+
+impl std::error::Error for UrlParseError {}
 
 /// Check if a character is valid in a URL scheme.
 /// Valid scheme characters: alphanumeric, +, -, or .

@@ -1,15 +1,44 @@
 use crate::{FlushDecompress, Inflate, Status};
 
 /// The error returned by various [Inflate methods][super::Inflate]
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Could not write all bytes when decompressing content")]
-    WriteInflated(#[from] std::io::Error),
-    #[error("Could not decode zip stream, status was '{0}'")]
-    Inflate(#[from] super::DecompressError),
-    #[error("The zlib status indicated an error, status was '{0:?}'")]
+    WriteInflated(std::io::Error),
+    Inflate(super::DecompressError),
     Status(super::Status),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::WriteInflated(_) => f.write_str("Could not write all bytes when decompressing content"),
+            Error::Inflate(err) => write!(f, "Could not decode zip stream, status was '{err}'"),
+            Error::Status(status) => write!(f, "The zlib status indicated an error, status was '{status:?}'"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::WriteInflated(err) => Some(err),
+            Error::Inflate(err) => Some(err),
+            Error::Status(_) => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(source: std::io::Error) -> Self {
+        Error::WriteInflated(source)
+    }
+}
+
+impl From<super::DecompressError> for Error {
+    fn from(source: super::DecompressError) -> Self {
+        Error::Inflate(source)
+    }
 }
 
 impl Inflate {
