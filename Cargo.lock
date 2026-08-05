@@ -2279,7 +2279,6 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2293,7 +2292,6 @@ dependencies = [
  "parking_lot",
  "rustix",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2415,7 +2413,6 @@ dependencies = [
  "gix-object",
  "gix-testtools",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]

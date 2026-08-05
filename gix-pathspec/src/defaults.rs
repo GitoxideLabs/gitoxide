@@ -5,13 +5,35 @@ use crate::{Defaults, MagicSignature, SearchMode};
 ///
 pub mod from_environment {
     /// The error returned by [Defaults::from_environment()](super::Defaults::from_environment()).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        ParseValue(#[from] gix_config_value::Error),
-        #[error("Glob and no-glob settings are mutually exclusive")]
+        ParseValue(gix_config_value::Error),
         MixedGlobAndNoGlob,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ParseValue(err) => std::fmt::Display::fmt(err, f),
+                Error::MixedGlobAndNoGlob => f.write_str("Glob and no-glob settings are mutually exclusive"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ParseValue(err) => err.source(),
+                Error::MixedGlobAndNoGlob => None,
+            }
+        }
+    }
+
+    impl From<gix_config_value::Error> for Error {
+        fn from(err: gix_config_value::Error) -> Self {
+            Error::ParseValue(err)
+        }
     }
 }
 

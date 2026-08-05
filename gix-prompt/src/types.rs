@@ -1,21 +1,56 @@
 use std::path::PathBuf;
 
 /// The error returned by [ask()][crate::ask()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Terminal prompts are disabled")]
     Disabled,
-    #[error("The current platform has no implementation for prompting in the terminal")]
     UnsupportedPlatform,
-    #[error(
-        "Failed to open terminal at {:?} for writing prompt, or to write it",
-        crate::unix::TTY_PATH
-    )]
-    TtyIo(#[from] std::io::Error),
+    TtyIo(std::io::Error),
     #[cfg(unix)]
-    #[error("Failed to obtain or set terminal configuration")]
-    TerminalConfiguration(#[from] rustix::io::Errno),
+    TerminalConfiguration(rustix::io::Errno),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Disabled => f.write_str("Terminal prompts are disabled"),
+            Error::UnsupportedPlatform => {
+                f.write_str("The current platform has no implementation for prompting in the terminal")
+            }
+            Error::TtyIo(_) => write!(
+                f,
+                "Failed to open terminal at {:?} for writing prompt, or to write it",
+                crate::unix::TTY_PATH
+            ),
+            #[cfg(unix)]
+            Error::TerminalConfiguration(_) => f.write_str("Failed to obtain or set terminal configuration"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::TtyIo(err) => Some(err),
+            #[cfg(unix)]
+            Error::TerminalConfiguration(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::TtyIo(err)
+    }
+}
+
+#[cfg(unix)]
+impl From<rustix::io::Errno> for Error {
+    fn from(err: rustix::io::Errno) -> Self {
+        Error::TerminalConfiguration(err)
+    }
 }
 
 /// The way the user is prompted.
