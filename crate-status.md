@@ -151,12 +151,14 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
                 * [ ] include-tags when shallow is used (needs separate fetch)
                 * [ ] prune non-existing shallow commits
             * [ ] [bundles](https://git-scm.com/docs/git-bundle)
+            * [x] in-process `file://` via built-in upload-pack (experimental feature gate, no external process)
         * [x] fetch
             * [x] shallow (remains shallow, options to adjust shallow boundary)
             * [ ] a way to auto-explode small packs to avoid them to pile up
             * [x] 'ref-in-want'
             * [ ] 'wanted-ref'
             * [x] standard negotiation algorithms `consecutive`, `skipping` and `noop`.
+            * [x] in-process `file://` via built-in upload-pack (experimental feature gate, no external process)
         * [ ] push
         * [x] ls-refs
         * [x] ls-refs with ref-spec filter

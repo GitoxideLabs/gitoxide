@@ -17,6 +17,9 @@ test = true
 [features]
 default = []
 
+## Enable experimental features, currently the built-in upload-pack transport for `file://` URLs.
+experimental = ["gix/experimental", "gix/parallel"]
+
 #! ### Tools
 ## Discover all git repositories within a directory. Particularly useful with [skim](https://github.com/lotabout/skim).
 organize = ["dep:dua-core", "dep:gix-url", "dep:parking_lot"]

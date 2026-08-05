@@ -669,6 +669,7 @@ pub fn main() -> Result<()> {
         #[cfg(feature = "gitoxide-core-blocking-client")]
         Subcommands::Clone(crate::plumbing::options::clone::Platform {
             handshake_info,
+            builtin_upload_pack,
             bare,
             no_tags,
             ref_name,
@@ -677,6 +678,9 @@ pub fn main() -> Result<()> {
             shallow,
             directory,
         }) => {
+            if builtin_upload_pack && cfg!(not(feature = "experimental")) {
+                anyhow::bail!("--builtin-upload-pack requires the 'experimental' feature (build with --features experimental)");
+            }
             let opts = core::repository::clone::Options {
                 format,
                 bare,
@@ -685,6 +689,7 @@ pub fn main() -> Result<()> {
                 ref_name,
                 revision,
                 shallow: shallow.into(),
+                builtin_upload_pack,
             };
             prepare_and_run(
                 "clone",
@@ -700,12 +705,16 @@ pub fn main() -> Result<()> {
         Subcommands::Fetch(crate::plumbing::options::fetch::Platform {
             dry_run,
             handshake_info,
+            builtin_upload_pack,
             negotiation_info,
             open_negotiation_graph,
             remote,
             shallow,
             ref_spec,
         }) => {
+            if builtin_upload_pack && cfg!(not(feature = "experimental")) {
+                anyhow::bail!("--builtin-upload-pack requires the 'experimental' feature (build with --features experimental)");
+            }
             let opts = core::repository::fetch::Options {
                 format,
                 dry_run,
@@ -715,6 +724,7 @@ pub fn main() -> Result<()> {
                 open_negotiation_graph,
                 shallow: shallow.into(),
                 ref_specs: ref_spec,
+                builtin_upload_pack,
             };
             prepare_and_run(
                 "fetch",

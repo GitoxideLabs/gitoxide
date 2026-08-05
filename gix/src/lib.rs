@@ -476,6 +476,10 @@ pub mod filter;
 ///
 pub mod remote;
 
+/// Transport implementations specific to the `gix` crate, gated behind feature flags.
+#[cfg(feature = "experimental")]
+pub mod transport;
+
 ///
 pub mod init;
 

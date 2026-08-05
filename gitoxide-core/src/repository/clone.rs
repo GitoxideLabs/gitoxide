@@ -8,6 +8,8 @@ pub struct Options {
     pub shallow: gix::remote::fetch::Shallow,
     pub ref_name: Option<gix::refs::PartialName>,
     pub revision: Option<gix::bstr::BString>,
+    /// Use the built-in in-process upload-pack instead of spawning git-upload-pack.
+    pub builtin_upload_pack: bool,
 }
 
 pub const PROGRESS_RANGE: std::ops::RangeInclusive<u8> = 1..=3;
@@ -36,6 +38,7 @@ pub(crate) mod function {
             ref_name,
             revision,
             shallow,
+            builtin_upload_pack,
         }: Options,
     ) -> anyhow::Result<()>
     where
@@ -76,6 +79,9 @@ pub(crate) mod function {
         )?;
         if no_tags {
             prepare = prepare.configure_remote(|r| Ok(r.with_fetch_tags(gix::remote::fetch::Tags::None)));
+        }
+        if builtin_upload_pack {
+            prepare = prepare.configure_connection(configure_builtin_transport);
         }
         let (mut checkout, fetch_outcome) = prepare
             .with_shallow(shallow)
@@ -144,5 +150,47 @@ pub(crate) mod function {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Configure the connection to use the built-in upload-pack transport for `file://` URLs.
+    ///
+    /// When the remote URL uses the `file://` scheme, this replaces the standard
+    /// `SpawnProcessOnDemand` transport with an in-process `BuiltinUploadPack`.
+    /// For non-file schemes the connection is left unchanged.
+    #[cfg(feature = "experimental")]
+    fn configure_builtin_transport(
+        connection: &mut gix::remote::Connection<
+            '_,
+            '_,
+            '_,
+            Box<dyn gix::protocol::transport::client::blocking_io::Transport + Send>,
+        >,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let url = connection
+            .remote()
+            .url(gix::remote::Direction::Fetch)
+            .expect("remote always has a fetch URL during clone/fetch");
+        if url.scheme == gix::url::Scheme::File {
+            let path = url.path.clone();
+            let transport = gix::transport::builtin_upload_pack::BuiltinUploadPack::new(
+                path,
+                gix::protocol::transport::Protocol::V2,
+                false,
+            );
+            *connection.transport_mut() = Box::new(transport);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "experimental"))]
+    fn configure_builtin_transport(
+        _connection: &mut gix::remote::Connection<
+            '_,
+            '_,
+            '_,
+            Box<dyn gix::protocol::transport::client::blocking_io::Transport + Send>,
+        >,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Err("--builtin-upload-pack requires the 'experimental' feature (build with --features experimental)".into())
     }
 }

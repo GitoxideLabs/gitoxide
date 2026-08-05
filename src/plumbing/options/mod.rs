@@ -704,6 +704,11 @@ pub mod fetch {
         #[clap(long, short = 'H')]
         pub handshake_info: bool,
 
+        /// Use the built-in in-process upload-pack instead of spawning git-upload-pack.
+        /// Requires the `experimental` feature to be compiled in.
+        #[clap(long, hide = cfg!(not(feature = "experimental")))]
+        pub builtin_upload_pack: bool,
+
         /// Print statistics about negotiation phase.
         #[clap(long, short = 's')]
         pub negotiation_info: bool,
@@ -782,6 +787,11 @@ pub mod clone {
         /// Output additional typically information provided by the server as part of the connection handshake.
         #[clap(long, short = 'H')]
         pub handshake_info: bool,
+
+        /// Use the built-in in-process upload-pack instead of spawning git-upload-pack.
+        /// Requires the `experimental` feature to be compiled in.
+        #[clap(long, hide = cfg!(not(feature = "experimental")))]
+        pub builtin_upload_pack: bool,
 
         /// The clone will be bare and a working tree checkout won't be available.
         #[clap(long)]

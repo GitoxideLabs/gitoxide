@@ -561,6 +561,46 @@ title "gix commit-graph"
         )
     )
     fi
+    if test "$kind" = "max" || test "$kind" = "max-pure"; then
+    title "gix clone (builtin-upload-pack)"
+    (when "cloning with the built-in upload-pack"
+      snapshot="$snapshot/builtin-upload-pack"
+      (with "a repository that has branches and tags"
+        (sandbox
+          git init -q fixture-repo
+          (
+            cd fixture-repo
+            git checkout -q -b main
+            git config commit.gpgsign false
+            git config tag.gpgsign false
+            echo "initial content" >file.txt
+            git add file.txt
+            git commit -q -m "initial commit"
+            git tag v1.0 -m "first release"
+            git branch feature
+          )
+          fixture_repo="$PWD/fixture-repo"
+
+          it "succeeds with the --builtin-upload-pack flag" && {
+            expect_run $SUCCESSFULLY "$exe_plumbing" clone --builtin-upload-pack "file://$fixture_repo" builtin-clone
+          }
+          it "produces a valid HEAD" && {
+            expect_run $SUCCESSFULLY git -C builtin-clone rev-parse HEAD
+          }
+          it "has the same refs as a standard clone" && {
+            expect_run $SUCCESSFULLY "$exe_plumbing" clone "file://$fixture_repo" standard-clone
+            expect_run_sh $SUCCESSFULLY 'test "$(git -C builtin-clone for-each-ref --format="%(refname) %(objectname)")" = "$(git -C standard-clone for-each-ref --format="%(refname) %(objectname)")"'
+          }
+          it "contains the expected branch ref" && {
+            expect_run_sh $SUCCESSFULLY 'git -C builtin-clone for-each-ref --format="%(refname)" | grep -q "refs/remotes/origin/feature"'
+          }
+          it "contains the expected tag ref" && {
+            expect_run_sh $SUCCESSFULLY 'git -C builtin-clone for-each-ref --format="%(refname)" | grep -q "refs/tags/v1.0"'
+          }
+        )
+      )
+    )
+    fi
     (with "the 'index' sub-command"
       snapshot="$snapshot/index"
       title "gix free pack index create"

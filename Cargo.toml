@@ -44,7 +44,7 @@ default = ["max"]
 ##
 ## When used in conjunction with `http-client-curl-rustls`, the `openssl` crates will still be compiled, but won't be used. To bypass this, disable
 ## default dependencies and specify the features yourself.
-max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl"]
+max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-blocking-client", "http-client-curl-openssl", "experimental"]
 
 ## Like `max`, but only Rust is allowed.
 ##
@@ -53,7 +53,7 @@ max = ["hashes", "max-control", "fast", "gitoxide-core-tools-query", "gitoxide-c
 ## This uses Rust's HTTP implementation.
 ##
 ## As fast as possible, with TUI progress, progress line rendering with auto-configuration, all transports available but less mature pure Rust HTTP implementation, all `ein` tools, CLI colors and local-time support, JSON output, regex support for rev-specs.
-max-pure = ["hashes", "max-control", "http-client-reqwest", "gitoxide-core-blocking-client"]
+max-pure = ["hashes", "max-control", "http-client-reqwest", "gitoxide-core-blocking-client", "experimental"]
 
 ## Like `max`, but with more control for configuration. See the *Package Maintainers* headline for more information.
 ## Needs to chose its own hash(es).
@@ -81,6 +81,10 @@ small = ["hashes", "pretty-cli", "prodash-render-line", "is-terminal"]
 ## Due to async client-networking not being implemented for most transports, this one supports only the 'git+tcp' and HTTP transport.
 ## It uses, however, a fully asynchronous networking implementation which can serve a real-world example on how to implement custom async transports.
 lean-async = ["hashes", "fast", "tracing", "pretty-cli", "tix", "gitoxide-core-tools", "gitoxide-core-tools-query", "gitoxide-core-tools-corpus", "gitoxide-core-async-client", "prodash-render-line"]
+
+## Enable experimental features in gix for development builds.
+## Currently gates the built-in upload-pack for file:// transports.
+experimental = ["gix/experimental", "gitoxide-core/experimental"]
 
 #! ### Package Maintainers
 #! `*-control` features leave it to you to configure C libraries, involving choices for HTTP transport implementation.

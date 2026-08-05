@@ -178,6 +178,13 @@ worktree-stream = ["gix-worktree-stream", "attributes"]
 ## Your application should add it as dependency and re-activate the desired features.
 worktree-archive = ["gix-archive", "worktree-stream", "attributes"]
 
+#! #### Experimental
+#!
+#! Features that are not yet stable. They may change or be removed without notice.
+
+## Experimental features not yet stable. Enables built-in upload-pack for file:// transports.
+experimental = ["gix-protocol/blocking-server", "dep:gix-transport"]
+
 #! #### Mutually Exclusive Network Client
 #!
 #! Either `async-*` or `blocking-*` versions of these toggles may be enabled at a time.
