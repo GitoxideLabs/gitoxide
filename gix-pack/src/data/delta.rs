@@ -1,18 +1,27 @@
 ///
 pub mod apply {
     /// Returned when failing to apply deltas.
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Corrupt delta data: {message}")]
         Corrupt { message: &'static str },
-        #[error("Encountered unsupported command code: 0")]
         UnsupportedCommandCode,
-        #[error("Delta copy from base: byte slices must match")]
         DeltaCopyBaseSliceMismatch,
-        #[error("Delta copy data: byte slices must match")]
         DeltaCopyDataSliceMismatch,
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Corrupt { message } => write!(f, "Corrupt delta data: {message}"),
+                Error::UnsupportedCommandCode => f.write_str("Encountered unsupported command code: 0"),
+                Error::DeltaCopyBaseSliceMismatch => f.write_str("Delta copy from base: byte slices must match"),
+                Error::DeltaCopyDataSliceMismatch => f.write_str("Delta copy data: byte slices must match"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 /// Given the decompressed pack delta `d`, decode a size in bytes (either the base object size or the result object size)

@@ -32,13 +32,41 @@ pub enum Kind {
 }
 
 /// The error returned by [`output::Entry::from_data()`].
-#[expect(missing_docs)]
-#[derive(Debug, thiserror::Error)]
+#[allow(missing_docs)]
+#[derive(Debug)]
 pub enum Error {
-    #[error("{0}")]
-    ZlibDeflate(#[from] std::io::Error),
-    #[error(transparent)]
-    EntryType(#[from] crate::data::entry::decode::Error),
+    ZlibDeflate(std::io::Error),
+    EntryType(crate::data::entry::decode::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ZlibDeflate(err) => write!(f, "{err}"),
+            Error::EntryType(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ZlibDeflate(err) => Some(err),
+            Error::EntryType(err) => err.source(),
+        }
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::ZlibDeflate(err)
+    }
+}
+
+impl From<crate::data::entry::decode::Error> for Error {
+    fn from(err: crate::data::entry::decode::Error) -> Self {
+        Error::EntryType(err)
+    }
 }
 
 impl output::Entry {

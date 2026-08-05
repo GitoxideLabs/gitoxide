@@ -3,16 +3,47 @@ use std::io::Write;
 use crate::{data::output, exact_vec};
 
 /// The error returned by `next()` in the [`FromEntriesIter`] iterator.
-#[expect(missing_docs)]
-#[derive(Debug, thiserror::Error)]
+#[allow(missing_docs)]
+#[derive(Debug)]
 pub enum Error<E>
 where
     E: std::error::Error + 'static,
 {
-    #[error(transparent)]
-    Io(#[from] gix_hash::io::Error),
-    #[error(transparent)]
+    Io(gix_hash::io::Error),
     Input(E),
+}
+
+impl<E> std::fmt::Display for Error<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(err) => std::fmt::Display::fmt(err, f),
+            Error::Input(err) => std::fmt::Display::fmt(err, f),
+        }
+    }
+}
+
+impl<E> std::error::Error for Error<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => err.source(),
+            Error::Input(err) => err.source(),
+        }
+    }
+}
+
+impl<E> From<gix_hash::io::Error> for Error<E>
+where
+    E: std::error::Error + 'static,
+{
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(err)
+    }
 }
 
 /// An implementation of [`Iterator`] to write [encoded entries][output::Entry] to an inner implementation each time

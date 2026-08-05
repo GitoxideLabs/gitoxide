@@ -59,7 +59,6 @@ gix-diff = { version = "^0.66.0", path = "../gix-diff", default-features = false
 memmap2 = "0.9.11"
 smallvec = "1.15.1"
 parking_lot = { version = "0.12.4", default-features = false, optional = true }
-thiserror = "2.0.18"
 crossbeam-deque = { version = "0.8.6", optional = true }
 
 # for caching

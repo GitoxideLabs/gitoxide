@@ -1,18 +1,59 @@
 /// Returned by [`BytesToEntriesIter::new_from_header()`][crate::data::input::BytesToEntriesIter::new_from_header()] and as part
 /// of `Item` of [`BytesToEntriesIter`][crate::data::input::BytesToEntriesIter].
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("An IO operation failed while streaming an entry")]
-    Io(#[from] gix_hash::io::Error),
-    #[error(transparent)]
-    PackParse(#[from] crate::data::header::decode::Error),
-    #[error("Failed to verify pack checksum in trailer")]
-    Verify(#[from] gix_hash::verify::Error),
-    #[error("pack is incomplete: it was decompressed into {actual} bytes but {expected} bytes where expected.")]
+    Io(gix_hash::io::Error),
+    PackParse(crate::data::header::decode::Error),
+    Verify(gix_hash::verify::Error),
     IncompletePack { actual: u64, expected: u64 },
-    #[error("The object {object_id} could not be decoded or wasn't found")]
     NotFound { object_id: gix_hash::ObjectId },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io(_) => f.write_str("An IO operation failed while streaming an entry"),
+            Error::PackParse(err) => std::fmt::Display::fmt(err, f),
+            Error::Verify(_) => f.write_str("Failed to verify pack checksum in trailer"),
+            Error::IncompletePack { actual, expected } => write!(
+                f,
+                "pack is incomplete: it was decompressed into {actual} bytes but {expected} bytes where expected."
+            ),
+            Error::NotFound { object_id } => {
+                write!(f, "The object {object_id} could not be decoded or wasn't found")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io(err) => Some(err),
+            Error::PackParse(err) => err.source(),
+            Error::Verify(err) => Some(err),
+            Error::IncompletePack { .. } | Error::NotFound { .. } => None,
+        }
+    }
+}
+
+impl From<gix_hash::io::Error> for Error {
+    fn from(err: gix_hash::io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+impl From<crate::data::header::decode::Error> for Error {
+    fn from(err: crate::data::header::decode::Error) -> Self {
+        Error::PackParse(err)
+    }
+}
+
+impl From<gix_hash::verify::Error> for Error {
+    fn from(err: gix_hash::verify::Error) -> Self {
+        Error::Verify(err)
+    }
 }
 
 /// Iteration Mode

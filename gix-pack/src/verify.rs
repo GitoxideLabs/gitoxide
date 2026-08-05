@@ -5,15 +5,44 @@ use gix_features::progress::Progress;
 ///
 pub mod checksum {
     /// Returned by various methods to verify the checksum of a memory mapped file that might also exist on disk.
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Interrupted by user")]
         Interrupted,
-        #[error("Failed to hash data")]
-        Hasher(#[from] gix_hash::hasher::Error),
-        #[error(transparent)]
-        Verify(#[from] gix_hash::verify::Error),
+        Hasher(gix_hash::hasher::Error),
+        Verify(gix_hash::verify::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Interrupted => f.write_str("Interrupted by user"),
+                Error::Hasher(_) => f.write_str("Failed to hash data"),
+                Error::Verify(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Hasher(err) => Some(err),
+                Error::Verify(err) => err.source(),
+                Error::Interrupted => None,
+            }
+        }
+    }
+
+    impl From<gix_hash::hasher::Error> for Error {
+        fn from(err: gix_hash::hasher::Error) -> Self {
+            Error::Hasher(err)
+        }
+    }
+
+    impl From<gix_hash::verify::Error> for Error {
+        fn from(err: gix_hash::verify::Error) -> Self {
+            Error::Verify(err)
+        }
     }
 }
 
