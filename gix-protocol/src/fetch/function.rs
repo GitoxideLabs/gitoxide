@@ -3,6 +3,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use gix_error::ErrorExt;
 use gix_features::progress::DynNestedProgress;
 
 use crate::fetch::{
@@ -109,9 +110,14 @@ where
                 progress.step();
                 progress.set_name(format!("negotiate (round {})", rounds.len() + 1));
                 if should_interrupt.load(Ordering::Relaxed) {
-                    return Err(Error::Negotiate(negotiate::Error::NegotiationFailed {
-                        rounds: rounds.len(),
-                    }));
+                    return Err(Error::Negotiate(
+                        gix_error::message!(
+                            "We were unable to figure out what objects the server should send after {} round(s)",
+                            rounds.len()
+                        )
+                        .raise()
+                        .into_error(),
+                    ));
                 }
 
                 let is_done = match negotiate.one_round(&mut state, &mut arguments, previous_response.as_ref()) {
