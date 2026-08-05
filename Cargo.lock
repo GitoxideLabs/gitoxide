@@ -1818,6 +1818,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -1836,7 +1837,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "shell-words",
- "thiserror 2.0.18",
 ]
 
 [[package]]

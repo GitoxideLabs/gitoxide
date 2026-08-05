@@ -168,7 +168,9 @@ pub fn spawn_tree_delta_threads<'scope>(
                                             (true, true) => {
                                                 files.modified += 1;
                                                 if let Some(cache) = cache.as_mut() {
-                                                    let mut diff = change.diff(cache).map_err(std::io::Error::other)?;
+                                                    let mut diff = change
+                                                        .diff(cache)
+                                                        .map_err(|err| std::io::Error::other(err.into_error()))?;
                                                     let mut nl = 0;
                                                     if let Some(counts) =
                                                         diff.line_counts().map_err(std::io::Error::other)?

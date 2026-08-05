@@ -1,6 +1,7 @@
 use std::{borrow::Cow, cell::RefCell, cmp::Ordering};
 
 use bstr::BStr;
+use gix_error::{ErrorExt, message};
 use gix_filter::attributes::glob::pattern::Case;
 
 use super::{Action, ChangeRef, Error, RewriteOptions};
@@ -39,14 +40,16 @@ where
     Find: gix_object::FindObjectOrHeader,
 {
     if lhs.is_sparse() || rhs.is_sparse() {
-        return Err(Error::IsSparse);
+        return Err(message("Cannot diff indices that contain sparse entries").raise());
     }
     if lhs
         .entries()
         .iter()
         .any(|e| e.stage() != gix_index::entry::Stage::Unconflicted)
     {
-        return Err(Error::LhsHasUnmerged);
+        return Err(
+            message("Unmerged entries aren't allowed in the left-hand index, only in the right-hand index").raise(),
+        );
     }
 
     let lhs_range = lhs
@@ -122,7 +125,7 @@ where
                                 Some(tracker) => tracker.try_push_change(change, rhs_path),
                             };
                             if let Some(change) = change {
-                                match cb(change).map_err(|err| Error::Callback(err.into()))? {
+                                match cb(change).map_err(callback_error)? {
                                     std::ops::ControlFlow::Continue(()) => {}
                                     std::ops::ControlFlow::Break(()) => return Ok(None),
                                 }
@@ -183,7 +186,7 @@ where
                     Ok(std::ops::ControlFlow::Continue(())) => std::ops::ControlFlow::Continue(()),
                     Ok(std::ops::ControlFlow::Break(())) => std::ops::ControlFlow::Break(()),
                     Err(err) => {
-                        cb_err = Some(Error::Callback(err.into()));
+                        cb_err = Some(callback_error(err));
                         std::ops::ControlFlow::Break(())
                     }
                 }
@@ -243,7 +246,7 @@ where
         },
     };
 
-    cb(change).map_err(|err| Error::Callback(err.into()))
+    cb(change).map_err(callback_error)
 }
 
 fn emit_addition<'rhs, 'lhs: 'rhs, E>(
@@ -273,7 +276,11 @@ where
         },
     };
 
-    cb(change).map_err(|err| Error::Callback(err.into()))
+    cb(change).map_err(callback_error)
+}
+
+fn callback_error<E: Into<Box<dyn std::error::Error + Send + Sync>>>(err: E) -> Error {
+    std::io::Error::other(err.into()).and_raise(message("The callback indicated failure"))
 }
 
 fn ignore_unmerged_and_intent_to_add<'rhs, 'lhs: 'rhs>(
