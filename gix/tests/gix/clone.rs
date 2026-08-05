@@ -1087,7 +1087,7 @@ mod blocking_io {
     }
 
     #[test]
-    fn fetch_succeeds_despite_remote_head_ref() -> crate::Result {
+    fn fetch_retries_without_the_implicit_head_refspec_on_conflict() -> crate::Result {
         let tmp = gix_testtools::tempfile::TempDir::new()?;
         let remote_repo = remote::repo("head-ref");
         let mut prepare = gix::clone::PrepareFetch::new(
@@ -1100,7 +1100,14 @@ mod blocking_io {
 
         let (mut checkout, _out) = prepare.fetch_then_checkout(gix::progress::Discard, &AtomicBool::default())?;
         let (repo, _) = checkout.main_worktree(gix::progress::Discard, &AtomicBool::default())?;
-        assert!(repo.head().is_ok(), "we could handle the HEAD normaller");
+        assert!(
+            repo.head().is_ok(),
+            "the clone completed after recovering from the conflict"
+        );
+        assert!(
+            repo.try_find_reference("refs/remotes/origin/HEAD")?.is_some(),
+            "retrying without the implicit refspec still fetches the remote branch named HEAD"
+        );
         Ok(())
     }
 
