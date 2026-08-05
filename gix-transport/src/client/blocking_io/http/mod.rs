@@ -299,7 +299,8 @@ impl<H: Http> Transport<H> {
                 message!(
                     "Didn't find '{wanted_content_type}' header to indicate 'smart' protocol, and 'dumb' protocol is not supported."
                 )
-                .raise(),
+                .raise()
+                .into_error(),
             ));
         }
         Ok(())
@@ -426,7 +427,8 @@ impl<H: Http> blocking_io::Transport for Transport<H> {
                         service.as_str(),
                         announced_service
                     )
-                    .raise(),
+                    .raise()
+                    .into_error(),
                 ));
             }
 

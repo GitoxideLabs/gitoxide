@@ -56,14 +56,12 @@ mod error {
 
     use bstr::BString;
 
-    #[cfg(feature = "http-client")]
-    use crate::client::blocking_io::http;
     #[cfg(feature = "blocking-client")]
     use crate::client::blocking_io::ssh;
     use crate::client::capabilities;
 
     #[cfg(feature = "http-client")]
-    type HttpError = http::Error;
+    type HttpError = gix_error::Error;
     #[cfg(feature = "blocking-client")]
     type SshInvocationError = ssh::invocation::Error;
     #[cfg(not(feature = "http-client"))]
@@ -77,7 +75,7 @@ mod error {
     pub enum Error {
         MissingHandshake,
         Io(std::io::Error),
-        Capabilities { err: capabilities::Error },
+        Capabilities { err: gix_error::Error },
         LineDecode { err: gix_packetline::decode::Error },
         ExpectedLine(&'static str),
         ExpectedDataLine,
@@ -110,7 +108,7 @@ mod error {
                 }
                 Error::InvokeProgram { command, .. } => write!(f, "Failed to invoke program {command:?}"),
                 Error::Http(err) => std::fmt::Display::fmt(err, f),
-                Error::SshInvocation(err) => std::fmt::Display::fmt(err, f),
+                Error::SshInvocation(_) => f.write_str("SSH invocation failed"),
                 Error::AmbiguousPath { path } => {
                     write!(
                         f,
@@ -127,7 +125,9 @@ mod error {
                 Error::Io(err) => Some(err),
                 Error::LineDecode { err } => Some(err),
                 Error::InvokeProgram { source, .. } => Some(source),
-                Error::Capabilities { .. } | Error::Http(_) | Error::SshInvocation(_) => None,
+                Error::Capabilities { err } => Some(err),
+                Error::Http(err) => Some(err),
+                Error::SshInvocation(err) => Some(err),
                 _ => None,
             }
         }
@@ -141,7 +141,7 @@ mod error {
 
     impl From<capabilities::Error> for Error {
         fn from(err: capabilities::Error) -> Self {
-            Error::Capabilities { err }
+            Error::Capabilities { err: err.into_error() }
         }
     }
 
@@ -156,9 +156,35 @@ mod error {
         pub fn can_retry(&self) -> bool {
             match self {
                 Error::Io(err) => gix_error::can_retry(err),
-                Error::Http(err) => err.iter().any(|frame| gix_error::can_retry(frame.error())),
+                Error::Http(err) => err.can_retry(),
                 _ => false,
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[cfg(feature = "http-client")]
+        use gix_error::{ErrorExt, message};
+
+        #[cfg(feature = "http-client")]
+        #[test]
+        fn http_keeps_retryable_sources() {
+            let err = super::Error::Http(
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "retry me")
+                    .and_raise(message("HTTP failed"))
+                    .into_error(),
+            );
+
+            assert!(err.can_retry());
+            let source = std::error::Error::source(&err)
+                .and_then(|err| err.downcast_ref::<gix_error::Error>())
+                .expect("HTTP errors retain their gix-error wrapper");
+            assert!(
+                source
+                    .sources()
+                    .any(<dyn std::error::Error + 'static>::is::<std::io::Error>)
+            );
         }
     }
 }
