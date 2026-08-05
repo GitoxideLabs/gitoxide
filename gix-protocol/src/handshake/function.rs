@@ -1,6 +1,7 @@
 use crate::bisync::bisync;
 use gix_error::{ErrorExt, ResultExt, message};
 use gix_features::{progress, progress::Progress};
+use gix_transport::IsSpuriousError;
 use gix_transport::{Service, client};
 
 use super::Error;
@@ -85,7 +86,13 @@ where
             }
             Err(err) => Err(err),
         }
-        .or_raise(|| message("Transport handshake failed"))?;
+        .map_err(|err| {
+            if err.is_spurious() {
+                gix_error::RetryableError::new(err).and_raise(message("Transport handshake failed"))
+            } else {
+                err.and_raise(message("Transport handshake failed"))
+            }
+        })?;
 
         if !supported_versions.is_empty() && !supported_versions.contains(&actual_protocol) {
             return Err(message!(

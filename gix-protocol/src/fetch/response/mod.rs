@@ -42,6 +42,17 @@ impl std::error::Error for Error {
     }
 }
 
+impl Error {
+    pub(crate) fn can_retry(&self) -> bool {
+        use crate::transport::IsSpuriousError;
+        match self {
+            Error::Io(err) => err.is_spurious(),
+            Error::Transport(err) => err.is_spurious(),
+            _ => false,
+        }
+    }
+}
+
 impl From<gix_transport::packetline::read::Error> for Error {
     fn from(err: gix_transport::packetline::read::Error) -> Self {
         Error::UploadPack(err)
