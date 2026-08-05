@@ -5,7 +5,7 @@ $*.html
 
 !foo.html
 
-# this isn't allowed and ignored
+# not allowed with precious support, but a plain negation without it
 !$foo.html
 
 # but this is a literal !/* that is precious
