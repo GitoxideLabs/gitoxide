@@ -28,9 +28,9 @@ use crossterm::{
     clipboard::CopyToClipboard,
     cursor,
     event::{
-        self, DisableFocusChange, EnableFocusChange, Event as TerminalEvent, KeyCode, KeyEvent, KeyEventKind,
-        KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event as TerminalEvent,
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     style::{Print, ResetColor},
@@ -416,7 +416,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
 }
 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
-    execute!(backend, EnableFocusChange)?;
+    execute!(backend, EnableFocusChange, EnableMouseCapture)?;
     if enhanced_keyboard {
         execute!(
             backend,
@@ -434,7 +434,7 @@ fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keybo
     if enhanced_keyboard {
         execute!(backend, PopKeyboardEnhancementFlags)?;
     }
-    execute!(backend, DisableFocusChange)
+    execute!(backend, DisableMouseCapture, DisableFocusChange)
 }
 
 fn half_height(terminal_height: u16) -> u16 {
@@ -889,7 +889,8 @@ fn event_loop(
             enhanced_keyboard,
         )?;
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
-            || verification_receiver.is_some();
+            || verification_receiver.is_some()
+            || repeat_deadline.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
             draw(
                 terminal,
@@ -925,8 +926,19 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
-        let key = match terminal_event {
-            TerminalEvent::Key(key) => key,
+        let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
+            TerminalEvent::Key(key) => {
+                let action = action(key);
+                let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
+                (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
+            }
+            TerminalEvent::Mouse(mouse) => {
+                let Some(action) = mouse_scroll_action(mouse.kind) else {
+                    continue;
+                };
+                let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
+                (Some(action), repeats_history, true, true)
+            }
             TerminalEvent::FocusLost => {
                 focused = false;
                 app.changes_suppressed = false;
@@ -950,18 +962,18 @@ fn event_loop(
         if !focused {
             continue;
         }
-        let action = action(key);
-        let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
+        if repeats_history || throttles_draw {
+            repeat_deadline = Some(Instant::now() + REPEAT_IDLE);
+        }
         if repeats_history {
             fill_repository.retain = true;
-            repeat_deadline = Some(Instant::now() + REPEAT_IDLE);
-        } else if key.kind != KeyEventKind::Repeat {
+        } else if !is_repeat {
             fill_repository.retain = false;
             fill_repository.retained = None;
         }
         if repeats_history && app.changes_mode.is_some() {
             app.changes_suppressed = true;
-        } else if key.kind != KeyEventKind::Repeat && app.changes_suppressed {
+        } else if !is_repeat && app.changes_suppressed {
             app.changes_suppressed = false;
             repeat_deadline = None;
             dirty = true;
@@ -971,7 +983,7 @@ fn event_loop(
             continue;
         };
         dirty = true;
-        urgent = true;
+        urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
         let toggles_changes = action == Action::ToggleChanges;
         let refreshes_worktree = action == Action::Refresh && app.changes_mode == Some(ChangesMode::Both);
@@ -2380,6 +2392,16 @@ fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>, changes_
     !changes_focused && kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
 }
 
+fn mouse_scroll_action(kind: MouseEventKind) -> Option<Action> {
+    match kind {
+        MouseEventKind::ScrollUp => Some(Action::MoveUp),
+        MouseEventKind::ScrollDown => Some(Action::MoveDown),
+        MouseEventKind::ScrollLeft => Some(Action::ScrollLeft),
+        MouseEventKind::ScrollRight => Some(Action::ScrollRight),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::open::Error> {
     gix::open_opts(path.as_ref(), gix::open::Options::isolated())
@@ -3021,6 +3043,27 @@ mod tests {
             KeyEventKind::Repeat,
             Some(&Action::ToggleDate),
             false
+        ));
+    }
+
+    #[test]
+    fn maps_continuous_mouse_scrolling_to_navigation() {
+        assert_eq!(mouse_scroll_action(MouseEventKind::ScrollUp), Some(Action::MoveUp));
+        assert_eq!(mouse_scroll_action(MouseEventKind::ScrollDown), Some(Action::MoveDown));
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::ScrollLeft),
+            Some(Action::ScrollLeft)
+        );
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::ScrollRight),
+            Some(Action::ScrollRight)
+        );
+        assert_eq!(mouse_scroll_action(MouseEventKind::Moved), None);
+        assert!(repeats_viewport(
+            &mouse_scroll_action(MouseEventKind::ScrollDown).expect("vertical scrolling has an action")
+        ));
+        assert!(!repeats_viewport(
+            &mouse_scroll_action(MouseEventKind::ScrollRight).expect("horizontal scrolling has an action")
         ));
     }
 
