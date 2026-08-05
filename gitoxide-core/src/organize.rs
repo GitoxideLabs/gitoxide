@@ -1,10 +1,23 @@
 use std::{
     borrow::Cow,
+    collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use gix::{NestedProgress, Progress, objs::bstr::ByteSlice, progress};
+use parking_lot::Mutex;
+
+fn walk_threads(requested: Option<usize>) -> usize {
+    requested.filter(|threads| *threads != 0).unwrap_or_else(|| {
+        if cfg!(target_os = "macos") {
+            4
+        } else {
+            std::thread::available_parallelism().map_or(1, usize::from)
+        }
+    })
+}
 
 #[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub enum Mode {
@@ -27,13 +40,13 @@ pub fn find_git_repository_workdirs(
         is_bare: bool,
     }
 
-    fn is_repository(path: &Path) -> Option<RepoInfo> {
+    fn is_repository(path: &Path, is_dir: bool, is_file: bool) -> Option<RepoInfo> {
         // Can be git dir or worktree checkout (file)
         if path.file_name() != Some(OsStr::new(".git")) && path.extension() != Some(OsStr::new("git")) {
             return None;
         }
 
-        if path.is_dir() {
+        if is_dir {
             if path.join("HEAD").is_file() && path.join("config").is_file() {
                 gix::discover::is_git(path).ok().map(|discovered_kind| {
                     let is_bare = discovered_kind.is_bare();
@@ -54,12 +67,14 @@ pub fn find_git_repository_workdirs(
             } else {
                 None
             }
-        } else {
+        } else if is_file {
             // git files are always linked worktrees
             Some(RepoInfo {
                 kind: gix::repository::Kind::LinkedWorkTree,
                 is_bare: false,
             })
+        } else {
+            None
         }
     }
     fn into_workdir(git_dir: PathBuf, info: &RepoInfo) -> PathBuf {
@@ -70,48 +85,46 @@ pub fn find_git_repository_workdirs(
         }
     }
 
-    #[derive(Debug, Default)]
-    struct State {
-        info: Option<RepoInfo>,
+    fn repository_at(entry: &dua_core::Entry) -> Option<(PathBuf, RepoInfo)> {
+        let path = entry.path();
+        if let Some(info) = is_repository(&path, entry.file_type.is_dir(), entry.file_type.is_file()) {
+            return Some((path, info));
+        }
+        let git_dir = path.join(".git");
+        let metadata = git_dir.metadata().ok()?;
+        is_repository(&git_dir, metadata.is_dir(), metadata.is_file()).map(|info| (git_dir, info))
     }
 
-    let walk = jwalk::WalkDirGeneric::<((), State)>::new(root)
-        .follow_links(false)
-        .sort(true)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(threads.unwrap_or(0)));
-
-    walk.process_read_dir(move |_depth, path, _read_dir_state, siblings| {
-        if debug {
-            eprintln!("{}", path.display());
-        }
-        let mut found_any_repo = false;
-        let mut found_bare_repo = false;
-        for entry in siblings.iter_mut().flatten() {
+    let repositories = Arc::new(Mutex::new(HashMap::new()));
+    let repositories_in_workers = Arc::clone(&repositories);
+    dua_core::walk(
+        root.as_ref(),
+        walk_threads(threads),
+        dua_core::Order::ParentFirst,
+        move |entry| {
+            let Some(repository) = repository_at(entry) else {
+                return true;
+            };
             let path = entry.path();
-            if let Some(info) = is_repository(&path) {
-                let is_bare = info.is_bare;
-                entry.client_state = State { info: info.into() };
-                entry.read_children_path = None;
-
-                found_any_repo = true;
-                found_bare_repo = is_bare;
-            }
-        }
-        // Only return paths which are repositories are further participating in the traversal
-        // Don't let bare repositories cause siblings to be pruned.
-        if found_any_repo && !found_bare_repo {
-            siblings.retain(|e| e.as_ref().is_ok_and(|e| e.client_state.info.is_some()));
+            repositories_in_workers.lock().insert(path, repository);
+            false
+        },
+    )
+    .inspect(move |entry| {
+        if debug && let Ok(entry) = entry {
+            eprintln!("{}", entry.path().display());
         }
     })
-    .into_iter()
     .inspect(move |_| progress.inc())
     .filter_map(Result::ok)
-    .filter_map(|mut e| {
-        e.client_state
-            .info
-            .take()
-            .map(|info| (into_workdir(e.path(), &info), info.kind))
+    .filter_map(move |entry| {
+        let path = entry.path();
+        let repository = if entry.file_type.is_dir() {
+            repositories.lock().remove(&path)
+        } else {
+            is_repository(&path, false, entry.file_type.is_file()).map(|info| (path, info))
+        };
+        repository.map(|(git_dir, info)| (into_workdir(git_dir, &info), info.kind))
     })
 }
 
@@ -265,9 +278,11 @@ pub fn discover<P: NestedProgress>(
     debug: bool,
     threads: Option<usize>,
 ) -> anyhow::Result<()> {
-    for (git_workdir, _kind) in
+    let mut repositories =
         find_git_repository_workdirs(source_dir, progress.add_child("Searching repositories"), debug, threads)
-    {
+            .collect::<Vec<_>>();
+    repositories.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    for (git_workdir, _kind) in repositories {
         writeln!(&mut out, "{}", git_workdir.display())?;
     }
     Ok(())
@@ -282,9 +297,11 @@ pub fn run<P: NestedProgress>(
 ) -> anyhow::Result<()> {
     let mut num_errors = 0usize;
     let destination = destination.as_ref().canonicalize()?;
-    for (path_to_move, kind) in
+    let mut repositories =
         find_git_repository_workdirs(source_dir, progress.add_child("Searching repositories"), false, threads)
-    {
+            .collect::<Vec<_>>();
+    repositories.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    for (path_to_move, kind) in repositories {
         if let Err(err) = handle(mode, kind, &path_to_move, &destination, &mut progress) {
             progress.fail(format!(
                 "Error when handling directory {:?}: {}",
