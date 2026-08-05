@@ -117,4 +117,11 @@ fn not_found_is_discovered_in_well_known_errors() {
     let missing = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
     assert!(Error::from(missing).is_not_found());
     assert!(Error::from_error(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")).is_not_found());
+    assert!(
+        Error::from_boxed(Box::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing object"
+        )))
+        .is_not_found()
+    );
 }

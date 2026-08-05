@@ -54,6 +54,12 @@ mod _impl {
                 inner: Inner::ExnAsError(Exn::new(error).into()),
             }
         }
+
+        /// Create a new instance representing an already boxed `error`.
+        #[track_caller]
+        pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+            Self::from_error(super::BoxedError(error))
+        }
     }
 
     impl std::fmt::Display for Error {
@@ -147,6 +153,12 @@ mod _impl {
                 inner: Exn::new(error).into_chain(),
             }
         }
+
+        /// Create a new instance representing an already boxed `error`.
+        #[track_caller]
+        pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+            Self::from_error(super::BoxedError(error))
+        }
     }
 
     impl std::fmt::Display for Error {
@@ -177,6 +189,26 @@ mod _impl {
                 inner: err.into_chain(),
             }
         }
+    }
+}
+
+struct BoxedError(Box<dyn std::error::Error + Send + Sync + 'static>);
+
+impl std::fmt::Display for BoxedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for BoxedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BoxedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
     }
 }
 

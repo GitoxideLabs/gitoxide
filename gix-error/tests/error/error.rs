@@ -174,5 +174,8 @@ fn not_found_is_discovered_in_well_known_errors() {
         .and_raise(message("failed to open repository"));
     assert!(Error::from(io).is_not_found());
 
+    let boxed = Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "missing object"));
+    assert!(Error::from_boxed(boxed).is_not_found());
+
     assert!(!Error::from(message("permission denied").raise()).is_not_found());
 }
