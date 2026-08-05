@@ -32,7 +32,7 @@ mod merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let db = object_db();
         for (content, kind) in [
@@ -48,11 +48,11 @@ mod merge {
                     kind,
                     &db,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
         let mut platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             platform_ref.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -62,7 +62,7 @@ mod merge {
         let mut buf = Vec::new();
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -72,7 +72,7 @@ mod merge {
         platform_ref.options.resolve_binary_with = Some(builtin_driver::binary::ResolveWith::Theirs);
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Theirs, Resolution::CompleteWithAutoResolvedConflict),
@@ -92,7 +92,7 @@ mod merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let db = object_db();
         for (content, kind) in [
@@ -108,11 +108,11 @@ mod merge {
                     kind,
                     &db,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
         let platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             platform_ref.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -122,7 +122,7 @@ mod merge {
         let mut buf = Vec::new();
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Complete),
@@ -150,7 +150,7 @@ mod merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let db = object_db();
         for (content, kind) in [
@@ -160,17 +160,17 @@ mod merge {
             let id = insert(&db, content)?;
             platform
                 .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
 
         let mut platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(platform_ref.driver, DriverChoice::BuiltIn(BuiltinDriver::Text));
         let mut buf = Vec::new();
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
         assert_eq!(
             buf.as_bstr(),
@@ -188,7 +188,7 @@ theirs
         };
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::Conflict));
 
         assert_eq!(
@@ -207,7 +207,7 @@ theirs
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithOurs;
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict),
@@ -218,14 +218,14 @@ theirs
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithTheirs;
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "theirs");
 
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::ResolveWithUnion;
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
@@ -233,14 +233,14 @@ theirs
         platform_ref.options.text.conflict = builtin_driver::text::Conflict::default();
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::CompleteWithAutoResolvedConflict));
         assert_eq!(buf.as_bstr(), "ours\ntheirs");
 
         platform_ref.driver = DriverChoice::BuiltIn(BuiltinDriver::Binary);
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -286,7 +286,7 @@ theirs
             platform_ref.options.resolve_binary_with = Some(resolve);
             let res = platform_ref
                 .merge(&mut buf, default_labels(), &Default::default())
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(res, (expected_pick, Resolution::CompleteWithAutoResolvedConflict));
             assert_eq!(platform_ref.buffer_by_pick(res.0).unwrap().unwrap().as_bstr(), expected);
 
@@ -325,7 +325,7 @@ theirs
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let db = object_db();
         for (content, kind) in [
@@ -335,16 +335,16 @@ theirs
             let id = insert(&db, content)?;
             platform
                 .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
 
         let platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let mut buf = Vec::new();
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete), "merge drivers always merge ");
         let mut lines = cleaned_driver_lines(&buf)?;
         for tmp_file in lines.by_ref().take(3) {
@@ -370,13 +370,13 @@ theirs
         let id = insert(&db, "binary\0")?;
         platform
             .set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::OtherOrTheirs, &db)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let res = platform_ref
             .merge(&mut buf, default_labels(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -455,12 +455,12 @@ cat "%B" >> "%A""#
             let id = insert(&db, content)?;
             platform
                 .set_resource(id, EntryKind::Blob, "b".into(), kind, &db)
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
 
         let platform_ref = platform
             .prepare_merge(&db, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let worktree = gix_testtools::tempfile::TempDir::new()?;
         let git_dir = worktree.path().join(".git");
         std::fs::create_dir(&git_dir)?;
@@ -476,7 +476,7 @@ cat "%B" >> "%A""#
                     ..Default::default()
                 },
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(res, (Pick::Buffer, Resolution::Complete));
 
         let mut lines = buf.lines();
@@ -526,7 +526,7 @@ cat "%B" >> "%A""#
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         // Two deletions
         for kind in [ResourceKind::CurrentOrOurs, ResourceKind::OtherOrTheirs] {
@@ -538,17 +538,17 @@ cat "%B" >> "%A""#
                     kind,
                     &gix_object::find::Never,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
         }
 
         let platform_ref = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let mut buf = Vec::new();
         let res = platform_ref
             .merge(&mut buf, Default::default(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Buffer, Resolution::Complete),
@@ -599,7 +599,7 @@ cat "%B" >> "%A""#
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         platform.filter.roots.other_root = platform.filter.roots.common_ancestor_root.clone();
         platform.filter.roots.current_root = platform.filter.roots.common_ancestor_root.clone();
 
@@ -611,7 +611,7 @@ cat "%B" >> "%A""#
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         platform
             .set_resource(
                 gix_hash::Kind::Sha1.null(),
@@ -620,17 +620,17 @@ cat "%B" >> "%A""#
                 ResourceKind::OtherOrTheirs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let platform_ref = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(platform_ref.other.data, platform::resource::Data::TooLarge { size: 12 });
 
         let mut out = Vec::new();
         let res = platform_ref
             .merge(&mut out, Default::default(), &Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             res,
             (Pick::Ours, Resolution::Conflict),
@@ -690,7 +690,7 @@ mod prepare_merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         platform
             .set_resource(
@@ -700,7 +700,7 @@ mod prepare_merge {
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         platform
             .set_resource(
                 gix_hash::Kind::Sha1.null(),
@@ -709,7 +709,7 @@ mod prepare_merge {
                 ResourceKind::OtherOrTheirs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let state = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
@@ -753,7 +753,7 @@ mod prepare_merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         platform
             .set_resource(
@@ -763,7 +763,7 @@ mod prepare_merge {
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         platform
             .set_resource(
                 gix_hash::Kind::Sha1.null(),
@@ -772,11 +772,11 @@ mod prepare_merge {
                 ResourceKind::OtherOrTheirs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -796,10 +796,10 @@ mod prepare_merge {
                 ResourceKind::CommonAncestorOrBase,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -814,10 +814,10 @@ mod prepare_merge {
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Binary),
@@ -832,10 +832,10 @@ mod prepare_merge {
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -845,7 +845,7 @@ mod prepare_merge {
         platform.options.default_driver = Some("union".into());
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let expected_idx = 3;
         assert_eq!(
             prepared.driver,
@@ -858,7 +858,7 @@ mod prepare_merge {
         platform.options.default_driver = Some("binary".into());
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Binary),
@@ -868,7 +868,7 @@ mod prepare_merge {
         platform.options.default_driver = Some("Binary".into());
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             prepared.driver,
             DriverChoice::BuiltIn(BuiltinDriver::Text),
@@ -883,10 +883,10 @@ mod prepare_merge {
                 ResourceKind::CurrentOrOurs,
                 &gix_object::find::Never,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let prepared = platform
             .prepare_merge(&gix_object::find::Never, Default::default())
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let expected_idx = 0;
         assert_eq!(prepared.driver, DriverChoice::Index(expected_idx));
         assert_eq!(
@@ -904,7 +904,7 @@ mod prepare_merge {
                     ..Default::default()
                 },
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let expected_idx = 1;
         assert_eq!(prepared.driver, DriverChoice::Index(expected_idx));
         assert_eq!(

@@ -31,7 +31,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
             ResourceKind::OldOrSource,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let db = object_db();
     let a_content = "a-content";
@@ -44,7 +44,7 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
             ResourceKind::NewOrDestination,
             &db,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let (old, new) = platform.resources().expect("previously set source and destination");
     assert_eq!(old.data.as_slice().expect("present").as_bstr(), "a\n");
@@ -94,12 +94,12 @@ fn resources_of_worktree_and_odb_and_check_link() -> crate::Result {
 
     platform
         .set_resource(id, EntryKind::Link, "a".into(), ResourceKind::NewOrDestination, &db)
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     // Double-inserts are fine.
     platform
         .set_resource(id, EntryKind::Link, "a".into(), ResourceKind::NewOrDestination, &db)
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     let (old, new) = platform.resources().expect("previously set source and destination");
     assert_eq!(
         old.data.as_slice().expect("present").as_bstr(),
@@ -221,14 +221,14 @@ fn diff_binary() -> crate::Result {
             ResourceKind::OldOrSource,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
     platform
         .set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let out = platform.prepare_diff()?;
     assert!(
@@ -266,14 +266,14 @@ fn diff_performed_despite_external_command() -> crate::Result {
             ResourceKind::OldOrSource,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
     platform
         .set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let out = platform.prepare_diff()?;
     assert!(
@@ -312,14 +312,14 @@ fn diff_skipped_due_to_external_command_and_enabled_option() -> crate::Result {
             ResourceKind::OldOrSource,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let db = object_db();
     let a_content = "b";
     let id = insert(&db, a_content)?;
     platform
         .set_resource(id, EntryKind::Blob, "b".into(), ResourceKind::NewOrDestination, &db)
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let out = platform.prepare_diff()?;
     assert_eq!(
@@ -343,7 +343,7 @@ fn source_and_destination_do_not_exist() -> crate::Result {
             ResourceKind::OldOrSource,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     platform
         .set_resource(
@@ -353,7 +353,7 @@ fn source_and_destination_do_not_exist() -> crate::Result {
             ResourceKind::NewOrDestination,
             &gix_object::find::Never,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let (old, new) = platform.resources().expect("previously set source and destination");
     assert_eq!(old.data, platform::resource::Data::Missing);

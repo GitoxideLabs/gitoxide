@@ -154,11 +154,11 @@ pub mod excludes {
         /// [`Worktree::attributes()`][crate::Worktree::attributes()] for accessing both attributes and excludes.
         pub fn excludes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'_>, Error> {
             let index = self.index()?;
-            Ok(self.parent.excludes(
+            self.parent.excludes(
                 &index,
                 overrides,
                 gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-            )?)
+            )
         }
     }
 }
@@ -180,12 +180,12 @@ pub mod attributes {
         /// * `$GIT_DIR/info/exclude|attributes` if present.
         pub fn attributes(&self, overrides: Option<gix_ignore::Search>) -> Result<AttributeStack<'repo>, Error> {
             let index = self.index()?;
-            Ok(self.parent.attributes(
+            self.parent.attributes(
                 &index,
                 gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
                 gix_worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
                 overrides,
-            )?)
+            )
         }
 
         /// Like [attributes()][Self::attributes()], but without access to exclude/ignore information.
@@ -240,13 +240,13 @@ pub mod pathspec {
                 )
                 .map_err(gix_error::Error::from)?
                 .unwrap_or(gitoxide::Pathspec::INHERIT_IGNORE_CASE_DEFAULT);
-            Ok(self.parent.pathspec(
+            self.parent.pathspec(
                 true, /* empty patterns match prefix */
                 patterns,
                 inherit_ignore_case,
                 &index,
                 gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping,
-            )?)
+            )
         }
     }
 }

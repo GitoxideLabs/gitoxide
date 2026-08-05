@@ -223,7 +223,7 @@ impl crate::Repository {
     /// Also note that the returned id is likely to point to a commit, but could also
     /// point to a tree or blob. It won't, however, point to a tag as these are always peeled.
     pub fn head_id(&self) -> Result<crate::Id<'_>, reference::head_id::Error> {
-        Ok(self.head()?.into_peeled_id()?)
+        self.head()?.into_peeled_id()
     }
 
     /// Return the name to the symbolic reference `HEAD` points to, or `None` if the head is detached.
@@ -308,7 +308,7 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn head_tree(&self) -> Result<crate::Tree<'_>, reference::head_tree::Error> {
-        Ok(self.head_commit()?.tree()?)
+        self.head_commit()?.tree()
     }
 
     /// Find the reference with the given partial or full `name`, like `main`, `HEAD`, `heads/branch` or `origin/other`,

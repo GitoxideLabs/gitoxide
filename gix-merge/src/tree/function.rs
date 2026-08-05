@@ -1590,7 +1590,7 @@ fn apply_our_resolution(
         Original => local_ours,
         Swapped => local_theirs,
     };
-    Ok(apply_change(editor, ours, None).or_raise(|| gix_error::message("Tree merge failed"))?)
+    apply_change(editor, ours, None).or_raise(|| gix_error::message("Tree merge failed"))
 }
 
 fn involves_submodule(a: &EntryMode, b: &EntryMode) -> bool {

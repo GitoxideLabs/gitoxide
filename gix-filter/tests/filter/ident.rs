@@ -79,7 +79,7 @@ mod apply {
             "$Id: expanded is ignored$",
         ] {
             let changed = ident::apply(input_no_match.as_bytes(), gix_testtools::object_hash(), &mut buf)
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert!(!changed, "no substitution happens, nothing to do");
             assert_eq!(buf.len(), 0);
         }
@@ -90,7 +90,7 @@ mod apply {
     fn simple() -> crate::Result {
         let mut buf = Vec::new();
         assert!(
-            ident::apply(B("$Id$"), gix_testtools::object_hash(), &mut buf).map_err(|err| err.into_error())?,
+            ident::apply(B("$Id$"), gix_testtools::object_hash(), &mut buf).map_err(gix_error::Exn::into_error)?,
             "a change happens"
         );
         let expected_hash = match gix_testtools::object_hash() {
@@ -101,7 +101,8 @@ mod apply {
         assert_eq!(buf.as_bstr(), format!("$Id: {expected_hash}$"));
 
         assert!(
-            ident::apply(B("$Id$ $Id$ foo"), gix_testtools::object_hash(), &mut buf).map_err(|err| err.into_error())?
+            ident::apply(B("$Id$ $Id$ foo"), gix_testtools::object_hash(), &mut buf)
+                .map_err(gix_error::Exn::into_error)?
         );
         let expected_hash = match gix_testtools::object_hash() {
             gix_hash::Kind::Sha1 => "e230cff7a9624f59eaa28bfb97602c3a03651a49",
@@ -124,7 +125,7 @@ mod apply {
             "$Id$ and one more $Id$ and done",
         ] {
             let changed =
-                ident::apply(B(input), gix_testtools::object_hash(), &mut buf).map_err(|err| err.into_error())?;
+                ident::apply(B(input), gix_testtools::object_hash(), &mut buf).map_err(gix_error::Exn::into_error)?;
             assert!(changed, "the input was rewritten");
             assert!(ident::undo(&buf.clone(), &mut buf)?, "undo does something as well");
             assert_eq!(buf.as_bstr(), input, "the filter can be undone perfectly");

@@ -44,7 +44,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert!(out.driver_index.is_none(), "there was no driver");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
             assert_eq!(buf.as_bstr(), a_content, "there is no transformations configured");
@@ -62,7 +62,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -88,7 +88,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none(), "there was no driver");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -130,7 +130,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }), "detected in buffer");
         assert_eq!(buf.len(), 0, "it should avoid querying that data in the first place");
@@ -148,7 +148,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }));
@@ -189,7 +189,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 5 }));
         assert_eq!(buf.len(), 0, "it should avoid querying that data in the first place");
@@ -211,7 +211,7 @@ pub(crate) mod convert_to_diffable {
                     pipeline::Mode::default(),
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(
@@ -237,7 +237,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 5 }));
@@ -277,7 +277,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, None);
         assert_eq!(buf.len(), 0, "always cleared");
@@ -294,7 +294,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none());
         assert_eq!(out.data, None);
         assert_eq!(buf.len(), 0, "always cleared");
@@ -313,7 +313,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, None);
@@ -361,7 +361,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -384,7 +384,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGit,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -410,7 +410,7 @@ pub(crate) mod convert_to_diffable {
                     pipeline::Mode::default(),
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -437,7 +437,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -457,7 +457,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGit,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -512,7 +512,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }));
         assert_eq!(buf.len(), 0, "binary files aren't stored, even if we read them");
@@ -536,7 +536,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 11 }));
@@ -558,7 +558,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::default(),
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
@@ -650,7 +650,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(0));
             assert_eq!(
                 out.data,
@@ -674,7 +674,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGit,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(buf.as_bstr(), "a\n", "unconditionally use git according to mode");
@@ -694,7 +694,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(0));
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
             assert_eq!(buf.as_bstr(), "to-text\na\n", "filter was applied");
@@ -713,7 +713,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGit,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -738,7 +738,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, None);
             assert_eq!(buf.len(), 0, "always cleared");
@@ -757,7 +757,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, None);
             assert_eq!(buf.len(), 0, "always cleared");
@@ -777,7 +777,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
             assert_eq!(
@@ -803,7 +803,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert_eq!(out.driver_index, Some(1));
             assert_eq!(
@@ -830,7 +830,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
 
             assert_eq!(out.driver_index, Some(1));
             assert_eq!(
@@ -856,7 +856,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(2));
             assert_eq!(
                 out.data,
@@ -886,7 +886,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(2));
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
             assert_eq!(
@@ -911,7 +911,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(
                 out.driver_index, None,
                 "no driver is associated, as `diff` is explicitly unset"
@@ -939,7 +939,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(
                 out.driver_index, None,
                 "no driver is associated, as `diff` is explicitly unset"
@@ -968,7 +968,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(3));
             assert_eq!(
                 out.data,
@@ -995,7 +995,7 @@ pub(crate) mod convert_to_diffable {
                     mode,
                     &mut buf,
                 )
-                .map_err(|err| err.into_error())?;
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(3));
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
             assert_eq!(
@@ -1019,7 +1019,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, None);
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -1042,7 +1042,7 @@ pub(crate) mod convert_to_diffable {
                 pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
                 &mut buf,
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, None);
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(

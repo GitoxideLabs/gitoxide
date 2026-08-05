@@ -1387,7 +1387,7 @@ mod util {
             &mut pathspecs,
             &mut |_, _, _, _| false,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
         Ok((out, rewrites_info))
     }
 
@@ -1407,7 +1407,7 @@ mod util {
                 std::io::Error::other(format!("Could not read '{}': {}", tree_id_path.display(), err))
             })?;
             let tree_id = gix_hash::ObjectId::from_hex(hex_id.trim().as_bytes())?;
-            Ok(gix_index::State::from_tree(&tree_id, odb, Default::default()).map_err(|err| err.into_error())?)
+            Ok(gix_index::State::from_tree(&tree_id, odb, Default::default()).map_err(gix_error::Exn::into_error)?)
         }
     }
 }

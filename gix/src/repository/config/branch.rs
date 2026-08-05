@@ -128,7 +128,7 @@ impl crate::Repository {
     ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
         let remote_ref = match self.branch_remote_ref_name(name, direction)? {
             Ok(r) => r,
-            Err(err) => return Some(Err(err.into())),
+            Err(err) => return Some(Err(err)),
         };
         let remote = match self.branch_remote(name.shorten(), direction)? {
             Ok(r) => r,

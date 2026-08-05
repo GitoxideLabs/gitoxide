@@ -12,7 +12,7 @@ use gix_transport::client::capabilities::blocking_recv::Handshake;
 #[test]
 fn from_bytes() -> crate::Result {
     let (caps, delim_pos) = Capabilities::from_bytes(&b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0multi_ack thin-pack side-band side-band-64k ofs-delta shallow deepen-since deepen-not deepen-relative no-progress include-tag multi_ack_detailed symref=HEAD:refs/heads/master object-format=sha1 agent=git/2.28.0"[..])
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert_eq!(delim_pos, 45);
     assert_eq!(
         caps.iter().map(|c| c.name().to_owned()).collect::<Vec<_>>(),
@@ -64,7 +64,7 @@ fn from_bytes_with_sha256_object_format() -> crate::Result {
     let (caps, _delim_pos) = Capabilities::from_bytes(
         &b"7814e8a05a59c0cf5fb186661d1551c75d1299b5 HEAD\0side-band-64k object-format=sha256 agent=git/2.40.0"[..],
     )
-    .map_err(|err| err.into_error())?;
+    .map_err(gix_error::Exn::into_error)?;
     let object_format = caps.capability("object-format").expect("cap exists");
     assert!(
         object_format.supports("sha256").expect("there is a value"),

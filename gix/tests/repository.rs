@@ -193,8 +193,7 @@ fn revspec_paths_starting_with_a_dot_need_a_worktree_to_stay_within() -> gix_tes
 
 #[cfg(feature = "revision")]
 fn probable_cause(res: Result<gix::Id<'_>, gix::revision::spec::parse::single::Error>) -> String {
-    match res.expect_err("the revspec must not resolve") {
-        gix::revision::spec::parse::single::Error::Parse(err) => err.probable_cause().to_string(),
-        err => panic!("expected a failure while parsing, got {err:?}"),
-    }
+    res.expect_err("the revspec must not resolve")
+        .probable_cause()
+        .to_string()
 }

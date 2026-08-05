@@ -43,6 +43,7 @@ impl std::error::Error for Error {
 }
 
 impl Error {
+    #[cfg(any(feature = "blocking-client", feature = "async-client"))]
     pub(crate) fn can_retry(&self) -> bool {
         match self {
             Error::Io(err) => gix_error::can_retry(err),

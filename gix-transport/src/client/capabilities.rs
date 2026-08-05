@@ -1,9 +1,8 @@
 use bstr::{BStr, BString, ByteSlice};
 use gix_error::{ErrorExt, message};
 
-use crate::Protocol;
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
-use crate::client;
+use crate::{Protocol, client};
 
 /// The error used in [`Capabilities::from_bytes()`] and [`Capabilities::from_lines()`].
 pub type Error = gix_error::Exn<gix_error::Message>;

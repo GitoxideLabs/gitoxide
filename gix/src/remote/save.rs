@@ -140,9 +140,8 @@ impl Remote<'_> {
         let name = crate::remote::name::validated(name.as_bstr().to_owned())?;
         let prev_name = self.name.take();
         self.name = Some(name.into());
-        self.save_to(config).map_err(|err| {
+        self.save_to(config).inspect_err(|_| {
             self.name = prev_name;
-            err.into()
         })
     }
 }

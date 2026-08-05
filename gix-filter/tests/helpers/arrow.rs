@@ -32,12 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &["clean", "smudge", "delay"]
                 },
             )
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
 
             let mut next_smudge_aborts = false;
             let mut next_smudge_fails_permanently = false; // a test validates that we don't actually hang
             let mut delayed = Vec::new();
-            while let Some(mut request) = srv.next_request().map_err(|err| err.into_error())? {
+            while let Some(mut request) = srv.next_request().map_err(gix_error::Exn::into_error)? {
                 let needs_failure = request
                     .meta
                     .iter()

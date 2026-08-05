@@ -36,7 +36,7 @@ mod shutdown {
         let client = extract_client(
             state
                 .maybe_launch_process(&driver, Operation::Clean, "does not matter".into())
-                .map_err(|err| err.into_error())?,
+                .map_err(gix_error::Exn::into_error)?,
         );
 
         assert!(
@@ -157,7 +157,7 @@ pub(crate) mod apply {
         let client = extract_client(
             state
                 .maybe_launch_process(&driver, Operation::Clean, "does not matter".into())
-                .map_err(|err| err.into_error())?,
+                .map_err(gix_error::Exn::into_error)?,
         );
 
         assert!(
@@ -189,7 +189,7 @@ pub(crate) mod apply {
         let client = extract_client(
             state
                 .maybe_launch_process(&driver, Operation::Clean, "does not matter".into())
-                .map_err(|err| err.into_error())?,
+                .map_err(gix_error::Exn::into_error)?,
         );
 
         assert!(
@@ -354,7 +354,9 @@ pub(crate) mod apply {
             context_from_path("sub/a.txt"),
         )?);
 
-        let paths = state.list_delayed_paths(&process_key).map_err(|err| err.into_error())?;
+        let paths = state
+            .list_delayed_paths(&process_key)
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             paths.len(),
             1,
@@ -364,7 +366,7 @@ pub(crate) mod apply {
 
         let mut filtered = state
             .fetch_delayed(&process_key, paths[0].as_ref(), driver::Operation::Smudge)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let mut buf = Vec::new();
         filtered.read_to_end(&mut buf)?;
         drop(filtered);
@@ -374,7 +376,9 @@ pub(crate) mod apply {
             "arrow applies indentation also in delayed mode"
         );
 
-        let paths = state.list_delayed_paths(&process_key).map_err(|err| err.into_error())?;
+        let paths = state
+            .list_delayed_paths(&process_key)
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(paths.len(), 0, "delayed paths are consumed once fetched");
 
         let process_key = extract_delayed_key(state.apply_delayed(
@@ -385,7 +389,9 @@ pub(crate) mod apply {
             context_from_path("sub/b.txt"),
         )?);
 
-        let paths = state.list_delayed_paths(&process_key).map_err(|err| err.into_error())?;
+        let paths = state
+            .list_delayed_paths(&process_key)
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(
             paths.len(),
             1,
@@ -395,7 +401,7 @@ pub(crate) mod apply {
 
         let mut filtered = state
             .fetch_delayed(&process_key, paths[0].as_ref(), driver::Operation::Clean)
-            .map_err(|err| err.into_error())?;
+            .map_err(gix_error::Exn::into_error)?;
         let mut buf = Vec::new();
         filtered.read_to_end(&mut buf)?;
         drop(filtered);
@@ -405,7 +411,9 @@ pub(crate) mod apply {
             "it's possible to apply clean in delayed mode as well"
         );
 
-        let paths = state.list_delayed_paths(&process_key).map_err(|err| err.into_error())?;
+        let paths = state
+            .list_delayed_paths(&process_key)
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(paths.len(), 0, "delayed paths are consumed once fetched");
 
         state.shutdown(gix_filter::driver::shutdown::Mode::WaitForProcesses)?;

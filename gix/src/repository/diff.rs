@@ -23,7 +23,7 @@ impl Repository {
         worktree_roots: gix_diff::blob::pipeline::WorktreeRoots,
     ) -> Result<gix_diff::blob::Platform, diff_resource_cache::Error> {
         let index = self.index_or_load_from_head_or_empty()?;
-        Ok(crate::diff::resource_cache(
+        crate::diff::resource_cache(
             self,
             mode,
             self.attributes_only(
@@ -38,7 +38,7 @@ impl Repository {
             .inner,
             worktree_roots,
         )
-        .map_err(gix_error::Error::from_error)?)
+        .map_err(gix_error::Error::from_error)
     }
 
     /// Produce the changes that would need to be applied to `old_tree` to create `new_tree`.

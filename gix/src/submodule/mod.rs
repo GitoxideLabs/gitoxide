@@ -278,8 +278,9 @@ impl Submodule<'_> {
                 })?;
                 if !git_dir.is_dir() {
                     return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
-                        "The gitdir file at '{}' contains an invalid gitdir target: {git_dir:?}",
-                        worktree_gitdir.display()
+                        "The gitdir file at '{}' contains an invalid gitdir target: '{}'",
+                        worktree_gitdir.display(),
+                        git_dir.display()
                     ))));
                 }
                 git_dir

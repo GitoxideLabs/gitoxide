@@ -68,11 +68,11 @@ impl crate::Repository {
     /// ```
     pub fn find_remote(&self, name_or_url: impl gix_utils::AsBStr) -> Result<Remote<'_>, find::existing::Error> {
         let name_or_url = name_or_url.as_bstr();
-        Ok(self.try_find_remote(name_or_url).ok_or_else(|| {
+        self.try_find_remote(name_or_url).ok_or_else(|| {
             gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
                 "The remote named {name_or_url:?} did not exist"
             )))
-        })??)
+        })?
     }
 
     /// Find the default remote as configured, or `None` if no such configuration could be found.

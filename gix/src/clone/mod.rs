@@ -103,10 +103,6 @@ impl PrepareFetch {
     ///
     /// Similar to `git`, a missing user name and email configuration is not terminal and we will fill it in with dummy values. However,
     /// instead of deriving values from the system, ours are hardcoded to indicate what happened.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn new<Url, E>(
         url: Url,
         path: impl AsRef<std::path::Path>,
@@ -128,11 +124,6 @@ impl PrepareFetch {
             open_opts,
         )
     }
-
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     fn new_inner(
         mut url: gix_url::Url,
         path: &std::path::Path,

@@ -60,10 +60,9 @@ impl crate::Repository {
             let mut repo_config = self.config_snapshot_mut();
             repo_config.append(config).map_err(gix_error::Error::from_error)?;
         }
-        Ok(self
-            .committer()
+        self.committer()
             .expect("committer was just set")
-            .map_err(gix_error::Error::from_error)?)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the author as configured by this repository, which is determined by…

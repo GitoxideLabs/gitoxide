@@ -31,7 +31,7 @@ fn all_stages() -> gix_testtools::Result {
                 unknown_encoding: to_worktree::UnknownEncoding::Fail,
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(
         out.as_bytes().is_none(),
@@ -74,7 +74,7 @@ fn all_stages_no_filter() -> gix_testtools::Result {
                 unknown_encoding: to_worktree::UnknownEncoding::Fail,
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(
         out.as_read().is_none(),
@@ -116,7 +116,7 @@ fn no_filter() -> gix_testtools::Result {
                 unknown_encoding: to_worktree::UnknownEncoding::Fail,
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(!out.is_changed(), "no filter was applied");
     let actual = out.as_bytes().expect("input is unchanged");
     assert_eq!(actual, input, "so the input is unchanged…");
@@ -144,7 +144,7 @@ fn unknown_encoding_is_ignored_after_other_conversions() -> gix_testtools::Resul
                 ..Default::default()
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert_eq!(
         out.as_bytes().expect("converted in memory").as_bstr(),
         "a\r\nb\r\n",
@@ -173,7 +173,7 @@ fn encoding_failure_is_ignored_after_other_conversions() -> gix_testtools::Resul
                 unknown_encoding: to_worktree::UnknownEncoding::Ignore,
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert_eq!(
         out.as_bytes().expect("converted in memory").as_bstr(),
         "a\r\n😀\r\n",

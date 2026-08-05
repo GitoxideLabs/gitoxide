@@ -26,7 +26,7 @@ fn no_driver_but_filter_with_autocrlf() -> gix_testtools::Result {
             &mut |_path, _attrs| {},
             &mut no_object_in_index,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     assert_eq!(
         out.as_bytes().expect("read converted to buffer").as_bstr(),
@@ -68,7 +68,7 @@ fn all_stages_mean_streaming_is_impossible() -> gix_testtools::Result {
             },
             &mut no_object_in_index,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(out.as_read().is_none(), "non-driver filters operate in-memory");
     let buf = out.as_bytes().expect("in-memory operation");
@@ -105,7 +105,7 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
             },
             &mut no_object_in_index,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(out.as_read().is_some(), "filter-only can be streamed");
     let mut buf = Vec::new();
@@ -142,7 +142,7 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
             },
             &mut no_call,
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert!(!out.is_changed(), "no filter was applied");
     let actual = out
         .as_read()

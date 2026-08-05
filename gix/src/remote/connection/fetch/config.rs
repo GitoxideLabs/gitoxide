@@ -6,7 +6,7 @@ use crate::{
 use gix_error::ErrorExt;
 
 pub fn index_threads(repo: &Repository) -> Result<Option<usize>, Error> {
-    Ok(Pack::THREADS
+    Pack::THREADS
         .try_into_usize(
             repo.config
                 .resolved
@@ -17,7 +17,7 @@ pub fn index_threads(repo: &Repository) -> Result<Option<usize>, Error> {
             gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(
                 "The configured pack thread count is invalid",
             )))
-        })?)
+        })
 }
 
 pub fn pack_index_version(repo: &Repository) -> Result<gix_pack::index::Version, Error> {

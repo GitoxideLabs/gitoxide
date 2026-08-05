@@ -78,7 +78,7 @@ pub(crate) mod function {
             }
 
             if let Some(()) = index_object(buf)
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+                .map_err(std::io::Error::other)
                 .or_raise(|| message("Could not obtain index object to check line endings for"))?
             {
                 let has_crlf_in_index = buf

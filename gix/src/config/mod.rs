@@ -222,7 +222,6 @@ pub mod key {
                 self.key,
                 self.value.as_ref().map(|v| format!("={v}")).unwrap_or_default(),
                 self.environment_override
-                    .as_deref()
                     .map(|var| format!(" (possibly from {var})"))
                     .unwrap_or_default(),
                 suffix(SUFFIX)

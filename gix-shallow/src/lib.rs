@@ -10,15 +10,22 @@
 //! # let shallow_file = dir.path().join("shallow");
 //! # std::fs::write(&shallow_file, format!("{first}\n"))?;
 //!
-//! let shallow = gix_shallow::read(&shallow_file)?.expect("a shallow boundary");
+//! let shallow = gix_shallow::read(&shallow_file)
+//!     .map_err(gix_error::Exn::into_error)?
+//!     .expect("a shallow boundary");
 //! let lock = gix_lock::File::acquire_to_update_resource(
 //!     &shallow_file,
 //!     gix_lock::acquire::Fail::Immediately,
 //!     None,
 //! )?;
-//! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])?;
+//! gix_shallow::write(lock, Some(shallow), &[gix_shallow::Update::Shallow(second)])
+//!     .map_err(gix_error::Exn::into_error)?;
 //!
-//! let ids = gix_shallow::read(&shallow_file)?.unwrap().into_iter().collect::<Vec<_>>();
+//! let ids = gix_shallow::read(&shallow_file)
+//!     .map_err(gix_error::Exn::into_error)?
+//!     .expect("a shallow boundary")
+//!     .into_iter()
+//!     .collect::<Vec<_>>();
 //! assert_eq!(ids, vec![first, second]);
 //! # Ok(()) }
 //! ```

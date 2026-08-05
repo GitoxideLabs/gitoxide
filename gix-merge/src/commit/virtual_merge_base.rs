@@ -90,7 +90,7 @@ pub(super) mod function {
                 .tree_merge
                 .tree
                 .write(|tree| objects.write(tree))
-                .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+                .map_err(std::io::Error::other)
                 .or_raise(|| message("Failed to write tree for merged merge-base or virtual commit"))?;
 
             tree_id = Some(merged_tree_id);
@@ -133,7 +133,7 @@ pub(super) mod function {
         commit.tree = tree_id;
         objects
             .write(&commit)
-            .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+            .map_err(std::io::Error::other)
             .or_raise(|| message("Failed to write tree for merged merge-base or virtual commit"))
     }
 }

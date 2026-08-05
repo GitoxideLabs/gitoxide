@@ -88,11 +88,10 @@ impl<'repo> Commit<'repo> {
     ///
     /// For the time at which it was authored, refer to `.author()?.time()`.
     pub fn time(&self) -> Result<gix_date::Time, Error> {
-        Ok(self
-            .committer()
+        self.committer()
             .map_err(gix_error::Error::from_error)?
             .time()
-            .map_err(gix_error::Error::from_error)?)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Decode the entire commit object and return it for accessing all commit information.

@@ -143,7 +143,7 @@ pub(crate) mod function {
                     )
                     .await
                     .or_raise(|| message("Could not invoke ls-refs"))?;
-                Ok($from_v2_refs(&mut remote_refs).await?)
+                $from_v2_refs(&mut remote_refs).await
             }
         };
     }

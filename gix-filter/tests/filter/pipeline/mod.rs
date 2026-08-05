@@ -18,7 +18,7 @@ fn default() -> crate::Result {
                 unknown_encoding: to_worktree::UnknownEncoding::Fail,
             },
         )
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
     assert_eq!(
         out.as_bytes().expect("unchanged").as_bstr(),
         "hi",

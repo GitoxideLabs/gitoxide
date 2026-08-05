@@ -43,10 +43,6 @@ impl crate::Repository {
     ///
     /// Note that it might be the one that is currently open if this repository doesn't point to a linked worktree.
     /// Also note that the main repo might be bare.
-    #[expect(
-        clippy::result_large_err,
-        reason = "will be removed once `gix-error` is used consistently"
-    )]
     pub fn main_repo(&self) -> Result<crate::Repository, crate::open::Error> {
         crate::ThreadSafeRepository::open_opts(self.common_dir(), self.options.clone()).map(Into::into)
     }

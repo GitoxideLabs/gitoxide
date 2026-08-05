@@ -232,7 +232,7 @@ impl<'repo> Reference<'repo> {
             .follow_to_object_packed(&self.repo.refs, packed)
             .map_err(gix_error::Error::from_error)?
             .attach(self.repo);
-        Ok(target.object()?.peel_to_kind(kind)?)
+        target.object()?.peel_to_kind(kind)
     }
 
     /// Follow all symbolic references we point to up to the first object, which is typically (but not always) a tag,

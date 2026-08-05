@@ -49,7 +49,7 @@ pub(crate) fn all(
                 extension::link::SIGNATURE => {
                     ext.link = extension::link::decode(ext_data, object_hash)
                         .or_raise(|| message("Could not parse mandatory link extension"))?
-                        .into()
+                        .into();
                 }
                 extension::sparse::SIGNATURE => {
                     if !ext_data.is_empty() {

@@ -25,7 +25,7 @@ fn from_tree() -> crate::Result {
             Default::default(),
         )?;
         let odb = odb_at(git_dir.join("objects"))?;
-        let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(|err| err.into_error())?;
+        let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(gix_error::Exn::into_error)?;
 
         compare_states(&actual_state, &expected_state, fixture);
     }
@@ -62,7 +62,7 @@ fn from_tree_returns_file_directory_conflicts_until_fixed() -> crate::Result {
     let tree_id = tree_id(&worktree_dir);
     let odb = odb_at(worktree_dir.join(".git").join("objects"))?;
 
-    let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(|err| err.into_error())?;
+    let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(gix_error::Exn::into_error)?;
     actual_state
         .verify_entries()
         .expect("valid, even though invariants aren't met");

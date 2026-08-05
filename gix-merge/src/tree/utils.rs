@@ -180,7 +180,7 @@ where
 
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))
+        .map_err(std::io::Error::other)
         .or_raise(|| message("Failed to write merged blob content as blob to the object database"))?
         .ok_or_raise(|| {
             message("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")

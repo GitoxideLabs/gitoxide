@@ -60,7 +60,7 @@ fn skip_hash() -> crate::Result {
             extensions: Default::default(),
             skip_hash: false,
         })
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let actual = gix_index::File::at(
         &path,
@@ -79,7 +79,7 @@ fn skip_hash() -> crate::Result {
             extensions: Default::default(),
             skip_hash: true,
         })
-        .map_err(|err| err.into_error())?;
+        .map_err(gix_error::Exn::into_error)?;
 
     let actual = gix_index::File::at(
         &path,

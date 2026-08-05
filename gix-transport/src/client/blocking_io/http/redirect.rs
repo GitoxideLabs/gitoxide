@@ -1,3 +1,5 @@
+use gix_error::{ErrorExt, message};
+
 /// The error provided when redirection went beyond what we deem acceptable.
 pub type Error = gix_error::Exn<gix_error::Message>;
 
@@ -209,4 +211,3 @@ mod tests {
         );
     }
 }
-use gix_error::{ErrorExt, message};

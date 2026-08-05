@@ -266,7 +266,7 @@ impl Iterator for Iter {
                     let tree_index = if let Some(handle) = tree_handle {
                         match handle.join().expect("no panic") {
                             Ok(out) => Some(out),
-                            Err(err) => break Some(Err(err.into())),
+                            Err(err) => break Some(Err(err)),
                         }
                     } else {
                         None
@@ -278,7 +278,7 @@ impl Iterator for Iter {
                             self.out = Some(out);
                             None
                         }
-                        Err(err) => Some(Err(err.into())),
+                        Err(err) => Some(Err(err)),
                     };
                 }
             }
