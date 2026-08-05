@@ -2,6 +2,7 @@
 use std::any::Any;
 
 use crate::bstr::BStr;
+use gix_error::ResultExt;
 
 impl crate::Repository {
     /// Produce configuration suitable for `url`, as differentiated by its protocol/scheme, to be passed to a transport instance via
@@ -26,11 +27,11 @@ impl crate::Repository {
         url: impl Into<&'a BStr>,
         remote_name: Option<&BStr>,
     ) -> Result<Option<Box<dyn Any>>, crate::config::transport::Error> {
-        let url = gix_url::parse(url.into()).map_err(gix_error::Error::from_error)?;
+        let url = gix_url::parse(url.into()).or_raise(|| gix_error::message("Invalid URL passed for configuration"))?;
         use gix_url::Scheme::*;
 
         match &url.scheme {
-            Http | Https => {
+            Http | Https => (|| -> Result<Option<Box<dyn Any>>, crate::config::transport::http::Error> {
                 #[cfg(not(any(
                     feature = "blocking-http-transport-reqwest",
                     feature = "blocking-http-transport-curl"
@@ -260,13 +261,15 @@ impl crate::Repository {
                         .filter(|url| !url.is_empty())
                         .map(gix_url::parse)
                         .transpose()
-                        .map_err(gix_error::Error::from_error)?
+                        .or_raise(|| gix_error::message("Invalid URL passed for configuration"))?
                         .filter(|url| url.user().is_some())
                         .map(|url| -> Result<_, config::transport::http::Error> {
-                            let (mut cascade, action_with_normalized_url, prompt_opts) = self
-                                .config_snapshot()
-                                .credential_helpers(url)
-                                .map_err(gix_error::Error::from_error)?;
+                            let (mut cascade, action_with_normalized_url, prompt_opts) =
+                                self.config_snapshot().credential_helpers(url).or_raise(|| {
+                                    gix_error::message(
+                                        "Could not configure the credential helpers for the authenticated proxy url",
+                                    )
+                                })?;
                             Ok((
                                 action_with_normalized_url,
                                 Arc::new(Mutex::new(move |action| cascade.invoke(action, prompt_opts.clone())))
@@ -412,9 +415,11 @@ impl crate::Repository {
                             Some(Arc::new(Mutex::new(backend)) as Arc<Mutex<dyn Any + Send + Sync + 'static>>);
                     }
 
-                    Ok(Some(Box::new(opts)))
+                    Ok(Some(Box::new(opts) as Box<dyn Any>))
                 }
-            }
+            })()
+            .or_raise(|| gix_error::message("Could obtain configuration for an HTTP url"))
+            .map_err(Into::into),
             File | Git | Ssh | Ext(_) => Ok(None),
         }
     }

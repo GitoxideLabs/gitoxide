@@ -128,18 +128,31 @@ impl crate::Repository {
     ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
         let remote_ref = match self.branch_remote_ref_name(name, direction)? {
             Ok(r) => r,
-            Err(err) => return Some(Err(err)),
+            Err(err) => {
+                return Some(Err(gix_error::Error::from(err.and_raise(gix_error::message(
+                    "Could not get the remote reference to translate into the local tracking branch",
+                )))));
+            }
         };
         let remote = match self.branch_remote(name.shorten(), direction)? {
             Ok(r) => r,
-            Err(err) => return Some(Err(gix_error::Error::from_error(err))),
+            Err(err) => {
+                return Some(Err(gix_error::Error::from(err.and_raise(gix_error::message(
+                    "Couldn't find remote to obtain fetch-specs for mapping to the tracking reference",
+                )))));
+            }
         };
 
         if remote.fetch_specs.is_empty() {
             return None;
         }
-        matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash())
-            .map(|res| res.map_err(gix_error::Error::from_error))
+        matching_remote(remote_ref.as_ref(), remote.fetch_specs.iter(), self.object_hash()).map(|res| {
+            res.map_err(|err| {
+                gix_error::Error::from(
+                    err.and_raise(gix_error::message("The name of the tracking reference was invalid")),
+                )
+            })
+        })
     }
 
     /// Given a local `tracking_branch` name, find the remote that maps to it along with the name of the branch on

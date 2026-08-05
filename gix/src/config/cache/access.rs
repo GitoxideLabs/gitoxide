@@ -407,7 +407,7 @@ impl Cache {
         Ok(gix_worktree::stack::state::Ignore::new(
             overrides.unwrap_or_default(),
             gix_ignore::Search::from_git_dir(git_dir, excludes_file, buf, parse_ignore)
-                .map_err(gix_error::Error::from_error)?,
+                .or_raise(|| gix_error::message("Could not read repository exclude"))?,
             None,
             source,
             parse_ignore,
@@ -422,10 +422,9 @@ impl Cache {
         attributes: crate::open::permissions::Attributes,
     ) -> Result<(gix_worktree::stack::state::Attributes, Vec<u8>), config::attribute_stack::Error> {
         use gix_attributes::Source;
-        let configured_or_user_attributes = match self
-            .trusted_file_path(Core::ATTRIBUTES_FILE)
-            .map_err(gix_error::Error::from_error)?
-        {
+        let configured_or_user_attributes = match self.trusted_file_path(Core::ATTRIBUTES_FILE).or_raise(|| {
+            gix_error::message("Failed to interpolate the attribute file configured at `core.attributesFile`")
+        })? {
             Some(attributes) => Some(attributes),
             None => {
                 if attributes.git {
@@ -449,7 +448,7 @@ impl Cache {
         let mut collection = gix_attributes::search::MetadataCollection::default();
         let state = gix_worktree::stack::state::Attributes::new(
             gix_attributes::Search::new_globals(attribute_files, &mut buf, &mut collection)
-                .map_err(gix_error::Error::from_error)?,
+                .or_raise(|| gix_error::message("An attribute file could not be read"))?,
             Some(info_attributes_path),
             source,
             collection,

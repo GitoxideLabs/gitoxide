@@ -31,7 +31,7 @@ impl Snapshot<'_> {
 }
 
 pub(super) mod function {
-    use gix_error::ErrorExt;
+    use gix_error::{ErrorExt, ResultExt};
 
     use crate::{
         bstr::{ByteSlice, ByteVec},
@@ -153,10 +153,10 @@ pub(super) mod function {
                         .map(|val| {
                             gix_config::Boolean::try_from(val)
                                 .map_err(|err| {
-                                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
-                                        "Could not parse 'useHttpPath'",
-                                        section.header().to_bstring(),
-                                    )))
+                                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new(format!(
+                                        "Could not parse 'useHttpPath' key in section {}",
+                                        section.header().to_bstring()
+                                    ))))
                                 })
                                 .map(|b| b.0)
                         })
@@ -190,7 +190,7 @@ pub(super) mod function {
                 environment,
             )
             .ignore_empty()
-            .map_err(gix_error::Error::from_error)?,
+            .or_raise(|| gix_error::message("core.askpass could not be read"))?,
             mode: Credentials::TERMINAL_PROMPT
                 .enrich_error(config.boolean(Credentials::TERMINAL_PROMPT))
                 .with_leniency(is_lenient_config)?

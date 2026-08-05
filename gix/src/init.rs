@@ -9,6 +9,7 @@ use gix_ref::{
 };
 
 use crate::{ThreadSafeRepository, bstr::ByteSlice, config::tree::Init};
+use gix_error::ResultExt;
 
 /// The name of the branch to use if non is configured via git configuration.
 ///
@@ -56,7 +57,9 @@ impl ThreadSafeRepository {
         let (git_dir, worktree_dir) = path.into_repository_and_work_tree_directories();
         open_options.git_dir_trust = Some(gix_sec::Trust::Full);
         // The repo will use `core.precomposeUnicode` to adjust the value as needed.
-        open_options.current_dir = gix_fs::current_dir(false).map_err(gix_error::Error::from_error)?.into();
+        open_options.current_dir = gix_fs::current_dir(false)
+            .or_raise(|| gix_error::message("Could not obtain the current directory"))?
+            .into();
         let repo = ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, open_options)?;
 
         let branch_name = repo
@@ -92,7 +95,7 @@ impl ThreadSafeRepository {
                 name: "HEAD".try_into().expect("valid"),
                 deref: false,
             })
-            .map_err(gix_error::Error::from_error)?;
+            .or_raise(|| gix_error::message("Could not edit HEAD reference with new default name"))?;
             repo.refs.write_reflog = prev_write_reflog;
         }
 

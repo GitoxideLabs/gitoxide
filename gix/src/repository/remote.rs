@@ -1,6 +1,6 @@
 #![allow(clippy::result_large_err)]
 use crate::{Remote, bstr::BStr, config, remote, remote::find};
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 
 impl crate::Repository {
     /// Create a new remote available at the given `url`.
@@ -152,7 +152,9 @@ impl crate::Repository {
         Ok(match name_or_url {
             Some(name) => match self.try_find_remote(name).and_then(Result::ok) {
                 Some(remote) => remote,
-                None => self.remote_at(gix_url::parse(name).map_err(gix_error::Error::from_error)?)?,
+                None => self.remote_at(
+                    gix_url::parse(name).or_raise(|| gix_error::message("remote name could not be parsed as URL"))?,
+                )?,
             },
             None => self
                 .head()?
@@ -275,9 +277,11 @@ impl crate::Repository {
         let fetch_tags = config
             .string_filter(&format!("remote.{}.{}", name_or_url, "tagOpt"), &mut filter)
             .map(|value| {
-                config::tree::Remote::TAG_OPT
-                    .try_into_tag_opt(value)
-                    .map_err(gix_error::Error::from_error)
+                config::tree::Remote::TAG_OPT.try_into_tag_opt(value).map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::message(
+                        "The value for 'remote.<name>.tagOpt` is invalid and must either be '--tags' or '--no-tags'",
+                    )))
+                })
             });
         let fetch_tags = match fetch_tags {
             Some(Ok(v)) => v,
@@ -339,7 +343,8 @@ impl crate::Repository {
                         fetch_tags,
                         self,
                     )
-                    .map_err(gix_error::Error::from_error),
+                    .or_raise(|| gix_error::message("Could not initialize a URL remote"))
+                    .map_err(Into::into),
                 )
             }
         }

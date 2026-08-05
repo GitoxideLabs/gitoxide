@@ -7,6 +7,7 @@ use crate::{
     util::OwnedOrStaticAtomicBool,
     worktree::IndexPersistedOrInMemory,
 };
+use gix_error::ResultExt;
 
 impl Repository {
     /// Return default options suitable for performing a directory walk on this repository.
@@ -66,7 +67,9 @@ impl Repository {
         let mut opts = gix_dir::walk::Options::from(options);
         let worktree_relative_worktree_dirs_storage;
         if let Some(workdir) = self.workdir().filter(|_| opts.for_deletion.is_some()) {
-            let linked_worktrees = self.worktrees().map_err(gix_error::Error::from_error)?;
+            let linked_worktrees = self.worktrees().or_raise(|| {
+                gix_error::message("Could not list worktrees to assure they are no candidates for deletion")
+            })?;
             if !linked_worktrees.is_empty() {
                 let real_workdir = gix_path::realpath_opts(
                     workdir,

@@ -1,4 +1,4 @@
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 use gix_features::progress::Progress;
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::Transport;
@@ -125,7 +125,8 @@ where
             self.transport
                 .inner
                 .configure(&**config)
-                .map_err(|err| gix_error::Error::from_error(std::io::Error::other(err)))?;
+                .map_err(std::io::Error::other)
+                .or_raise(|| gix_error::message("Failed to configure the transport layer"))?;
         }
         let mut handshake = gix_protocol::handshake(
             &mut self.transport.inner,

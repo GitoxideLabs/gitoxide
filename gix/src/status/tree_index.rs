@@ -1,4 +1,5 @@
 use crate::{Repository, config::tree};
+use gix_error::ResultExt;
 
 /// The error returned by [Repository::tree_index_status()].
 pub type Error = gix_error::Error;
@@ -85,7 +86,10 @@ impl Repository {
         };
         let mut resource_cache = None;
         if rewrites.is_some() {
-            resource_cache = Some(self.diff_resource_cache_for_tree_diff()?);
+            resource_cache = Some(
+                self.diff_resource_cache_for_tree_diff()
+                    .or_raise(|| gix_error::message("Could not create diff-cache for similarity checks"))?,
+            );
         }
         let mut pathspec_storage = None;
         if pathspec.is_none() {

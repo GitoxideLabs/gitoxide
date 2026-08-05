@@ -1,5 +1,5 @@
 use crate::{bstr::BStr, clone::PrepareFetch};
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 use gix_ref::Category;
 
 /// The error returned by [`PrepareFetch::fetch_only()`].
@@ -134,11 +134,10 @@ impl PrepareFetch {
                         | gix_protocol::handshake::Ref::Unborn {
                             full_ref_name, target, ..
                         } if full_ref_name == "HEAD" => gix_ref::FullName::try_from(target)
-                            .map_err(|err| {
-                                gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
-                                    "The remote HEAD points to an invalid reference",
-                                    target.clone(),
-                                )))
+                            .or_raise(|| {
+                                gix_error::ValidationError::new(format!(
+                                    "The remote HEAD points to a reference named {target:?} which is invalid."
+                                ))
                             })
                             .into(),
                         _ => None,
@@ -335,7 +334,11 @@ impl PrepareFetch {
                         )
                         .map_err(gix_error::Error::from_error)?,
                     )
-                    .map_err(gix_error::Error::from_error)?;
+                    .or_raise(|| {
+                        gix_error::message(
+                            "Failed to transfer in-memory configuration after adopting the remote's object format",
+                        )
+                    })?;
                 repo.config
                     .reread_values_and_clear_caches_replacing_config(resolved_config.into())?;
                 config = None;

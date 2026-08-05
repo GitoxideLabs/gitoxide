@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use gix_error::ErrorExt;
+use gix_error::ResultExt;
 use gix_ref::{
     Category, FullNameRef, PartialName,
     transaction::{LogChange, RefLog},
@@ -21,9 +21,12 @@ pub fn append_remote_to_local_config_file(
     remote_name: BString,
 ) -> Result<gix_config::File, Error> {
     let mut config = gix_config::File::new(local_config_meta(remote.repo));
-    remote.save_as_to(remote_name, &mut config)?;
+    remote
+        .save_as_to(remote_name, &mut config)
+        .or_raise(|| gix_error::message("Failed to store configured remote in memory"))?;
 
-    write_to_local_config(&config, WriteMode::Append).map_err(gix_error::Error::from_error)?;
+    write_to_local_config(&config, WriteMode::Append)
+        .or_raise(|| gix_error::message("Failed to write repository configuration to disk"))?;
     Ok(config)
 }
 
@@ -52,7 +55,7 @@ pub(super) fn reinitialize_with_object_hash(
     let config_path = git_dir.join("config");
 
     let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)
-        .map_err(gix_error::Error::from_error)?;
+        .or_raise(|| gix_error::message("Failed to load repo-local git configuration before writing"))?;
     // Mirror what `crate::create` writes at init time: only SHA-256 repositories get
     // `repositoryformatversion = 1` along with the `objectformat` extension.
     let is_sha256 = object_hash == gix_hash::Kind::Sha256;
@@ -72,13 +75,18 @@ pub(super) fn reinitialize_with_object_hash(
         config.remove_section("extensions", None);
     }
     let mut lock = gix_lock::File::acquire_to_update_resource(&config_path, gix_lock::acquire::Fail::Immediately, None)
-        .map_err(gix_error::Error::from_error)?;
+        .or_raise(|| gix_error::message("Failed to acquire lock to write repository configuration to disk"))?;
     config
         .write_to_filter(&mut lock, |section| section.meta().source == gix_config::Source::Local)
-        .map_err(gix_error::Error::from_error)?;
-    lock.commit().map_err(gix_error::Error::from_error)?;
+        .or_raise(|| gix_error::message("Failed to write repository configuration to disk"))?;
+    lock.commit()
+        .or_raise(|| gix_error::message("Failed to commit lock after writing repository configuration to disk"))?;
 
-    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())?.to_thread_local())
+    Ok(crate::ThreadSafeRepository::open_opts(git_dir, repo.options.clone())
+        .or_raise(|| {
+            gix_error::message("Failed to reopen the local repository after adopting the remote's object format")
+        })?
+        .to_thread_local())
 }
 
 fn local_config_meta(repo: &Repository) -> gix_config::file::Metadata {
@@ -182,13 +190,11 @@ pub fn update_head(
     };
     match head_ref {
         Some(referent) => {
-            let referent: gix_ref::FullName =
-                gix_ref::FullName::try_from(referent).map_err(|err: gix_validate::reference::name::Error| {
-                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
-                        "The remote HEAD points to an invalid reference",
-                        referent.to_owned(),
-                    )))
-                })?;
+            let referent: gix_ref::FullName = gix_ref::FullName::try_from(referent).or_raise(|| {
+                gix_error::ValidationError::new(format!(
+                    "The remote HEAD points to a reference named {referent:?} which is invalid."
+                ))
+            })?;
             repo.refs
                 .transaction()
                 .packed_refs(gix_ref::file::transaction::PackedRefs::DeletionsAndNonSymbolicUpdates(
@@ -221,9 +227,9 @@ pub fn update_head(
                     gix_lock::acquire::Fail::Immediately,
                     gix_lock::acquire::Fail::Immediately,
                 )
-                .map_err(gix_error::Error::from_error)?
+                .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?
                 .commit(repo.committer().transpose().map_err(gix_error::Error::from)?)
-                .map_err(gix_error::Error::from_error)?;
+                .or_raise(|| gix_error::message("Failed to update HEAD with values from remote"))?;
 
             if let Some(head_peeled_id) = head_peeled_id {
                 let mut log = reflog_message();

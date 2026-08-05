@@ -1,3 +1,4 @@
+use gix_error::ResultExt;
 use gix_object::TreeRefIter;
 
 use crate::{
@@ -34,7 +35,7 @@ impl Repository {
                     gix_worktree::stack::state::attributes::Source::WorktreeThenIdMapping
                 },
             )
-            .map_err(gix_error::Error::from_error)?
+            .or_raise(|| gix_error::message("Could not obtain resource cache for diffing"))?
             .inner,
             worktree_roots,
         )

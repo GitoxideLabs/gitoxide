@@ -172,7 +172,12 @@ impl crate::Repository {
         edits: impl IntoIterator<Item = RefEdit>,
         committer: Option<gix_actor::SignatureRef<'_>>,
     ) -> Result<Vec<RefEdit>, reference::edit::Error> {
-        let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().map_err(gix_error::Error::from)?;
+        let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().map_err(|err| {
+            gix_error::Error::from(err.and_raise(gix_error::message(
+                "Could not interpret core.filesRefLockTimeout or core.packedRefsTimeout, it must be the number in \
+                 milliseconds to wait for locks or negative to wait forever",
+            )))
+        })?;
         self.refs
             .transaction()
             .prepare(edits, file_lock_fail, packed_refs_lock_fail)

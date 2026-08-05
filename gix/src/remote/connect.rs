@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 #[cfg(feature = "async-network-client")]
 use gix_transport::client::async_io::{Transport, connect};
 #[cfg(feature = "blocking-network-client")]
@@ -58,7 +58,8 @@ impl<'repo> Remote<'repo> {
                 #[cfg(feature = "blocking-network-client")]
                 ssh: scheme_is_ssh
                     .then(|| self.repo.ssh_connect_options())
-                    .transpose()?
+                    .transpose()
+                    .or_raise(|| gix_error::message("Could not obtain options for connecting via ssh"))?
                     .unwrap_or_default(),
                 trace: self.repo.config.trace_packet(),
             },
@@ -94,7 +95,8 @@ impl<'repo> Remote<'repo> {
                     kind,
                     // precomposed unicode doesn't matter here as long as the produced path is accessible,
                     // which is a given either way.
-                    &gix_fs::current_dir(false).map_err(gix_error::Error::from_error)?,
+                    &gix_fs::current_dir(false)
+                        .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
                 )
                 .ok_or_else(|| {
                     gix_error::Error::from_error(gix_error::ValidationError::new_with_input(

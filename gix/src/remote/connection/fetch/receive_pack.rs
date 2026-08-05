@@ -1,6 +1,6 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 use gix_odb::store::RefreshMode;
 use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
@@ -131,7 +131,10 @@ where
                     repo.config
                         .resolved
                         .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section()),
-                )?
+                )
+                .or_raise(|| {
+                    gix_error::message("Could not obtain configuration to learn if shallow remotes should be rejected")
+                })?
                 .unwrap_or(false),
         };
         let context = gix_protocol::fetch::Context {

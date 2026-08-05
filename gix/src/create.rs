@@ -5,7 +5,7 @@ use std::{
 };
 
 use gix_discover::DOT_GIT_DIR;
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 
 /// The error used in [`into()`].
 pub type Error = gix_error::Error;
@@ -303,7 +303,8 @@ pub(crate) fn into_with_capabilities(
             } else {
                 gix_discover::repository::Kind::WorkTree { linked_git_dir: None }
             },
-            &gix_fs::current_dir(caps.precompose_unicode).map_err(gix_error::Error::from_error)?,
+            &gix_fs::current_dir(caps.precompose_unicode)
+                .or_raise(|| gix_error::message("Could not obtain the current directory"))?,
         )
         .expect("by now the `dot_git` dir is valid as we have accessed it"),
         caps,

@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{Repository, submodule};
+use gix_error::ResultExt;
 
 impl Repository {
     /// Open the `.gitmodules` file as present in the worktree, or return `None` if no such file is available.
@@ -26,7 +27,7 @@ impl Repository {
         if metadata.file_type().is_symlink() {
             return Ok(None);
         }
-        let buf = std::fs::read(&path).map_err(gix_error::Error::from_error)?;
+        let buf = std::fs::read(&path).or_raise(|| gix_error::message("Could not read '.gitmodules' file"))?;
         Ok(Some(
             gix_submodule::File::from_bytes(&buf, path, &self.config.resolved).map_err(gix_error::Error::from_error)?,
         ))
@@ -86,9 +87,18 @@ impl Repository {
                     },
                 };
                 Ok(Some(gix_features::threading::OwnShared::new(
-                    gix_submodule::File::from_bytes(&self.find_object(id)?.data, None, &self.config.resolved)
-                        .map_err(gix_error::Error::from_error)?
-                        .into(),
+                    gix_submodule::File::from_bytes(
+                        &self
+                            .find_object(id)
+                            .or_raise(|| {
+                                gix_error::message("Could not find the .gitmodules file by id in the object database")
+                            })?
+                            .data,
+                        None,
+                        &self.config.resolved,
+                    )
+                    .map_err(gix_error::Error::from_error)?
+                    .into(),
                 )))
             }
         }

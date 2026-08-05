@@ -1,4 +1,5 @@
 use crate::{Commit, ObjectDetached, Tree, bstr, bstr::BStr};
+use gix_error::ResultExt;
 
 mod error {
     /// The error returned by commit accessors.
@@ -89,9 +90,10 @@ impl<'repo> Commit<'repo> {
     /// For the time at which it was authored, refer to `.author()?.time()`.
     pub fn time(&self) -> Result<gix_date::Time, Error> {
         self.committer()
-            .map_err(gix_error::Error::from_error)?
+            .or_raise(|| gix_error::message("The commit could not be decoded fully or partially"))?
             .time()
-            .map_err(gix_error::Error::from_error)
+            .or_raise(|| gix_error::message("The commit date could not be parsed"))
+            .map_err(Into::into)
     }
 
     /// Decode the entire commit object and return it for accessing all commit information.

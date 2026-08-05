@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gix_error::ErrorExt;
+use gix_error::{ErrorExt, ResultExt};
 pub use gix_submodule::*;
 
 use crate::{
@@ -215,9 +215,10 @@ impl Submodule<'_> {
             .state
             .repo
             .head_commit()?
-            .tree()?
+            .tree()
+            .or_raise(|| gix_error::message("Could not get tree of head commit"))?
             .peel_to_entry_by_path(gix_path::from_bstring(path))
-            .map_err(gix_error::Error::from_error)?
+            .or_raise(|| gix_error::message("Could not peel tree to submodule path"))?
             .and_then(|entry| (entry.mode().is_commit()).then_some(entry.inner.oid)))
     }
 
