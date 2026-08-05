@@ -289,29 +289,13 @@ fn attribute_names_must_not_use_the_reserved_builtin_prefix() {
     assert_eq!(
         line(r"p builtin"),
         (pattern("p", Mode::NO_SUB_DIR, None), vec![set("builtin")], 1),
-        "only the exact 'builtin_' prefix is reserved"
+        "only the exact 'builtin_' prefix is reserved…"
     );
     assert_eq!(
         line(r"p x_builtin_y"),
         (pattern("p", Mode::NO_SUB_DIR, None), vec![set("x_builtin_y")], 1),
-        "and only at the beginning of the name"
+        "…and only at the beginning of the name"
     );
-}
-
-#[test]
-fn the_builtin_namespace_is_reserved_in_attribute_files() {
-    assert!(matches!(
-        try_line("p builtin_custom valid"),
-        Err(parse::Error::AttributeName { line_number: 1, .. })
-    ));
-    assert!(
-        lenient_lines("p builtin_custom valid").is_empty(),
-        "one reserved name invalidates the entire line"
-    );
-    assert!(matches!(
-        try_line("[attr]builtin_custom valid"),
-        Err(parse::Error::MacroName { line_number: 1, .. })
-    ));
 }
 
 #[test]
