@@ -169,6 +169,17 @@ fn macros_can_be_empty() {
 }
 
 #[test]
+fn the_macro_prefix_without_a_name_is_a_pattern() {
+    for input in ["[attr]", "\"[attr]\""] {
+        let output = line(input);
+        assert!(
+            matches!(output.0, parse::Kind::Pattern(_)),
+            "{input:?} is an ordinary pattern in Git"
+        );
+    }
+}
+
+#[test]
 fn custom_macros_must_be_valid_attribute_names() {
     assert!(matches!(
         try_line(r"[attr]-prefixdash"),
@@ -245,6 +256,22 @@ fn attribute_names_must_not_be_empty() {
         ),
         "the unspecified prefix needs one as well"
     );
+}
+
+#[test]
+fn the_builtin_namespace_is_reserved_in_attribute_files() {
+    assert!(matches!(
+        try_line("p builtin_custom valid"),
+        Err(parse::Error::AttributeName { line_number: 1, .. })
+    ));
+    assert!(
+        lenient_lines("p builtin_custom valid").is_empty(),
+        "one reserved name invalidates the entire line"
+    );
+    assert!(matches!(
+        try_line("[attr]builtin_custom valid"),
+        Err(parse::Error::MacroName { line_number: 1, .. })
+    ));
 }
 
 #[test]

@@ -22,9 +22,9 @@ mod error {
     pub enum Error {
         #[error(r"Line {line_number} has a negative pattern, for literal characters use \!: {line}")]
         PatternNegation { line_number: usize, line: BString },
-        #[error("Attribute in line {line_number} has non-ascii characters or starts with '-': {attribute}")]
+        #[error("Attribute in line {line_number} has an invalid name: {attribute}")]
         AttributeName { line_number: usize, attribute: BString },
-        #[error("Macro in line {line_number} has non-ascii characters or starts with '-': {macro_name}")]
+        #[error("Macro in line {line_number} has an invalid name: {macro_name}")]
         MacroName { line_number: usize, macro_name: BString },
         #[error("Could not unquote attributes line")]
         Unquote(#[from] gix_quote::ansi_c::undo::Error),
@@ -67,18 +67,11 @@ impl<'a> Iter<'a> {
 }
 
 fn check_attr(attr: &BStr) -> Result<NameRef<'_>, name::Error> {
-    fn attr_valid(attr: &BStr) -> bool {
-        if attr.is_empty() || attr.first() == Some(&b'-') {
-            return false;
-        }
-
-        attr.bytes()
-            .all(|b| matches!(b, b'-' | b'.' | b'_' | b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'))
-    }
-
-    attr_valid(attr)
-        .then(|| NameRef(attr.to_str().expect("no illformed utf8")))
-        .ok_or_else(|| name::Error { attribute: attr.into() })
+    NameRef::try_from(attr).and_then(|name| {
+        (!name.as_str().starts_with("builtin_"))
+            .then_some(name)
+            .ok_or_else(|| name::Error { attribute: attr.into() })
+    })
 }
 
 impl<'a> Iterator for Iter<'a> {
@@ -141,7 +134,7 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
             .unwrap_or((line.into(), [].as_bstr()))
     };
 
-    let kind_res = match line.strip_prefix(b"[attr]") {
+    let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {
         Some(macro_name) => check_attr(macro_name.into())
             .map_err(|err| Error::MacroName {
                 line_number,

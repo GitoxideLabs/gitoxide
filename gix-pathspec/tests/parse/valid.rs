@@ -319,6 +319,10 @@ fn attributes_in_signature() {
             ":(attr:someAttr anotherAttr)",
             pat_with_attrs(vec![("someAttr", State::Set), ("anotherAttr", State::Set)]),
         ),
+        (
+            ":(attr:builtin_objectmode)",
+            pat_with_attrs(vec![("builtin_objectmode", State::Set)]),
+        ),
     ];
 
     check_valid_inputs(inputs);
