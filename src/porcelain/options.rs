@@ -13,7 +13,7 @@ pub struct Args {
     /// Bring up a terminal user interface displaying progress visually.
     #[clap(long, conflicts_with("quiet"))]
     pub progress: bool,
-    /// The number of threads to use. If unset, use all cores, if 0 use all physical cores.
+    /// The number of threads to use. If unset or 0, use the command default; repository discovery uses 8 on macOS.
     #[clap(short = 't', long)]
     pub threads: Option<usize>,
 

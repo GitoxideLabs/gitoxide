@@ -1105,6 +1105,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dua-core"
+version = "2.41.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5eb6fcfdefafb636afa3858535f557376e9fb575def4ccef9f1bf0cfa8646d6"
+dependencies = [
+ "crossbeam",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1502,6 +1512,7 @@ dependencies = [
  "bytesize",
  "crossbeam-channel",
  "document-features",
+ "dua-core",
  "fs-err",
  "futures-io",
  "futures-lite",
@@ -1513,7 +1524,6 @@ dependencies = [
  "gix-status",
  "gix-transport",
  "gix-url",
- "jwalk",
  "layout-rs",
  "open",
  "parking_lot",
@@ -2017,7 +2027,7 @@ dependencies = [
  "gix-hash",
  "gix-imara-diff",
  "gix-object",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -3423,16 +3433,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "jwalk"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2735847566356cd2179a2a38264839308f7079fa96e6bd5a42d740460e003c56"
-dependencies = [
- "crossbeam",
- "rayon",
 ]
 
 [[package]]
