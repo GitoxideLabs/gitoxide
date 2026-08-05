@@ -2,7 +2,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use gix_config::file::Metadata;
+#[cfg(feature = "blob-diff")]
 use gix_error::ErrorExt;
+#[cfg(feature = "excludes")]
+use gix_error::ResultExt;
 use gix_lock::acquire::Fail;
 
 use crate::{
@@ -393,7 +396,10 @@ impl Cache {
         source: gix_worktree::stack::state::ignore::Source,
         buf: &mut Vec<u8>,
     ) -> Result<gix_worktree::stack::state::Ignore, config::exclude_stack::Error> {
-        let excludes_file = match self.excludes_file().map_err(gix_error::Error::from_error)? {
+        let excludes_file = match self
+            .excludes_file()
+            .or_raise(|| gix_error::message("The value for `core.excludesFile` could not be read from configuration"))?
+        {
             Some(user_path) => Some(user_path),
             None => self.xdg_config_path("ignore").map_err(gix_error::Error::from_error)?,
         };
