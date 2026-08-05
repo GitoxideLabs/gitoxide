@@ -1,4 +1,4 @@
-use gix_error::{Error, ErrorExt, RetryableError, message};
+use gix_error::{CorruptionError, Error, ErrorExt, RetryableError, message};
 #[cfg(not(feature = "tree-error"))]
 use gix_error::{Exn, Message};
 use std::error::Error as _;
@@ -104,4 +104,10 @@ fn retryability_is_discovered_in_the_error_chain() {
     let dependency_specific =
         RetryableError::new(message("HTTP/2 stream failed")).and_raise(message("network operation failed"));
     assert!(Error::from(dependency_specific).can_retry());
+}
+
+#[test]
+fn corruption_is_discovered_in_the_error_chain() {
+    let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
+    assert!(Error::from(corrupt).is_corrupted());
 }

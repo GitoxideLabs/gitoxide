@@ -21,6 +21,11 @@ mod _impl {
         pub fn can_retry(&self) -> bool {
             self.sources().any(super::is_retryable)
         }
+
+        /// Return `true` if malformed or internally inconsistent data caused the failure.
+        pub fn is_corrupted(&self) -> bool {
+            self.sources().any(super::is_corrupted)
+        }
     }
 
     pub(crate) enum Inner {
@@ -115,6 +120,12 @@ mod _impl {
             std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
                 .any(|err| super::is_retryable(err.err.as_ref()))
         }
+
+        /// Return `true` if malformed or internally inconsistent data caused the failure.
+        pub fn is_corrupted(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_corrupted(err.err.as_ref()))
+        }
     }
 
     impl Error {
@@ -185,6 +196,10 @@ fn is_retryable(err: &(dyn std::error::Error + 'static)) -> bool {
                 | ConnectionRefused
         )
     })
+}
+
+fn is_corrupted(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| err.is::<crate::CorruptionError>())
 }
 
 fn error_chain<'a>(
