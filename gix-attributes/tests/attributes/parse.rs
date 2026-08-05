@@ -256,6 +256,46 @@ fn attribute_names_must_not_be_empty() {
         ),
         "the unspecified prefix needs one as well"
     );
+    assert!(
+        gix_attributes::NameRef::try_from(bstr::BStr::new(b"")).is_err(),
+        "names can't be created empty either, which `attr_name_valid()` rejects via `namelen <= 0`"
+    );
+}
+
+#[test]
+fn attribute_names_must_not_use_the_reserved_builtin_prefix() {
+    assert!(
+        matches!(
+            try_line(r"p builtin_objectmode"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "Git reserves 'builtin_' for built-in attributes and drops lines that assign to it"
+    );
+    assert!(lenient_lines(r"p builtin_objectmode").is_empty());
+    assert!(
+        matches!(
+            try_line(r"p -builtin_objectmode"),
+            Err(parse::Error::AttributeName { line_number: 1, .. })
+        ),
+        "the prefix is checked after '-' and '!' are stripped, just like in `parse_attr()`"
+    );
+    assert!(
+        matches!(
+            try_line(r"[attr]builtin_macro -text"),
+            Err(parse::Error::MacroName { line_number: 1, .. })
+        ),
+        "macro names are checked against the reserved namespace as well"
+    );
+    assert_eq!(
+        line(r"p builtin"),
+        (pattern("p", Mode::NO_SUB_DIR, None), vec![set("builtin")], 1),
+        "only the exact 'builtin_' prefix is reserved"
+    );
+    assert_eq!(
+        line(r"p x_builtin_y"),
+        (pattern("p", Mode::NO_SUB_DIR, None), vec![set("x_builtin_y")], 1),
+        "and only at the beginning of the name"
+    );
 }
 
 #[test]
