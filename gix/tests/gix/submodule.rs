@@ -326,7 +326,13 @@ mod open {
             sm.open().expect_err("opening validates the gitlink target"),
         ] {
             assert!(err.is_validation());
-            assert!(err.to_string().contains("missing"));
+            let cause = err.probable_cause().to_string();
+            assert!(
+                cause.starts_with("The gitdir file at '")
+                    && cause.contains("invalid gitdir target")
+                    && cause.contains("missing"),
+                "the missing target and its validation context are retained: {cause}"
+            );
         }
 
         #[cfg(feature = "status")]
@@ -334,11 +340,8 @@ mod open {
             let err = sm
                 .status(gix::submodule::config::Ignore::None, false)
                 .expect_err("ignore=none fails as some submodules can't be opened");
-            assert!(err.sources().any(|source| {
-                source
-                    .downcast_ref::<gix::Error>()
-                    .is_some_and(gix::Error::is_validation)
-            }));
+            assert!(err.is_validation());
+            assert!(err.probable_cause().to_string().contains("invalid gitdir target"));
         }
 
         #[cfg(feature = "status")]
@@ -368,10 +371,12 @@ mod open {
             .next()
             .expect("one submodule");
 
+        let err = sm.git_dir_try_old_form().expect_err("the gitlink target is malformed");
+        assert!(err.is_validation());
         assert!(
-            sm.git_dir_try_old_form()
-                .expect_err("the gitlink target is malformed")
-                .is_validation()
+            err.sources()
+                .any(<dyn std::error::Error + 'static>::is::<gix_discover::path::from_gitdir_file::Error>),
+            "the precise gitdir parsing failure remains in the erased API's chain"
         );
 
         #[cfg(feature = "status")]
@@ -379,11 +384,11 @@ mod open {
             let err = sm
                 .status(gix::submodule::config::Ignore::None, false)
                 .expect_err("ignore=none fails as some submodules can't be opened");
-            assert!(err.sources().any(|source| {
-                source
-                    .downcast_ref::<gix::Error>()
-                    .is_some_and(gix::Error::is_validation)
-            }));
+            assert!(err.is_validation());
+            assert!(
+                err.sources()
+                    .any(<dyn std::error::Error + 'static>::is::<gix_discover::path::from_gitdir_file::Error>)
+            );
 
             let status = sm.status(gix::submodule::config::Ignore::All, false)?;
             assert_eq!(
@@ -753,21 +758,20 @@ mod advisory {
             sm.git_dir(),
             Err(gix_validate::submodule::name::Error::ParentComponent)
         ));
-        assert!(
-            sm.git_dir_try_old_form()
-                .expect_err("the traversal name is rejected")
-                .is_validation()
-        );
-        assert!(
-            sm.open()
-                .expect_err("opening rejects the traversal name")
-                .is_validation()
-        );
-        assert!(
-            sm.state()
-                .expect_err("state rejects the traversal name")
-                .is_validation()
-        );
+        for err in [
+            sm.git_dir_try_old_form().expect_err("the traversal name is rejected"),
+            sm.open().expect_err("opening rejects the traversal name"),
+            sm.state().expect_err("state rejects the traversal name"),
+        ] {
+            assert!(err.is_validation());
+            assert!(
+                err.sources().any(|source| matches!(
+                    source.downcast_ref::<gix_validate::submodule::name::Error>(),
+                    Some(gix_validate::submodule::name::Error::ParentComponent)
+                )),
+                "the precise traversal-name failure remains in the erased API's chain"
+            );
+        }
 
         let redirected_repo = fixture.path().join("escaped-target.git");
         assert!(

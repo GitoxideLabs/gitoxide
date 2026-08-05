@@ -68,11 +68,13 @@ fn paths_cannot_leave_the_repository() -> gix_testtools::Result {
         "some-with-file/very/deeply/nested/subdir/empty-file",
         "absolute paths inside the worktree become repository-relative"
     );
-    assert!(
-        repo.normalize_path("../../outside")
-            .expect_err("relative paths cannot traverse above the worktree")
-            .is_validation(),
-        "leaving the worktree is a validation error"
+    let err = repo
+        .normalize_path("../../outside")
+        .expect_err("relative paths cannot traverse above the worktree");
+    assert!(err.is_validation(), "leaving the worktree is a validation error");
+    assert_eq!(
+        err.probable_cause().to_string(),
+        "The path 'some/../../outside' leaves the repository"
     );
 
     assert_eq!(
@@ -95,13 +97,13 @@ fn absolute_paths_outside_the_repository_are_rejected() -> gix_testtools::Result
         .normalize_path(&outside_as_bstr)
         .expect_err("an absolute path outside the repository must fail");
     assert!(err.is_validation(), "an outside path is a validation error");
-    assert!(
-        err.to_string().contains(&outside.display().to_string()),
-        "the rejected path is retained in the message"
-    );
-    assert!(
-        err.to_string().contains(&root.display().to_string()),
-        "the repository root is retained in the message"
+    assert_eq!(
+        err.probable_cause().to_string(),
+        format!(
+            "The absolute path '{}' is not inside the repository at '{}'",
+            outside.display(),
+            root.display()
+        )
     );
     Ok(())
 }

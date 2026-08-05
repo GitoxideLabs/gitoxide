@@ -11,7 +11,14 @@ mod blocking_io {
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);
                 let remote = repo.find_remote("origin").unwrap();
-                assert!(remote.connect(Fetch).err().expect("protocol is denied").is_validation());
+                let err = remote.connect(Fetch).err().expect("protocol is denied");
+                assert!(err.is_validation());
+                let validation = err
+                    .sources()
+                    .find_map(|source| source.downcast_ref::<gix::error::ValidationError>())
+                    .expect("protocol denial retains its validation details");
+                assert_eq!(validation.message, "Protocol File is denied per configuration");
+                assert!(validation.input.is_some(), "the denied URL is retained");
             }
         }
 

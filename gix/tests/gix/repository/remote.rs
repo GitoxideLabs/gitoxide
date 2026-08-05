@@ -224,7 +224,12 @@ mod find_remote {
             );
         }
         assert!(count > 0, "should have seen more than one commit");
-        assert!(repo.find_remote("unknown").unwrap_err().is_not_found());
+        let err = repo.find_remote("unknown").unwrap_err();
+        assert!(err.is_not_found());
+        assert!(
+            err.sources()
+                .any(|source| source.to_string() == "The remote named \"unknown\" did not exist")
+        );
         Ok(())
     }
 
@@ -544,9 +549,11 @@ mod find_remote {
         let repo = remote::repo("bad-explicit-push-url-rewriting");
 
         let expected_err_msg = "The rewritten push url \"invalid:://repo\" failed to parse";
-        assert_eq!(
-            repo.find_remote("origin").unwrap_err().to_string(),
-            expected_err_msg,
+        assert!(
+            repo.find_remote("origin")
+                .unwrap_err()
+                .sources()
+                .any(|source| source.to_string() == expected_err_msg),
             "explicit pushUrl values use normal insteadOf rewriting, 
             so a malformed result must fail and be labeled as a push URL error"
         );

@@ -46,6 +46,10 @@ fn prefix() -> crate::Result {
         err.is_validation(),
         "an empty core.abbrev fails the open operation in strict config mode, emulating git behaviour"
     );
+    assert_eq!(
+        err.probable_cause().to_string(),
+        "Invalid value for 'core.abbrev' = 'invalid'. It must be between 4 and 40"
+    );
     Ok(())
 }
 

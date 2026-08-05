@@ -1323,7 +1323,15 @@ fn clone_and_destination_must_be_empty() -> crate::Result {
         restricted(),
     ) {
         Ok(_) => unreachable!("this should fail as the directory isn't empty"),
-        Err(err) => assert!(err.is_validation()),
+        Err(err) => {
+            assert!(err.is_validation());
+            let validation = err
+                .sources()
+                .find_map(|source| source.downcast_ref::<gix::error::ValidationError>())
+                .expect("the non-empty destination remains a typed validation failure");
+            assert_eq!(validation.message, "Refusing to initialize the non-empty directory as");
+            assert!(validation.input.is_some(), "the rejected destination is retained");
+        }
     }
     Ok(())
 }
@@ -1342,6 +1350,12 @@ fn clone_with_worktree_and_destination_must_be_empty() -> crate::Result {
     .map(drop)
     .expect_err("this should fail as the directory isn't empty");
     assert!(err.is_validation());
+    let validation = err
+        .sources()
+        .find_map(|source| source.downcast_ref::<gix::error::ValidationError>())
+        .expect("the non-empty destination remains a typed validation failure");
+    assert_eq!(validation.message, "Refusing to initialize the non-empty directory as");
+    assert!(validation.input.is_some(), "the rejected destination is retained");
     Ok(())
 }
 

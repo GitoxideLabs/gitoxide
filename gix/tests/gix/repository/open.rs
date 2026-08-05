@@ -354,6 +354,11 @@ fn non_bare_split_worktree_invalid_worktree_path_boolean() -> crate::Result {
     )
     .unwrap_err();
     assert!(err.is_validation(), "in strict mode, we fail just like git does");
+    assert!(
+        err.sources().any(|source| {
+            source.to_string() == "The key \"core.worktree\" (possibly from GIT_WORK_TREE) was invalid"
+        })
+    );
     Ok(())
 }
 
@@ -369,6 +374,14 @@ fn non_bare_split_worktree_invalid_worktree_path_empty() -> crate::Result {
     assert!(
         err.is_validation(),
         "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it"
+    );
+    let validation = err
+        .sources()
+        .find_map(|source| source.downcast_ref::<gix::error::ValidationError>())
+        .expect("the invalid core.worktree path remains classified");
+    assert_eq!(
+        validation.message,
+        "The path at the 'core.worktree' configuration could not be interpolated"
     );
     Ok(())
 }
@@ -444,7 +457,8 @@ mod not_a_repository {
             let repo_path = gix_testtools::scripted_fixture_read_only("make_config_repos.sh")?.join(name);
             let err = gix::open_opts(&repo_path, gix::open::Options::isolated()).unwrap_err();
             assert!(err.is_not_found());
-            assert!(err.to_string().contains(&repo_path.display().to_string()));
+            assert!(err.sources().any(|source| source.to_string()
+                == format!("\"{}\" does not appear to be a git repository", repo_path.display())));
         }
         Ok(())
     }
@@ -468,6 +482,10 @@ mod object_format_extension {
                 err.is_validation(),
                 "objectFormat on a v0 repository must be rejected, got {err:?} for {name}"
             );
+            assert_eq!(
+                err.probable_cause().to_string(),
+                "extensions.objectFormat is a v1-only extension, but the repository format version is 0; set core.repositoryFormatVersion=1 to use it, or remove extensions.objectFormat to fall back to the default Sha1 format (if supported by this build)"
+            );
         }
         Ok(())
     }
@@ -483,6 +501,10 @@ mod object_format_extension {
         assert!(
             err.is_validation(),
             "future repository format versions must be rejected before interpreting extensions, got {err:?}"
+        );
+        assert_eq!(
+            err.probable_cause().to_string(),
+            "Unsupported repository format version 2; only versions 0 and 1 are supported"
         );
         Ok(())
     }
@@ -506,6 +528,11 @@ mod open_path_as_is {
     fn worktrees_cannot_be_opened() -> crate::Result {
         let err = repo_opts("make_basic_repo.sh", open_path_as_is()).unwrap_err();
         assert!(err.is_not_found());
+        assert!(
+            err.sources()
+                .any(|source| source.downcast_ref::<gix::error::NotFoundError>().is_some()),
+            "the precise not-a-repository marker survives erasure"
+        );
         Ok(())
     }
 
