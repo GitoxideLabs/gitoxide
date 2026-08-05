@@ -285,13 +285,12 @@ impl crate::Repository {
 
     /// Like [`Self::head_tree_id()`], but will return an empty tree hash if the repository HEAD is unborn.
     pub fn head_tree_id_or_empty(&self) -> Result<crate::Id<'_>, reference::head_tree_id::Error> {
-        self.head_tree_id().or_else(|err| {
-            if err.is_not_found() {
-                Ok(self.empty_tree().id())
-            } else {
-                Err(err)
-            }
-        })
+        let mut head = self.head()?;
+        if head.is_unborn() {
+            Ok(self.empty_tree().id())
+        } else {
+            head.peel_to_commit()?.tree_id().map_err(gix_error::Error::from_error)
+        }
     }
 
     /// Return the tree object the `HEAD^{tree}` reference currently points to after peeling it fully,
