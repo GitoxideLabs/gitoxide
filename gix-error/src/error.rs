@@ -125,9 +125,7 @@ mod _impl {
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
         pub fn sources(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> + '_ {
-            std::iter::successors(Some(&self.inner as &(dyn std::error::Error + 'static)), |err| {
-                err.source()
-            })
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref()).map(|err| err.err.as_ref() as _)
         }
 
         /// Return `true` if retrying the failed operation might succeed.

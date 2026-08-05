@@ -24,19 +24,19 @@ fn from_exn_error_tree() {
     assert_eq!(format!("{err:#}").to_string(), "topmost");
     insta::assert_debug_snapshot!(err.sources().map(|err| fixup_paths(err.to_string())).collect::<Vec<_>>(), @r#"
     [
-        "topmost, at gix-error/tests/auto_chain_error.rs:23",
-        "E6, at gix-error/tests/auto_chain_error.rs:87",
-        "E5, at gix-error/tests/auto_chain_error.rs:79",
-        "E4, at gix-error/tests/auto_chain_error.rs:82",
-        "E8, at gix-error/tests/auto_chain_error.rs:85",
-        "E3, at gix-error/tests/auto_chain_error.rs:71",
-        "E10, at gix-error/tests/auto_chain_error.rs:74",
-        "E12, at gix-error/tests/auto_chain_error.rs:77",
-        "E2, at gix-error/tests/auto_chain_error.rs:81",
-        "E7, at gix-error/tests/auto_chain_error.rs:84",
-        "E1, at gix-error/tests/auto_chain_error.rs:70",
-        "E9, at gix-error/tests/auto_chain_error.rs:73",
-        "E11, at gix-error/tests/auto_chain_error.rs:76",
+        "topmost",
+        "E6",
+        "E5",
+        "E4",
+        "E8",
+        "E3",
+        "E10",
+        "E12",
+        "E2",
+        "E7",
+        "E1",
+        "E9",
+        "E11",
     ]
     "#);
     assert_eq!(
@@ -141,6 +141,12 @@ fn not_found_is_discovered_in_well_known_errors() {
 fn validation_is_discovered_in_the_error_chain() {
     assert!(Error::from_error(ValidationError::new("invalid")).is_validation());
     assert!(Error::from_error(ErrorWithSource(ValidationError::new("invalid"))).is_validation());
+
+    let err = Error::from(ValidationError::new("typed").and_raise(message("context")));
+    assert!(
+        err.sources().any(|source| source.is::<ValidationError>()),
+        "sources() exposes the stored error types in chain mode"
+    );
 }
 
 #[test]
