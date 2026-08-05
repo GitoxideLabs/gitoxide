@@ -75,32 +75,85 @@ pub struct Options {
 }
 
 /// The error returned by the [checkout()][crate::checkout()] function.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("Could not convert path to UTF8: {}", .path)]
-    IllformedUtf8 { path: BString },
-    #[error("The clock was off when reading file related metadata after updating a file on disk")]
-    Time(#[from] std::time::SystemTimeError),
-    #[error("IO error while writing blob or reading file metadata or changing filetype")]
-    Io(#[from] std::io::Error),
-    #[error("object for checkout at {} could not be retrieved from object database", .path.display())]
+    IllformedUtf8 {
+        path: BString,
+    },
+    Time(std::time::SystemTimeError),
+    Io(std::io::Error),
     Find {
-        #[source]
         err: gix_object::find::existing_object::Error,
         path: std::path::PathBuf,
     },
-    #[error(transparent)]
-    Filter(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-    #[error(transparent)]
-    FilterListDelayed(#[from] gix_filter::driver::delayed::list::Error),
-    #[error(transparent)]
-    FilterFetchDelayed(#[from] gix_filter::driver::delayed::fetch::Error),
-    #[error("The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it")]
-    FilterPathUnknown { rela_path: BString },
-    #[error("The following paths were delayed and apparently forgotten to be processed by the filter driver: ")]
-    FilterPathsUnprocessed { rela_paths: Vec<BString> },
+    Filter(gix_filter::pipeline::convert::to_worktree::Error),
+    FilterListDelayed(gix_filter::driver::delayed::list::Error),
+    FilterFetchDelayed(gix_filter::driver::delayed::fetch::Error),
+    FilterPathUnknown {
+        rela_path: BString,
+    },
+    FilterPathsUnprocessed {
+        rela_paths: Vec<BString>,
+    },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::IllformedUtf8 { path } => write!(f, "Could not convert path to UTF8: {path}"),
+            Error::Time(_) => {
+                f.write_str("The clock was off when reading file related metadata after updating a file on disk")
+            }
+            Error::Io(_) => f.write_str("IO error while writing blob or reading file metadata or changing filetype"),
+            Error::Find { path, .. } => write!(
+                f,
+                "object for checkout at {} could not be retrieved from object database",
+                path.display()
+            ),
+            Error::Filter(err) => std::fmt::Display::fmt(err, f),
+            Error::FilterListDelayed(err) => std::fmt::Display::fmt(err, f),
+            Error::FilterFetchDelayed(err) => std::fmt::Display::fmt(err, f),
+            Error::FilterPathUnknown { rela_path } => write!(
+                f,
+                "The entry at path '{rela_path}' was listed as delayed by the filter process, but we never passed it"
+            ),
+            Error::FilterPathsUnprocessed { .. } => f.write_str(
+                "The following paths were delayed and apparently forgotten to be processed by the filter driver: ",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Time(err) => Some(err),
+            Error::Io(err) => Some(err),
+            Error::Find { err, .. } => Some(err),
+            Error::Filter(err) => err.source(),
+            Error::FilterListDelayed(err) => err.source(),
+            Error::FilterFetchDelayed(err) => err.source(),
+            _ => None,
+        }
+    }
+}
+
+macro_rules! from_error {
+    ($ty:ty, $variant:ident) => {
+        impl From<$ty> for Error {
+            fn from(err: $ty) -> Self {
+                Error::$variant(err)
+            }
+        }
+    };
+}
+
+from_error!(std::time::SystemTimeError, Time);
+from_error!(std::io::Error, Io);
+from_error!(gix_filter::pipeline::convert::to_worktree::Error, Filter);
+from_error!(gix_filter::driver::delayed::list::Error, FilterListDelayed);
+from_error!(gix_filter::driver::delayed::fetch::Error, FilterFetchDelayed);
 
 mod chunk;
 mod entry;
