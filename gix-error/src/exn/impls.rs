@@ -41,12 +41,15 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     /// [source chain of the error]: Error::source
     #[track_caller]
     pub fn new(error: E) -> Self {
-        fn walk_sources(error: &dyn Error, location: &'static Location<'static>) -> Vec<Frame> {
-            if let Some(source) = error.source() {
+        fn walk_sources(
+            source: Option<std::sync::Arc<SourceError>>,
+            location: &'static Location<'static>,
+        ) -> Vec<Frame> {
+            if let Some(source) = source {
                 let children = vec![Frame {
-                    error: Box::new(SourceError::new(source)),
+                    error: Box::new((*source).clone()),
                     location,
-                    children: walk_sources(source, location),
+                    children: walk_sources(source.source.clone(), location),
                 }];
                 children
             } else {
@@ -55,7 +58,8 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         }
 
         let location = Location::caller();
-        let children = walk_sources(&error, location);
+        let source = error.source().map(SourceError::new).map(std::sync::Arc::new);
+        let children = walk_sources(source, location);
         let frame = Frame {
             error: Box::new(error),
             location,
@@ -488,11 +492,13 @@ impl fmt::Debug for Something {
 impl Error for Something {}
 
 /// A way to keep all information of errors returned by `source()` chains.
+#[derive(Clone)]
 struct SourceError {
     display: String,
     alt_display: String,
     debug: String,
     alt_debug: String,
+    source: Option<std::sync::Arc<SourceError>>,
 }
 
 impl fmt::Debug for SourceError {
@@ -513,7 +519,11 @@ impl fmt::Display for SourceError {
     }
 }
 
-impl Error for SourceError {}
+impl Error for SourceError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source.as_deref().map(|source| source as &dyn Error)
+    }
+}
 
 impl SourceError {
     fn new(err: &dyn Error) -> Self {
@@ -522,6 +532,7 @@ impl SourceError {
             alt_display: format!("{err:#}"),
             debug: format!("{err:?}"),
             alt_debug: format!("{err:#?}"),
+            source: err.source().map(SourceError::new).map(std::sync::Arc::new),
         }
     }
 }

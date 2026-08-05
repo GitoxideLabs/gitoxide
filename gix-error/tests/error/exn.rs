@@ -743,3 +743,22 @@ fn erased_into_inner_preserves_source_chain() {
         "type erasure remains transparent to std-style source traversal"
     );
 }
+
+#[test]
+fn copied_sources_retain_the_rest_of_the_source_chain() {
+    let e = Exn::new(ErrorWithSource("top", ErrorWithSource("middle", message("bottom"))));
+    let middle = e
+        .frame()
+        .children()
+        .first()
+        .expect("the copied source is present")
+        .error();
+
+    assert_eq!(
+        middle
+            .source()
+            .expect("the copied source retains its source")
+            .to_string(),
+        "bottom"
+    );
+}
