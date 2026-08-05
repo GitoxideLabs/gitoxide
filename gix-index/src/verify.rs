@@ -4,53 +4,34 @@ use crate::State;
 
 ///
 pub mod entries {
-    use bstr::BString;
-
     /// The error returned by [`State::verify_entries()`][crate::State::verify_entries()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(
-            "Entry '{current_path}' (stage = {current_stage}) at index {current_index} should order after prior entry '{previous_path}' (stage = {previous_stage})"
-        )]
-        OutOfOrder {
-            current_index: usize,
-            current_path: BString,
-            current_stage: u8,
-            previous_path: BString,
-            previous_stage: u8,
-        },
-    }
+    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
 }
 
 ///
 pub mod extensions {
-    use crate::extension;
-
     /// The error returned by [`State::verify_extensions()`][crate::State::verify_extensions()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Tree(#[from] extension::tree::verify::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::CorruptionError>;
 }
 
 impl State {
     /// Assure our entries are consistent.
     pub fn verify_entries(&self) -> Result<(), entries::Error> {
+        use gix_error::ErrorExt;
+
         let _span = gix_features::trace::coarse!("gix_index::File::verify_entries()");
         let mut previous = None::<&crate::Entry>;
         for (idx, entry) in self.entries.iter().enumerate() {
             if let Some(prev) = previous {
                 if prev.cmp(entry, self) != Ordering::Less {
-                    return Err(entries::Error::OutOfOrder {
-                        current_index: idx,
-                        current_path: entry.path(self).into(),
-                        current_stage: entry.flags.stage() as u8,
-                        previous_path: prev.path(self).into(),
-                        previous_stage: prev.flags.stage() as u8,
-                    });
+                    return Err(gix_error::CorruptionError::new(format!(
+                        "Entry '{}' (stage = {}) at index {idx} should order after prior entry '{}' (stage = {})",
+                        entry.path(self),
+                        entry.flags.stage() as u8,
+                        prev.path(self),
+                        prev.flags.stage() as u8
+                    ))
+                    .raise());
                 }
             }
             previous = Some(entry);

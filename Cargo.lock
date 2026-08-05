@@ -2034,6 +2034,7 @@ dependencies = [
  "filetime",
  "fnv",
  "gix-bitmap",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2053,7 +2054,6 @@ dependencies = [
  "rustix",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]

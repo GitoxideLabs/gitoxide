@@ -1,4 +1,4 @@
-use std::{error::Error, path::Path};
+use std::path::Path;
 
 use crate::{odb_at, scripted_fixture_read_only};
 use gix_index::State;
@@ -25,7 +25,7 @@ fn from_tree() -> crate::Result {
             Default::default(),
         )?;
         let odb = odb_at(git_dir.join("objects"))?;
-        let actual_state = State::from_tree(&tree_id, &odb, Default::default())?;
+        let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(|err| err.into_error())?;
 
         compare_states(&actual_state, &expected_state, fixture);
     }
@@ -48,7 +48,7 @@ fn from_tree_validation() -> crate::Result {
 
         let err = State::from_tree(&tree_id, &odb, Default::default()).unwrap_err();
         assert_eq!(
-            err.source().expect("inner").to_string(),
+            err.into_error().probable_cause().to_string(),
             r"Path separators like / or \ are not allowed",
             r"Note that this effectively tests what would happen on Windows, where \ also isn't allowed"
         );
@@ -62,7 +62,7 @@ fn from_tree_returns_file_directory_conflicts_until_fixed() -> crate::Result {
     let tree_id = tree_id(&worktree_dir);
     let odb = odb_at(worktree_dir.join(".git").join("objects"))?;
 
-    let actual_state = State::from_tree(&tree_id, &odb, Default::default())?;
+    let actual_state = State::from_tree(&tree_id, &odb, Default::default()).map_err(|err| err.into_error())?;
     actual_state
         .verify_entries()
         .expect("valid, even though invariants aren't met");

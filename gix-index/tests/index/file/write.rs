@@ -55,10 +55,12 @@ fn skip_hash() -> crate::Result {
     assert!(expected.checksum().is_some());
 
     expected.set_path(&path);
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: false,
-    })?;
+    expected
+        .write(Options {
+            extensions: Default::default(),
+            skip_hash: false,
+        })
+        .map_err(|err| err.into_error())?;
 
     let actual = gix_index::File::at(
         &path,
@@ -72,10 +74,12 @@ fn skip_hash() -> crate::Result {
         "a hash is written by default and it matches"
     );
 
-    expected.write(Options {
-        extensions: Default::default(),
-        skip_hash: true,
-    })?;
+    expected
+        .write(Options {
+            extensions: Default::default(),
+            skip_hash: true,
+        })
+        .map_err(|err| err.into_error())?;
 
     let actual = gix_index::File::at(
         &path,
