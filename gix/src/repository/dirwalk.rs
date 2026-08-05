@@ -41,11 +41,13 @@ impl Repository {
     ) -> Result<dirwalk::Outcome<'_>, dirwalk::Error> {
         let _span = gix_trace::coarse!("gix::dirwalk");
         let workdir = self.workdir().ok_or(dirwalk::Error::MissingWorkDir)?;
-        let mut excludes = self.excludes(
-            index,
-            None,
-            crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
-        )?;
+        let mut excludes = self
+            .excludes(
+                index,
+                None,
+                crate::worktree::stack::state::ignore::Source::WorktreeThenIdMappingIfNotSkipped,
+            )
+            .map_err(dirwalk::Error::Excludes)?;
         let mut pathspec = self.pathspec(
             options.empty_patterns_match_prefix, /* empty patterns match prefix */
             patterns,

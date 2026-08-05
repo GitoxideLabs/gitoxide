@@ -24,7 +24,7 @@ mod error {
         #[error("Could not access remote repository at \"{}\"", directory.display())]
         InvalidRemoteRepositoryPath { directory: std::path::PathBuf },
         #[error(transparent)]
-        SchemePermission(#[from] config::protocol::allow::Error),
+        SchemePermission(config::protocol::allow::Error),
         #[error("Protocol {scheme:?} of url {url:?} is denied per configuration")]
         ProtocolDenied { url: BString, scheme: gix_url::Scheme },
         #[error(transparent)]
@@ -146,7 +146,13 @@ impl<'repo> Remote<'repo> {
             .map_err(|err| Error::UnknownProtocol { source: err })?;
 
         let url = self.url(direction).ok_or(Error::MissingUrl { direction })?.to_owned();
-        if !self.repo.config.url_scheme()?.allow(&url.scheme) {
+        if !self
+            .repo
+            .config
+            .url_scheme()
+            .map_err(Error::SchemePermission)?
+            .allow(&url.scheme)
+        {
             return Err(Error::ProtocolDenied {
                 url: url.to_bstring(),
                 scheme: url.scheme,

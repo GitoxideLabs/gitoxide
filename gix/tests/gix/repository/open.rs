@@ -353,14 +353,7 @@ fn non_bare_split_worktree_invalid_worktree_path_boolean() -> crate::Result {
         gix::open::Options::isolated().strict_config(true),
     )
     .unwrap_err();
-    assert_eq!(
-        err.sources()
-            .find(|source| source.is::<gix::config::Error>())
-            .expect("configuration error present")
-            .to_string(),
-        "The key \"core.worktree\" (possibly from GIT_WORK_TREE) was invalid",
-        "in strict mode, we fail just like git does"
-    );
+    assert!(err.is_validation(), "in strict mode, we fail just like git does");
     Ok(())
 }
 
@@ -374,10 +367,7 @@ fn non_bare_split_worktree_invalid_worktree_path_empty() -> crate::Result {
     )
     .unwrap_err();
     assert!(
-        err.sources().any(|source| matches!(
-            source.downcast_ref(),
-            Some(gix::config::Error::PathInterpolation { .. })
-        )),
+        err.is_validation(),
         "DEVIATION: could not read path at core.worktree as empty is always invalid, git tries to use an empty path, even though it's better to reject it"
     );
     Ok(())
@@ -475,8 +465,7 @@ mod object_format_extension {
             let err = named_subrepo_opts("make_config_repos.sh", name, gix::open::Options::isolated())
                 .expect_err("a v0 repository setting extensions.objectFormat must be rejected");
             assert!(
-                err.sources()
-                    .any(|source| matches!(source.downcast_ref(), Some(gix::config::Error::ObjectFormatRequiresV1))),
+                err.is_validation(),
                 "objectFormat on a v0 repository must be rejected, got {err:?} for {name}"
             );
         }
@@ -492,10 +481,7 @@ mod object_format_extension {
         )
         .expect_err("future repository format versions must be rejected");
         assert!(
-            err.sources().any(|source| matches!(
-                source.downcast_ref(),
-                Some(gix::config::Error::UnsupportedRepositoryFormatVersion { version: 2 })
-            )),
+            err.is_validation(),
             "future repository format versions must be rejected before interpreting extensions, got {err:?}"
         );
         Ok(())

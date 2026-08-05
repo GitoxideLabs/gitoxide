@@ -47,7 +47,7 @@ pub enum Error {
     #[error("A working tree is required to perform a directory walk")]
     MissingWorkDir,
     #[error(transparent)]
-    Excludes(#[from] config::exclude_stack::Error),
+    Excludes(config::exclude_stack::Error),
     #[error(transparent)]
     Pathspec(#[from] crate::pathspec::init::Error),
     #[error(transparent)]

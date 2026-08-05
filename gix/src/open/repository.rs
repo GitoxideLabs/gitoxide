@@ -282,11 +282,13 @@ impl ThreadSafeRepository {
             let original = worktree.clone();
             let worktree = worktree
                 .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
-                .map_err(|err| config::Error::PathInterpolation {
-                    path: original.value,
-                    source: err,
-                })
-                .map_err(gix_error::Error::from_error)?;
+                .map_err(|err| {
+                    use gix_error::ErrorExt;
+                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                        "The path at the 'core.worktree' configuration could not be interpolated",
+                        original.value,
+                    )))
+                })?;
             let worktree = match source {
                 gix_config::Source::Env
                 | gix_config::Source::Cli
@@ -317,15 +319,13 @@ impl ThreadSafeRepository {
                     is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
                 })
                 .map_err(|err| {
-                    gix_error::Error::from_error(config::Error::ConfigTypedString(
-                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
-                    ))
+                    gix_error::Error::from(config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err))
                 })?
                 .is_some()
         {
-            return Err(gix_error::Error::from_error(config::Error::ConfigTypedString(
-                config::key::GenericErrorWithValue::from(&Core::WORKTREE),
-            )));
+            return Err(gix_error::Error::from(config::key::GenericErrorWithValue::<
+                gix_config::value::Error,
+            >::from(&Core::WORKTREE)));
         }
 
         // Without an explicit path, a non-bare `.git` directory implies its parent as worktree.
@@ -431,7 +431,7 @@ impl ThreadSafeRepository {
                     Ok(Some(value)) => value,
                     Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
                     Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(err) => return Err(gix_error::Error::from_error(config::Error::from(err))),
+                    Err(err) => return Err(err.into()),
                 };
             if alloc_limit_if_reduced_trust != 0 {
                 config.alloc_limit_bytes = Some(alloc_limit_if_reduced_trust);
@@ -577,8 +577,7 @@ fn replacement_objects_refs_prefix(
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<BString>, Error> {
     let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)
-        .map_err(config::Error::ConfigBoolean)
-        .map_err(gix_error::Error::from_error)?
+        .map_err(gix_error::Error::from)?
         .unwrap_or(true);
 
     if is_disabled {

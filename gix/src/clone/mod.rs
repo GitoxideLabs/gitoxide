@@ -67,11 +67,11 @@ pub mod with_revision {
 #[expect(missing_docs)]
 pub enum Error {
     #[error(transparent)]
-    Config(#[from] crate::config::Error),
+    Config(crate::config::Error),
     #[error(transparent)]
     Init(#[from] crate::init::Error),
     #[error(transparent)]
-    CommitterOrFallback(#[from] crate::config::commit_signature::Error),
+    CommitterOrFallback(crate::config::commit_signature::Error),
     #[error(transparent)]
     UrlParse(#[from] gix_url::parse::Error),
     #[error("Failed to turn a the relative file url \"{}\" into an absolute one", url.to_bstring())]
@@ -136,13 +136,15 @@ impl PrepareFetch {
             crate::create::Kind::WithWorktree => path.join(gix_discover::DOT_GIT_DIR),
             crate::create::Kind::Bare => path.to_owned(),
         };
-        let config = crate::config(Some(&git_dir), &open_opts)?;
+        let config = crate::config(Some(&git_dir), &open_opts).map_err(Error::Config)?;
         if crate::config::cache::util::config_bool_opt(
             &config,
             &crate::config::tree::Core::SYMLINKS,
             "core.symlinks",
             open_opts.lenient_config,
-        )? == Some(false)
+        )
+        .map_err(Error::Config)?
+            == Some(false)
         {
             open_opts.api_config_overrides.push("core.symlinks=false".into());
         }
@@ -162,7 +164,8 @@ impl PrepareFetch {
                 url: url.clone(),
                 source: err,
             })?;
-        repo.committer_or_set_generic_fallback()?;
+        repo.committer_or_set_generic_fallback()
+            .map_err(Error::CommitterOrFallback)?;
         Ok(PrepareFetch {
             url,
             #[cfg(any(feature = "async-network-client", feature = "blocking-network-client"))]

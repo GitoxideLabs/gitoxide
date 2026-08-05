@@ -43,8 +43,7 @@ fn prefix() -> crate::Result {
     )
     .expect_err("invalid core.abbrev must fail");
     assert!(
-        err.sources()
-            .any(|source| matches!(source.downcast_ref(), Some(gix::config::Error::CoreAbbrev(_)))),
+        err.is_validation(),
         "an empty core.abbrev fails the open operation in strict config mode, emulating git behaviour"
     );
     Ok(())

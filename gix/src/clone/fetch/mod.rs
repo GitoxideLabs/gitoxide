@@ -25,7 +25,7 @@ pub enum Error {
     #[error(transparent)]
     ParseConfig(#[from] crate::config::overrides::Error),
     #[error(transparent)]
-    ApplyConfig(#[from] crate::config::Error),
+    ApplyConfig(crate::config::Error),
     #[error(transparent)]
     Span(#[from] gix_config::parse::span::Error),
     #[error(transparent)]
@@ -61,7 +61,7 @@ pub enum Error {
     #[error("The requested revision did not peel to a commit")]
     PeelRevision(#[from] crate::object::peel::to_kind::Error),
     #[error(transparent)]
-    CommitterOrFallback(#[from] crate::config::commit_signature::Error),
+    CommitterOrFallback(crate::config::commit_signature::Error),
     #[error(transparent)]
     RefMap(#[from] crate::remote::ref_map::Error),
     #[error(transparent)]
@@ -118,11 +118,14 @@ impl PrepareFetch {
             .expect("user error: multiple calls are allowed only until it succeeds")
             .clone();
 
-        repo.committer_or_set_generic_fallback()?;
+        repo.committer_or_set_generic_fallback()
+            .map_err(Error::CommitterOrFallback)?;
 
         if !self.config_overrides.is_empty() {
             let mut snapshot = repo.config_snapshot_mut();
-            snapshot.append_config(&self.config_overrides, gix_config::Source::Api)?;
+            snapshot
+                .append_config(&self.config_overrides, gix_config::Source::Api)
+                .map_err(Error::ApplyConfig)?;
         }
 
         let remote_name = match self.remote_name.as_ref() {

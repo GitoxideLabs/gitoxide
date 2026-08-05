@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 use std::ffi::OsString;
 
+use gix_error::ErrorExt;
 use gix_sec::Permission;
 
 use super::{Error, StageOne, interpolate_context, util};
@@ -284,32 +285,49 @@ pub(crate) fn load(
         },
     )
     .map_err(|err| match err {
-        gix_config::file::init::from_paths::Error::Init(err) => Error::from(err),
-        gix_config::file::init::from_paths::Error::Io { source, path } => Error::Io { source, path },
+        gix_config::file::init::from_paths::Error::Init(err) => gix_error::Error::from_error(err),
+        gix_config::file::init::from_paths::Error::Io { source, path } => source
+            .and_raise(gix_error::message!(
+                "Could not read configuration file at \"{}\"",
+                path.display()
+            ))
+            .into(),
     })?
     .unwrap_or_default();
 
     let local_meta = git_dir_config.as_ref().map(gix_config::File::meta_owned);
     if let Some(git_dir_config) = git_dir_config {
-        globals.append(git_dir_config)?;
+        globals.append(git_dir_config).map_err(gix_error::Error::from_error)?;
     }
-    globals.resolve_includes(options)?;
+    globals
+        .resolve_includes(options)
+        .map_err(gix_error::Error::from_error)?;
     if use_env {
-        globals.append(gix_config::File::from_env(options)?.unwrap_or_default())?;
+        globals
+            .append(
+                gix_config::File::from_env(options)
+                    .map_err(gix_error::Error::from_error)?
+                    .unwrap_or_default(),
+            )
+            .map_err(gix_error::Error::from_error)?;
     }
     if !cli_config_overrides.is_empty() {
         config::overrides::append(&mut globals, cli_config_overrides, gix_config::Source::Cli, |_| None).map_err(
-            |err| Error::ConfigOverrides {
-                err,
-                source: gix_config::Source::Cli,
+            |err| {
+                gix_error::Error::from(err.and_raise(gix_error::message!(
+                    "{:?} configuration overrides at open or init time could not be applied.",
+                    gix_config::Source::Cli
+                )))
             },
         )?;
     }
     if !api_config_overrides.is_empty() {
         config::overrides::append(&mut globals, api_config_overrides, gix_config::Source::Api, |_| None).map_err(
-            |err| Error::ConfigOverrides {
-                err,
-                source: gix_config::Source::Api,
+            |err| {
+                gix_error::Error::from(err.and_raise(gix_error::message!(
+                    "{:?} configuration overrides at open or init time could not be applied.",
+                    gix_config::Source::Api
+                )))
             },
         )?;
     }
@@ -636,7 +654,9 @@ fn apply_environment_overrides(
             .expect("statically known valid section name");
         for (var, key) in data {
             if let Some(value) = var_as_bstring(var, permission) {
-                section.push_with_comment(*key, value, format!("from {var}"))?;
+                section
+                    .push_with_comment(*key, value, format!("from {var}"))
+                    .map_err(gix_error::Error::from_error)?;
             }
         }
         if section.num_values() == 0 {
@@ -665,7 +685,9 @@ fn apply_environment_overrides(
             },
         ] {
             if let Some(value) = var_as_bstring(var, permission) {
-                section.push_with_comment(key, value, format!("from {var}"))?;
+                section
+                    .push_with_comment(key, value, format!("from {var}"))
+                    .map_err(gix_error::Error::from_error)?;
             }
         }
 
@@ -676,7 +698,7 @@ fn apply_environment_overrides(
     }
 
     if !env_override.is_void() {
-        config.append(env_override)?;
+        config.append(env_override).map_err(gix_error::Error::from_error)?;
     }
     Ok(())
 }
