@@ -36,6 +36,9 @@ impl Display for ChainedError {
 
 impl std::error::Error for ChainedError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_ref().map(|e| e as &(dyn std::error::Error + 'static))
+        self.source
+            .as_deref()
+            .map(|err| err as &(dyn std::error::Error + 'static))
+            .or_else(|| self.err.source())
     }
 }

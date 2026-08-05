@@ -144,6 +144,18 @@ fn classification_survives_raising_a_converted_error() {
 }
 
 #[test]
+fn raising_a_converted_error_preserves_stored_types() {
+    let converted =
+        Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+
+    assert!(
+        err.sources().any(|source| source.is::<ValidationError>()),
+        "the nested Error retains its typed frames"
+    );
+}
+
+#[test]
 fn validation_error_displays_input_with_debug_formatting() {
     let err = ValidationError::new_with_input("invalid input", "hello\n ");
     assert_eq!(

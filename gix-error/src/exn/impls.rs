@@ -36,7 +36,8 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
     ///
     /// See also [`ErrorExt::raise`](crate::ErrorExt) for a fluent way to convert an error into an `Exn` instance.
     ///
-    /// Note that **sources of `error` are degenerated to their string representation** and all type information is erased.
+    /// Note that **sources of `error` are degenerated to their string representation** and all type information is erased,
+    /// unless `error` is already a [`crate::Error`], whose stored errors remain intact.
     ///
     /// [source chain of the error]: Error::source
     #[track_caller]
@@ -58,7 +59,11 @@ impl<E: Error + Send + Sync + 'static> Exn<E> {
         }
 
         let location = Location::caller();
-        let source = error.source().map(SourceError::new).map(std::sync::Arc::new);
+        let source = if (&error as &(dyn Error + 'static)).is::<crate::Error>() {
+            None
+        } else {
+            error.source().map(SourceError::new).map(std::sync::Arc::new)
+        };
         let children = walk_sources(source, location);
         let frame = Frame {
             error: Box::new(error),
@@ -261,6 +266,12 @@ fn write_frame_recursive(
         write_location(f, frame.location)?;
     }
 
+    if let Some(err) = frame.error().downcast_ref::<crate::Error>() {
+        for source in err.sources().filter(|source| !source.is::<crate::Error>()).skip(1) {
+            write!(f, "\n{prefix}|\n{prefix}└─ {source}")?;
+        }
+    }
+
     let children = frame.children();
     let children_len = children.len();
 
@@ -268,7 +279,15 @@ fn write_frame_recursive(
         write!(f, "\n{prefix}|")?;
         write!(f, "\n{prefix}└─ ")?;
 
-        let child_child_len = child.children().len();
+        let child_child_len = if child
+            .error()
+            .downcast_ref::<crate::Error>()
+            .is_some_and(|err| err.sources().filter(|source| !source.is::<crate::Error>()).count() > 1)
+        {
+            1
+        } else {
+            child.children().len()
+        };
         let may_linearize_chain = matches!(tree_mode, TreeMode::Linearize) && children_len == 1 && child_child_len == 1;
         if may_linearize_chain {
             write_frame_recursive(f, child, prefix, err_mode, tree_mode)?;
@@ -315,10 +334,11 @@ impl Frame {
     /// If the error was [erased](crate::Exn::erased), this is the original error,
     /// so it can still be downcast to its actual type.
     pub fn error(&self) -> &(dyn Error + Send + Sync + 'static) {
-        match self.error.downcast_ref::<Untyped>() {
-            Some(erased) => &*erased.0,
-            None => &*self.error,
+        let mut error = &*self.error;
+        while let Some(erased) = error.downcast_ref::<Untyped>() {
+            error = &*erased.0;
         }
+        error
     }
 
     /// Return the source code location where this exception frame was created.

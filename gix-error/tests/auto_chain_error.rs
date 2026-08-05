@@ -67,12 +67,7 @@ fn from_any_error() {
 
 #[test]
 fn probable_cause_survives_tree_flattening() {
-    let err = Error::from(
-        message("bottom")
-            .raise()
-            .raise(message("middle"))
-            .raise(message("top")),
-    );
+    let err = Error::from(message("bottom").raise().raise(message("middle")).raise(message("top")));
     assert_eq!(format!("{:#}", err.probable_cause()), "bottom");
 }
 
@@ -154,6 +149,27 @@ fn classification_survives_raising_a_converted_error() {
     let converted = Error::from_error(ErrorWithSource(ValidationError::new("invalid object header")));
     let raised = Error::from(converted.and_raise(message("revision parsing failed")));
     assert!(raised.is_validation());
+}
+
+#[test]
+#[cfg(not(feature = "tree-error"))]
+fn raising_a_converted_error_preserves_stored_types() {
+    let converted =
+        Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let raised = converted.and_raise(message("revision parsing failed"));
+    insta::assert_debug_snapshot!(raised, @r#"
+    revision parsing failed
+    |
+    └─ object lookup failed
+    |
+    └─ invalid object header
+    "#);
+    let raised = Error::from(raised);
+
+    assert!(
+        raised.sources().any(|source| source.is::<ValidationError>()),
+        "the nested Error retains its typed frames"
+    );
 }
 
 #[derive(Debug)]

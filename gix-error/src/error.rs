@@ -14,7 +14,19 @@ mod _impl {
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
         pub fn sources(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> + '_ {
-            self.inner.frame().iter_frames().map(|f| f.error() as _)
+            let mut out = Vec::new();
+            self.collect_sources(&mut out);
+            out.into_iter()
+        }
+
+        fn collect_sources<'a>(&'a self, out: &mut Vec<&'a (dyn std::error::Error + 'static)>) {
+            for frame in self.inner.frame().iter_frames() {
+                let err = frame.error() as &(dyn std::error::Error + 'static);
+                out.push(err);
+                if let Some(err) = err.downcast_ref::<Error>() {
+                    err.collect_sources(out);
+                }
+            }
         }
 
         /// Return `true` if retrying the failed operation might succeed.
@@ -89,7 +101,11 @@ mod _impl {
         /// Return the first source of an [Exn] error, or the source of a boxed error.
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match &self.inner {
-                Inner::ExnAsError(frame) | Inner::Exn(frame) => frame.children().first().map(|f| f.error() as _),
+                Inner::ExnAsError(frame) | Inner::Exn(frame) => frame
+                    .children()
+                    .first()
+                    .map(|f| f.error() as _)
+                    .or_else(|| frame.error().source()),
             }
         }
     }
@@ -125,7 +141,19 @@ mod _impl {
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
         pub fn sources(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> + '_ {
-            std::iter::successors(Some(&self.inner), |err| err.source.as_deref()).map(|err| err.err.as_ref() as _)
+            let mut out = Vec::new();
+            self.collect_sources(&mut out);
+            out.into_iter()
+        }
+
+        fn collect_sources<'a>(&'a self, out: &mut Vec<&'a (dyn std::error::Error + 'static)>) {
+            for chained in std::iter::successors(Some(&self.inner), |err| err.source.as_deref()) {
+                let err = chained.err.as_ref() as &(dyn std::error::Error + 'static);
+                out.push(err);
+                if let Some(err) = err.downcast_ref::<Error>() {
+                    err.collect_sources(out);
+                }
+            }
         }
 
         /// Return `true` if retrying the failed operation might succeed.

@@ -322,7 +322,7 @@ pub use exn::{ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
 /// # Warning: `source()` information is stringified and type-erased
 ///
 /// All `source()` values when created with [`Error::from_error()`] are turned into frames,
-/// but lose their type information completely.
+/// but lose their type information completely. An existing `Error` is retained as a nested error instead.
 /// This is because they are only seen as reference and thus can't be stored.
 ///
 /// # The `auto-chain-error` feature
