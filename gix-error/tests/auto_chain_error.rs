@@ -132,6 +132,13 @@ fn validation_is_discovered_in_the_error_chain() {
     assert!(Error::from_error(ErrorWithSource(ValidationError::new("invalid"))).is_validation());
 }
 
+#[test]
+fn classification_survives_raising_a_converted_error() {
+    let converted = Error::from_error(ErrorWithSource(ValidationError::new("invalid object header")));
+    let raised = Error::from(converted.and_raise(message("revision parsing failed")));
+    assert!(raised.is_validation());
+}
+
 #[derive(Debug)]
 struct ErrorWithSource<E>(E);
 
