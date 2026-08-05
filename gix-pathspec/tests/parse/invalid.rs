@@ -54,6 +54,10 @@ fn invalid_attributes() {
         ":(attr:validAttr +invalidAttr)some/path",
         ":(attr:+invalidAttr,attr:valid)some/path",
         r":(attr:inva\lid)some/path",
+        ":(attr:a\tb)some/path",
+        ":(attr:a\rb)some/path",
+        ":(attr:!a=b)some/path",
+        ":(attr:-a=b)some/path",
     ];
 
     for input in inputs {
@@ -63,6 +67,20 @@ fn invalid_attributes() {
         assert!(output.is_err(), "This pathspec did not produce an error {input}");
         assert!(matches!(output.unwrap_err(), Error::InvalidAttribute { .. }));
     }
+}
+
+#[test]
+fn attribute_values_are_not_split_on_non_space_blanks() {
+    let input = ":(attr:a=one\tb=two)some/path";
+
+    assert!(!check_against_baseline(input), "This pathspec is valid in git: {input}");
+    assert!(
+        matches!(
+            gix_pathspec::parse(input.as_bytes(), Default::default()),
+            Err(Error::InvalidAttributeValue { .. })
+        ),
+        "the tab belongs to the value and makes it invalid"
+    );
 }
 
 #[test]

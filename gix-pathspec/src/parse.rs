@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use bstr::{BStr, BString, ByteSlice, ByteVec};
+use bstr::{BStr, BString, ByteSlice};
 
 use crate::{Defaults, MagicSignature, Pattern, SearchMode};
 
@@ -195,48 +195,37 @@ fn parse_attributes(input: &[u8]) -> Result<Vec<gix_attributes::Assignment>, Err
         return Err(Error::EmptyAttribute);
     }
 
-    let unescaped = unescape_attribute_values(input.into())?;
-
-    gix_attributes::parse::Iter::new(unescaped.as_bstr())
-        .map(|res| res.map(gix_attributes::AssignmentRef::to_owned))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| Error::InvalidAttribute { attribute: e.attribute })
-}
-
-fn unescape_attribute_values(input: &BStr) -> Result<Cow<'_, BStr>, Error> {
-    if !input.contains(&b'=') {
-        return Ok(Cow::Borrowed(input));
-    }
-
-    let mut out: Cow<'_, BStr> = Cow::Borrowed("".into());
-
-    for attr in input.split(|&c| c == b' ') {
-        let split_point = attr.find_byte(b'=').map_or_else(|| attr.len(), |i| i + 1);
-        let (name, value) = attr.split_at(split_point);
-
-        if value.contains(&b'\\') {
-            let out = out.to_mut();
-            out.push_str(name);
-            out.push_str(unescape_and_check_attr_value(value.into())?);
-            out.push(b' ');
-        } else {
-            check_attribute_value(value.as_bstr())?;
-            match out {
-                Cow::Borrowed(_) => {
-                    let end = out.len() + attr.len() + 1;
-                    out = Cow::Borrowed(&input[0..end.min(input.len())]);
-                }
-                Cow::Owned(_) => {
-                    let out = out.to_mut();
-                    out.push_str(name);
-                    out.push_str(value);
-                    out.push(b' ');
-                }
-            }
-        }
-    }
-
-    Ok(out)
+    input
+        .split(|&b| b == b' ')
+        .filter(|attr| !attr.is_empty())
+        .map(|attr| {
+            let (name, state) = match attr.first() {
+                Some(b'!') => (&attr[1..], gix_attributes::State::Unspecified),
+                Some(b'-') => (&attr[1..], gix_attributes::State::Unset),
+                _ => match attr.find_byte(b'=') {
+                    Some(pos) => {
+                        let (name, value) = attr.split_at(pos);
+                        let value = &value[1..];
+                        let value = if value.contains(&b'\\') {
+                            Cow::Owned(unescape_and_check_attr_value(value.into())?)
+                        } else {
+                            check_attribute_value(value.into())?;
+                            Cow::Borrowed(value.as_bstr())
+                        };
+                        (name, gix_attributes::StateRef::from_bytes(value.as_ref()).to_owned())
+                    }
+                    None => (attr, gix_attributes::State::Set),
+                },
+            };
+            let name = gix_attributes::NameRef::try_from(name.as_bstr()).map_err(|err| Error::InvalidAttribute {
+                attribute: err.attribute,
+            })?;
+            Ok(gix_attributes::Assignment {
+                name: name.to_owned(),
+                state,
+            })
+        })
+        .collect()
 }
 
 fn unescape_and_check_attr_value(value: &BStr) -> Result<BString, Error> {

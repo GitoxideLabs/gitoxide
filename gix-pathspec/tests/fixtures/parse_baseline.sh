@@ -94,6 +94,7 @@ baseline ':(attr:a= b=two)'
 baseline ':(attr:a=one b=two)'
 baseline ':(attr:a=one   b=two)'
 baseline ':(attr:someAttr anotherAttr)'
+baseline ':(attr:builtin_objectmode)'
 
 # attributes_with_escape_chars_in_state_values
 baseline ':(attr:v=one\-)'
@@ -135,6 +136,11 @@ baseline ':(attr:+invalidAttr)some/path'
 baseline ':(attr:validAttr +invalidAttr)some/path'
 baseline ':(attr:+invalidAttr,attr:valid)some/path'
 baseline ':(attr:inva\lid)some/path'
+baseline $':(attr:a\tb)some/path'
+baseline $':(attr:a\rb)some/path'
+baseline $':(attr:a=one\tb=two)some/path'
+baseline ':(attr:!a=b)some/path'
+baseline ':(attr:-a=b)some/path'
 
 # invalid_attribute_values
 baseline ':(attr:v=inva#lid)some/path'
