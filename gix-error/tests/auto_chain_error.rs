@@ -1,4 +1,4 @@
-use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, message};
+use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, ValidationError, message};
 #[cfg(not(feature = "tree-error"))]
 use gix_error::{Exn, Message};
 use std::error::Error as _;
@@ -124,4 +124,25 @@ fn not_found_is_discovered_in_well_known_errors() {
         )))
         .is_not_found()
     );
+}
+
+#[test]
+fn validation_is_discovered_in_the_error_chain() {
+    assert!(Error::from_error(ValidationError::new("invalid")).is_validation());
+    assert!(Error::from_error(ErrorWithSource(ValidationError::new("invalid"))).is_validation());
+}
+
+#[derive(Debug)]
+struct ErrorWithSource<E>(E);
+
+impl<E: std::fmt::Display> std::fmt::Display for ErrorWithSource<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<E: std::error::Error + 'static> std::error::Error for ErrorWithSource<E> {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
 }

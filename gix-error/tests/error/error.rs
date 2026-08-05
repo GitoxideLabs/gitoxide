@@ -140,6 +140,8 @@ fn validation_error_displays_input_with_debug_formatting() {
         "invalid input: \"hello\\n \"",
         "it won't hide whitespace and other special characters"
     );
+    assert!(Error::from_error(err).is_validation());
+    assert!(Error::from_error(ErrorWithSource("validation failed", ValidationError::new("invalid"))).is_validation());
 }
 
 #[test]

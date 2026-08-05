@@ -31,6 +31,11 @@ mod _impl {
         pub fn is_not_found(&self) -> bool {
             self.sources().any(super::is_not_found)
         }
+
+        /// Return `true` if invalid input caused the failure.
+        pub fn is_validation(&self) -> bool {
+            self.sources().any(super::is_validation)
+        }
     }
 
     pub(crate) enum Inner {
@@ -143,6 +148,12 @@ mod _impl {
             std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
                 .any(|err| super::is_not_found(err.err.as_ref()))
         }
+
+        /// Return `true` if invalid input caused the failure.
+        pub fn is_validation(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_validation(err.err.as_ref()))
+        }
     }
 
     impl Error {
@@ -252,6 +263,10 @@ fn is_not_found(err: &(dyn std::error::Error + 'static)) -> bool {
                 .downcast_ref::<std::io::Error>()
                 .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
     })
+}
+
+fn is_validation(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| err.is::<crate::ValidationError>())
 }
 
 fn error_chain<'a>(
