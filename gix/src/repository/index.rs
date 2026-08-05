@@ -187,7 +187,7 @@ impl crate::Repository {
     ) -> Result<IndexPersistedOrInMemory, crate::repository::index_or_load_from_head_or_empty::Error> {
         Ok(match self.try_index().map_err(gix_error::Error::from_error)? {
             Some(index) => IndexPersistedOrInMemory::Persisted(index),
-            None => match self.head().map_err(gix_error::Error::from_error)?.id() {
+            None => match self.head()?.id() {
                 Some(id) => {
                     let head_tree_id = id
                         .object()?

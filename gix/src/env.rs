@@ -61,7 +61,7 @@ pub mod collate {
             #[error(transparent)]
             Open(#[from] crate::open::Error),
             #[error(transparent)]
-            FindExistingReference(#[from] crate::reference::find::existing::Error),
+            FindExistingReference(crate::reference::find::existing::Error),
             #[error(transparent)]
             RemoteInit(#[from] crate::remote::init::Error),
             #[error(transparent)]

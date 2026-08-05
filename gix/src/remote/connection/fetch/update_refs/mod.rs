@@ -113,10 +113,7 @@ pub(crate) fn update(
         }
         let (mode, edit_index, type_change) = match local {
             Some(name) => {
-                let (mode, reflog_message, name, previous_value) = match repo
-                    .try_find_reference(name)
-                    .map_err(gix_error::Error::from_error)?
-                {
+                let (mode, reflog_message, name, previous_value) = match repo.try_find_reference(name)? {
                     Some(existing) => {
                         if let Some(wt_dirs) = checked_out_branches.get_mut(existing.name()) {
                             wt_dirs.sort();
@@ -206,9 +203,16 @@ pub(crate) fn update(
                                     PreviousValue::MustExistAndMatch(existing.target().into_owned()),
                                 )
                             }
-                            Err(crate::reference::peel::Error::ToId(gix_ref::peel::to_id::Error::FollowToObject(
-                                gix_ref::peel::to_object::Error::Follow(_),
-                            ))) => {
+                            Err(err)
+                                if err.sources().any(|err| {
+                                    matches!(
+                                        err.downcast_ref::<gix_ref::peel::to_id::Error>(),
+                                        Some(gix_ref::peel::to_id::Error::FollowToObject(
+                                            gix_ref::peel::to_object::Error::Follow(_)
+                                        ))
+                                    )
+                                }) =>
+                            {
                                 // An unborn reference, always allow it to be changed to whatever the remote wants.
                                 (
                                     if existing.target().try_name().map(gix_ref::FullNameRef::as_bstr)

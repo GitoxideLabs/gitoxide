@@ -5,6 +5,7 @@ use gix_ref::{
 };
 
 use crate::{Reference, bstr::BString, ext::ReferenceExt, reference};
+use gix_error::ErrorExt;
 
 /// Obtain and alter references comfortably
 impl crate::Repository {
@@ -25,7 +26,13 @@ impl crate::Repository {
                 expected: constraint,
                 new: Target::Object(id),
             },
-            name: format!("refs/tags/{}", name.as_ref()).try_into()?,
+            name: format!("refs/tags/{}", name.as_ref()).try_into().map_err(
+                |err: gix_validate::reference::name::Error| {
+                    gix_error::Error::from(
+                        err.and_raise(gix_error::ValidationError::new("The tag reference name is invalid")),
+                    )
+                },
+            )?,
             deref: false,
         })?;
         assert_eq!(edits.len(), 1, "reference splits should ever happen");
@@ -88,7 +95,13 @@ impl crate::Repository {
         gix_validate::reference::name::Error: From<E>,
     {
         self.reference_inner(
-            name.try_into().map_err(gix_validate::reference::name::Error::from)?,
+            name.try_into()
+                .map_err(gix_validate::reference::name::Error::from)
+                .map_err(|err| {
+                    gix_error::Error::from(
+                        err.and_raise(gix_error::ValidationError::new("The reference name is invalid")),
+                    )
+                })?,
             target.into(),
             constraint,
             log_message.into(),
@@ -159,12 +172,13 @@ impl crate::Repository {
         edits: impl IntoIterator<Item = RefEdit>,
         committer: Option<gix_actor::SignatureRef<'_>>,
     ) -> Result<Vec<RefEdit>, reference::edit::Error> {
-        let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout()?;
+        let (file_lock_fail, packed_refs_lock_fail) = self.config.lock_timeout().map_err(gix_error::Error::from)?;
         self.refs
             .transaction()
-            .prepare(edits, file_lock_fail, packed_refs_lock_fail)?
+            .prepare(edits, file_lock_fail, packed_refs_lock_fail)
+            .map_err(gix_error::Error::from_error)?
             .commit(committer)
-            .map_err(Into::into)
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the repository head, an abstraction to help dealing with the `HEAD` reference.
@@ -189,7 +203,7 @@ impl crate::Repository {
         Ok(match head.inner.target {
             Target::Symbolic(branch) => match self.find_reference(&branch) {
                 Ok(r) => crate::head::Kind::Symbolic(r.detach()),
-                Err(reference::find::existing::Error::NotFound { .. }) => crate::head::Kind::Unborn(branch),
+                Err(err) if err.is_not_found() => crate::head::Kind::Unborn(branch),
                 Err(err) => return Err(err),
             },
             Target::Object(target) => crate::head::Kind::Detached {
@@ -251,7 +265,7 @@ impl crate::Repository {
     /// # Ok(()) }
     /// ```
     pub fn head_commit(&self) -> Result<crate::Commit<'_>, reference::head_commit::Error> {
-        self.head().map_err(gix_error::Error::from_error)?.peel_to_commit()
+        self.head()?.peel_to_commit()
     }
 
     /// Return the tree id the `HEAD` reference currently points to after peeling it fully,
@@ -325,11 +339,14 @@ impl crate::Repository {
         let partial_name = name
             .clone()
             .try_into()
-            .map_err(|err| reference::find::Error::Find(gix_ref::file::find::Error::from(err)))?;
-        self.try_find_reference(name)?
-            .ok_or_else(|| reference::find::existing::Error::NotFound {
-                name: partial_name.to_owned(),
-            })
+            .map_err(gix_ref::file::find::Error::from)
+            .map_err(gix_error::Error::from_error)?;
+        self.try_find_reference(name)?.ok_or_else(|| {
+            gix_error::Error::from_error(gix_error::NotFoundError::new(format!(
+                "The reference '{}' did not exist",
+                partial_name.as_bstr()
+            )))
+        })
     }
 
     /// Return a platform for iterating references.
@@ -373,7 +390,7 @@ impl crate::Repository {
                 Some(r) => Ok(Some(Reference::from_ref(r, self))),
                 None => Ok(None),
             },
-            Err(err) => Err(err.into()),
+            Err(err) => Err(gix_error::Error::from_error(err)),
         }
     }
 }

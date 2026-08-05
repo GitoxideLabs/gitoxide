@@ -217,13 +217,16 @@ pub fn update_head(
                     gix_lock::acquire::Fail::Immediately,
                     gix_lock::acquire::Fail::Immediately,
                 )
-                .map_err(crate::reference::edit::Error::from)?
+                .map_err(gix_error::Error::from_error)
+                .map_err(Error::HeadUpdate)?
                 .commit(
                     repo.committer()
                         .transpose()
-                        .map_err(|err| Error::HeadUpdate(crate::reference::edit::Error::ParseCommitterTime(err)))?,
+                        .map_err(gix_error::Error::from)
+                        .map_err(Error::HeadUpdate)?,
                 )
-                .map_err(crate::reference::edit::Error::from)?;
+                .map_err(gix_error::Error::from_error)
+                .map_err(Error::HeadUpdate)?;
 
             if let Some(head_peeled_id) = head_peeled_id {
                 let mut log = reflog_message();
@@ -236,7 +239,8 @@ pub fn update_head(
                     },
                     name: head,
                     deref: false,
-                })?;
+                })
+                .map_err(Error::HeadUpdate)?;
             }
 
             setup_branch_config(repo, referent.as_ref(), head_peeled_id, remote_name)?;
@@ -254,7 +258,8 @@ pub fn update_head(
                 },
                 name: head,
                 deref: false,
-            })?;
+            })
+            .map_err(Error::HeadUpdate)?;
         }
     }
     Ok(())

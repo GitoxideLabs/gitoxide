@@ -46,7 +46,7 @@ pub enum Error {
         head_ref_name: crate::bstr::BString,
     },
     #[error("Failed to update HEAD with values from remote")]
-    HeadUpdate(#[from] crate::reference::edit::Error),
+    HeadUpdate(crate::reference::edit::Error),
     #[error("The remote didn't have any ref that matched '{}'", wanted.as_ref().as_bstr())]
     RefNameMissing { wanted: gix_ref::PartialName },
     #[error("The remote has {} refs for '{}', try to use a specific name: {}", candidates.len(), wanted.as_ref().as_bstr(), candidates.iter().filter_map(|n| n.to_str().ok()).collect::<Vec<_>>().join(", "))]
