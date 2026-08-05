@@ -1877,7 +1877,6 @@ dependencies = [
  "is_ci",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]

@@ -17,13 +17,41 @@ pub enum RepositoryKind {
 ///
 pub mod from_gitdir_file {
     /// The error returned by [`from_gitdir_file()`][crate::path::from_gitdir_file()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Parse(#[from] crate::parse::gitdir::Error),
+        Io(std::io::Error),
+        Parse(crate::parse::gitdir::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Io(err) => std::fmt::Display::fmt(err, f),
+                Error::Parse(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Io(err) => err.source(),
+                Error::Parse(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
+    }
+
+    impl From<crate::parse::gitdir::Error> for Error {
+        fn from(err: crate::parse::gitdir::Error) -> Self {
+            Error::Parse(err)
+        }
     }
 }
 
