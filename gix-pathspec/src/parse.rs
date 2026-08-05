@@ -130,7 +130,7 @@ fn parse_long_keywords(input: &[u8], p: &mut Pattern, cursor: &mut usize) -> Res
 
     split_on_non_escaped_char(input, b',', |keyword| {
         // Git skips empty keywords instead of rejecting them, so `:(top,)`, `:(,top)` and
-        // `:(top,,icase)` are all valid there - see `parse_long_magic()` in `pathspec.c`.
+        // `:(top,,icase)` are all valid there.
         if keyword.is_empty() {
             return Ok(());
         }

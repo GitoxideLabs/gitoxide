@@ -38,6 +38,15 @@ fn empty_keywords_are_ignored() {
             ":(icase,)some/path",
             pat_with_path_and_sig("some/path", MagicSignature::ICASE),
         ),
+        (
+            ":(attr:someAttr,)some/path",
+            pat(
+                "some/path",
+                MagicSignature::empty(),
+                SearchMode::ShellGlob,
+                vec![("someAttr", State::Set)],
+            ),
+        ),
     ];
 
     check_valid_inputs(input);
