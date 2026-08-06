@@ -991,7 +991,7 @@ fn event_loop(
         };
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
-                let action = action(key);
+                let action = action_with_history_display(key, app.history_display_expanded);
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
@@ -2441,6 +2441,10 @@ fn poll_timeout(
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
+    action_with_history_display(key, false)
+}
+
+fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) -> Option<Action> {
     if key.kind == KeyEventKind::Release
         && !matches!(
             key.code,
@@ -2462,6 +2466,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+        KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
         KeyCode::Char('l') => Some(Action::ScrollRight),
         KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::PageUp),
@@ -2473,16 +2478,16 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Last),
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
-        KeyCode::Char('d') => Some(Action::ToggleDate),
-        KeyCode::Char('e') => Some(Action::ToggleEmail),
-        KeyCode::Char('n') => Some(Action::ToggleName),
-        KeyCode::Char('t') => Some(Action::ToggleTrailers),
-        KeyCode::Char('m') => Some(Action::ToggleMailmap),
+        KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
+        KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleEmail),
+        KeyCode::Char('n') if history_display_expanded => Some(Action::ToggleName),
+        KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
+        KeyCode::Char('m') if history_display_expanded => Some(Action::ToggleMailmap),
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
-        KeyCode::Char('r') => Some(Action::ToggleRefs),
+        KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
-        KeyCode::Char('v') => Some(Action::ToggleHidden),
+        KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
@@ -3086,30 +3091,12 @@ mod tests {
             Some(Action::Last),
             "terminals that report shifted letters in lowercase still map Shift-G to the first commit"
         );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
-            Some(Action::ToggleDate)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
-            Some(Action::ToggleEmail)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)),
-            Some(Action::ToggleName)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ToggleTrailers)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
-            Some(Action::ToggleMailmap)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
-            Some(Action::ToggleRefs)
-        );
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
@@ -3122,7 +3109,27 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
-            Some(Action::ToggleHidden)
+            Some(Action::ToggleHistoryDisplay)
+        );
+        for (key, expected) in [
+            ('d', Action::ToggleDate),
+            ('e', Action::ToggleEmail),
+            ('n', Action::ToggleName),
+            ('t', Action::ToggleTrailers),
+            ('m', Action::ToggleMailmap),
+            ('r', Action::ToggleRefs),
+            ('h', Action::ToggleHidden),
+        ] {
+            assert_eq!(
+                action_with_history_display(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), true),
+                Some(expected),
+                "{key} is available after the view prefix"
+            );
+        }
+        assert_eq!(
+            action_with_history_display(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), true),
+            Some(Action::ToggleHistoryDisplay),
+            "v closes the view shortcut group"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),

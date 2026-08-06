@@ -271,6 +271,7 @@ pub(crate) enum Action {
     ToggleRefs,
     Refresh,
     ToggleHidden,
+    ToggleHistoryDisplay,
     ToggleAlign,
     ToggleCommit,
     ToggleChanges,
@@ -347,6 +348,7 @@ pub(crate) struct App {
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
     pub(crate) notice: Option<String>,
+    pub(crate) history_display_expanded: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -411,6 +413,7 @@ impl App {
             copy_feedback: None,
             focus_feedback: None,
             notice: None,
+            history_display_expanded: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -575,6 +578,19 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
+        if !matches!(
+            &action,
+            Action::ToggleHistoryDisplay
+                | Action::ToggleDate
+                | Action::ToggleEmail
+                | Action::ToggleName
+                | Action::ToggleTrailers
+                | Action::ToggleMailmap
+                | Action::ToggleRefs
+                | Action::ToggleHidden
+        ) {
+            self.history_display_expanded = false;
+        }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
@@ -659,6 +675,7 @@ impl App {
             }
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
+            Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
             Action::ToggleRefs => {
                 self.ref_mode = match self.ref_mode {
                     RefMode::All => RefMode::Default,
@@ -2214,6 +2231,34 @@ mod tests {
         assert_eq!(app.changes_parent, 0);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn history_display_group_stays_open_only_for_grouped_actions() {
+        let mut app = App::new(1);
+
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(app.history_display_expanded);
+        app.update(Action::ToggleDate);
+        app.update(Action::ToggleEmail);
+        assert!(
+            app.history_display_expanded,
+            "grouped display changes keep the group open"
+        );
+
+        app.update(Action::MoveDown);
+        assert!(!app.history_display_expanded, "navigation collapses the group");
+
+        app.update(Action::ToggleHistoryDisplay);
+        app.update(Action::ToggleAlign);
+        assert!(
+            !app.history_display_expanded,
+            "direct display commands also collapse the group"
+        );
+
+        app.update(Action::ToggleHistoryDisplay);
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(!app.history_display_expanded, "the prefix key toggles the group");
     }
 
     #[test]
