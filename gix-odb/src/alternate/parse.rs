@@ -30,3 +30,27 @@ pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::content;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_quote_that_is_never_closed_is_used_as_a_literal_path() {
+        assert_eq!(
+            content(br#""unterminated"#).expect("no path conversion issue"),
+            vec![PathBuf::from(r#""unterminated"#)],
+            "broken quoting falls back to the raw line, like Git's alternates parsing does"
+        );
+    }
+
+    #[test]
+    fn a_properly_quoted_path_is_unquoted() {
+        assert_eq!(
+            content(br#""quoted\tpath""#).expect("no path conversion issue"),
+            vec![PathBuf::from("quoted\tpath")],
+            "…while quoting that is intact still decodes its escapes"
+        );
+    }
+}

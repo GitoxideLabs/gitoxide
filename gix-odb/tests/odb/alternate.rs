@@ -149,26 +149,6 @@ fn single_link_with_comment_before_path_and_ansi_c_escape() -> crate::Result {
 }
 
 #[test]
-fn a_quote_that_is_never_closed_is_used_as_a_literal_path() -> crate::Result {
-    let tmp = gix_testtools::tempfile::TempDir::new()?;
-    // The entry is relative so that it can start with the quote that is never closed.
-    let (from, to) = alternate_with_content(
-        tmp.path().join("a"),
-        tmp.path().join("a").join("\"unterminated"),
-        br#""unterminated"#.to_vec(),
-        None,
-    )?;
-
-    let alternates = alternate::resolve(from, &std::env::current_dir()?)?;
-    assert_eq!(
-        alternates,
-        vec![to],
-        "broken quoting falls back to the raw line, like Git's alternates parsing does"
-    );
-    Ok(())
-}
-
-#[test]
 fn no_alternate_in_first_objects_dir() -> crate::Result {
     let tmp = gix_testtools::tempfile::TempDir::new()?;
     assert!(alternate::resolve(tmp.path().to_owned(), &std::env::current_dir()?)?.is_empty());
