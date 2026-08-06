@@ -40,6 +40,11 @@ baseline push '^'
 
 baseline fetch '^refs/heads/qa/*/*'
 baseline push '^refs/heads/qa/*/*'
+
+# a fetch source is a ref name, so it can't hold the colon that a push source may
+baseline fetch 'a:b:c'
+baseline fetch ':/message:refs/heads/x'
+
 baseline push 'main~1'
 baseline fetch 'main~1'
 baseline push 'main~1:other~1'
@@ -91,6 +96,12 @@ baseline fetch 'refs/heads/main:refs/remotes/frotz/xyzzy'
 
 baseline push 'main~1:refs/remotes/frotz/backup'
 baseline push 'HEAD~4:refs/remotes/frotz/new'
+
+# Git splits on the last colon, so a push source may contain one itself
+baseline push 'a:b:c'
+baseline push 'a:b:c:d'
+baseline push ':/message:refs/heads/x'
+baseline push 'HEAD:path:refs/heads/x'
 
 baseline push 'HEAD'
 baseline fetch 'HEAD'
