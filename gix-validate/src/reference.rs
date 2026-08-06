@@ -130,9 +130,8 @@ fn validate(path: &BStr, mode: Mode) -> Result<Option<BString>, name::Error> {
             Mode::PartialSanitize => crate::tag::Mode::Sanitize,
         },
     )?;
-    // `@` alone is shorthand for `HEAD` in revision syntax, so Git refuses it as a reference name -
-    // see `check_or_sanitize_refname()` in `refs.c`, which `check_refname_format()` delegates to.
-    // Git substitutes `-` when sanitizing it, which is what we do here too. Note that `@` stays
+    // `@` alone is shorthand for `HEAD` in revspecs, so Git refuses it as a reference name.
+    // Git substitutes it with `-` when sanitizing it, which is what we do here too. Note that `@` stays
     // valid as a component, which is why `refs/heads/@` and a tag named `@` are both fine.
     if out.as_ref().map_or(path, |b| b.as_bstr()) == "@" {
         match out.as_mut() {

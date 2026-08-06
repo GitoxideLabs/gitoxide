@@ -233,6 +233,9 @@ mod name {
         mktests!(all_uppercase_with_underscore_san, b"NEW_HEAD", "NEW_HEAD");
         mktest!(chinese_utf8, "refs/heads/你好吗".as_bytes());
         mktests!(chinese_utf8_san, "refs/heads/你好吗".as_bytes(), "refs/heads/你好吗");
+        mktest!(an_at_sign_within_a_component, b"refs/heads/@");
+        mktest!(an_at_sign_as_its_own_component, b"@/x");
+        mktest!(an_at_sign_beside_other_characters, b"refs/heads/@@");
         mktest!(dot_in_directory_component, b"this./totally./works");
         mktests!(
             dot_in_directory_component_san,
