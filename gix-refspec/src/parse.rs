@@ -75,7 +75,10 @@ pub(crate) mod function {
             }
         };
 
-        let (mut src, dst) = match spec.find_byte(b':') {
+        // Split on the last colon like `strrchr()` in Git's `parse_refspec()` does, so that a
+        // push source may itself contain one - `:/message` and `<rev>:<path>` are both valid
+        // revisions. With a single colon this is the same position as the first one.
+        let (mut src, dst) = match spec.rfind_byte(b':') {
             Some(pos) => {
                 if mode == Mode::Negative {
                     return Err(Error::NegativeWithDestination);
