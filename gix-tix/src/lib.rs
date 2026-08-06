@@ -635,6 +635,8 @@ fn event_loop(
     let mut lane_receiver = None;
     let mut refresh_receiver: Option<mpsc::Receiver<Result<history::Refresh>>> = None;
     let mut refresh_pending = false;
+    let mut refresh_from_filesystem = false;
+    let mut refresh_select_top = false;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
@@ -712,7 +714,13 @@ fn event_loop(
         }
         while let Ok(event) = ref_events.try_recv() {
             match event {
-                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => refresh_pending = true,
+                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
+                    refresh_pending = true;
+                    refresh_from_filesystem = true;
+                    if refresh_receiver.is_some() {
+                        refresh_select_top = true;
+                    }
+                }
                 Ok(_) => {}
                 Err(_) => {
                     ref_watcher = None;
@@ -777,7 +785,12 @@ fn event_loop(
                     } else {
                         result.refs.hidden_tips.as_slice()
                     };
-                    if let Some(rows) = app.start_refresh(result.commits, &result.refs.view_tips, hidden_tips) {
+                    if let Some(rows) = app.start_refresh(
+                        result.commits,
+                        &result.refs.view_tips,
+                        hidden_tips,
+                        std::mem::take(&mut refresh_select_top),
+                    ) {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
                     refresh_receiver = None;
@@ -835,6 +848,7 @@ fn event_loop(
             let next = history::snapshot(&repository, &revisions, &hide)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed;
+            let select_top = std::mem::take(&mut refresh_from_filesystem);
             ref_snapshot = next;
             refresh_pending = false;
             if tips_changed || refresh_expand_hidden {
@@ -853,6 +867,7 @@ fn event_loop(
                     expand,
                     gix::features::threading::OwnShared::clone(&authors),
                 ));
+                refresh_select_top = select_top;
                 refresh_expand_hidden = false;
                 app.state = State::Loading;
             } else {
