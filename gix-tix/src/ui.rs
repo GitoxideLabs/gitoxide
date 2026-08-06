@@ -144,7 +144,7 @@ pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: 
             } else if line.starts_with(b"+") {
                 Style::default().fg(Color::Green)
             } else if line.starts_with(b"-") {
-                Style::default().fg(Color::Red)
+                Style::default().fg(Color::LightRed)
             } else if line.starts_with(b"Binary ") {
                 Style::default().fg(Color::Yellow)
             } else {
@@ -534,7 +534,7 @@ pub(crate) fn draw_with_worktree(
                 ]);
             }
             if let Some(error) = &app.changes(pane).error {
-                spans.push(Span::styled(format!("diff: {error}"), color(Color::Red)));
+                spans.push(Span::styled(format!("diff: {error}"), color(Color::LightRed)));
             } else {
                 spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
             }
@@ -655,7 +655,7 @@ pub(crate) fn draw_with_worktree(
     if app.signature_failures > 0 {
         footer_spans.extend([
             Span::raw(format!(" · s {} ", app.signature_failures)),
-            Span::styled("●", color(Color::Red)),
+            Span::styled("●", color(Color::LightRed)),
         ]);
     } else if has_verifiable_signatures {
         footer_spans.extend([
@@ -716,11 +716,18 @@ fn render_changes_divider(frame: &mut Frame<'_>, panes: &[ChangesPaneArea], app:
 fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRelation>) -> Line<'static> {
     let mut spans = Vec::new();
     if let Some(changes) = changes {
-        spans.extend([
-            Span::styled(format!("+{}", changes.lines_added), selection_color(Color::Green)),
-            Span::raw(" "),
-            Span::styled(format!("-{}", changes.lines_removed), selection_color(Color::Red)),
-        ]);
+        if changes.lines_added > 0 {
+            push_selection_span(
+                &mut spans,
+                Span::styled(format!("+{}", changes.lines_added), selection_color(Color::Green)),
+            );
+        }
+        if changes.lines_removed > 0 {
+            push_selection_span(
+                &mut spans,
+                Span::styled(format!("-{}", changes.lines_removed), selection_color(Color::LightRed)),
+            );
+        }
     }
     match relation {
         Some(SelectionRelation::Tracking { ahead, behind }) => {
@@ -734,10 +741,10 @@ fn selection_info_line(changes: Option<&Changes>, relation: Option<SelectionRela
                 if ahead == 0 {
                     push_selection_span(
                         &mut spans,
-                        Span::styled(format!("⇣{behind}"), selection_color(Color::Red)),
+                        Span::styled(format!("⇣{behind}"), selection_color(Color::LightRed)),
                     );
                 } else {
-                    spans.push(Span::styled(format!("⇣{behind}"), selection_color(Color::Red)));
+                    spans.push(Span::styled(format!("⇣{behind}"), selection_color(Color::LightRed)));
                 }
             }
         }
@@ -802,12 +809,18 @@ fn render_changes(frame: &mut Frame<'_>, area: Rect, changes: &Changes, pane: Ch
                 spans.push(Span::styled(change.path.to_str_lossy(), path_style));
             }
             if selected && let Some((insertions, removals)) = change.lines {
-                spans.extend([
-                    Span::raw(" "),
-                    Span::styled(format!("+{insertions}"), color(Color::Green)),
-                    Span::raw(" "),
-                    Span::styled(format!("-{removals}"), color(Color::Red)),
-                ]);
+                if insertions > 0 {
+                    spans.extend([
+                        Span::raw(" "),
+                        Span::styled(format!("+{insertions}"), color(Color::Green)),
+                    ]);
+                }
+                if removals > 0 {
+                    spans.extend([
+                        Span::raw(" "),
+                        Span::styled(format!("-{removals}"), color(Color::LightRed)),
+                    ]);
+                }
             }
             Line::from(spans)
         })
@@ -861,10 +874,10 @@ fn change_color(kind: ChangeKind) -> Color {
     match kind {
         ChangeKind::Added => Color::Green,
         ChangeKind::Modified => Color::Yellow,
-        ChangeKind::Deleted => Color::Red,
+        ChangeKind::Deleted => Color::LightRed,
         ChangeKind::Renamed | ChangeKind::Copied => Color::Cyan,
         ChangeKind::TypeChanged => Color::Magenta,
-        ChangeKind::Unmerged => Color::Red,
+        ChangeKind::Unmerged => Color::LightRed,
     }
 }
 
@@ -872,7 +885,7 @@ fn path_change_color(change: &crate::app::PathChange) -> Color {
     match change.group {
         ChangeGroup::Tree => change_color(change.kind),
         ChangeGroup::Staged => Color::Green,
-        ChangeGroup::Unstaged => Color::Red,
+        ChangeGroup::Unstaged => Color::LightRed,
     }
 }
 
@@ -887,15 +900,6 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
         }
         ChangePane::Worktree => vec![Span::raw("─ Worktree ── ")],
     };
-    if pane == ChangePane::Worktree && changes.paths.is_empty() {
-        spans.extend([
-            Span::styled("+0", color(Color::Green)),
-            Span::raw(" "),
-            Span::styled("-0", color(Color::Red)),
-            Span::raw(" "),
-        ]);
-        return Line::from(spans);
-    }
     let counts: Vec<_> = match pane {
         ChangePane::Tree => {
             let mut counts = Vec::new();
@@ -924,7 +928,7 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
             let unstaged = changes.paths.len().saturating_sub(staged);
             [
                 ("S".to_owned(), staged, Color::Green),
-                ("U".to_owned(), unstaged, Color::Red),
+                ("U".to_owned(), unstaged, Color::LightRed),
             ]
             .into_iter()
             .filter(|(_, count, _)| *count > 0)
@@ -932,7 +936,7 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
         }
     };
     let has_counts = !counts.is_empty();
-    let show_total = counts.len() != 1 || counts[0].1 != changes.paths.len();
+    let show_total = has_counts && (counts.len() != 1 || counts[0].1 != changes.paths.len());
     for (index, (label, count, count_color)) in counts.into_iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw(" + "));
@@ -946,13 +950,22 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
             changes.paths.len()
         )));
     }
-    spans.extend([
-        Span::raw(" · "),
-        Span::styled(format!("+{}", changes.lines_added), color(Color::Green)),
-        Span::raw(" "),
-        Span::styled(format!("-{}", changes.lines_removed), color(Color::Red)),
-        Span::raw(" "),
-    ]);
+    if changes.lines_added > 0 || changes.lines_removed > 0 {
+        spans.push(Span::raw(" · "));
+        if changes.lines_added > 0 {
+            spans.push(Span::styled(format!("+{}", changes.lines_added), color(Color::Green)));
+        }
+        if changes.lines_removed > 0 {
+            if changes.lines_added > 0 {
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(
+                format!("-{}", changes.lines_removed),
+                color(Color::LightRed),
+            ));
+        }
+        spans.push(Span::raw(" "));
+    }
     Line::from(spans)
 }
 
@@ -1352,7 +1365,7 @@ fn signature_color(signature: SignatureState) -> Color {
         SignatureState::Unsigned => Color::Blue,
         SignatureState::Unverified | SignatureState::Verifying => Color::Rgb(255, 165, 0),
         SignatureState::Verified => Color::Green,
-        SignatureState::Failed => Color::Red,
+        SignatureState::Failed => Color::LightRed,
     }
 }
 
@@ -1364,7 +1377,7 @@ fn graph_style(column: usize) -> Style {
         Color::Green,
         Color::Reset,
         Color::White,
-        Color::Red,
+        Color::LightRed,
     ];
     let index = column % 14;
     let style = Style::default().fg(COLORS[index % COLORS.len()]);
@@ -1490,7 +1503,7 @@ mod tests {
             "selection info has a left margin"
         );
         assert_eq!(buffer[(info_x, 0)].fg, Color::Green);
-        assert_eq!(buffer[(info_x + 3, 0)].fg, Color::Red);
+        assert_eq!(buffer[(info_x + 3, 0)].fg, Color::LightRed);
         assert!(!buffer[(info_x, 0)].modifier.contains(Modifier::DIM));
         let spacer_x = info_x + info.chars().count() as u16;
         assert_eq!(buffer[(spacer_x, 0)].symbol(), " ", "the marker has a left spacer");
@@ -1533,6 +1546,10 @@ mod tests {
         };
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 2 })), "⇣2");
         assert_eq!(text(Some(SelectionRelation::Tracking { ahead: 0, behind: 0 })), "");
+        assert!(
+            selection_info_line(Some(&Changes::default()), None).spans.is_empty(),
+            "selection information hides empty diff counts"
+        );
         Ok(())
     }
 
@@ -1551,10 +1568,10 @@ mod tests {
 
         assert_eq!(rendered_line(&terminal, 0).trim(), "M file");
         for (y, color) in [
-            (1, Color::Red),
+            (1, Color::LightRed),
             (2, Color::Green),
             (3, Color::Cyan),
-            (4, Color::Red),
+            (4, Color::LightRed),
             (5, Color::Green),
         ] {
             assert_eq!(terminal.backend().buffer()[(0, y)].fg, color);
@@ -2051,7 +2068,7 @@ mod tests {
             (SignatureState::Unsigned, Color::Blue),
             (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
             (SignatureState::Verified, Color::Green),
-            (SignatureState::Failed, Color::Red),
+            (SignatureState::Failed, Color::LightRed),
         ];
         let mut terminal = Terminal::new(TestBackend::new(2, states.len() as u16))?;
         terminal.draw(|frame| {
@@ -2485,7 +2502,7 @@ mod tests {
         let added_x = position("A 1");
         let deleted_x = position("D 1");
         assert_eq!(terminal.backend().buffer()[(added_x, 7)].fg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(deleted_x, 7)].fg, Color::Red);
+        assert_eq!(terminal.backend().buffer()[(deleted_x, 7)].fg, Color::LightRed);
         assert!(
             terminal.backend().buffer()[(added_x, 7)]
                 .modifier
@@ -2622,7 +2639,7 @@ mod tests {
             "the selected filepath is inverted"
         );
         assert_eq!(terminal.backend().buffer()[(added_x, 9)].fg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(removed_x, 9)].fg, Color::Red);
+        assert_eq!(terminal.backend().buffer()[(removed_x, 9)].fg, Color::LightRed);
         assert!(
             !terminal.backend().buffer()[(added_x, 9)]
                 .modifier
@@ -2639,6 +2656,23 @@ mod tests {
         assert!(
             rendered_line(&terminal, 14).contains("Enter diff · c tree"),
             "the changes pane advertises the next cycle mode"
+        );
+
+        app.update(Action::MoveUp);
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(rendered_line(&terminal, 8).contains("A added +10"));
+        assert!(
+            !rendered_line(&terminal, 8).contains("-0"),
+            "selected paths hide empty counts"
         );
 
         app.update(Action::Last);
@@ -2830,7 +2864,10 @@ mod tests {
         let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
         let unstaged_x = rendered_line(&terminal, unstaged_y).find('M').expect("unstaged letter") as u16;
         assert_eq!(terminal.backend().buffer()[(staged_x, staged_y)].fg, Color::Green);
-        assert_eq!(terminal.backend().buffer()[(unstaged_x, unstaged_y)].fg, Color::Red);
+        assert_eq!(
+            terminal.backend().buffer()[(unstaged_x, unstaged_y)].fg,
+            Color::LightRed
+        );
 
         let modified = Changes {
             paths: (0..12)
@@ -2849,7 +2886,11 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert!(summary.contains("M 12 · +0 -0"));
+        assert!(summary.contains("M 12"));
+        assert!(
+            !summary.contains("+0") && !summary.contains("-0"),
+            "empty diff counts are hidden"
+        );
         assert!(!summary.contains("= 12"), "a single term already expresses the total");
 
         terminal.draw(|frame| {
@@ -2864,8 +2905,12 @@ mod tests {
             );
         })?;
         assert!(
-            (0..8).any(|y| rendered_line(&terminal, y).contains("Worktree ── +0 -0")),
+            (0..8).any(|y| rendered_line(&terminal, y).contains("Worktree ──")),
             "an enabled clean worktree remains visible as an empty block"
+        );
+        assert!(
+            !(0..8).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
+            "a clean worktree omits empty diff counts"
         );
         assert!(
             !(0..8).any(|y| rendered_line(&terminal, y).contains("= 0")),
