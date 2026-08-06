@@ -11,6 +11,12 @@ This repository contains `gitoxide` - a pure Rust implementation of Git. This do
 
 ## Development Practices
 
+### AI Agent Communication
+
+- AI agents communicating through a person's account must identify themselves, for example in issue or PR descriptions and comments.
+- AI assistance that does not replace the person as the speaker, such as proofreading or wording polish, does not require identification.
+- Attributing AI assistance in commit metadata, for example with an `Assisted-by:` or `Co-authored-by:` trailer, is welcome but not required.
+
 ### Test-First Development
 
 - Protect against regression and make implementing features easy

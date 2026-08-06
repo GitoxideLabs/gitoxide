@@ -24,7 +24,7 @@ use crate::{
 ///    - Access to database objects, also for used for diffing.
 ///    - Should have an object cache for good diff performance.
 /// * `start`
-///    - Where to start the blame. Can be either a commit or a file in a worktree that contains
+///    - Where to start the blame. Can be either a commit or contents of a worktree file that contains
 ///      untracked changes.
 /// * `cache`
 ///    - Optionally, the commitgraph cache.
@@ -764,6 +764,7 @@ fn blob_changes(
 ) -> Result<Vec<Change>, Error> {
     resource_cache.set_resource(
         previous_oid,
+        // TODO(blame): add a test to show of symlink blaming works.
         gix_object::tree::EntryKind::Blob,
         previous_file_path,
         gix_diff::blob::ResourceKind::OldOrSource,
@@ -896,10 +897,15 @@ pub(crate) fn tokens_for_diffing(data: &[u8]) -> impl TokenSource<Token = &[u8]>
     gix_diff::blob::sources::byte_lines(data)
 }
 
+/// The blame input after resolving [`Start`] and before traversing commit history.
 struct InitialState {
+    /// The final file contents whose lines are being attributed.
     blamed_file_blob: Vec<u8>,
+    /// Requested ranges that still need attribution through commit traversal.
     hunks_to_blame: Vec<UnblamedHunk>,
+    /// Entries already resolved while comparing worktree contents to the first suspect.
     out: Vec<BlameEntry>,
+    /// The first commit to traverse, or `None` if no history traversal is needed.
     first_suspect: Option<ObjectId>,
 }
 

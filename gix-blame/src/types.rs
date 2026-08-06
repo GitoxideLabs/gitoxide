@@ -191,11 +191,9 @@ pub struct BlamePathEntry {
 }
 
 /// The starting point for [`file()`](crate::file()).
-#[derive(Debug)]
 pub enum Start<'a> {
     /// Start from a specific commit.
     Commit(ObjectId),
-
     /// Start from `contents`, then continue from `first_suspect`.
     ///
     /// Lines that only exist in `contents` are attributed to the null id,
@@ -210,11 +208,28 @@ pub enum Start<'a> {
     Contents {
         /// The commit to start from after it has been compared to `contents`.
         first_suspect: ObjectId,
-        /// The contents to start the blame from.
+        /// The contents to start the blame from, typically read from the worktree.
+        // TODO(blame): add a type so rename tracking can avoid comparing blobs with symlinks.
+        //              Blob is hard-coded in at least once place.
         contents: std::borrow::Cow<'a, [u8]>,
     },
 }
 
+impl std::fmt::Debug for Start<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Start::Commit(id) => f.debug_tuple("Commit").field(id).finish(),
+            Start::Contents {
+                first_suspect,
+                contents,
+            } => f
+                .debug_struct("Contents")
+                .field("first_suspect", first_suspect)
+                .field("contents_len", &contents.len())
+                .finish(),
+        }
+    }
+}
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
