@@ -10,7 +10,10 @@ use gix_traverse::commit::find as find_commit;
 use smallvec::SmallVec;
 
 use super::{Change, UnblamedHunk, process_changes};
-use crate::{BlameEntry, Error, Options, Outcome, Statistics, types::BlamePathEntry};
+use crate::{
+    BlameEntry, Error, Options, Outcome, Statistics,
+    types::{BlamePathEntry, Start},
+};
 
 /// Produce a list of consecutive [`BlameEntry`] instances to indicate in which commits the ranges of the file
 /// at `suspect:<file_path>` originated in.
@@ -20,8 +23,9 @@ use crate::{BlameEntry, Error, Options, Outcome, Statistics, types::BlamePathEnt
 /// * `odb`
 ///    - Access to database objects, also for used for diffing.
 ///    - Should have an object cache for good diff performance.
-/// * `suspect`
-///    - The first commit to be responsible for parts of `file_path`.
+/// * `start`
+///    - Where to start the blame. Can be either a commit or contents of a worktree file that contains
+///      untracked changes.
 /// * `cache`
 ///    - Optionally, the commitgraph cache.
 /// * `resource_cache`
@@ -62,50 +66,51 @@ use crate::{BlameEntry, Error, Options, Outcome, Statistics, types::BlamePathEnt
 /// <---><---><-----><-------><-----><-><-><->
 pub fn file(
     odb: impl gix_object::Find + gix_object::FindHeader,
-    suspect: ObjectId,
+    start: Start,
     cache: Option<gix_commitgraph::Graph>,
     resource_cache: &mut gix_diff::blob::Platform,
     file_path: &BStr,
     options: Options,
 ) -> Result<Outcome, Error> {
-    let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?suspect);
+    let _span = gix_trace::coarse!("gix_blame::file()", ?file_path, ?start);
 
     let mut stats = Statistics::default();
     let (mut buf, mut buf2, mut buf3) = (Vec::new(), Vec::new(), Vec::new());
-    let blamed_file_entry_id = find_path_entry_in_commit(
+
+    let InitialState {
+        blamed_file_blob,
+        mut hunks_to_blame,
+        mut out,
+        first_suspect,
+    } = initial_state(
         &odb,
-        &suspect,
-        file_path,
+        start,
         cache.as_ref(),
+        file_path,
+        &options,
         &mut buf,
         &mut buf2,
         &mut stats,
-    )?
-    .ok_or_else(|| Error::FileMissing {
-        file_path: file_path.to_owned(),
-        commit_id: suspect,
-    })?;
-    let blamed_file_blob = odb.find_blob(&blamed_file_entry_id, &mut buf)?.data.to_vec();
-    let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
+    )?;
 
-    // Binary or otherwise empty?
-    if num_lines_in_blamed == 0 {
-        return Ok(Outcome::default());
+    if hunks_to_blame.is_empty() {
+        out.sort_by_key(|entry| entry.start_in_blamed_file);
+        return Ok(Outcome {
+            entries: coalesce_blame_entries(out),
+            blob: blamed_file_blob,
+            statistics: stats,
+            blame_path: None,
+        });
     }
 
-    let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
-    let mut hunks_to_blame = ranges_to_blame
-        .into_iter()
-        .map(|range| UnblamedHunk::new(range, suspect))
-        .collect::<Vec<_>>();
-
-    let (mut buf, mut buf2) = (Vec::new(), Vec::new());
-    let commit = find_commit(cache.as_ref(), &odb, &suspect, &mut buf)?;
     let mut queue: gix_revwalk::PriorityQueue<gix_date::SecondsSinceUnixEpoch, ObjectId> =
         gix_revwalk::PriorityQueue::new();
-    queue.insert(commit.commit_time()?, suspect);
 
-    let mut out = Vec::new();
+    if let Some(first_suspect) = first_suspect {
+        let commit = find_commit(cache.as_ref(), &odb, &first_suspect, &mut buf)?;
+        queue.insert(commit.commit_time()?, first_suspect);
+    }
+
     let mut diff_state = gix_diff::tree::State::default();
     let mut previous_entry: Option<(ObjectId, ObjectId)> = None;
     let mut blame_path = if options.debug_track_path {
@@ -757,10 +762,9 @@ fn blob_changes(
     diff_algorithm: gix_diff::blob::Algorithm,
     stats: &mut Statistics,
 ) -> Result<Vec<Change>, Error> {
-    use gix_diff::blob::Hunk;
-
     resource_cache.set_resource(
         previous_oid,
+        // TODO(blame): add a test to show of symlink blaming works.
         gix_object::tree::EntryKind::Blob,
         previous_file_path,
         gix_diff::blob::ResourceKind::OldOrSource,
@@ -775,10 +779,24 @@ fn blob_changes(
     )?;
 
     let outcome = resource_cache.prepare_diff()?;
-    let input = gix_diff::blob::InternedInput::new(
+
+    Ok(blob_changes_from_data(
         outcome.old.data.as_slice().unwrap_or_default(),
         outcome.new.data.as_slice().unwrap_or_default(),
-    );
+        diff_algorithm,
+        stats,
+    ))
+}
+
+fn blob_changes_from_data(
+    old_data: &[u8],
+    new_data: &[u8],
+    diff_algorithm: gix_diff::blob::Algorithm,
+    stats: &mut Statistics,
+) -> Vec<Change> {
+    use gix_diff::blob::Hunk;
+
+    let input = gix_diff::blob::InternedInput::new(old_data, new_data);
 
     let mut diff = gix_diff::blob::Diff::compute(diff_algorithm, &input);
     diff.postprocess_lines(&input);
@@ -816,7 +834,7 @@ fn blob_changes(
     }
 
     stats.blobs_diffed += 1;
-    Ok(changes)
+    changes
 }
 
 fn find_path_entry_in_commit(
@@ -877,4 +895,126 @@ fn collect_parents(
 /// to unify them so the later access shows the right thing.
 pub(crate) fn tokens_for_diffing(data: &[u8]) -> impl TokenSource<Token = &[u8]> {
     gix_diff::blob::sources::byte_lines(data)
+}
+
+/// The blame input after resolving [`Start`] and before traversing commit history.
+struct InitialState {
+    /// The final file contents whose lines are being attributed.
+    blamed_file_blob: Vec<u8>,
+    /// Requested ranges that still need attribution through commit traversal.
+    hunks_to_blame: Vec<UnblamedHunk>,
+    /// Entries already resolved while comparing worktree contents to the first suspect.
+    out: Vec<BlameEntry>,
+    /// The first commit to traverse, or `None` if no history traversal is needed.
+    first_suspect: Option<ObjectId>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initial_state(
+    odb: &impl gix_object::Find,
+    start: Start<'_>,
+    cache: Option<&gix_commitgraph::Graph>,
+    file_path: &BStr,
+    options: &Options,
+    buf: &mut Vec<u8>,
+    buf2: &mut Vec<u8>,
+    stats: &mut Statistics,
+) -> Result<InitialState, Error> {
+    match start {
+        Start::Commit(suspect) => {
+            let blamed_file_entry_id = find_path_entry_in_commit(&odb, &suspect, file_path, cache, buf, buf2, stats)?
+                .ok_or_else(|| Error::FileMissing {
+                file_path: file_path.to_owned(),
+                commit_id: suspect,
+            })?;
+            let blamed_file_blob = odb.find_blob(&blamed_file_entry_id, buf)?.data.to_vec();
+            let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
+
+            // Binary or otherwise empty?
+            if num_lines_in_blamed == 0 {
+                return Ok(InitialState {
+                    blamed_file_blob,
+                    hunks_to_blame: Vec::new(),
+                    out: Vec::new(),
+                    first_suspect: None,
+                });
+            }
+
+            let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
+            let hunks_to_blame = ranges_to_blame
+                .into_iter()
+                .map(|range| UnblamedHunk::new(range, suspect))
+                .collect::<Vec<_>>();
+
+            Ok(InitialState {
+                blamed_file_blob,
+                hunks_to_blame,
+                out: Vec::new(),
+                first_suspect: Some(suspect),
+            })
+        }
+        Start::Contents {
+            first_suspect,
+            contents,
+        } => {
+            let null_id = first_suspect.kind().null();
+            let blamed_file_blob = contents.into_owned();
+            let num_lines_in_blamed = tokens_for_diffing(&blamed_file_blob).tokenize().count() as u32;
+
+            if num_lines_in_blamed == 0 {
+                return Ok(InitialState {
+                    blamed_file_blob,
+                    hunks_to_blame: Vec::new(),
+                    out: Vec::new(),
+                    first_suspect: None,
+                });
+            }
+
+            let ranges_to_blame = options.ranges.to_zero_based_exclusive_ranges(num_lines_in_blamed);
+            let mut hunks_to_blame = ranges_to_blame
+                .into_iter()
+                .map(|range| UnblamedHunk::new(range, null_id))
+                .collect::<Vec<_>>();
+
+            let mut out = Vec::new();
+
+            let Some(first_suspect_entry_id) =
+                find_path_entry_in_commit(odb, &first_suspect, file_path, cache, buf, buf2, stats)?
+            else {
+                // File does not exist in the starting commit. Treat the requested
+                // ranges as entirely "not committed yet".
+                out.extend(
+                    hunks_to_blame
+                        .iter()
+                        .filter_map(|hunk| BlameEntry::from_unblamed_hunk(hunk, null_id)),
+                );
+
+                return Ok(InitialState {
+                    blamed_file_blob,
+                    hunks_to_blame: Vec::new(),
+                    out,
+                    first_suspect: None,
+                });
+            };
+
+            let first_suspect_blob = odb.find_blob(&first_suspect_entry_id, buf)?.data.to_vec();
+
+            let changes = blob_changes_from_data(&first_suspect_blob, &blamed_file_blob, options.diff_algorithm, stats);
+            hunks_to_blame = process_changes(hunks_to_blame, changes, null_id, first_suspect);
+
+            unblamed_to_out_is_done(&mut hunks_to_blame, &mut out, null_id);
+
+            let first_suspect = hunks_to_blame
+                .iter()
+                .any(|hunk| hunk.has_suspect(&first_suspect))
+                .then_some(first_suspect);
+
+            Ok(InitialState {
+                blamed_file_blob,
+                hunks_to_blame,
+                out,
+                first_suspect,
+            })
+        }
+    }
 }

@@ -1,3 +1,4 @@
+use gix_blame::Start;
 use gix_hash::ObjectId;
 use gix_ref::bstr::BStr;
 
@@ -39,7 +40,7 @@ impl Repository {
 
         let outcome = gix_blame::file(
             &self.objects,
-            suspect.into(),
+            Start::Commit(suspect.into()),
             cache,
             &mut resource_cache,
             file_path,

@@ -190,6 +190,46 @@ pub struct BlamePathEntry {
     pub parent_index: usize,
 }
 
+/// The starting point for [`file()`](crate::file()).
+pub enum Start<'a> {
+    /// Start from a specific commit.
+    Commit(ObjectId),
+    /// Start from `contents`, then continue from `first_suspect`.
+    ///
+    /// Lines that only exist in `contents` are attributed to the null id,
+    /// i.e. "not committed yet".
+    ///
+    /// It is assumed that the data in `contents` is ready to be used for diffing, in particular
+    /// that it has been run through the configured worktree filters.
+    ///
+    /// See [Pipeline::convert_to_diffable()](gix_diff::blob::Pipeline::convert_to_diffable) for
+    /// how to obtain the contents of a worktree file by running them through the configured
+    /// worktree filters.
+    Contents {
+        /// The commit to start from after it has been compared to `contents`.
+        first_suspect: ObjectId,
+        /// The contents to start the blame from, typically read from the worktree.
+        // TODO(blame): add a type so rename tracking can avoid comparing blobs with symlinks.
+        //              Blob is hard-coded in at least once place.
+        contents: std::borrow::Cow<'a, [u8]>,
+    },
+}
+
+impl std::fmt::Debug for Start<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Start::Commit(id) => f.debug_tuple("Commit").field(id).finish(),
+            Start::Contents {
+                first_suspect,
+                contents,
+            } => f
+                .debug_struct("Contents")
+                .field("first_suspect", first_suspect)
+                .field("contents_len", &contents.len())
+                .finish(),
+        }
+    }
+}
 /// The outcome of [`file()`](crate::file()).
 #[derive(Debug, Default, Clone)]
 pub struct Outcome {
