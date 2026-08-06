@@ -73,6 +73,12 @@ mod name_partial {
         mktests!(chinese_utf8_san, "heads/你好吗".as_bytes(), "heads/你好吗");
         mktest!(parentheses_special_case_upload_pack, b"(null)");
         mktests!(parentheses_special_case_upload_pack_san, b"(null)", "(null)");
+        mktest!(an_at_sign_within_a_component, b"refs/heads/@");
+        mktests!(an_at_sign_within_a_component_san, b"refs/heads/@", "refs/heads/@");
+        mktest!(an_at_sign_as_its_own_component, b"@/x");
+        mktests!(an_at_sign_as_its_own_component_san, b"@/x", "@/x");
+        mktest!(an_at_sign_beside_other_characters, b"@@");
+        mktests!(an_at_sign_beside_other_characters_san, b"@@", "@@");
     }
 
     mod invalid {
@@ -93,6 +99,13 @@ mod name_partial {
 
         mktest!(refs_path_double_dot, b"refs/../somewhere", RefError::StartsWithDot);
         mktests!(refs_path_double_dot_san, b"refs/../somewhere", "refs/-/somewhere");
+        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. });
+        mktests!(a_lone_at_sign_san, b"@", "-");
+        // Sanitizing strips slashes first, so these collapse to a lone `@` and must be replaced
+        // as well - otherwise the output wouldn't pass `name_partial()`.
+        mktests!(a_lone_at_sign_leading_slash_san, b"/@", "-");
+        mktests!(a_lone_at_sign_trailing_slash_san, b"@/", "-");
+        mktests!(a_lone_at_sign_surrounded_by_slashes_san, b"//@//", "-");
         mktest!(
             refs_path_name_starts_with_dot,
             b".refs/somewhere",
@@ -289,6 +302,7 @@ mod name {
             b"refs/./still-inside-but-not-cool",
             "refs/-/still-inside-but-not-cool"
         );
+        mktest!(a_lone_at_sign, b"@", RefError::Reserved { .. });
         mktest!(capitalized_name_without_path, b"Main", RefError::SomeLowercase);
         mktests!(capitalized_name_without_path_san, b"Main", "Main");
         mktest!(lowercase_name_without_path, b"main", RefError::SomeLowercase);
