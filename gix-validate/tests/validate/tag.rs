@@ -22,7 +22,9 @@ mod name {
             };
         }
         mktest!(an_at_sign, b"@");
-        mktests!(an_at_sign_san, b"@", "@");
+        // `mktests!` sanitizes as a *reference* name, where a lone `@` means `HEAD` and is refused,
+        // so it has to be replaced. As a tag name it stays valid - `refs/tags/@` is a legal ref.
+        mktests!(an_at_sign_san, b"@", "-");
         mktest!(chinese_utf8, "你好吗".as_bytes());
         mktests!(chinese_utf8_san, "你好吗".as_bytes(), "你好吗");
         mktest!(non_text, "😅🙌".as_bytes());

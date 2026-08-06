@@ -24,6 +24,19 @@ fn whitespace() {
 }
 
 #[test]
+fn destination_cannot_be_a_lone_at_sign() {
+    for op in [Operation::Fetch, Operation::Push] {
+        assert!(
+            matches!(
+                try_parse("HEAD:@", op).expect_err("a lone '@' is not a valid destination"),
+                Error::ReferenceName(gix_validate::reference::name::Error::Reserved { name }) if name == "@"
+            ),
+            "{op:?} validates refspec destinations"
+        );
+    }
+}
+
+#[test]
 fn complex_patterns_with_more_than_one_asterisk() {
     // For one-sided refspecs, complex patterns are now allowed
     for op in [Operation::Fetch, Operation::Push] {

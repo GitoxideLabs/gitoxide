@@ -123,13 +123,22 @@ enum Mode {
 }
 
 fn validate(path: &BStr, mode: Mode) -> Result<Option<BString>, name::Error> {
-    let out = crate::tag::name_inner(
+    let mut out = crate::tag::name_inner(
         path,
         match mode {
             Mode::Complete | Mode::Partial => crate::tag::Mode::Validate,
             Mode::PartialSanitize => crate::tag::Mode::Sanitize,
         },
     )?;
+    // `@` alone is shorthand for `HEAD` in revspecs, so Git refuses it as a reference name.
+    // Git substitutes it with `-` when sanitizing it, which is what we do here too. Note that `@` stays
+    // valid as a component, which is why `refs/heads/@` and a tag named `@` are both fine.
+    if out.as_ref().map_or(path, |b| b.as_bstr()) == "@" {
+        match out.as_mut() {
+            Some(out) => out[0] = b'-',
+            None => return Err(name::Error::Reserved { name: path.into() }),
+        }
+    }
     if let Mode::Complete = mode {
         let input = out.as_ref().map_or(path, |b| b.as_bstr());
         let saw_slash = input.find_byte(b'/').is_some();
