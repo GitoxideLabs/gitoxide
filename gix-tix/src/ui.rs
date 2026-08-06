@@ -607,43 +607,45 @@ pub(crate) fn draw_with_worktree(
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
     footer_spans.extend([Span::raw(" · "), toggle("c changes", app.changes_mode.is_some())]);
-    if app.has_hidden_filter {
-        footer_spans.extend([
-            Span::raw(" · "),
-            toggle(
-                if app.show_hidden {
-                    "v hide hidden"
-                } else {
-                    "v show hidden"
-                },
-                app.show_hidden,
-            ),
-        ]);
-    }
-    footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
-    footer_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
-    let (name_label, names_visible) = match app.name_mode {
-        NameMode::All => ("n names", true),
-        NameMode::Author => ("n name", true),
-        NameMode::None => ("n name", false),
-    };
-    footer_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
-    for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
-        footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
-    }
-    footer_spans.push(Span::raw(" · "));
-    if app.preview_author_copy && app.manual_refresh {
-        footer_spans.push(toggle(
-            "R refresh",
-            matches!(app.state, State::Complete | State::Cancelled),
-        ));
-    } else {
+    if app.history_display_expanded {
+        footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
+        footer_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
+        let (name_label, names_visible) = match app.name_mode {
+            NameMode::All => ("n names", true),
+            NameMode::Author => ("n name", true),
+            NameMode::None => ("n name", false),
+        };
+        footer_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
+        for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
+            footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
+        }
         let ref_label = match app.ref_mode {
             RefMode::All => "r all refs",
             RefMode::Default => "r refs",
             RefMode::None => "r no refs",
         };
-        footer_spans.push(toggle(ref_label, app.ref_mode != RefMode::None));
+        footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
+        if app.has_hidden_filter {
+            footer_spans.extend([
+                Span::raw(" · "),
+                toggle(
+                    if app.show_hidden {
+                        "h hide hidden"
+                    } else {
+                        "h show hidden"
+                    },
+                    app.show_hidden,
+                ),
+            ]);
+        }
+    } else {
+        footer_spans.push(Span::raw(" · v view"));
+    }
+    if app.preview_author_copy && app.manual_refresh {
+        footer_spans.extend([
+            Span::raw(" · "),
+            toggle("R refresh", matches!(app.state, State::Complete | State::Cancelled)),
+        ]);
     }
     footer_spans.push(Span::raw(if app.preview_author_copy {
         " · Y copy author"
@@ -1612,6 +1614,7 @@ mod tests {
             ],
         });
         app.selected = None;
+        app.history_display_expanded = true;
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
 
         let mailmap =
@@ -1786,7 +1789,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · ↑↓/jk move · h/l pan · [ align · o commit · c changes · d date · e emails · n names · m mailmap · t trailers · r refs · y copy · q quit";
+        let footer_text = "#1 · ↑↓/jk move · h/l pan · [ align · o commit · c changes · v view · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -1817,12 +1820,6 @@ mod tests {
             .chars()
             .count();
         for x in commit..commit + "o commit".len() {
-            expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
-        }
-        let email = footer_text[..footer_text.find("e emails").expect("the email toggle is present")]
-            .chars()
-            .count();
-        for x in email..email + "e emails".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         terminal.backend().assert_buffer(&expected);
@@ -1864,6 +1861,7 @@ mod tests {
             "recovery information replaces the status until the next action"
         );
 
+        app.history_display_expanded = true;
         app.update(Action::ToggleMailmap);
         assert!(app.notice.is_none(), "the next action restores the normal status");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
@@ -1929,13 +1927,13 @@ mod tests {
         app.has_hidden_filter = true;
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
-            rendered_line(&terminal, 1).contains("v show hidden"),
+            rendered_line(&terminal, 1).contains("h show hidden"),
             "the footer advertises the configured hidden-history toggle"
         );
         app.show_hidden = true;
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
-            rendered_line(&terminal, 1).contains("v hide hidden"),
+            rendered_line(&terminal, 1).contains("h hide hidden"),
             "the footer reflects the unfiltered view"
         );
 
