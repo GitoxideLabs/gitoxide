@@ -76,8 +76,13 @@ use gix_error::{Exn, ResultExt};
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
 ///
-/// The forms understood are `now`, `today`, `yesterday`, and `<n> <unit> ago`. Future forms such
-/// as `1 hour from now` are not accepted.
+/// The forms understood are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
+/// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
+/// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
+/// as `1 hour ago`. The trailing `ago` is optional.
+///
+/// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
+/// now` is an hour in the past to it, and to this function.
 pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Exn<Error>> {
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
     // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same

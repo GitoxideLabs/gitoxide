@@ -14,12 +14,14 @@ struct Sample {
     seconds: SecondsSinceUnixEpoch,
 }
 
-/// Returns true if the pattern looks like a relative date of the form "N unit ago".
-/// Note: This only covers the relative dates tested in the baseline (e.g., "1 day ago").
-/// Other relative formats like "yesterday", "last week" etc. are not included in baseline
-/// testing because they would require additional handling in the baseline script.
+/// Returns true if the pattern is one of the relative dates recorded by `baseline_relative()`,
+/// which are the entries whose expected value depends on `GIT_TEST_DATE_NOW`.
+///
+/// `ago` is matched anywhere rather than as a suffix, because a separator other than a space is
+/// just as good to Git: `1.hour.ago` is a relative date too.
 fn is_relative_date(pattern: &str) -> bool {
-    pattern.ends_with(" ago") || pattern == "now" || pattern == "today" || pattern == "yesterday"
+    let pattern = pattern.trim().to_ascii_lowercase();
+    pattern.contains("ago") || matches!(pattern.as_str(), "now" | "today" | "yesterday" | "last week")
 }
 
 /// The fixed "now" timestamp used for testing relative dates.
