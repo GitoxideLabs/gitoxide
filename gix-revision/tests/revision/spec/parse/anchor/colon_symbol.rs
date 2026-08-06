@@ -87,6 +87,8 @@ fn various_valid_index_lookups_by_path_and_stage() {
         (":0:path", "path", 0),
         (":1:dir/path", "dir/path", 1),
         (":2:dir/path@{part-of-path}", "dir/path@{part-of-path}", 2),
+        // Git records conflicts as stages 1, 2 and 3, so `:3:` is the 'theirs' side.
+        (":3:dir/path", "dir/path", 3),
     ] {
         let rec = parse(spec);
 
