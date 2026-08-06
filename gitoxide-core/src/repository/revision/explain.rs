@@ -197,9 +197,10 @@ impl delegate::Navigate for Explain<'_> {
             path,
             stage,
             match stage {
-                0 => "base",
-                1 => "ours",
-                2 => "theirs",
+                0 => "unconflicted",
+                1 => "base",
+                2 => "ours",
+                3 => "theirs",
                 _ => unreachable!("BUG: parser assures of that"),
             }
         )

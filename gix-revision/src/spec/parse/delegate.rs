@@ -72,7 +72,8 @@ pub trait Navigate {
     /// or return `None` if it doesn't exist at this `stage`.
     /// Note that this implies no revision is needed and no anchor is set yet.
     ///
-    /// * `stage` ranges from 0 to 2, with 0 being the base, 1 being ours, 2 being theirs.
+    /// * `stage` ranges from 0 to 3, with 0 being unconflicted, 1 being the base, 2 being ours
+    ///   and 3 being theirs, just like the stages Git records in the index.
     /// * `path` without prefix is relative to the root of the repository, while prefixes like `./` and `../` make it
     ///   relative to the current working directory.
     fn index_lookup(&mut self, path: &BStr, stage: u8) -> Result<(), Exn>;

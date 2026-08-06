@@ -403,6 +403,11 @@ where
                 format!("Couldn't find index '{path}' stage 2", path = path.as_bstr())
             });
         }
+        [b':', b'3', b':', path @ ..] => {
+            return consume_all(delegate.index_lookup(path.as_bstr(), 3), || {
+                format!("Couldn't find index '{path}' stage 3", path = path.as_bstr())
+            });
+        }
         [b':', path @ ..] => {
             return consume_all(delegate.index_lookup(path.as_bstr(), 0), || {
                 format!("Couldn't find index '{path}' stage 0 (implicit)", path = path.as_bstr())
