@@ -115,9 +115,23 @@ fn exclamation_marks_must_be_escaped_or_error_unlike_gitignore() {
 }
 
 #[test]
-fn invalid_escapes_in_quotes_are_an_error() {
-    assert!(matches!(try_line(r#""\!hello""#), Err(parse::Error::Unquote(_))));
-    assert!(lenient_lines(r#""\!hello""#).is_empty());
+fn broken_quoting_falls_back_to_the_raw_text() {
+    assert_eq!(
+        line(r#""\!hello""#),
+        (pattern(r#""\!hello""#, Mode::NO_SUB_DIR, Some(1)), vec![], 1),
+        "an invalid escape leaves the quotes in place, so the leading `!` no longer negates, \
+         and the backslash goes on to escape it for the matcher"
+    );
+    assert_eq!(
+        line(r#""abc"#),
+        (pattern(r#""abc"#, Mode::NO_SUB_DIR, None), vec![], 1),
+        "so does a quote that is never closed"
+    );
+    assert_eq!(
+        line(r#""abc def"#),
+        (pattern(r#""abc"#, Mode::NO_SUB_DIR, None), vec![set("def")], 1),
+        "the raw text is then split on blanks like any unquoted pattern"
+    );
 }
 
 #[test]

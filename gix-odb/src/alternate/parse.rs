@@ -8,8 +8,6 @@ use gix_object::bstr::ByteSlice;
 pub enum Error {
     #[error("Could not obtain an object path for the alternate directory '{}'", String::from_utf8_lossy(.0))]
     PathConversion(Vec<u8>),
-    #[error("Could not unquote alternate path")]
-    Unquote(#[from] gix_quote::ansi_c::undo::Error),
 }
 
 pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
@@ -20,10 +18,11 @@ pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
             continue;
         }
         out.push(
-            gix_path::try_from_bstr(if line.starts_with(b"\"") {
-                gix_quote::ansi_c::undo(line)?.0
-            } else {
-                Cow::Borrowed(line)
+            // Broken quoting, like an entry that doesn't end with a quote, falls back to the raw
+            // line - a case that Git's alternates parsing in `odb.c` calls out in its own comment.
+            gix_path::try_from_bstr(match line.starts_with(b"\"").then(|| gix_quote::ansi_c::undo(line)) {
+                Some(Ok((unquoted, _consumed))) => unquoted,
+                _ => Cow::Borrowed(line),
             })
             .map_err(|_| Error::PathConversion(line.to_vec()))?
             .into_owned(),
