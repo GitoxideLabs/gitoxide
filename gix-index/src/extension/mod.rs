@@ -34,6 +34,23 @@ pub struct Tree {
     pub children: Vec<Tree>,
 }
 
+impl Tree {
+    /// Return true if this tree and all child trees are valid and their tree objects exist in `objects`.
+    pub fn is_fully_valid(&self, objects: &impl gix_object::Exists) -> bool {
+        self.num_entries.is_some()
+            && objects.exists(&self.id)
+            && self.children.iter().all(|child| child.is_fully_valid(objects))
+    }
+
+    /// Invalidate this tree and all child trees.
+    pub(crate) fn invalidate_recursively(&mut self) {
+        self.num_entries = None;
+        for child in &mut self.children {
+            child.invalidate_recursively();
+        }
+    }
+}
+
 /// The link extension to track a shared index.
 #[derive(Clone)]
 pub struct Link {

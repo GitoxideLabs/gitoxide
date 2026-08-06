@@ -92,7 +92,7 @@ impl Outcome {
             IndexPersistedOrInMemory::InMemory(index) => index.clone(),
         };
 
-        let entries = index.entries_mut();
+        let entries = index.entries_mut_keep_tree_cache();
         for (entry_index, change) in changes {
             let entry = &mut entries[entry_index];
             match change {
