@@ -538,6 +538,7 @@ pub(crate) fn draw_with_worktree(
             } else {
                 spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
             }
+            spans.push(Span::raw(" · y copy"));
             spans.push(Span::raw(match app.changes_mode {
                 Some(ChangesMode::Both) => " · c tree",
                 Some(ChangesMode::Tree) => " · c to hide",
@@ -2654,8 +2655,12 @@ mod tests {
         assert!(rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"));
 
         assert!(
-            rendered_line(&terminal, 14).contains("Enter diff · c tree"),
+            rendered_line(&terminal, 14).contains("Enter diff · y copy · c tree"),
             "the changes pane advertises the next cycle mode"
+        );
+        assert!(
+            rendered_line(&terminal, 14).contains("y copy"),
+            "the changes pane advertises path copying"
         );
 
         app.update(Action::MoveUp);
@@ -2734,8 +2739,9 @@ mod tests {
             "parent context no longer crowds the aggregate border"
         );
         assert!(
-            rendered_line(&terminal, 14)
-                .contains("vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · c tree"),
+            rendered_line(&terminal, 14).contains(
+                "vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · y copy · c tree"
+            ),
             "merge diffs keep parent controls alongside navigation"
         );
         let parent = rendered_line(&terminal, 1);

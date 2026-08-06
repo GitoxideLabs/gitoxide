@@ -281,6 +281,7 @@ pub(crate) enum Action {
     VerifySignatures,
     Cancel,
     Copy,
+    CopyPath(BString),
     CopyAuthor,
     PreviewAuthorCopy(bool),
     ForceQuit,
@@ -291,6 +292,7 @@ pub(crate) enum Action {
 pub(crate) enum Effect {
     Cancel,
     CopyId(ObjectId),
+    CopyPath(BString),
     CopyAuthor(&'static Author),
     Reload(bool),
     OpenDiff(ChangePane, usize),
@@ -772,6 +774,7 @@ impl App {
                     return vec![Effect::CopyId(id)];
                 }
             }
+            Action::CopyPath(path) => return vec![Effect::CopyPath(path)],
             Action::CopyAuthor => {
                 if let Some(author) = self
                     .selected
@@ -2589,6 +2592,10 @@ mod tests {
         app.extend_commits(vec![row(7)]);
 
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(
+            app.update(Action::CopyPath("dir/file".into())),
+            vec![Effect::CopyPath("dir/file".into())]
+        );
         assert_eq!(app.update(Action::CopyAuthor), vec![Effect::CopyAuthor(row(7).author)]);
         complete(&mut app);
         assert_eq!(app.state, State::Complete);
