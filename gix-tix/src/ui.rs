@@ -207,9 +207,20 @@ pub(crate) fn draw_with_worktree(
         app.changes_visible() && app.changes_mode == Some(ChangesMode::Both) && worktree_changes.is_some();
     let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
     let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
+    let commit_pane = app.show_commit.then(|| {
+        let width = 80.min(full_body.width / 2);
+        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
+        body.width = body.width.min(commits.width);
+        let mut content = message.inner(Margin {
+            horizontal: 2,
+            vertical: 0,
+        });
+        content.height = content.height.saturating_sub(1);
+        (message, content)
+    });
     let pane_height = |changes: &Changes| u16::try_from(changes.paths.len()).unwrap_or(u16::MAX).saturating_add(2);
     let (changes_layout, changes_panes, _) = changes_pane_areas(
-        full_body,
+        body,
         frame.area().height / 2,
         tree_visible.then(|| {
             (
@@ -236,18 +247,6 @@ pub(crate) fn draw_with_worktree(
                 && worktree_changes.is_some_and(Changes::is_visible),
         );
     }
-    let commit_pane = app.show_commit.then(|| {
-        let width = 80.min(full_body.width / 2);
-        let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
-        body.width = body.width.min(commits.width);
-        (
-            message,
-            message.inner(Margin {
-                horizontal: 2,
-                vertical: 1,
-            }),
-        )
-    });
     app.viewport_rows = changes_panes
         .iter()
         .map(|pane| pane.outer.y.saturating_sub(body.y))
@@ -559,6 +558,7 @@ pub(crate) fn draw_with_worktree(
     }
     if let Some((outer, area)) = commit_pane {
         frame.render_widget(Clear, outer);
+        frame.render_widget(Block::new().borders(Borders::LEFT), outer);
         let max_offset = if let Some(message) = commit_message {
             let notes = app
                 .selected
@@ -2155,14 +2155,19 @@ mod tests {
             );
         })?;
         assert_eq!(
-            terminal.backend().buffer()[(62, 1)].symbol(),
+            terminal.backend().buffer()[(62, 0)].symbol(),
             "s",
-            "the pane is capped at half width with two columns of horizontal margin"
+            "the title starts on the first pane row after two columns of horizontal margin"
         );
         assert_eq!(
-            terminal.backend().buffer()[(62, 3)].symbol(),
+            terminal.backend().buffer()[(60, 0)].symbol(),
+            "│",
+            "the pane has a left border"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(62, 2)].symbol(),
             "b",
-            "vertical margin leaves the full commit body intact"
+            "the commit body remains separated from its title"
         );
         assert!(
             !footer_is_dim(&terminal, "o commit"),
@@ -2190,7 +2195,7 @@ mod tests {
             );
         })?;
         assert_eq!(
-            wide_terminal.backend().buffer()[(122, 1)].symbol(),
+            wide_terminal.backend().buffer()[(122, 0)].symbol(),
             "s",
             "the pane remains eighty columns wide on a wide screen"
         );
@@ -2717,21 +2722,62 @@ mod tests {
         );
 
         app.update(Action::ToggleCommit);
+        let worktree_changes = Changes::default();
         terminal.draw(|frame| {
-            super::draw(
+            super::draw_with_worktree(
                 frame,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
                 Some(b"subject".as_bstr()),
                 Some(&changes),
+                Some(&worktree_changes),
             );
         })?;
         assert_eq!(
-            terminal.backend().buffer()[(62, 7)].symbol(),
-            " ",
-            "the right commit pane is rendered over the bottom changes pane"
+            app.changes_layout,
+            ChangesLayout::Stacked,
+            "both change blocks adapt to the width left by the commit pane"
         );
+        assert!(
+            rendered_line(&terminal, 7)
+                .chars()
+                .take(60)
+                .collect::<String>()
+                .contains("Worktree")
+        );
+        assert!(
+            rendered_line(&terminal, 9)
+                .chars()
+                .take(60)
+                .collect::<String>()
+                .contains("Tree")
+        );
+        assert_eq!(terminal.backend().buffer()[(60, 7)].symbol(), "│");
+        assert_eq!(
+            app.viewport_rows, 7,
+            "history remains bounded above the highest overlay"
+        );
+        assert!(rendered_line(&terminal, 0).starts_with('>'));
+
+        let mut wide_terminal = Terminal::new(TestBackend::new(240, 16))?;
+        wide_terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                Some(b"subject".as_bstr()),
+                Some(&changes),
+                Some(&worktree_changes),
+            );
+        })?;
+        assert_eq!(
+            app.changes_layout,
+            ChangesLayout::SideBySide,
+            "sufficient remaining width still permits side-by-side changes"
+        );
+        assert_eq!(wide_terminal.backend().buffer()[(160, 7)].symbol(), "│");
         Ok(())
     }
 
