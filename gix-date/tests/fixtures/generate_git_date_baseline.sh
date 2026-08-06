@@ -130,6 +130,13 @@ baseline '946684800 +0000' 'RAW'
 baseline '1466000000 +0200' 'RAW'  # from git t0006
 baseline '1466000000 -0200' 'RAW'  # from git t0006
 
+# Git accepts a leading `@` before either of the two forms above. Re-formatting is not checked,
+# as the `@` isn't reproduced.
+baseline '@1234567890' ''
+baseline '@100000000' ''
+baseline '@1660874655 +0800' ''
+baseline '@1466000000 -0200' ''
+
 # Note: Git does not support negative timestamps through --type=expiry-date
 # gix-date does support them, but they can't be tested via the baseline.
 
