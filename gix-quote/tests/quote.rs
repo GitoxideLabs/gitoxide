@@ -82,6 +82,16 @@ mod ansi_c {
         }
 
         #[test]
+        fn a_quote_that_is_never_closed_is_an_error() {
+            for unterminated in [r#"""#, r#""abc"#, r#""abc def"#, r#""abc\"#, r#""\""#] {
+                assert!(
+                    ansi_c::undo(unterminated.into()).is_err(),
+                    "{unterminated:?} should not parse, just like in `unquote_c_style()`"
+                );
+            }
+        }
+
+        #[test]
         fn fuzzed() {
             for invalid in ["\"\\", "\"Q\u{2}QT\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\0\0\\"] {
                 assert!(ansi_c::undo(invalid.into()).is_err());
