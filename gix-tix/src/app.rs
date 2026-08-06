@@ -353,6 +353,7 @@ pub(crate) struct App {
     horizontal_max: usize,
     follow_tail: bool,
     reload_selection: Option<ObjectId>,
+    select_top_after_refresh: bool,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
     pub(crate) manual_refresh: bool,
@@ -416,6 +417,7 @@ impl App {
             horizontal_max: 0,
             follow_tail: false,
             reload_selection: None,
+            select_top_after_refresh: false,
             signature_failures: 0,
             signature_verification_running: false,
             manual_refresh: false,
@@ -826,6 +828,7 @@ impl App {
         commits: LoadedCommits,
         view_tips: &[ObjectId],
         hidden_tips: &[ObjectId],
+        select_top: bool,
     ) -> Option<Vec<CommitRow>> {
         drop(self.store_commits(commits));
 
@@ -849,6 +852,7 @@ impl App {
             .filter_map(|id| self.all_rows.get(id).cloned())
             .collect();
         self.pending_hidden_rows = Some(boundary);
+        self.select_top_after_refresh = select_top;
         self.state = State::Computing;
         self.follow_tail = false;
         Some(rows)
@@ -872,7 +876,9 @@ impl App {
         if self.state != State::Computing {
             return;
         }
-        let selected = self.selected.map(|index| self.rows[index].id);
+        let selected = (!std::mem::take(&mut self.select_top_after_refresh))
+            .then(|| self.selected.map(|index| self.rows[index].id))
+            .flatten();
         let metadata: HashMap<_, _> = if rows.iter().any(|row| !row.metadata_loaded) {
             self.rows
                 .iter()
@@ -924,6 +930,7 @@ impl App {
     #[cfg(test)]
     pub(crate) fn reload(&mut self, show_hidden: bool) {
         self.reload_selection = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        self.select_top_after_refresh = false;
         self.rows = Vec::new();
         self.all_rows.clear();
         self.all_order.clear();
@@ -1717,7 +1724,7 @@ mod tests {
         complete(&mut app);
 
         let rows = app
-            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[])
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], false)
             .expect("a refresh computes lanes");
         assert_eq!(
             app.rows.len(),
@@ -1730,16 +1737,21 @@ mod tests {
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(4), id(3), id(2), id(1)]
         );
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "ordinary refreshes preserve the selected commit"
+        );
 
         let rows = app
-            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[])
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[], false)
             .expect("a rewind reprojects cached topology");
         let (rows, graph, time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, time);
         assert_eq!(app.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [id(2), id(1)]);
 
         let rows = app
-            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(4)], &[])
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(4)], &[], false)
             .expect("a fast-forward to retained commits needs no new objects");
         let (rows, graph, time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, time);
@@ -1747,6 +1759,25 @@ mod tests {
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(4), id(3), id(2), id(1)]
         );
+    }
+
+    #[test]
+    fn filesystem_refresh_selects_the_first_selectable_row() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], true)
+            .expect("a filesystem refresh computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(app.selected, app.first_selectable());
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
     }
 
     #[test]
