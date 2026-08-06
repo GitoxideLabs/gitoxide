@@ -1046,6 +1046,12 @@ fn event_loop(
         let Some(action) = action else {
             continue;
         };
+        let action = copy_selected_path_action(
+            action,
+            &app,
+            tree_changes.as_ref().map(|(_, _, changes)| changes),
+            worktree_changes.as_ref().map(|(_, changes)| changes),
+        );
         dirty = true;
         urgent |= !throttles_draw;
         let previous_changes_mode = app.changes_mode;
@@ -1081,6 +1087,7 @@ fn event_loop(
                     terminal.backend_mut(),
                     CopyToClipboard::to_clipboard_from(id.to_hex().to_string())
                 )?,
+                Effect::CopyPath(path) => execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(path))?,
                 Effect::CopyAuthor(author) => {
                     let actor = actor_bytes(author);
                     execute!(terminal.backend_mut(), CopyToClipboard::to_clipboard_from(actor))?;
@@ -2500,6 +2507,25 @@ fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) ->
     }
 }
 
+fn copy_selected_path_action(
+    action: Action,
+    app: &App,
+    tree_changes: Option<&Changes>,
+    worktree_changes: Option<&Changes>,
+) -> Action {
+    if action != Action::Copy {
+        return action;
+    }
+    let (pane, changes) = match app.changes_focus {
+        Some(pane @ ChangePane::Tree) => (pane, tree_changes),
+        Some(pane @ ChangePane::Worktree) => (pane, worktree_changes),
+        None => return action,
+    };
+    changes
+        .and_then(|changes| changes.paths.get(app.changes(pane).selected))
+        .map_or(action, |change| Action::CopyPath(change.path.clone()))
+}
+
 fn repeats_viewport(action: &Action) -> bool {
     matches!(
         action,
@@ -2536,6 +2562,38 @@ fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_the_selected_path_from_the_focused_changes_block() {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.set_changes_bounds(ChangePane::Tree, 2, 2, 80, 0);
+        drop(app.update(Action::MoveDown));
+        let changes = Changes {
+            paths: ["first", "dir/second"]
+                .into_iter()
+                .map(|path| app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: path.into(),
+                    lines: None,
+                })
+                .collect(),
+            ..Changes::default()
+        };
+
+        assert_eq!(
+            copy_selected_path_action(Action::Copy, &app, Some(&changes), None),
+            Action::CopyPath("dir/second".into())
+        );
+        app.changes_focus = None;
+        assert_eq!(
+            copy_selected_path_action(Action::Copy, &app, Some(&changes), None),
+            Action::Copy,
+            "history retains commit-id copying"
+        );
+    }
 
     #[test]
     fn loads_commit_messages_from_an_existing_repository() -> gix_testtools::Result {
