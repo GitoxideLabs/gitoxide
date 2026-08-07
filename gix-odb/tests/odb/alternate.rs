@@ -5,6 +5,37 @@ use std::{
 
 use gix_odb::alternate;
 
+mod parse {
+    use std::path::PathBuf;
+
+    use gix_odb::alternate;
+
+    #[test]
+    fn a_quote_that_is_never_closed_is_used_as_a_literal_path() {
+        assert_eq!(
+            alternate::parse(br#""unterminated"#).expect("no path conversion issue"),
+            vec![PathBuf::from(r#""unterminated"#)],
+            "broken quoting falls back to the raw line"
+        );
+    }
+
+    #[test]
+    fn a_properly_quoted_path_is_unquoted() {
+        assert_eq!(
+            alternate::parse(br#""quoted\tpath""#).expect("no path conversion issue"),
+            vec![PathBuf::from("quoted\tpath")]
+        );
+    }
+
+    #[test]
+    fn a_quoted_path_may_contain_the_line_separator() {
+        assert_eq!(
+            alternate::parse(b"\"quoted\npath\"\nnext").expect("no path conversion issue"),
+            vec![PathBuf::from("quoted\npath"), PathBuf::from("next")],
+            "Git looks for a closing quote before treating a newline as the next separator"
+        );
+    }
+}
 pub fn alternate(
     objects_at: impl Into<PathBuf>,
     objects_to: impl Into<PathBuf>,
