@@ -26,8 +26,6 @@ mod error {
         AttributeName { line_number: usize, attribute: BString },
         #[error("Macro in line {line_number} has an invalid name: {macro_name}")]
         MacroName { line_number: usize, macro_name: BString },
-        #[error("Could not unquote attributes line")]
-        Unquote(#[from] gix_quote::ansi_c::undo::Error),
     }
 }
 pub use error::Error;
@@ -122,16 +120,16 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
         return None;
     }
 
-    let (line, attrs): (Cow<'_, _>, _) = if line.starts_with(b"\"") {
-        let (unquoted, consumed) = match gix_quote::ansi_c::undo(line) {
-            Ok(res) => res,
-            Err(err) => return Some(Err(err.into())),
-        };
-        (unquoted, &line[consumed..])
-    } else {
-        line.find_byteset(BLANKS)
+    let unquoted = line
+        .starts_with(b"\"")
+        .then(|| gix_quote::ansi_c::undo(line).ok())
+        .flatten();
+    let (line, attrs): (Cow<'_, _>, _) = match unquoted {
+        Some((unquoted, consumed)) => (unquoted, &line[consumed..]),
+        None => line
+            .find_byteset(BLANKS)
             .map(|pos| (line[..pos].as_bstr().into(), line[pos..].as_bstr()))
-            .unwrap_or((line.into(), [].as_bstr()))
+            .unwrap_or((line.into(), [].as_bstr())),
     };
 
     let kind_res = match line.strip_prefix(b"[attr]").filter(|name| !name.is_empty()) {

@@ -1,33 +1,51 @@
-use std::{borrow::Cow, path::PathBuf};
-
-use gix_object::bstr::ByteSlice;
-
 /// Returned as part of [`crate::alternate::Error::Parse`]
 #[derive(thiserror::Error, Debug)]
 #[expect(missing_docs)]
 pub enum Error {
     #[error("Could not obtain an object path for the alternate directory '{}'", String::from_utf8_lossy(.0))]
     PathConversion(Vec<u8>),
-    #[error("Could not unquote alternate path")]
-    Unquote(#[from] gix_quote::ansi_c::undo::Error),
 }
 
-pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
-    let mut out = Vec::new();
-    for line in input.split(|b| *b == b'\n') {
-        let line = line.as_bstr();
-        if line.is_empty() || line.starts_with(b"#") {
-            continue;
-        }
-        out.push(
-            gix_path::try_from_bstr(if line.starts_with(b"\"") {
-                gix_quote::ansi_c::undo(line)?.0
+pub(super) mod function {
+    use super::Error;
+    use std::{borrow::Cow, path::PathBuf};
+
+    use gix_object::bstr::ByteSlice;
+
+    /// Parse the raw contents of an `objects/info/alternates` file from `input` into paths.
+    ///
+    /// Empty entries and comments are ignored. Entries beginning with `"` use Git's C-style quoting,
+    /// which permits literal newlines in paths. Invalid quoting falls back to the raw entry.
+    pub fn parse(mut input: &[u8]) -> Result<Vec<PathBuf>, Error> {
+        let mut out = Vec::new();
+        while !input.is_empty() {
+            let entry = input.as_bstr();
+            let end_of_line = || entry.find_byte(b'\n').unwrap_or(entry.len());
+            let (path, consumed) = if entry.starts_with(b"#") {
+                (None, end_of_line())
             } else {
-                Cow::Borrowed(line)
-            })
-            .map_err(|_| Error::PathConversion(line.to_vec()))?
-            .into_owned(),
-        );
+                // Like Git, try unquoting before treating a newline as the next separator.
+                match entry.starts_with(b"\"").then(|| gix_quote::ansi_c::undo(entry)) {
+                    Some(Ok((unquoted, consumed))) => (Some(unquoted), consumed),
+                    _ => {
+                        let consumed = end_of_line();
+                        (Some(Cow::Borrowed(entry[..consumed].as_bstr())), consumed)
+                    }
+                }
+            };
+            let original = &entry[..consumed];
+            let maybe_nl = usize::from(consumed < input.len());
+            input = &input[consumed + maybe_nl..];
+
+            let Some(path) = path.filter(|path| !path.is_empty()) else {
+                continue;
+            };
+            out.push(
+                gix_path::try_from_bstr(path)
+                    .map_err(|_| Error::PathConversion(original.to_vec()))?
+                    .into_owned(),
+            );
+        }
+        Ok(out)
     }
-    Ok(out)
 }

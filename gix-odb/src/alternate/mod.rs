@@ -22,6 +22,7 @@ use gix_path::realpath::MAX_SYMLINKS;
 
 ///
 pub mod parse;
+pub use parse::function::parse;
 
 /// Returned by [`resolve()`]
 #[derive(thiserror::Error, Debug)]
@@ -67,7 +68,7 @@ pub fn resolve(objects_directory: PathBuf, current_dir: &std::path::Path) -> Res
         seen.push((dir_canonicalized, parent_idx));
         match fs::read(dir.join("info").join("alternates")) {
             Ok(input) => {
-                for path in parse::content(&input)?.into_iter().rev() {
+                for path in parse(&input)?.into_iter().rev() {
                     dirs.push((Some(idx), objects_directory.join(path)));
                 }
             }
