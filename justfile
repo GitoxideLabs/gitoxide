@@ -158,10 +158,15 @@ unit-tests:
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
     cargo nextest run -p gix-testtools --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features sha1,tar_gz --no-fail-fast
-    cargo nextest run -p gix-archive --no-default-features --features sha1,zip --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar_gz --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,zip --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --features sha256 --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256 --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,tar --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,tar_gz --no-fail-fast
+    env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-archive --no-default-features --features sha256,zip --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-diff --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-diff --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-status --no-fail-fast
