@@ -220,6 +220,14 @@ impl<'repo> Commit<'repo> {
     {
         gix_object::CommitRefIter::signature(&self.data, self.id.kind())
     }
+
+    /// Verify this commit's signature using Git-compatible configuration and external verification programs.
+    #[cfg(feature = "command")]
+    pub fn verify_signature(
+        &self,
+    ) -> Result<Option<crate::commit::signature::Outcome>, crate::commit::signature::Error> {
+        crate::commit::signature::verify(self)
+    }
 }
 
 impl std::fmt::Debug for Commit<'_> {

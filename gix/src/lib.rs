@@ -466,6 +466,10 @@ pub mod config;
 pub mod mailmap;
 
 ///
+#[cfg(feature = "notes")]
+pub mod note;
+
+///
 pub mod worktree;
 
 pub mod revision;

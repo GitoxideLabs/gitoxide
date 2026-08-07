@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ops::Range,
     time::{Duration, Instant},
 };
@@ -19,6 +19,8 @@ pub(crate) struct Commit<T> {
     pub attributions: Range<usize>,
     pub title: T,
     pub metadata_loaded: bool,
+    pub has_agent_marker: bool,
+    pub signature: SignatureState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +29,135 @@ pub(crate) struct Metadata<T> {
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
+    pub has_agent_marker: bool,
+    pub signature: SignatureState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SignatureState {
+    #[default]
+    Unsigned,
+    Unverified,
+    Verifying,
+    Verified,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+    Unmerged,
+}
+
+impl ChangeKind {
+    pub(crate) fn letter(self) -> char {
+        match self {
+            ChangeKind::Added => 'A',
+            ChangeKind::Modified => 'M',
+            ChangeKind::Deleted => 'D',
+            ChangeKind::Renamed => 'R',
+            ChangeKind::Copied => 'C',
+            ChangeKind::TypeChanged => 'T',
+            ChangeKind::Unmerged => 'U',
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangesMode {
+    #[default]
+    Tree,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ChangePane {
+    Tree,
+    Worktree,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangesLayout {
+    #[default]
+    SideBySide,
+    Stacked,
+}
+
+#[derive(Debug)]
+pub(crate) struct ChangesView {
+    pub selected: usize,
+    pub offset: usize,
+    pub horizontal_offset: usize,
+    pub error: Option<String>,
+    page: usize,
+    max: usize,
+    horizontal_page: usize,
+    horizontal_max: usize,
+}
+
+impl Default for ChangesView {
+    fn default() -> Self {
+        Self {
+            selected: 0,
+            offset: 0,
+            horizontal_offset: 0,
+            error: None,
+            page: 1,
+            max: 0,
+            horizontal_page: 1,
+            horizontal_max: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum ChangeGroup {
+    #[default]
+    Tree,
+    Staged,
+    Unstaged,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PathChange {
+    pub kind: ChangeKind,
+    pub group: ChangeGroup,
+    pub source: Option<BString>,
+    pub path: BString,
+    pub lines: Option<(u32, u32)>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Changes {
+    pub parent: Option<ComparedParent>,
+    pub paths: Vec<PathChange>,
+    pub diffs: Vec<crate::FileChange>,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+}
+
+impl Changes {
+    pub(crate) fn is_visible(&self) -> bool {
+        self.parent.is_some() || !self.paths.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ComparedParent {
+    pub index: usize,
+    pub total: usize,
+    pub id: ObjectId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SelectionRelation {
+    Tracking { ahead: usize, behind: usize },
+    Visible(usize),
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -41,6 +172,13 @@ impl Author {
             .iter()
             .any(|candidate| self.email.eq_ignore_ascii_case(candidate))
     }
+
+    pub fn is_github_noreply(&self) -> bool {
+        let suffix = b"@users.noreply.github.com";
+        self.email
+            .get(self.email.len().saturating_sub(suffix.len())..)
+            .is_some_and(|email| email.eq_ignore_ascii_case(suffix))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -51,15 +189,7 @@ pub(crate) struct Attribution {
 
 impl Attribution {
     pub fn is_agent(&self) -> bool {
-        self.author.is_bot()
-            || self.kind == AttributionKind::Assisted
-                && [b"opus".as_slice(), b"gpt".as_slice()].iter().any(|name| {
-                    self.author
-                        .name
-                        .get(..name.len())
-                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
-                        && self.author.name.get(name.len()).is_none_or(u8::is_ascii_whitespace)
-                })
+        self.author.is_bot() || self.kind == AttributionKind::Assisted
     }
 }
 
@@ -135,32 +265,50 @@ pub(crate) enum Action {
     Last,
     ToggleDate,
     ToggleName,
+    ToggleEmail,
     ToggleTrailers,
     ToggleMailmap,
     ToggleRefs,
+    Refresh,
     ToggleHidden,
+    ToggleHistoryDisplay,
     ToggleAlign,
     ToggleCommit,
+    ToggleChanges,
+    ToggleChangesFocus,
+    CycleChangesParent,
+    OpenDiff,
+    VerifySignatures,
     Cancel,
     Copy,
+    CopyPath(BString),
     CopyAuthor,
     PreviewAuthorCopy(bool),
+    ForceQuit,
     Quit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Effect {
     Cancel,
     CopyId(ObjectId),
+    CopyPath(BString),
     CopyAuthor(&'static Author),
     Reload(bool),
+    OpenDiff(ChangePane, usize),
+    VerifySignatures(Vec<ObjectId>),
     Quit,
 }
 
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<CommitRow>,
+    all_rows: HashMap<ObjectId, CommitRow>,
+    all_order: Vec<ObjectId>,
+    hidden_rows: HashSet<ObjectId>,
+    pending_hidden_rows: Option<HashSet<ObjectId>>,
     titles: Vec<u8>,
+    notes: HashMap<ObjectId, Vec<BString>>,
     graph: Option<Graph>,
     attributions: Vec<Attribution>,
     #[cfg(test)]
@@ -172,6 +320,7 @@ pub(crate) struct App {
     pub lane_time: Option<Duration>,
     pub show_committer_date: bool,
     pub name_mode: NameMode,
+    pub show_emails: bool,
     pub show_trailers: bool,
     pub use_mailmap: bool,
     pub ref_mode: RefMode,
@@ -179,22 +328,52 @@ pub(crate) struct App {
     pub show_hidden: bool,
     pub align_metadata: bool,
     pub show_commit: bool,
+    pub changes_mode: Option<ChangesMode>,
+    worktree_changes_available: bool,
+    pub(crate) changes_suppressed: bool,
+    pub(crate) changes_focus: Option<ChangePane>,
+    pub(crate) changes_layout: ChangesLayout,
+    pub(crate) tree_changes_visible: bool,
+    pub(crate) worktree_changes_visible: bool,
+    pub(crate) tree_changes: ChangesView,
+    pub(crate) worktree_changes: ChangesView,
+    pub(crate) changes_parent: usize,
+    pub(crate) commit_offset: usize,
+    commit_page: usize,
+    commit_max: usize,
     pub(crate) show_selection_tail: bool,
     pub inline: bool,
     pub preview_author_copy: bool,
+    reachability_anchor: Option<ObjectId>,
+    junction_parent: Option<usize>,
+    reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
+    pub(crate) focus_feedback: Option<&'static str>,
+    pub(crate) notice: Option<String>,
+    pub(crate) history_display_expanded: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
     horizontal_max: usize,
     follow_tail: bool,
+    reload_selection: Option<ObjectId>,
+    select_top_after_refresh: bool,
+    pub(crate) signature_failures: usize,
+    signature_verification_running: bool,
+    pub(crate) manual_refresh: bool,
+    pub(crate) selection_relation: Option<SelectionRelation>,
 }
 
 impl App {
     pub fn new(viewport_rows: usize) -> Self {
         App {
             rows: Vec::new(),
+            all_rows: HashMap::new(),
+            all_order: Vec::new(),
+            hidden_rows: HashSet::new(),
+            pending_hidden_rows: None,
             titles: Vec::new(),
+            notes: HashMap::new(),
             graph: None,
             attributions: Vec::new(),
             #[cfg(test)]
@@ -206,6 +385,7 @@ impl App {
             lane_time: None,
             show_committer_date: true,
             name_mode: NameMode::All,
+            show_emails: false,
             show_trailers: true,
             use_mailmap: true,
             ref_mode: RefMode::Default,
@@ -213,49 +393,122 @@ impl App {
             show_hidden: false,
             align_metadata: true,
             show_commit: false,
+            changes_mode: Some(ChangesMode::Both),
+            worktree_changes_available: true,
+            changes_suppressed: false,
+            changes_focus: None,
+            changes_layout: ChangesLayout::SideBySide,
+            tree_changes_visible: false,
+            worktree_changes_visible: false,
+            tree_changes: ChangesView::default(),
+            worktree_changes: ChangesView::default(),
+            changes_parent: 0,
+            commit_offset: 0,
+            commit_page: 1,
+            commit_max: 0,
             show_selection_tail: true,
             inline: false,
             preview_author_copy: false,
+            reachability_anchor: None,
+            junction_parent: None,
+            reachable_rows: None,
             copy_feedback: None,
+            focus_feedback: None,
+            notice: None,
+            history_display_expanded: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
             horizontal_max: 0,
             follow_tail: false,
+            reload_selection: None,
+            select_top_after_refresh: false,
+            signature_failures: 0,
+            signature_verification_running: false,
+            manual_refresh: false,
+            selection_relation: None,
+        }
+    }
+
+    pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
+        self.has_hidden_filter = present;
+        if present {
+            self.ref_mode = RefMode::None;
         }
     }
 
     pub(crate) fn extend_commits(&mut self, commits: impl Into<LoadedCommits>) {
-        let LoadedCommits { rows, attributions } = commits.into();
-        if self.state != State::Loading || rows.is_empty() {
+        let commits = commits.into();
+        if self.state != State::Loading || commits.rows.is_empty() {
             return;
         }
+        let rows = self.store_commits(commits);
         let was_empty = self.rows.is_empty();
-        self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
-        let attribution_base = self.attributions.len();
-        self.attributions.extend(attributions);
         self.rows.reserve(rows.len());
         for row in rows {
-            let start = self.titles.len();
-            self.titles.extend_from_slice(&row.title);
-            self.rows.push(Commit {
-                id: row.id,
-                parent_ids: row.parent_ids,
-                committer_time: row.committer_time,
-                author: row.author,
-                attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
-                title: start..self.titles.len(),
-                metadata_loaded: row.metadata_loaded,
-            });
+            self.rows.push(row);
         }
         if was_empty {
             self.estimated_lane_width = estimate_lane_width(&self.rows[..self.viewport_rows.min(self.rows.len())]);
-            self.selected = Some(0);
+            self.selected = self.first_selectable();
             self.ensure_visible();
         } else if self.follow_tail {
-            self.selected = Some(self.rows.len() - 1);
+            self.selected = self.last_selectable();
             self.ensure_visible();
         }
+        if let Some(index) = self
+            .reload_selection
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+        {
+            if !self.is_row_hidden(index) {
+                self.selected = Some(index);
+            }
+            self.reload_selection = None;
+            self.ensure_visible();
+        }
+        if self.reachability_anchor.is_some() {
+            self.compute_reachable_rows();
+        }
+    }
+
+    fn store_commits(&mut self, commits: LoadedCommits) -> Vec<CommitRow> {
+        let LoadedCommits { rows, attributions } = commits;
+        self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
+        let attribution_base = self.attributions.len();
+        self.attributions.extend(attributions);
+        rows.into_iter()
+            .map(|row| {
+                let start = self.titles.len();
+                self.titles.extend_from_slice(&row.title);
+                let row = Commit {
+                    id: row.id,
+                    parent_ids: row.parent_ids,
+                    committer_time: row.committer_time,
+                    author: row.author,
+                    attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
+                    title: start..self.titles.len(),
+                    metadata_loaded: row.metadata_loaded,
+                    has_agent_marker: row.has_agent_marker,
+                    signature: row.signature,
+                };
+                if self.all_rows.insert(row.id, row.clone()).is_none() {
+                    self.all_order.push(row.id);
+                }
+                row
+            })
+            .collect()
+    }
+
+    pub(crate) fn extend_hidden_commits(&mut self, commits: impl Into<LoadedCommits>) {
+        let commits = commits.into();
+        self.hidden_rows.extend(commits.rows.iter().map(|row| row.id));
+        self.extend_commits(commits);
+    }
+
+    pub(crate) fn is_row_hidden(&self, index: usize) -> bool {
+        self.rows
+            .get(index)
+            .is_some_and(|row| self.hidden_rows.contains(&row.id))
     }
 
     pub(crate) fn set_metadata(
@@ -273,6 +526,8 @@ impl App {
             author,
             attributions,
             title,
+            has_agent_marker,
+            signature,
         } = metadata;
         let title_start = self.titles.len();
         self.titles.extend_from_slice(&title);
@@ -283,11 +538,26 @@ impl App {
         row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
         row.title = title_start..self.titles.len();
         row.metadata_loaded = true;
+        row.has_agent_marker = has_agent_marker;
+        row.signature = signature;
+        self.all_rows.insert(row.id, row.clone());
     }
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
         debug_assert!(row.metadata_loaded, "visible rows have metadata");
         self.titles[row.title.clone()].as_bstr()
+    }
+
+    pub(crate) fn notes_loaded(&self, id: ObjectId) -> bool {
+        self.notes.contains_key(&id)
+    }
+
+    pub(crate) fn set_notes(&mut self, id: ObjectId, notes: Vec<BString>) {
+        self.notes.insert(id, notes);
+    }
+
+    pub(crate) fn notes(&self, id: ObjectId) -> &[BString] {
+        self.notes.get(&id).map(Vec::as_slice).unwrap_or_default()
     }
 
     pub(crate) fn render_lanes(&self, range: Range<usize>) -> RenderedLanes {
@@ -309,30 +579,89 @@ impl App {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        self.notice = None;
+        if !matches!(
+            &action,
+            Action::ToggleHistoryDisplay
+                | Action::ToggleDate
+                | Action::ToggleEmail
+                | Action::ToggleName
+                | Action::ToggleTrailers
+                | Action::ToggleMailmap
+                | Action::ToggleRefs
+                | Action::ToggleHidden
+        ) {
+            self.history_display_expanded = false;
+        }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
-            Action::MoveUp => self.move_selection(1, false),
-            Action::MoveDown => self.move_selection(1, true),
+            Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
+            Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
+            Action::MoveUp => self.move_reachable(false),
+            Action::MoveDown => self.move_reachable(true),
             Action::ScrollLeft => {
-                self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
+                if self.changes_focus.is_some() {
+                    self.pan_changes(false);
+                } else if !self.cycle_junction_parent(false) {
+                    self.horizontal_offset = self.horizontal_offset.saturating_sub(self.horizontal_page);
+                }
             }
             Action::ScrollRight => {
-                self.horizontal_offset = self
-                    .horizontal_offset
-                    .saturating_add(self.horizontal_page)
-                    .min(self.horizontal_max);
+                if self.changes_focus.is_some() {
+                    self.pan_changes(true);
+                } else if !self.cycle_junction_parent(true) {
+                    self.horizontal_offset = self
+                        .horizontal_offset
+                        .saturating_add(self.horizontal_page)
+                        .min(self.horizontal_max);
+                }
+            }
+            Action::HalfPageUp if self.changes_focus.is_some() => {
+                self.move_changes((self.focused_changes().page / 2).max(1), false);
+            }
+            Action::HalfPageDown if self.changes_focus.is_some() => {
+                self.move_changes((self.focused_changes().page / 2).max(1), true);
+            }
+            Action::PageUp if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, false),
+            Action::PageDown if self.changes_focus.is_some() => self.move_changes(self.focused_changes().page, true),
+            Action::PageUp if self.show_commit && self.commit_max > 0 => {
+                self.commit_offset = self.commit_offset.saturating_sub(self.commit_page);
+            }
+            Action::PageDown if self.show_commit && self.commit_max > 0 => {
+                self.commit_offset = self.commit_offset.saturating_add(self.commit_page).min(self.commit_max);
             }
             Action::HalfPageUp => self.move_selection((self.viewport_rows / 2).max(1), false),
             Action::HalfPageDown => self.move_selection((self.viewport_rows / 2).max(1), true),
             Action::PageUp => self.move_selection(self.viewport_rows.max(1), false),
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
-            Action::First => self.select(0),
-            Action::Last if !self.rows.is_empty() => {
-                self.selected = Some(self.rows.len() - 1);
+            Action::First if self.changes_focus.is_some() => {
+                let changes = self.focused_changes_mut();
+                changes.selected = 0;
+                changes.error = None;
+                self.ensure_changes_visible();
+            }
+            Action::First => {
+                if let Some(index) = self.first_selectable() {
+                    self.select(index);
+                }
+            }
+            Action::Last if self.changes_focus.is_some() => {
+                let changes = self.focused_changes_mut();
+                changes.selected = changes.max;
+                changes.error = None;
+                self.ensure_changes_visible();
+            }
+            Action::Last if self.last_selectable().is_some() => {
+                let previous = self.selected;
+                self.selected = self.last_selectable();
+                if self.selected != previous {
+                    self.retry_failed_signatures();
+                }
                 self.follow_tail = self.state == State::Loading;
                 self.ensure_visible();
             }
             Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
+            Action::ToggleEmail => self.show_emails = !self.show_emails,
             Action::ToggleName => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
@@ -348,6 +677,7 @@ impl App {
             }
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
+            Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
             Action::ToggleRefs => {
                 self.ref_mode = match self.ref_mode {
                     RefMode::All => RefMode::Default,
@@ -355,14 +685,85 @@ impl App {
                     RefMode::None => RefMode::All,
                 };
             }
+            Action::Refresh if self.manual_refresh && matches!(self.state, State::Complete | State::Cancelled) => {
+                return vec![Effect::Reload(self.show_hidden)];
+            }
             Action::ToggleHidden
                 if self.has_hidden_filter && matches!(self.state, State::Complete | State::Cancelled) =>
             {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
-            Action::ToggleCommit => self.show_commit = !self.show_commit,
-            Action::PreviewAuthorCopy(value) => self.preview_author_copy = value,
+            Action::ToggleCommit => {
+                self.show_commit = !self.show_commit;
+                self.reset_commit_view();
+            }
+            Action::ToggleChanges => {
+                self.focus_feedback = None;
+                self.changes_mode = match self.changes_mode {
+                    Some(ChangesMode::Both) => Some(ChangesMode::Tree),
+                    Some(ChangesMode::Tree) => None,
+                    None if self.worktree_changes_available => Some(ChangesMode::Both),
+                    None => Some(ChangesMode::Tree),
+                };
+                self.reset_changes_view();
+                self.changes_parent = 0;
+                if self.changes_mode.is_none() {
+                    self.changes_suppressed = false;
+                    self.changes_focus = None;
+                }
+            }
+            Action::ToggleChangesFocus if self.changes_mode.is_some() => {
+                self.cycle_changes_focus();
+                if self.changes_focus.is_some() {
+                    self.clear_preview_author_copy();
+                }
+                self.focus_feedback = Some(match self.changes_focus {
+                    Some(ChangePane::Tree) => "tree changes",
+                    Some(ChangePane::Worktree) => "worktree changes",
+                    None => "history",
+                });
+            }
+            Action::CycleChangesParent => {
+                if self.changes_focus == Some(ChangePane::Tree) {
+                    self.changes_parent = self.changes_parent.saturating_add(1);
+                    self.tree_changes.error = None;
+                }
+            }
+            Action::OpenDiff if self.changes_focus.is_some() => {
+                let pane = self.changes_focus.expect("focus was checked");
+                let changes = self.focused_changes_mut();
+                changes.error = None;
+                return vec![Effect::OpenDiff(pane, changes.selected)];
+            }
+            Action::VerifySignatures if !self.signature_verification_running => {
+                let start = self.offset.min(self.rows.len());
+                let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
+                let ids: Vec<_> = self.rows[start..end]
+                    .iter_mut()
+                    .filter(|row| !self.hidden_rows.contains(&row.id) && row.signature == SignatureState::Unverified)
+                    .map(|row| {
+                        row.signature = SignatureState::Verifying;
+                        row.id
+                    })
+                    .collect();
+                if !ids.is_empty() {
+                    self.signature_verification_running = true;
+                    return vec![Effect::VerifySignatures(ids)];
+                }
+            }
+            Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
+            Action::PreviewAuthorCopy(_) if self.changes_focus.is_some() => {}
+            Action::PreviewAuthorCopy(value) => {
+                if value && !self.preview_author_copy {
+                    self.reachability_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+                    self.compute_reachable_rows();
+                } else if !value {
+                    self.clear_preview_author_copy();
+                }
+                self.preview_author_copy = value;
+            }
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
                 return vec![Effect::Cancel];
@@ -373,6 +774,7 @@ impl App {
                     return vec![Effect::CopyId(id)];
                 }
             }
+            Action::CopyPath(path) => return vec![Effect::CopyPath(path)],
             Action::CopyAuthor => {
                 if let Some(author) = self
                     .selected
@@ -401,6 +803,7 @@ impl App {
             State::Loading => {
                 self.state = State::Computing;
                 self.follow_tail = false;
+                self.reload_selection = None;
                 Some(self.rows.clone())
             }
             State::Cancelling => {
@@ -412,11 +815,90 @@ impl App {
         }
     }
 
+    pub(crate) fn known_ids(&self) -> HashSet<ObjectId> {
+        self.all_rows.keys().copied().collect()
+    }
+
+    pub(crate) fn hidden_ids(&self) -> HashSet<ObjectId> {
+        self.hidden_rows.clone()
+    }
+
+    pub(crate) fn visible_ancestry_to_hidden(&self, tip: ObjectId) -> Option<usize> {
+        let mut pending = vec![tip];
+        let mut seen = HashSet::new();
+        let mut visible = 0;
+        let mut reached_hidden = false;
+        while let Some(id) = pending.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if self.hidden_rows.contains(&id) {
+                reached_hidden = true;
+                continue;
+            }
+            let Some(row) = self.all_rows.get(&id) else { continue };
+            visible += 1;
+            pending.extend(row.parent_ids.iter().copied());
+        }
+        reached_hidden.then_some(visible)
+    }
+
+    pub(crate) fn start_refresh(
+        &mut self,
+        commits: LoadedCommits,
+        view_tips: &[ObjectId],
+        hidden_tips: &[ObjectId],
+        select_top: bool,
+    ) -> Option<Vec<CommitRow>> {
+        drop(self.store_commits(commits));
+
+        let visible = self.reachable_from(view_tips);
+        let hidden = self.reachable_from(hidden_tips);
+        let visible: HashSet<_> = visible.difference(&hidden).copied().collect();
+        let boundary: HashSet<_> = if hidden_tips.is_empty() {
+            HashSet::new()
+        } else {
+            visible
+                .iter()
+                .filter_map(|id| self.all_rows.get(id))
+                .flat_map(|row| row.parent_ids.iter().copied())
+                .filter(|id| !visible.contains(id))
+                .collect()
+        };
+        let rows: Vec<_> = self
+            .all_order
+            .iter()
+            .filter(|id| visible.contains(*id) || boundary.contains(*id))
+            .filter_map(|id| self.all_rows.get(id).cloned())
+            .collect();
+        self.pending_hidden_rows = Some(boundary);
+        self.select_top_after_refresh = select_top;
+        self.state = State::Computing;
+        self.follow_tail = false;
+        Some(rows)
+    }
+
+    fn reachable_from(&self, tips: &[ObjectId]) -> HashSet<ObjectId> {
+        let mut reachable = HashSet::new();
+        let mut pending = tips.to_vec();
+        while let Some(id) = pending.pop() {
+            if !reachable.insert(id) {
+                continue;
+            }
+            if let Some(row) = self.all_rows.get(&id) {
+                pending.extend(row.parent_ids.iter().copied());
+            }
+        }
+        reachable
+    }
+
     pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, graph: Graph, lane_time: Duration) {
         if self.state != State::Computing {
             return;
         }
-        let selected = self.selected.map(|index| self.rows[index].id);
+        let selected = (!std::mem::take(&mut self.select_top_after_refresh))
+            .then(|| self.selected.map(|index| self.rows[index].id))
+            .flatten();
         let metadata: HashMap<_, _> = if rows.iter().any(|row| !row.metadata_loaded) {
             self.rows
                 .iter()
@@ -429,6 +911,8 @@ impl App {
                             author: row.author,
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
+                            has_agent_marker: row.has_agent_marker,
+                            signature: row.signature,
                         },
                     )
                 })
@@ -437,6 +921,9 @@ impl App {
             HashMap::new()
         };
         self.rows = rows;
+        if let Some(hidden) = self.pending_hidden_rows.take() {
+            self.hidden_rows = hidden;
+        }
         for row in &mut self.rows {
             if let Some(metadata) = metadata.get(&row.id) {
                 row.committer_time = metadata.committer_time;
@@ -444,18 +931,33 @@ impl App {
                 row.attributions = metadata.attributions.clone();
                 row.title = metadata.title.clone();
                 row.metadata_loaded = true;
+                row.has_agent_marker = metadata.has_agent_marker;
+                row.signature = metadata.signature;
             }
         }
         self.graph = Some(graph);
         self.lane_time = Some(lane_time);
-        self.selected = selected.and_then(|id| self.rows.iter().position(|row| row.id == id));
+        self.selected = selected
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+            .or_else(|| self.first_selectable());
         self.state = State::Complete;
+        if self.reachability_anchor.is_some() {
+            self.compute_reachable_rows();
+        }
         self.ensure_visible();
     }
 
+    #[cfg(test)]
     pub(crate) fn reload(&mut self, show_hidden: bool) {
+        self.reload_selection = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
+        self.select_top_after_refresh = false;
         self.rows = Vec::new();
+        self.all_rows.clear();
+        self.all_order.clear();
+        self.hidden_rows.clear();
+        self.pending_hidden_rows = None;
         self.titles = Vec::new();
+        self.notes.clear();
         self.graph = None;
         self.attributions = Vec::new();
         #[cfg(test)]
@@ -466,27 +968,254 @@ impl App {
         self.lane_time = None;
         self.estimated_lane_width = 0;
         self.show_hidden = show_hidden;
+        self.changes_suppressed = false;
         self.horizontal_offset = 0;
+        self.focus_history();
+        self.reset_commit_view();
+        self.reset_changes_view();
         self.follow_tail = false;
+        self.clear_preview_author_copy();
+        self.signature_failures = 0;
+        self.signature_verification_running = false;
+    }
+
+    pub(crate) fn finish_signature_verification(&mut self, results: Vec<(ObjectId, bool)>) {
+        let mut failed = 0;
+        for (id, valid) in results {
+            let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+                continue;
+            };
+            row.signature = if valid {
+                SignatureState::Verified
+            } else {
+                failed += 1;
+                SignatureState::Failed
+            };
+            self.all_rows.insert(row.id, row.clone());
+        }
+        self.signature_verification_running = false;
+        self.signature_failures = failed;
+    }
+
+    fn move_changes(&mut self, distance: usize, down: bool) {
+        let changes = self.focused_changes_mut();
+        changes.error = None;
+        changes.selected = if down {
+            changes.selected.saturating_add(distance).min(changes.max)
+        } else {
+            changes.selected.saturating_sub(distance)
+        };
+        self.ensure_changes_visible();
+    }
+
+    fn clear_preview_author_copy(&mut self) {
+        self.preview_author_copy = false;
+        self.reachability_anchor = None;
+        self.junction_parent = None;
+        self.reachable_rows = None;
+    }
+
+    pub(crate) fn focus_history(&mut self) {
+        self.changes_focus = None;
+        self.focus_feedback = None;
+    }
+
+    pub(crate) fn set_worktree_changes_available(&mut self, available: bool) {
+        self.worktree_changes_available = available;
+        if !available {
+            if self.changes_mode == Some(ChangesMode::Both) {
+                self.changes_mode = Some(ChangesMode::Tree);
+            }
+            if self.changes_focus == Some(ChangePane::Worktree) {
+                self.focus_history();
+            }
+        }
+    }
+
+    pub(crate) fn changes_visible(&self) -> bool {
+        self.changes_mode.is_some() && !self.changes_suppressed
+    }
+
+    fn ensure_changes_visible(&mut self) {
+        let changes = self.focused_changes_mut();
+        if changes.selected < changes.offset {
+            changes.offset = changes.selected;
+        } else if changes.selected >= changes.offset.saturating_add(changes.page) {
+            changes.offset = changes.selected + 1 - changes.page;
+        }
+        changes.offset = changes
+            .offset
+            .min(changes.max.saturating_add(1).saturating_sub(changes.page));
+    }
+
+    fn pan_changes(&mut self, right: bool) {
+        let changes = self.focused_changes_mut();
+        changes.horizontal_offset = if right {
+            changes
+                .horizontal_offset
+                .saturating_add(changes.horizontal_page)
+                .min(changes.horizontal_max)
+        } else {
+            changes.horizontal_offset.saturating_sub(changes.horizontal_page)
+        };
     }
 
     fn move_selection(&mut self, distance: usize, down: bool) {
         let Some(selected) = self.selected else { return };
-        self.selected = Some(if down {
+        let target = if down {
             selected.saturating_add(distance).min(self.rows.len() - 1)
         } else {
             selected.saturating_sub(distance)
-        });
+        };
+        self.selected = self.nearest_selectable(target, down);
+        if self.selected != Some(selected) {
+            self.retry_failed_signatures();
+        }
         self.follow_tail = false;
         self.ensure_visible();
     }
 
+    fn move_reachable(&mut self, down: bool) {
+        let (Some(selected), Some(reachable)) = (self.selected, self.reachable_rows.as_ref()) else {
+            self.move_selection(1, down);
+            return;
+        };
+        let next = if down {
+            (selected + 1..self.rows.len())
+                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+        } else {
+            (0..selected)
+                .rev()
+                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+        };
+        if let Some(next) = next {
+            self.select(next);
+        }
+    }
+
+    fn cycle_junction_parent(&mut self, forward: bool) -> bool {
+        if self.state != State::Complete {
+            return false;
+        }
+        let Some(parent_count) = self
+            .reachability_anchor
+            .and_then(|anchor| self.rows.iter().find(|row| row.id == anchor))
+            .map(|row| row.parent_ids.len())
+            .filter(|count| *count > 1)
+        else {
+            return false;
+        };
+        let current = self.junction_parent.unwrap_or(1);
+        self.junction_parent = Some(if forward {
+            (current + 1) % parent_count
+        } else {
+            (current + parent_count - 1) % parent_count
+        });
+        self.compute_reachable_rows();
+        true
+    }
+
+    fn compute_reachable_rows(&mut self) {
+        if self.state != State::Complete {
+            self.reachable_rows = None;
+            return;
+        }
+        let Some(anchor) = self.reachability_anchor else {
+            self.reachable_rows = None;
+            return;
+        };
+        let Some(anchor_index) = self.rows.iter().position(|row| row.id == anchor) else {
+            self.reachable_rows = Some(vec![false; self.rows.len()]);
+            return;
+        };
+        let parent_count = self.rows[anchor_index].parent_ids.len();
+        let start = if parent_count > 1 {
+            let parent = self.junction_parent.get_or_insert(1);
+            if *parent >= parent_count {
+                *parent = 1;
+            }
+            self.rows[anchor_index]
+                .parent_ids
+                .get(*parent)
+                .copied()
+                .expect("the selected junction parent exists")
+        } else {
+            self.junction_parent = None;
+            anchor
+        };
+        let mut pending = HashSet::from([start]);
+        let mut reachable: Vec<_> = self
+            .rows
+            .iter()
+            .map(|row| {
+                let reachable = pending.remove(&row.id);
+                if reachable {
+                    pending.extend(row.parent_ids.iter().copied());
+                }
+                reachable
+            })
+            .collect();
+        if start != anchor {
+            reachable[anchor_index] = true;
+        }
+        self.reachable_rows = Some(reachable);
+    }
+
+    pub(crate) fn junction_parent(&self, index: usize) -> Option<usize> {
+        let row = self.rows.get(index)?;
+        if self.reachability_anchor == Some(row.id) {
+            self.junction_parent.map(|parent| parent + 1)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_row_reachable(&self, index: usize) -> bool {
+        self.reachable_rows
+            .as_ref()
+            .is_none_or(|reachable| reachable.get(index).copied().unwrap_or(false))
+    }
+
     fn select(&mut self, selected: usize) {
-        if !self.rows.is_empty() {
+        if !self.rows.is_empty() && !self.is_row_hidden(selected) {
+            let previous = self.selected;
             self.selected = Some(selected.min(self.rows.len() - 1));
+            if self.selected != previous {
+                self.retry_failed_signatures();
+            }
             self.follow_tail = false;
             self.ensure_visible();
         }
+    }
+
+    fn first_selectable(&self) -> Option<usize> {
+        (0..self.rows.len()).find(|index| !self.is_row_hidden(*index))
+    }
+
+    fn last_selectable(&self) -> Option<usize> {
+        (0..self.rows.len()).rev().find(|index| !self.is_row_hidden(*index))
+    }
+
+    fn nearest_selectable(&self, target: usize, down: bool) -> Option<usize> {
+        if down {
+            (target..self.rows.len())
+                .find(|index| !self.is_row_hidden(*index))
+                .or_else(|| (0..target).rev().find(|index| !self.is_row_hidden(*index)))
+        } else {
+            (0..=target)
+                .rev()
+                .find(|index| !self.is_row_hidden(*index))
+                .or_else(|| (target + 1..self.rows.len()).find(|index| !self.is_row_hidden(*index)))
+        }
+    }
+
+    fn retry_failed_signatures(&mut self) {
+        for row in &mut self.rows {
+            if row.signature == SignatureState::Failed {
+                row.signature = SignatureState::Unverified;
+            }
+        }
+        self.signature_failures = 0;
     }
 
     pub(crate) fn ensure_visible(&mut self) {
@@ -503,6 +1232,102 @@ impl App {
         self.horizontal_page = page.max(1);
         self.horizontal_max = max;
         self.horizontal_offset = self.horizontal_offset.min(max);
+    }
+
+    pub(crate) fn set_commit_bounds(&mut self, page: usize, max: usize) {
+        self.commit_page = page.max(1);
+        self.commit_max = max;
+        self.commit_offset = self.commit_offset.min(max);
+    }
+
+    pub(crate) fn reset_commit_view(&mut self) {
+        self.commit_offset = 0;
+        self.commit_max = 0;
+    }
+
+    pub(crate) fn set_changes_bounds(
+        &mut self,
+        pane: ChangePane,
+        page: usize,
+        len: usize,
+        horizontal_page: usize,
+        horizontal_max: usize,
+    ) {
+        let changes = self.changes_mut(pane);
+        changes.page = page.max(1);
+        changes.max = len.saturating_sub(1);
+        if len == 0 {
+            changes.selected = 0;
+            changes.offset = 0;
+        } else {
+            changes.selected = changes.selected.min(changes.max);
+            if changes.selected < changes.offset {
+                changes.offset = changes.selected;
+            } else if changes.selected >= changes.offset.saturating_add(changes.page) {
+                changes.offset = changes.selected + 1 - changes.page;
+            }
+            changes.offset = changes
+                .offset
+                .min(changes.max.saturating_add(1).saturating_sub(changes.page));
+        }
+        changes.horizontal_page = horizontal_page.max(1);
+        changes.horizontal_max = horizontal_max;
+        changes.horizontal_offset = changes.horizontal_offset.min(horizontal_max);
+    }
+
+    pub(crate) fn reset_changes_view(&mut self) {
+        self.tree_changes = ChangesView::default();
+        self.worktree_changes = ChangesView::default();
+    }
+
+    pub(crate) fn changes(&self, pane: ChangePane) -> &ChangesView {
+        match pane {
+            ChangePane::Tree => &self.tree_changes,
+            ChangePane::Worktree => &self.worktree_changes,
+        }
+    }
+
+    pub(crate) fn changes_mut(&mut self, pane: ChangePane) -> &mut ChangesView {
+        match pane {
+            ChangePane::Tree => &mut self.tree_changes,
+            ChangePane::Worktree => &mut self.worktree_changes,
+        }
+    }
+
+    fn focused_changes(&self) -> &ChangesView {
+        self.changes(self.changes_focus.expect("changes are focused"))
+    }
+
+    fn focused_changes_mut(&mut self) -> &mut ChangesView {
+        self.changes_mut(self.changes_focus.expect("changes are focused"))
+    }
+
+    fn cycle_changes_focus(&mut self) {
+        let (first, second) = match self.changes_layout {
+            ChangesLayout::SideBySide => (ChangePane::Tree, ChangePane::Worktree),
+            ChangesLayout::Stacked => (ChangePane::Worktree, ChangePane::Tree),
+        };
+        let visible = |pane| match pane {
+            ChangePane::Tree => self.tree_changes_visible,
+            ChangePane::Worktree => self.worktree_changes_visible,
+        };
+        self.changes_focus = match self.changes_focus {
+            None if visible(first) => Some(first),
+            None if visible(second) => Some(second),
+            Some(current) if current == first && visible(second) => Some(second),
+            Some(_) | None => None,
+        };
+    }
+
+    pub(crate) fn set_changes_layout(&mut self, layout: ChangesLayout, tree_visible: bool, worktree_visible: bool) {
+        self.changes_layout = layout;
+        self.tree_changes_visible = tree_visible;
+        self.worktree_changes_visible = worktree_visible;
+        if self.changes_focus == Some(ChangePane::Tree) && !tree_visible {
+            self.changes_focus = worktree_visible.then_some(ChangePane::Worktree);
+        } else if self.changes_focus == Some(ChangePane::Worktree) && !worktree_visible {
+            self.changes_focus = tree_visible.then_some(ChangePane::Tree);
+        }
     }
 
     #[cfg(test)]
@@ -831,6 +1656,8 @@ mod tests {
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
         }
     }
 
@@ -841,34 +1668,23 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_named_agents_only_when_assisting() {
-        let opus = Box::leak(Box::new(Author {
-            name: b"Opus 4.7".as_bstr(),
-            email: b"".as_bstr(),
-        }));
-        let gpt = Box::leak(Box::new(Author {
-            name: b"GPT 5.6".as_bstr(),
+    fn recognizes_all_assistants_as_agents() {
+        let assistant = Box::leak(Box::new(Author {
+            name: b"Anything".as_bstr(),
             email: b"".as_bstr(),
         }));
 
         assert!(
             Attribution {
                 kind: AttributionKind::Assisted,
-                author: opus,
-            }
-            .is_agent()
-        );
-        assert!(
-            Attribution {
-                kind: AttributionKind::Assisted,
-                author: gpt,
+                author: assistant,
             }
             .is_agent()
         );
         assert!(
             !Attribution {
                 kind: AttributionKind::Reviewed,
-                author: opus,
+                author: assistant,
             }
             .is_agent()
         );
@@ -888,6 +1704,10 @@ mod tests {
             .expect("a loading app starts lane computation");
         let (rows, graph, lane_time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, lane_time);
+    }
+
+    fn show_tree_changes(app: &mut App) {
+        app.set_changes_layout(ChangesLayout::SideBySide, true, false);
     }
 
     #[test]
@@ -914,6 +1734,91 @@ mod tests {
         assert_eq!(
             app.render_lanes(0..app.rows.len()).iter().collect::<Vec<_>>(),
             ["●─┐ ", "● │ ", "├─● ", "● "]
+        );
+    }
+
+    #[test]
+    fn refresh_projects_from_an_append_only_commit_cache() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], false)
+            .expect("a refresh computes lanes");
+        assert_eq!(
+            app.rows.len(),
+            3,
+            "the current frame stays intact while lanes are computed"
+        );
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(2), id(1)]
+        );
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "ordinary refreshes preserve the selected commit"
+        );
+
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(2)], &[], false)
+            .expect("a rewind reprojects cached topology");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(app.rows.iter().map(|row| row.id).collect::<Vec<_>>(), [id(2), id(1)]);
+
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(4)], &[], false)
+            .expect("a fast-forward to retained commits needs no new objects");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(4), id(3), id(2), id(1)]
+        );
+    }
+
+    #[test]
+    fn filesystem_refresh_selects_the_first_selectable_row() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
+
+        let rows = app
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], true)
+            .expect("a filesystem refresh computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(app.selected, app.first_selectable());
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+    }
+
+    #[test]
+    fn counts_distinct_visible_ancestry_only_when_it_reaches_hidden_history() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(4, &[3, 2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+        ]);
+        app.extend_hidden_commits(vec![row(1)]);
+
+        assert_eq!(app.visible_ancestry_to_hidden(id(4)), Some(3));
+        assert_eq!(app.visible_ancestry_to_hidden(id(3)), Some(1));
+        assert_eq!(app.visible_ancestry_to_hidden(id(1)), Some(0));
+
+        app.hidden_rows.clear();
+        assert_eq!(
+            app.visible_ancestry_to_hidden(id(4)),
+            None,
+            "without hidden history the fallback count has no useful base"
         );
     }
 
@@ -958,6 +1863,8 @@ mod tests {
                 author: row(1).author,
                 attributions: 0..0,
                 title: "loaded".into(),
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
             },
             Vec::new(),
         );
@@ -966,6 +1873,31 @@ mod tests {
 
         assert!(app.rows[0].metadata_loaded);
         assert_eq!(app.title(&app.rows[0]), "loaded");
+    }
+
+    #[test]
+    fn verifies_only_visible_unchecked_signatures() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        for row in &mut app.rows {
+            row.signature = SignatureState::Unverified;
+        }
+        app.offset = 1;
+
+        assert_eq!(
+            app.update(Action::VerifySignatures),
+            vec![Effect::VerifySignatures(vec![id(2), id(3)])]
+        );
+        assert_eq!(app.rows[0].signature, SignatureState::Unverified);
+        assert_eq!(app.rows[1].signature, SignatureState::Verifying);
+        app.finish_signature_verification(vec![(id(2), true), (id(3), false)]);
+        assert_eq!(app.rows[1].signature, SignatureState::Verified);
+        assert_eq!(app.rows[2].signature, SignatureState::Failed);
+        assert_eq!(app.signature_failures, 1);
+
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[2].signature, SignatureState::Unverified);
+        assert_eq!(app.signature_failures, 0);
     }
 
     #[test]
@@ -1024,6 +1956,86 @@ mod tests {
     }
 
     #[test]
+    fn shift_limits_jk_to_the_selected_commits_ancestors() {
+        let mut app = App::new(5);
+        app.extend_commits(vec![
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(5));
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable: Vec<_> = app
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| app.is_row_reachable(*index))
+            .map(|(_, row)| row.id)
+            .collect();
+        assert_eq!(reachable, [id(5), id(3), id(1)]);
+
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[app.selected.expect("an ancestor is selected")].id, id(3));
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[app.selected.expect("an ancestor is selected")].id, id(1));
+
+        app.update(Action::PreviewAuthorCopy(false));
+        app.update(Action::MoveUp);
+        assert_eq!(app.rows[app.selected.expect("normal navigation is restored")].id, id(2));
+    }
+
+    #[test]
+    fn changes_focus_clears_and_ignores_shift() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(app.preview_author_copy && app.reachable_rows.is_some());
+
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+        assert!(
+            app.changes_focus == Some(ChangePane::Tree) && !app.preview_author_copy && app.reachable_rows.is_none(),
+            "entering the changes pane clears transient history navigation"
+        );
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(
+            !app.preview_author_copy && app.reachable_rows.is_none(),
+            "the inactive history pane ignores Shift"
+        );
+    }
+
+    #[test]
+    fn shift_defers_reachability_until_the_graph_is_complete() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![row_with_parents(4, &[3, 2]), row_with_parents(3, &[1])]);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        assert!(
+            app.reachable_rows.is_none(),
+            "pressing Shift while traversing does not compute reachability"
+        );
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        assert!(
+            app.reachable_rows.is_none(),
+            "later traversal batches do not recompute reachability"
+        );
+
+        complete(&mut app);
+        assert!(
+            app.reachable_rows.is_some(),
+            "graph completion computes reachability once"
+        );
+        assert_eq!(app.junction_parent(0), Some(2));
+    }
+
+    #[test]
     fn selection_follows_the_oldest_commit_until_the_user_moves() {
         let mut app = App::new(2);
         app.extend_commits(vec![row(1), row(2), row(3)]);
@@ -1058,6 +2070,55 @@ mod tests {
     }
 
     #[test]
+    fn hidden_boundary_rows_are_not_selectable_or_verifiable() {
+        let mut app = App::new(4);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        app.update(Action::Last);
+        app.extend_hidden_commits(vec![row(4)]);
+        app.rows[3].signature = SignatureState::Unverified;
+
+        assert_eq!(
+            app.selected,
+            Some(2),
+            "following the tail stops at the oldest visible commit"
+        );
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected, Some(2), "j cannot enter the hidden boundary");
+        app.update(Action::First);
+        app.update(Action::PageDown);
+        assert_eq!(app.selected, Some(2), "paging skips the hidden boundary");
+        assert!(
+            app.update(Action::VerifySignatures).is_empty(),
+            "hidden signatures are not actionable"
+        );
+    }
+
+    #[test]
+    fn full_pages_target_changes_then_commit_messages_then_history() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
+        app.show_commit = true;
+        app.set_commit_bounds(3, 7);
+
+        app.update(Action::PageDown);
+        assert_eq!(app.commit_offset, 3);
+        assert_eq!(app.selected, Some(0), "commit paging leaves history selection alone");
+        app.update(Action::PageDown);
+        assert_eq!(app.commit_offset, 6);
+
+        app.changes_focus = Some(ChangePane::Tree);
+        app.set_changes_bounds(ChangePane::Tree, 2, 5, 1, 0);
+        app.update(Action::PageDown);
+        assert_eq!(app.tree_changes.selected, 2, "focused changes retain paging priority");
+        assert_eq!(app.commit_offset, 6);
+
+        app.changes_focus = None;
+        app.set_commit_bounds(3, 0);
+        app.update(Action::PageDown);
+        assert_eq!(app.selected, Some(2), "history paging resumes when the commit fits");
+    }
+
+    #[test]
     fn half_pages_use_half_the_viewport() {
         let mut app = App::new(4);
         app.extend_commits((1..=5).map(row).collect::<Vec<_>>());
@@ -1086,19 +2147,79 @@ mod tests {
     }
 
     #[test]
+    fn focused_changes_redirect_navigation_to_the_path_viewport() {
+        let mut app = App::new(2);
+        app.extend_commits((1..=3).map(row).collect::<Vec<_>>());
+        app.set_changes_bounds(ChangePane::Tree, 4, 10, 20, 45);
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+        assert_eq!(app.focus_feedback.take(), Some("tree changes"));
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, None);
+        assert_eq!(app.focus_feedback.take(), Some("history"));
+        app.update(Action::ToggleChangesFocus);
+
+        app.update(Action::MoveDown);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (1, 0));
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Tree, 1)]
+        );
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "path selection leaves commit selection untouched"
+        );
+        app.update(Action::PageDown);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (5, 2));
+        app.update(Action::HalfPageDown);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (7, 4));
+        app.update(Action::Last);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (9, 6));
+        app.update(Action::First);
+        assert_eq!((app.tree_changes.selected, app.tree_changes.offset), (0, 0));
+
+        app.update(Action::ScrollRight);
+        app.update(Action::ScrollRight);
+        app.update(Action::ScrollRight);
+        assert_eq!(app.tree_changes.horizontal_offset, 45);
+        assert_eq!(app.horizontal_offset, 0, "path panning leaves the graph untouched");
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.tree_changes.horizontal_offset, 25);
+
+        app.update(Action::ToggleChanges);
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_focus, None, "closing the panel returns focus to history");
+        assert!(app.update(Action::OpenDiff).is_empty());
+        assert_eq!(app.tree_changes.selected, 0);
+        assert_eq!(app.tree_changes.offset, 0);
+        assert_eq!(app.tree_changes.horizontal_offset, 0);
+    }
+
+    #[test]
     fn toggles_metadata_columns() {
         let mut app = App::new(1);
         assert!(app.show_trailers, "trailer attribution is visible by default");
+        assert_eq!(
+            app.changes_mode,
+            Some(ChangesMode::Both),
+            "tree and worktree changes are visible by default"
+        );
 
         app.update(Action::ToggleDate);
+        app.update(Action::ToggleEmail);
         app.update(Action::ToggleName);
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
         app.update(Action::ToggleRefs);
         app.update(Action::ToggleAlign);
         app.update(Action::ToggleCommit);
+        app.update(Action::CycleChangesParent);
+        app.update(Action::ToggleChanges);
 
         assert!(!app.show_committer_date);
+        assert!(app.show_emails);
         assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
@@ -1109,8 +2230,105 @@ mod tests {
         assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
         assert!(app.show_commit);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+        assert_eq!(app.changes_parent, 0);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn history_display_group_stays_open_only_for_grouped_actions() {
+        let mut app = App::new(1);
+
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(app.history_display_expanded);
+        app.update(Action::ToggleDate);
+        app.update(Action::ToggleEmail);
+        assert!(
+            app.history_display_expanded,
+            "grouped display changes keep the group open"
+        );
+
+        app.update(Action::MoveDown);
+        assert!(!app.history_display_expanded, "navigation collapses the group");
+
+        app.update(Action::ToggleHistoryDisplay);
+        app.update(Action::ToggleAlign);
+        assert!(
+            !app.history_display_expanded,
+            "direct display commands also collapse the group"
+        );
+
+        app.update(Action::ToggleHistoryDisplay);
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(!app.history_display_expanded, "the prefix key toggles the group");
+    }
+
+    #[test]
+    fn cycles_both_tree_and_hidden_changes() {
+        let mut app = App::new(1);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both));
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+
+        app.changes_focus = Some(ChangePane::Tree);
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, None);
+        assert_eq!(app.changes_focus, None, "hiding changes returns focus to history");
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Both));
+    }
+
+    #[test]
+    fn bare_repositories_cycle_only_tree_and_hidden_changes() {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Worktree);
+
+        app.set_worktree_changes_available(false);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+        assert_eq!(app.changes_focus, None, "a hidden worktree pane cannot retain focus");
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, None);
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+    }
+
+    #[test]
+    fn cycles_changes_focus_in_visual_order_and_keeps_navigation_independent() {
+        let mut app = App::new(1);
+        app.changes_mode = Some(ChangesMode::Both);
+        app.set_changes_bounds(ChangePane::Tree, 2, 4, 10, 20);
+        app.set_changes_bounds(ChangePane::Worktree, 2, 4, 10, 20);
+        app.set_changes_layout(ChangesLayout::SideBySide, true, true);
+
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+        app.update(Action::MoveDown);
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.update(Action::MoveDown);
+        assert_eq!(app.tree_changes.selected, 1);
+        assert_eq!(app.worktree_changes.selected, 1);
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenDiff(ChangePane::Worktree, 1)]
+        );
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, None);
+
+        app.set_changes_layout(ChangesLayout::Stacked, true, true);
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(app.changes_focus, Some(ChangePane::Tree));
+
+        app.set_changes_layout(ChangesLayout::Stacked, false, true);
+        assert_eq!(app.changes_focus, Some(ChangePane::Worktree));
+        app.set_changes_layout(ChangesLayout::Stacked, false, false);
+        assert_eq!(app.changes_focus, None);
     }
 
     #[test]
@@ -1151,7 +2369,12 @@ mod tests {
             "the key is inert without hidden revisions"
         );
 
-        app.has_hidden_filter = true;
+        app.configure_hidden_filter(true);
+        assert_eq!(
+            app.ref_mode,
+            RefMode::None,
+            "hidden ancestry hides references by default"
+        );
         app.extend_commits(vec![row(1)]);
         assert!(
             app.update(Action::ToggleHidden).is_empty(),
@@ -1159,9 +2382,11 @@ mod tests {
         );
         complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(true)]);
+        drop(app.update(Action::PreviewAuthorCopy(true)));
         app.reload(true);
         assert!(app.rows.is_empty(), "reloading drops rows from the previous view");
         assert!(app.show_hidden);
+        assert!(!app.preview_author_copy, "reloading clears transient Shift state");
         assert_eq!(app.state, State::Loading);
         assert!(
             app.update(Action::ToggleHidden).is_empty(),
@@ -1169,6 +2394,63 @@ mod tests {
         );
         complete(&mut app);
         assert_eq!(app.update(Action::ToggleHidden), vec![Effect::Reload(false)]);
+    }
+
+    #[test]
+    fn refresh_reloads_only_finished_history() {
+        let mut app = App::new(1);
+        app.manual_refresh = true;
+        assert!(
+            app.update(Action::Refresh).is_empty(),
+            "a running walk cannot be replaced"
+        );
+
+        app.extend_commits(vec![row(1)]);
+        complete(&mut app);
+        assert_eq!(app.update(Action::Refresh), vec![Effect::Reload(false)]);
+
+        app.show_hidden = true;
+        app.state = State::Cancelled;
+        assert_eq!(
+            app.update(Action::Refresh),
+            vec![Effect::Reload(true)],
+            "refresh preserves the hidden-history setting"
+        );
+    }
+
+    #[test]
+    fn reload_retains_selection_or_falls_back_to_the_top() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        let selected = app.rows[app.selected.expect("a row is selected")].id;
+        app.set_changes_bounds(ChangePane::Tree, 1, 3, 1, 2);
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+        app.update(Action::MoveDown);
+        app.update(Action::ScrollRight);
+
+        app.reload(true);
+        assert_eq!(app.changes_focus, None, "reload returns focus to history");
+        assert_eq!(app.tree_changes.selected, 0);
+        assert_eq!((app.tree_changes.offset, app.tree_changes.horizontal_offset), (0, 0));
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        complete(&mut app);
+        assert_eq!(
+            app.rows[app.selected.expect("the old row remains selected")].id,
+            selected
+        );
+
+        app.reload(false);
+        app.extend_commits(vec![row(3)]);
+        app.extend_hidden_commits(vec![row(2)]);
+        complete(&mut app);
+        assert_eq!(
+            app.selected,
+            Some(0),
+            "a selection which becomes a hidden boundary falls back to the top row"
+        );
     }
 
     #[test]
@@ -1191,6 +2473,112 @@ mod tests {
     }
 
     #[test]
+    fn pane_exit_keys_return_to_history_but_control_c_quits() {
+        let mut app = App::new(1);
+        show_tree_changes(&mut app);
+        app.update(Action::ToggleChangesFocus);
+
+        assert!(app.update(Action::Quit).is_empty());
+        assert_eq!(app.changes_focus, None, "q returns focus to history");
+
+        app.update(Action::ToggleChangesFocus);
+        assert_eq!(
+            app.update(Action::ForceQuit),
+            vec![Effect::Quit],
+            "Ctrl-C quits even while changes have focus"
+        );
+        assert!(app.update(Action::Cancel).is_empty());
+        assert_eq!(app.changes_focus, None, "Escape returns focus to history");
+        assert_eq!(
+            app.state,
+            State::Loading,
+            "Escape does not cancel while changes had focus"
+        );
+
+        assert_eq!(app.update(Action::Cancel), vec![Effect::Cancel]);
+    }
+
+    #[test]
+    fn shift_starts_with_a_merges_second_parent_rail() {
+        let mut app = App::new(7);
+        app.extend_commits(vec![
+            row_with_parents(6, &[5, 4]),
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(6));
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable: Vec<_> = app
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| app.is_row_reachable(*index))
+            .map(|(_, row)| row.id)
+            .collect();
+        assert_eq!(
+            reachable,
+            [id(6), id(4), id(2), id(1)],
+            "the second parent and its complete ancestry are reachable"
+        );
+    }
+
+    #[test]
+    fn shift_cycles_junction_parents_without_panning() {
+        let mut app = App::new(8);
+        app.extend_commits(vec![
+            row_with_parents(10, &[8, 9, 11]),
+            row_with_parents(8, &[6]),
+            row_with_parents(9, &[7, 6]),
+            row_with_parents(11, &[5]),
+            row_with_parents(7, &[1]),
+            row_with_parents(6, &[1]),
+            row_with_parents(5, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(10));
+        app.set_horizontal_bounds(10, 25);
+
+        app.update(Action::PreviewAuthorCopy(true));
+        let reachable = |app: &App| {
+            app.rows
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| app.is_row_reachable(*index))
+                .map(|(_, row)| row.id)
+                .collect::<HashSet<_>>()
+        };
+        assert_eq!(app.junction_parent(0), Some(2));
+        assert_eq!(
+            reachable(&app),
+            HashSet::from([id(10), id(9), id(7), id(6), id(1)]),
+            "the selected rail traverses every parent of its next junction"
+        );
+
+        app.update(Action::ScrollRight);
+        assert_eq!(app.junction_parent(0), Some(3));
+        assert_eq!(reachable(&app), HashSet::from([id(10), id(11), id(5), id(1)]));
+        app.update(Action::ScrollRight);
+        assert_eq!(app.junction_parent(0), Some(1));
+        assert_eq!(reachable(&app), HashSet::from([id(10), id(8), id(6), id(1)]));
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.junction_parent(0), Some(3));
+        assert_eq!(
+            app.horizontal_offset, 0,
+            "junction selection suppresses horizontal panning"
+        );
+
+        app.update(Action::PreviewAuthorCopy(false));
+        app.update(Action::ScrollRight);
+        assert_eq!(app.horizontal_offset, 10, "releasing Shift restores horizontal panning");
+    }
+
+    #[test]
     fn completion_and_copy_effects_use_the_current_selection() {
         let mut app = App::new(10);
         assert!(
@@ -1204,6 +2592,10 @@ mod tests {
         app.extend_commits(vec![row(7)]);
 
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(row(7).id)]);
+        assert_eq!(
+            app.update(Action::CopyPath("dir/file".into())),
+            vec![Effect::CopyPath("dir/file".into())]
+        );
         assert_eq!(app.update(Action::CopyAuthor), vec![Effect::CopyAuthor(row(7).author)]);
         complete(&mut app);
         assert_eq!(app.state, State::Complete);

@@ -11,7 +11,7 @@ use gix::{
     objs::commit::ref_iter::Token,
 };
 
-use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits, Metadata};
+use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits, Metadata, SignatureState};
 
 pub(crate) type SharedAuthors = gix::features::threading::OwnShared<gix::features::threading::Mutable<Authors>>;
 static EMPTY_AUTHOR: std::sync::LazyLock<Author> = std::sync::LazyLock::new(|| Author {
@@ -36,6 +36,21 @@ pub(crate) enum DecorationKind {
 }
 
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RefSnapshot {
+    pub view: HashMap<BString, gix::refs::Target>,
+    pub hidden: HashMap<BString, gix::refs::Target>,
+    pub view_tips: Vec<ObjectId>,
+    pub hidden_tips: Vec<ObjectId>,
+}
+
+#[derive(Debug)]
+pub(crate) struct Refresh {
+    pub refs: RefSnapshot,
+    pub decorations: Decorations,
+    pub commits: LoadedCommits,
+}
 #[derive(Default)]
 pub(crate) struct Authors {
     strings: HashSet<&'static [u8]>,
@@ -47,6 +62,7 @@ const COMMIT_BATCH_SIZE: usize = 1024;
 pub(crate) enum Event {
     Decorations(Decorations),
     Commits(LoadedCommits),
+    HiddenCommits(LoadedCommits),
     Complete,
     Cancelled,
 }
@@ -77,6 +93,9 @@ pub(crate) fn load(
         .context("could not start revision walk")?;
     let mut rows = Vec::with_capacity(COMMIT_BATCH_SIZE);
     let mut attributions = Vec::with_capacity(COMMIT_BATCH_SIZE);
+    let mut visible = HashSet::new();
+    let mut connected = Vec::new();
+    let mut seen_parents = HashSet::new();
     for info in walk {
         if cancelled.load(Ordering::Relaxed) {
             emit(Event::Cancelled);
@@ -96,12 +115,23 @@ pub(crate) fn load(
             author,
             attributions: row_attributions,
             title,
+            has_agent_marker,
+            signature,
         } = metadata.unwrap_or_else(|| Metadata {
             committer_time: Default::default(),
             author: &EMPTY_AUTHOR,
             attributions: 0..0,
             title: BString::default(),
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
         });
+        visible.insert(info.id);
+        connected.extend(
+            info.parent_ids
+                .iter()
+                .copied()
+                .filter(|parent| seen_parents.insert(*parent)),
+        );
         rows.push(Commit {
             id: info.id,
             parent_ids: info.parent_ids,
@@ -110,6 +140,8 @@ pub(crate) fn load(
             attributions: row_attributions,
             title,
             metadata_loaded,
+            has_agent_marker,
+            signature,
         });
         if rows.len() == COMMIT_BATCH_SIZE
             && !emit(Event::Commits(LoadedCommits {
@@ -123,8 +155,164 @@ pub(crate) fn load(
     if !rows.is_empty() && !emit(Event::Commits(LoadedCommits { rows, attributions })) {
         return Ok(());
     }
+    if !hidden_revisions.is_empty() {
+        connected.retain(|id| !visible.contains(id));
+        let mut rows = Vec::with_capacity(connected.len());
+        let mut attributions = Vec::new();
+        let mut authors = gix::features::threading::lock(authors);
+        for id in connected {
+            if cancelled.load(Ordering::Relaxed) {
+                emit(Event::Cancelled);
+                return Ok(());
+            }
+            let object = repo.find_commit(id).context("could not read connected hidden commit")?;
+            let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
+            let Metadata {
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                has_agent_marker,
+                signature,
+            } = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
+            rows.push(Commit {
+                id,
+                parent_ids,
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                metadata_loaded: true,
+                has_agent_marker,
+                signature,
+            });
+        }
+        if !rows.is_empty() && !emit(Event::HiddenCommits(LoadedCommits { rows, attributions })) {
+            return Ok(());
+        }
+    }
     emit(Event::Complete);
     Ok(())
+}
+
+pub(crate) fn snapshot(repo: &gix::Repository, revisions: &[OsString], hidden: &[OsString]) -> Result<RefSnapshot> {
+    Ok(RefSnapshot {
+        view: referenced_refs(repo, revisions)?,
+        hidden: referenced_refs(repo, hidden)?,
+        view_tips: resolve_tips(repo, revisions)?.unwrap_or_default(),
+        hidden_tips: resolve_revisions(repo, hidden, "hidden ")?,
+    })
+}
+
+pub(crate) fn refresh(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+    hidden_revisions: &[OsString],
+    known: &HashSet<ObjectId>,
+    expand: &HashSet<ObjectId>,
+    authors: &SharedAuthors,
+) -> Result<Refresh> {
+    let refs = snapshot(repo, revisions, hidden_revisions)?;
+    let mut tips = refs.view_tips.clone();
+    tips.extend(refs.hidden_tips.iter().copied());
+    tips.extend(expand.iter().copied());
+    let mut rows = Vec::new();
+    let mut attributions = Vec::new();
+    if !tips.is_empty() {
+        let walk = repo
+            .rev_walk(tips)
+            .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default()))
+            .selected(|id| !known.contains(id) || expand.contains(id))
+            .context("could not start incremental revision walk")?;
+        for info in walk {
+            let info = info.context("could not refresh revision history")?;
+            if known.contains(&info.id) {
+                continue;
+            }
+            let metadata = if info.generation.is_some() {
+                None
+            } else {
+                let object = info.object().context("could not read commit")?;
+                let mut authors = gix::features::threading::lock(authors);
+                Some(decode_metadata(object.iter(), &mut authors, &mut attributions)?)
+            };
+            let metadata_loaded = metadata.is_some();
+            let Metadata {
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                has_agent_marker,
+                signature,
+            } = metadata.unwrap_or_else(|| Metadata {
+                committer_time: Default::default(),
+                author: &EMPTY_AUTHOR,
+                attributions: 0..0,
+                title: BString::default(),
+                has_agent_marker: false,
+                signature: SignatureState::Unsigned,
+            });
+            rows.push(Commit {
+                id: info.id,
+                parent_ids: info.parent_ids,
+                committer_time,
+                author,
+                attributions: row_attributions,
+                title,
+                metadata_loaded,
+                has_agent_marker,
+                signature,
+            });
+        }
+    }
+    Ok(Refresh {
+        refs,
+        decorations: decorations(repo)?,
+        commits: LoadedCommits { rows, attributions },
+    })
+}
+
+fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
+    let implicit_head = OsString::from("HEAD");
+    let revisions = if revisions.is_empty() {
+        std::slice::from_ref(&implicit_head)
+    } else {
+        revisions
+    };
+    let mut out = HashMap::new();
+    for revision in revisions {
+        let revision = gix::path::os_str_into_bstr(revision)
+            .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+        let spec = repo
+            .rev_parse(revision)
+            .with_context(|| format!("could not parse revision {revision}"))?;
+        for reference in [spec.first_reference(), spec.second_reference()].into_iter().flatten() {
+            insert_ref_chain(repo, reference.name.as_bstr(), &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+fn insert_ref_chain(repo: &gix::Repository, name: &BStr, out: &mut HashMap<BString, gix::refs::Target>) -> Result<()> {
+    let mut name = name.to_owned();
+    loop {
+        if out.contains_key(&name) {
+            return Ok(());
+        }
+        let reference = match repo.try_find_reference(name.as_bstr()) {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&err) => return Ok(()),
+            Err(err) => return Err(err).with_context(|| format!("could not read reference {name}")),
+        };
+        let Some(reference) = reference else {
+            return Ok(());
+        };
+        let target = reference.target().into_owned();
+        let next = target.try_name().map(|name| name.as_bstr().to_owned());
+        out.insert(name, target);
+        let Some(next) = next else { return Ok(()) };
+        name = next;
+    }
 }
 
 pub(crate) fn load_metadata(
@@ -148,6 +336,8 @@ fn decode_metadata<'a>(
     let mut author = None;
     let attribution_start = attributions.len();
     let mut title = None;
+    let mut has_agent_marker = false;
+    let mut signature = SignatureState::Unsigned;
     for token in tokens {
         match token.context("could not decode commit")? {
             Token::Author { signature } => {
@@ -158,6 +348,7 @@ fn decode_metadata<'a>(
                 committer_time = Some(signature.time().context("could not decode committer time")?);
             }
             Token::Message(message) => {
+                has_agent_marker = contains_agent_marker(message);
                 let message = gix::objs::commit::MessageRef::from_bytes(message);
                 title = Some(message.summary().into_owned());
                 if let Some(body) = message.body() {
@@ -183,6 +374,9 @@ fn decode_metadata<'a>(
                     }
                 }
             }
+            Token::ExtraHeader((name, _)) if name == "gpgsig" || name == "gpgsig-sha256" => {
+                signature = SignatureState::Unverified;
+            }
             _ => {}
         }
     }
@@ -191,7 +385,15 @@ fn decode_metadata<'a>(
         author: author.context("commit has no author")?,
         attributions: attribution_start..attributions.len(),
         title: title.context("commit has no message")?,
+        has_agent_marker,
+        signature,
     })
+}
+
+fn contains_agent_marker(message: &[u8]) -> bool {
+    [b"--- agent".as_slice(), b"<!-- agent -->".as_slice()]
+        .iter()
+        .any(|marker| message.windows(marker.len()).any(|window| window == *marker))
 }
 
 pub(crate) fn count_up_to(
@@ -287,7 +489,7 @@ impl Authors {
     }
 }
 
-fn decorations(repo: &gix::Repository) -> Result<Decorations> {
+pub(crate) fn decorations(repo: &gix::Repository) -> Result<Decorations> {
     let mut out = Decorations::new();
     for reference in repo
         .references()
@@ -295,7 +497,11 @@ fn decorations(repo: &gix::Repository) -> Result<Decorations> {
         .all()
         .context("could not iterate references")?
     {
-        let mut reference = reference.map_err(|err| anyhow::anyhow!("could not read reference: {err}"))?;
+        let mut reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
+        };
         let mut kind = decoration_kind(reference.name().as_bstr());
         if kind == DecorationKind::Tag {
             let annotated = match reference.try_id() {
@@ -328,6 +534,19 @@ fn decorations(repo: &gix::Repository) -> Result<Decorations> {
         });
     }
     Ok(out)
+}
+
+fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
+    loop {
+        if err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+        {
+            return true;
+        }
+        let Some(source) = err.source() else { return false };
+        err = source;
+    }
 }
 
 fn decoration_kind(name: &[u8]) -> DecorationKind {
@@ -370,6 +589,22 @@ mod tests {
             },
         )?;
         Ok(events)
+    }
+
+    #[test]
+    fn only_missing_ref_reads_are_ignored() {
+        let ref_error = |kind| gix::refs::file::iter::loose_then_packed::Error::ReadFileContents {
+            source: std::io::Error::from(kind),
+            path: "refs/heads/racing".into(),
+        };
+        assert!(
+            is_missing_ref(&ref_error(std::io::ErrorKind::NotFound)),
+            "a ref removed after iteration began is transient"
+        );
+        assert!(
+            !is_missing_ref(&ref_error(std::io::ErrorKind::PermissionDenied)),
+            "unrelated ref read errors remain actionable"
+        );
     }
 
     #[test]
@@ -416,6 +651,7 @@ mod tests {
             topic.author.is_bot(),
             "well-known bot email addresses identify bot authors"
         );
+        assert!(topic.has_agent_marker, "history loading recognizes the agent marker");
         assert_eq!(
             attributions[topic.attributions.clone()]
                 .iter()
@@ -437,6 +673,33 @@ mod tests {
             "2000-01-04",
             "the committer date is retained"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recognizes_supported_agent_markers() {
+        assert!(contains_agent_marker(b"subject\n\n--- agent\n"));
+        assert!(contains_agent_marker(b"subject\n\n<!-- agent -->\n"));
+        assert!(!contains_agent_marker(b"subject\n\nagent"));
+    }
+
+    #[test]
+    fn snapshots_references_and_symbolic_targets_from_revisions() -> gix_testtools::Result {
+        let fixture = fixture()?;
+        let repo = gix::open(fixture)?;
+        let implicit = snapshot(&repo, &[], &[])?;
+        assert!(
+            implicit.view.contains_key(b"HEAD".as_bstr()),
+            "an implicit revision watches HEAD"
+        );
+        assert!(
+            implicit.view.contains_key(b"refs/heads/main".as_bstr()),
+            "the symbolic target of HEAD is watched as well"
+        );
+
+        let explicit = snapshot(&repo, &[OsString::from("main")], &[OsString::from("topic")])?;
+        assert!(explicit.view.contains_key(b"refs/heads/main".as_bstr()));
+        assert!(explicit.hidden.contains_key(b"refs/heads/topic".as_bstr()));
         Ok(())
     }
 
@@ -515,6 +778,18 @@ mod tests {
         let expected = String::from_utf8(output.stdout)?.lines().map(str::to_owned).collect();
         assert_eq!(actual, expected, "hidden tips use Git's exclusion semantics");
         let repo = gix::open(&fixture)?;
+        let connected: Vec<_> = events
+            .iter()
+            .flat_map(|event| match event {
+                Event::HiddenCommits(batch) => batch.rows.iter().map(|row| row.id).collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(
+            connected,
+            [repo.rev_parse_single("topic^")?.detach()],
+            "only the excluded parent directly connected to visible history is retained"
+        );
         let revisions = [OsString::from("topic")];
         let hidden = [OsString::from("main")];
         assert_eq!(

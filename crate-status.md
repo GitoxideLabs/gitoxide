@@ -98,7 +98,7 @@ The top-level crate that acts as hub to all functionality provided by the `gix-*
         * [x] use credential helper configuration and to obtain credentials with `gix_credentials::helper::Cascade`
     * **traverse**
         * [x] commit graphs
-        * [ ] make [git-notes](https://git-scm.com/docs/git-notes) accessible
+        * [x] make [git-notes](https://git-scm.com/docs/git-notes) accessible
         * [x] tree entries
     * **diffs/changes**
         * [x] tree with other tree
@@ -619,7 +619,7 @@ Provide a native SSH transport and authentication backend so `gix` users can shi
 
 A mechanism to associate metadata with any object, and keep revisions of it using git itself.
 
-* [ ] CRUD for git notes
+* [x] CRUD for git notes
 
 ### gix-negotiate
 * **algorithms**
