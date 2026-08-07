@@ -206,19 +206,23 @@ baseline_relative '20 years ago' ''
 # ============================================================================
 # RELATIVE FORMS GIT ACCEPTS BEYOND "<n> <unit> ago"
 # ============================================================================
-# `approxidate_str()` only ever reads runs of digits and runs of letters, so any
-# other byte separates them just as a space would.
+# ascii-alnum is the for relevant partitions, so anything else separates them.
 baseline_relative '1.hour.ago' ''
 baseline_relative '1-hour-ago' ''
 
-# Unit names are compared with `match_string()`, which folds case.
+# Unit names are case-insensitive
 baseline_relative '2 HOURS ago' ''
 baseline_relative '2 Days ago' ''
+baseline_relative '2 Days ago 1 hour' ''
+baseline_relative '2 Days 1 hour ago' ''
+baseline_relative '2 Days and 1 hour ago' ''
 
-# Counts may be spelled out; `number_name[]` holds one through ten. `zero` is not
-# in it, as Git's lookup starts at one.
+# Counts can be spelled out, 1-10.
+baseline_relative 'zero days ago' ''
 baseline_relative 'two days ago' ''
 baseline_relative 'ten minutes ago' ''
+baseline_relative 'eleven minutes ago' ''
 
 # `last` is a count of one, and the trailing `ago` is not required.
 baseline_relative 'last week' ''
+baseline_relative 'last day ago' ''

@@ -33,6 +33,10 @@ fn various() {
         ("5 minutes ago", 5.minutes()),
         ("5 hours ago", 5.hours()),
         ("5 days ago", 5.days()),
+        ("2 Days 1 hour ago", 49.hours()),
+        ("2 Days ago 1 hour", 49.hours()),
+        ("2 Days and 23 hours ago", 71.hours()),
+        ("last day", 24.hours()),
         ("3 weeks ago", 3.weeks()),
         ("21 days ago", 21.days()),              // 3 weeks
         ("504 hours ago", 504.hours()),          // 3 weeks
