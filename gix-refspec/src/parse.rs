@@ -8,19 +8,22 @@ pub enum Error {
     NegativeWithDestination,
     #[error("Negative specs must not be empty")]
     NegativeEmpty,
-    #[error("Negative specs must be object hashes")]
+    #[error("Negative specs must not be object hashes")]
     NegativeObjectHash,
+    /// Retained for compatibility; partial negative ref names are accepted and this is no longer returned.
     #[error("Negative specs must be full ref names, starting with \"refs/\"")]
     NegativePartialName,
+    /// Retained for compatibility; negative ref patterns containing one `*` are accepted and this is no longer returned.
     #[error("Negative glob patterns are not allowed")]
     NegativeGlobPattern,
+    /// Retained for compatibility; invalid fetch destinations are reported as [`Error::ReferenceName`] instead.
     #[error("Fetch destinations must be ref-names, like 'HEAD:refs/heads/branch'")]
     InvalidFetchDestination,
     #[error("Cannot push into an empty destination")]
     PushToEmpty,
-    #[error("glob patterns may only involved a single '*' character, found {pattern:?}")]
+    #[error("refspec patterns may only contain a single '*' character, found {pattern:?}")]
     PatternUnsupported { pattern: bstr::BString },
-    #[error("Both sides of the specification need a pattern, like 'a/*:b/*'")]
+    #[error("Both sides of a two-sided specification need a pattern, like 'a/*:b/*'")]
     PatternUnbalanced,
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
@@ -116,11 +119,12 @@ pub(crate) mod function {
                 *spec = "HEAD".into();
             }
         }
-        let is_one_sided = dst.is_none();
-        let (src, src_had_pattern) = validated(src, operation == Operation::Push && dst.is_some(), is_one_sided)?;
-        let (dst, dst_had_pattern) = validated(dst, false, false)?;
-        // For one-sided refspecs, we don't need to check for pattern balance
-        if !is_one_sided && mode != Mode::Negative && src_had_pattern != dst_had_pattern {
+        let (src, src_had_pattern) = validated(src, operation == Operation::Push && dst.is_some())?;
+        let (dst, dst_had_pattern) = validated(dst, false)?;
+        if mode != Mode::Negative
+            && src_had_pattern != dst_had_pattern
+            && !(operation == Operation::Push && dst.is_none())
+        {
             return Err(Error::PatternUnbalanced);
         }
 
@@ -129,10 +133,6 @@ pub(crate) mod function {
                 Some(spec) => {
                     if looks_like_object_hash(spec) {
                         return Err(Error::NegativeObjectHash);
-                    } else if !spec.starts_with(b"refs/") && spec != "HEAD" {
-                        return Err(Error::NegativePartialName);
-                    } else if src_had_pattern {
-                        validate_negative_pattern(spec)?;
                     }
                 }
                 None => return Err(Error::NegativeEmpty),
@@ -151,15 +151,6 @@ pub(crate) mod function {
         spec.len() >= gix_hash::Kind::shortest().len_in_hex() && spec.iter().all(u8::is_ascii_hexdigit)
     }
 
-    fn validate_negative_pattern(spec: &BStr) -> Result<(), Error> {
-        if spec.iter().filter(|b| **b == b'*').take(2).count() > 1 {
-            return Err(Error::PatternUnsupported { pattern: spec.into() });
-        }
-
-        validate_partial_name_with_single_glob(spec)?;
-        Ok(())
-    }
-
     fn validate_partial_name_with_single_glob(spec: &BStr) -> Result<(), Error> {
         let mut buf = smallvec::SmallVec::<[u8; 256]>::with_capacity(spec.len());
         buf.extend_from_slice(spec);
@@ -172,23 +163,16 @@ pub(crate) mod function {
     /// Validate `spec`, and return it along with whether it holds a glob.
     ///
     /// `any_name` skips the check entirely, for the one side Git leaves unchecked.
-    fn validated(spec: Option<&BStr>, any_name: bool, is_one_sided: bool) -> Result<(Option<&BStr>, bool), Error> {
+    fn validated(spec: Option<&BStr>, any_name: bool) -> Result<(Option<&BStr>, bool), Error> {
         match spec {
             Some(spec) => {
                 let glob_count = spec.iter().filter(|b| **b == b'*').take(2).count();
                 if glob_count > 1 {
-                    // For one-sided refspecs, allow any number of globs without validation
-                    if !is_one_sided {
-                        return Err(Error::PatternUnsupported { pattern: spec.into() });
-                    }
+                    return Err(Error::PatternUnsupported { pattern: spec.into() });
                 }
-                // Check if there are any globs (one or more asterisks)
                 let has_globs = glob_count > 0;
                 if has_globs {
-                    // For one-sided refspecs, skip validation of glob patterns
-                    if !is_one_sided {
-                        validate_partial_name_with_single_glob(spec)?;
-                    }
+                    validate_partial_name_with_single_glob(spec)?;
                 } else if !any_name {
                     gix_validate::reference::name_partial(spec)?;
                 }

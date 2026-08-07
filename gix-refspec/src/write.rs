@@ -20,14 +20,14 @@ impl RefSpecRef<'_> {
 }
 
 impl Instruction<'_> {
-    /// Reproduce ourselves in parseable form.
+    /// Reproduce this instruction in refspec syntax.
     pub fn to_bstring(&self) -> BString {
         let mut buf = Vec::with_capacity(128);
         self.write_to(&mut buf).expect("no io error");
         buf.into()
     }
 
-    /// Serialize ourselves in a parseable format to `out`.
+    /// Serialize this instruction in refspec syntax to `out`.
     pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         match self {
             Instruction::Push(Push::Matching {

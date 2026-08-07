@@ -10,14 +10,14 @@ pub mod validate;
 
 /// Initialization
 impl<'a> MatchGroup<'a> {
-    /// Take all the fetch ref specs from `specs` get a match group ready.
+    /// Create a match group from all fetch refspecs in `specs`, ignoring push refspecs.
     pub fn from_fetch_specs(specs: impl IntoIterator<Item = RefSpecRef<'a>>) -> Self {
         MatchGroup {
             specs: specs.into_iter().filter(|s| s.op == Operation::Fetch).collect(),
         }
     }
 
-    /// Take all the push ref specs from `specs` get a match group ready.
+    /// Create a match group from all push refspecs in `specs`, ignoring fetch refspecs.
     pub fn from_push_specs(specs: impl IntoIterator<Item = RefSpecRef<'a>>) -> Self {
         MatchGroup {
             specs: specs.into_iter().filter(|s| s.op == Operation::Push).collect(),
@@ -32,7 +32,7 @@ impl<'spec> MatchGroup<'spec> {
     /// i.e. *left side of refspecs is mapped to their right side*.
     /// *Note that this method is correct only for fetch-specs*, even though it also *works for push-specs*.
     ///
-    /// Object names are never mapped and always returned as match.
+    /// Object IDs are emitted directly without being matched against `items`.
     ///
     /// Note that negative matches are not part of the return value, so they are not observable but will be used to remove mappings.
     // TODO: figure out how to deal with push-specs, probably when push is being implemented.

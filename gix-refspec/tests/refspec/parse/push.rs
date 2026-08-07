@@ -33,14 +33,8 @@ fn negative_with_destination() {
 
 #[test]
 fn exclude() {
-    assert!(matches!(
-        try_parse("^a", Operation::Push).unwrap_err(),
-        Error::NegativePartialName
-    ));
-    assert!(matches!(
-        try_parse("^a*", Operation::Push).unwrap_err(),
-        Error::NegativePartialName
-    ));
+    assert_parse("^a", Instruction::Push(Push::Exclude { src: b("a") }));
+    assert_parse("^a*", Instruction::Push(Push::Exclude { src: b("a*") }));
     assert_parse(
         "^refs/heads/a",
         Instruction::Push(Push::Exclude { src: b("refs/heads/a") }),
@@ -49,6 +43,18 @@ fn exclude() {
         "^refs/heads/*-deploy",
         Instruction::Push(Push::Exclude {
             src: b("refs/heads/*-deploy"),
+        }),
+    );
+}
+
+#[test]
+fn one_sided_pattern_matches_the_same_remote_refs() {
+    assert_parse(
+        "refs/heads/*",
+        Instruction::Push(Push::Matching {
+            src: b("refs/heads/*"),
+            dst: b("refs/heads/*"),
+            allow_non_fast_forward: false,
         }),
     );
 }
@@ -166,4 +172,11 @@ fn colon_alone_is_for_pushing_matching_refs() {
 fn delete() {
     assert_parse(":a", Instruction::Push(Push::Delete { ref_or_pattern: b("a") }));
     assert_parse("+:a", Instruction::Push(Push::Delete { ref_or_pattern: b("a") }));
+
+    for spec in [":refs/heads/*", "+:refs/heads/*"] {
+        assert!(
+            matches!(try_parse(spec, Operation::Push).unwrap_err(), Error::PatternUnbalanced),
+            "deletion destinations cannot be patterns"
+        );
+    }
 }

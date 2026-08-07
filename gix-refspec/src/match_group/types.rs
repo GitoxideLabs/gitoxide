@@ -5,7 +5,7 @@ use gix_hash::oid;
 
 use crate::RefSpecRef;
 
-/// A match group is able to match a list of ref specs in order while handling negation, conflicts and one to many mappings.
+/// Match a list of refspecs in order while handling negation, conflicts, and one-to-many mappings.
 #[derive(Default, Debug, Clone)]
 pub struct MatchGroup<'a> {
     /// The specs that take part in item matching.
@@ -47,7 +47,7 @@ pub mod match_rhs {
 /// An item to match, input to various matching operations.
 #[derive(Debug, Copy, Clone)]
 pub struct Item<'a> {
-    /// The full name of the references, like `refs/heads/main`
+    /// The full name of the reference, like `refs/heads/main`.
     pub full_ref_name: &'a BStr,
     /// The id that `full_ref_name` points to, which typically is a commit, but can also be a tag object (or anything else).
     pub target: &'a oid,
@@ -91,7 +91,7 @@ impl std::fmt::Display for SourceRef<'_> {
 /// The source (or left-hand) side of a mapping, which owns its name.
 pub type Source = SourceRef<'static>;
 
-/// A mapping from a remote to a local refs for fetches or local to remote refs for pushes.
+/// A mapping from a remote ref to a local ref for fetches, or from a local ref to a remote ref for pushes.
 ///
 /// Mappings are like edges in a graph, initially without any constraints.
 #[derive(Debug, Clone)]

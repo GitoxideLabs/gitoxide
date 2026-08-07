@@ -66,14 +66,8 @@ fn negative_with_destination() {
 
 #[test]
 fn exclude() {
-    assert!(matches!(
-        try_parse("^a", Operation::Fetch).unwrap_err(),
-        Error::NegativePartialName
-    ));
-    assert!(matches!(
-        try_parse("^a*", Operation::Fetch).unwrap_err(),
-        Error::NegativePartialName
-    ));
+    assert_parse("^a", Instruction::Fetch(Fetch::Exclude { src: b("a") }));
+    assert_parse("^a*", Instruction::Fetch(Fetch::Exclude { src: b("a*") }));
     assert_parse(
         "^refs/heads/a",
         Instruction::Fetch(Fetch::Exclude { src: b("refs/heads/a") }),
@@ -188,32 +182,17 @@ fn empty_refspec_is_enough_for_fetching_head_into_fetchhead() {
 }
 
 #[test]
-fn complex_glob_patterns_are_allowed_in_one_sided_refspecs() {
-    // Complex patterns with multiple asterisks should work for one-sided refspecs
-    assert_parse(
-        "refs/*/foo/*",
-        Instruction::Fetch(Fetch::Only { src: b("refs/*/foo/*") }),
-    );
-
-    assert_parse(
-        "+refs/heads/*/release/*",
-        Instruction::Fetch(Fetch::Only {
-            src: b("refs/heads/*/release/*"),
-        }),
-    );
-
-    // Even more complex patterns
-    assert_parse(
-        "refs/*/*/branch",
-        Instruction::Fetch(Fetch::Only {
-            src: b("refs/*/*/branch"),
-        }),
-    );
+fn glob_patterns_need_a_destination() {
+    for spec in ["refs/heads/*", "refs/heads/*:", ":refs/heads/*"] {
+        assert!(matches!(
+            try_parse(spec, Operation::Fetch).unwrap_err(),
+            Error::PatternUnbalanced
+        ));
+    }
 }
 
 #[test]
-fn complex_glob_patterns_still_fail_for_two_sided_refspecs() {
-    // Two-sided refspecs with complex patterns (multiple asterisks) should still fail
+fn patterns_with_multiple_asterisks_are_rejected() {
     for spec in [
         "refs/*/foo/*:refs/remotes/origin/*",
         "refs/*/*:refs/remotes/*",
