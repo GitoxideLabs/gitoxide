@@ -120,8 +120,6 @@ fn parse_line(line: &BStr, line_number: usize) -> Option<Result<(Kind, Iter<'_>,
         return None;
     }
 
-    // Broken quoting, like a pattern that never closes its quote, falls back to the raw text -
-    // `parse_attr_line()` in Git's `attr.c` reaches its unquoted branch the same way.
     let unquoted = line
         .starts_with(b"\"")
         .then(|| gix_quote::ansi_c::undo(line).ok())

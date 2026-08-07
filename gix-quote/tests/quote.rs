@@ -86,7 +86,7 @@ mod ansi_c {
             for unterminated in [r#"""#, r#""abc"#, r#""abc def"#, r#""abc\"#, r#""\""#] {
                 assert!(
                     ansi_c::undo(unterminated.into()).is_err(),
-                    "{unterminated:?} should not parse, just like in `unquote_c_style()`"
+                    "{unterminated:?} should not parse"
                 );
             }
         }

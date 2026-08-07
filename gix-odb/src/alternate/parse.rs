@@ -10,22 +10,34 @@ pub enum Error {
     PathConversion(Vec<u8>),
 }
 
-pub(crate) fn content(input: &[u8]) -> Result<Vec<PathBuf>, Error> {
+pub(crate) fn content(mut input: &[u8]) -> Result<Vec<PathBuf>, Error> {
     let mut out = Vec::new();
-    for line in input.split(|b| *b == b'\n') {
-        let line = line.as_bstr();
-        if line.is_empty() || line.starts_with(b"#") {
+    while !input.is_empty() {
+        let entry = input.as_bstr();
+        let end_of_line = || entry.find_byte(b'\n').unwrap_or(entry.len());
+        let (path, consumed) = if entry.starts_with(b"#") {
+            (None, end_of_line())
+        } else {
+            // Like Git, try unquoting before treating a newline as the next separator.
+            match entry.starts_with(b"\"").then(|| gix_quote::ansi_c::undo(entry)) {
+                Some(Ok((unquoted, consumed))) => (Some(unquoted), consumed),
+                _ => {
+                    let consumed = end_of_line();
+                    (Some(Cow::Borrowed(entry[..consumed].as_bstr())), consumed)
+                }
+            }
+        };
+        let original = &entry[..consumed];
+        let maybe_nl = usize::from(consumed < input.len());
+        input = &input[consumed + maybe_nl..];
+
+        let Some(path) = path.filter(|path| !path.is_empty()) else {
             continue;
-        }
+        };
         out.push(
-            // Broken quoting, like an entry that doesn't end with a quote, falls back to the raw
-            // line - a case that Git's alternates parsing in `odb.c` calls out in its own comment.
-            gix_path::try_from_bstr(match line.starts_with(b"\"").then(|| gix_quote::ansi_c::undo(line)) {
-                Some(Ok((unquoted, _consumed))) => unquoted,
-                _ => Cow::Borrowed(line),
-            })
-            .map_err(|_| Error::PathConversion(line.to_vec()))?
-            .into_owned(),
+            gix_path::try_from_bstr(path)
+                .map_err(|_| Error::PathConversion(original.to_vec()))?
+                .into_owned(),
         );
     }
     Ok(out)
@@ -41,7 +53,7 @@ mod tests {
         assert_eq!(
             content(br#""unterminated"#).expect("no path conversion issue"),
             vec![PathBuf::from(r#""unterminated"#)],
-            "broken quoting falls back to the raw line, like Git's alternates parsing does"
+            "broken quoting falls back to the raw line"
         );
     }
 
@@ -49,8 +61,16 @@ mod tests {
     fn a_properly_quoted_path_is_unquoted() {
         assert_eq!(
             content(br#""quoted\tpath""#).expect("no path conversion issue"),
-            vec![PathBuf::from("quoted\tpath")],
-            "…while quoting that is intact still decodes its escapes"
+            vec![PathBuf::from("quoted\tpath")]
+        );
+    }
+
+    #[test]
+    fn a_quoted_path_may_contain_the_line_separator() {
+        assert_eq!(
+            content(b"\"quoted\npath\"\nnext").expect("no path conversion issue"),
+            vec![PathBuf::from("quoted\npath"), PathBuf::from("next")],
+            "Git looks for a closing quote before treating a newline as the next separator"
         );
     }
 }

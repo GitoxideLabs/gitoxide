@@ -15,10 +15,7 @@ use gix_error::{ErrorExt, OptionExt, ResultExt, ValidationError};
 /// quotation, otherwise a new unquoted string will always be allocated.
 /// The amount of consumed bytes allow to pass strings that start with a quote, and skip all quoted text for additional processing
 ///
-/// A quote that is never closed is an error, just as in Git's `unquote_c_style()`. Note that Git's
-/// callers differ in how they respond to that: some abort, while those reading attributes and
-/// alternates fall back to using the raw, still-quoted text.
-///
+/// A quote that is never closed is an error.
 /// See [the tests][tests] for quotation examples.
 ///
 /// [tests]: https://github.com/GitoxideLabs/gitoxide/blob/64872690e60efdd9267d517f4d9971eecd3b875c/gix-quote/tests/quote.rs#L57-L74
@@ -97,8 +94,6 @@ pub fn undo(input: &BStr) -> Result<(Cow<'_, BStr>, usize), undo::Error> {
                 }
             }
             None => {
-                // Running out of input before the closing quote is an error in Git's
-                // `unquote_c_style()` as well.
                 return Err(
                     ValidationError::new_with_input("Missing closing quote in quoted string", original).raise(),
                 );
