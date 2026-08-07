@@ -13,7 +13,7 @@ impl Instruction<'_> {
 }
 
 /// Note that all sources can either be a ref-name, partial or full, or a rev-spec, unless specified otherwise, on the local side.
-/// A source that comes with a destination is whatever was written, as Git does not check that one either.
+/// A source that comes with a destination is whatever was written.
 /// Destinations can only be a partial or full ref names on the remote side.
 #[derive(PartialOrd, Ord, PartialEq, Eq, Copy, Clone, Hash, Debug)]
 pub enum Push<'a> {
@@ -40,7 +40,8 @@ pub enum Push<'a> {
     },
     /// Exclude a single ref.
     Exclude {
-        /// A full or partial ref name to exclude, or multiple if a single `*` is used.
+        /// A full ref name or `HEAD` to exclude, or multiple full ref names if a single `*` is used.
+        /// Partial ref names, rev-specs, and object hashes are not supported.
         src: &'a BStr,
     },
 }

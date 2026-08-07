@@ -117,8 +117,6 @@ pub(crate) mod function {
             }
         }
         let is_one_sided = dst.is_none();
-        // Git does not check a non-glob push source: it should be an extended SHA-1, which
-        // `parse_refspec()` has no repository to resolve, so it takes anything there.
         let (src, src_had_pattern) = validated(src, operation == Operation::Push && dst.is_some(), is_one_sided)?;
         let (dst, dst_had_pattern) = validated(dst, false, false)?;
         // For one-sided refspecs, we don't need to check for pattern balance
