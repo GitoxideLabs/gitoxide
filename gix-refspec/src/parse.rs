@@ -24,8 +24,6 @@ pub enum Error {
     PatternUnbalanced,
     #[error(transparent)]
     ReferenceName(#[from] gix_validate::reference::name::Error),
-    #[error(transparent)]
-    RevSpec(#[from] gix_revision::spec::parse::Error),
 }
 
 /// Define how the parsed refspec should be used.
@@ -44,7 +42,6 @@ pub(crate) mod function {
         types::Mode,
     };
     use bstr::{BStr, ByteSlice};
-    use gix_error::Exn;
 
     /// Parse `spec` for use in `operation` and return it if it is valid.
     pub fn parse(mut spec: &BStr, operation: Operation) -> Result<RefSpecRef<'_>, Error> {
@@ -120,6 +117,8 @@ pub(crate) mod function {
             }
         }
         let is_one_sided = dst.is_none();
+        // Git does not check a non-glob push source: it should be an extended SHA-1, which
+        // `parse_refspec()` has no repository to resolve, so it takes anything there.
         let (src, src_had_pattern) = validated(src, operation == Operation::Push && dst.is_some(), is_one_sided)?;
         let (dst, dst_had_pattern) = validated(dst, false, false)?;
         // For one-sided refspecs, we don't need to check for pattern balance
@@ -172,11 +171,10 @@ pub(crate) mod function {
         Ok(())
     }
 
-    fn validated(
-        spec: Option<&BStr>,
-        allow_revspecs: bool,
-        is_one_sided: bool,
-    ) -> Result<(Option<&BStr>, bool), Error> {
+    /// Validate `spec`, and return it along with whether it holds a glob.
+    ///
+    /// `any_name` skips the check entirely, for the one side Git leaves unchecked.
+    fn validated(spec: Option<&BStr>, any_name: bool, is_one_sided: bool) -> Result<(Option<&BStr>, bool), Error> {
         match spec {
             Some(spec) => {
                 let glob_count = spec.iter().filter(|b| **b == b'*').take(2).count();
@@ -193,83 +191,12 @@ pub(crate) mod function {
                     if !is_one_sided {
                         validate_partial_name_with_single_glob(spec)?;
                     }
-                } else {
-                    gix_validate::reference::name_partial(spec)
-                        .map_err(Error::from)
-                        .or_else(|err| {
-                            if allow_revspecs {
-                                gix_revision::spec::parse(spec, &mut super::revparse::Noop).map_err(Exn::into_inner)?;
-                                Ok(spec)
-                            } else {
-                                Err(err)
-                            }
-                        })?;
+                } else if !any_name {
+                    gix_validate::reference::name_partial(spec)?;
                 }
                 Ok((Some(spec), has_globs))
             }
             None => Ok((None, false)),
-        }
-    }
-}
-
-mod revparse {
-    use bstr::BStr;
-    use gix_error::Exn;
-    use gix_revision::spec::parse::delegate::{
-        Kind, Navigate, PeelTo, PrefixHint, ReflogLookup, Revision, SiblingBranch, Traversal,
-    };
-
-    pub(crate) struct Noop;
-
-    impl Revision for Noop {
-        fn find_ref(&mut self, _name: &BStr) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn disambiguate_prefix(&mut self, _prefix: gix_hash::Prefix, _hint: Option<PrefixHint<'_>>) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn reflog(&mut self, _query: ReflogLookup) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn nth_checked_out_branch(&mut self, _branch_no: usize) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn sibling_branch(&mut self, _kind: SiblingBranch) -> Result<(), Exn> {
-            Ok(())
-        }
-    }
-
-    impl Navigate for Noop {
-        fn traverse(&mut self, _kind: Traversal) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn peel_until(&mut self, _kind: PeelTo<'_>) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn find(&mut self, _regex: &BStr, _negated: bool) -> Result<(), Exn> {
-            Ok(())
-        }
-
-        fn index_lookup(&mut self, _path: &BStr, _stage: u8) -> Result<(), Exn> {
-            Ok(())
-        }
-    }
-
-    impl Kind for Noop {
-        fn kind(&mut self, _kind: gix_revision::spec::Kind) -> Result<(), Exn> {
-            Ok(())
-        }
-    }
-
-    impl gix_revision::spec::parse::Delegate for Noop {
-        fn done(&mut self) -> Result<(), Exn> {
-            Ok(())
         }
     }
 }

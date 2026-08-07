@@ -13,6 +13,7 @@ impl Instruction<'_> {
 }
 
 /// Note that all sources can either be a ref-name, partial or full, or a rev-spec, unless specified otherwise, on the local side.
+/// A source that comes with a destination is whatever was written, as Git does not check that one either.
 /// Destinations can only be a partial or full ref names on the remote side.
 #[derive(PartialOrd, Ord, PartialEq, Eq, Copy, Clone, Hash, Debug)]
 pub enum Push<'a> {

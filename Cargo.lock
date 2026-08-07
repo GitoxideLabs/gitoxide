@@ -2377,10 +2377,8 @@ name = "gix-refspec"
 version = "0.44.0"
 dependencies = [
  "bstr",
- "gix-error",
  "gix-glob",
  "gix-hash",
- "gix-revision",
  "gix-testtools",
  "gix-validate",
  "insta",
