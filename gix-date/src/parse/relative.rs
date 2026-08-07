@@ -39,14 +39,93 @@ fn parse_named(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn
     Some(subtract_span(now, span))
 }
 
+/// Parse Git-style relative count-unit pairs into one span.
+///
+/// Returns `None` if no pair is recognized and `Some(Err(_))` if span construction fails.
 fn parse_ago(input: &str) -> Option<Result<Span, Exn<Error>>> {
-    let mut split = input.split_whitespace();
-    let units = i64::from_str(split.next()?).ok()?;
-    let period = split.next()?;
-    if split.next()? != "ago" {
+    let mut words = input
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .peekable();
+
+    // Git applies a unit the moment it sees one and keeps going, so `2 days 3 hours ago` is both
+    // of them. Stopping after the first pair would turn that into a plausible-looking two days.
+    let mut pairs = Vec::new();
+    let mut ago = false;
+    while let Some(word) = words.peek() {
+        if word.eq_ignore_ascii_case("ago") {
+            ago = true;
+            words.next();
+            continue;
+        }
+        let Some(units) = count(word) else {
+            words.next();
+            continue;
+        };
+        words.next();
+        let Some(period) = words.next() else { break };
+        pairs.push((period, units));
+    }
+    if pairs.is_empty() {
         return None;
     }
-    span(period, units)
+    let mut total = Span::new();
+    for (period, units) in pairs {
+        match span(total, period, units, ago)? {
+            Ok(next) => total = next,
+            Err(err) => return Some(Err(err)),
+        }
+    }
+    Some(Ok(total))
+}
+
+/// The count in front of the unit, either written out in digits or spelled with one of one-ten.
+/// Note that `zero` is deliberately absent: Git's lookup starts at
+/// one, so `zero days ago` is not a relative date there either.
+fn count(input: &str) -> Option<i64> {
+    if let Ok(units) = i64::from_str(input) {
+        return Some(units);
+    }
+    const NAMES: &[&str] = &[
+        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    NAMES
+        .iter()
+        .position(|name| input.eq_ignore_ascii_case(name))
+        .map(|pos| pos as i64 + 1)
+        .or_else(|| input.eq_ignore_ascii_case("last").then_some(1))
+}
+
+/// Add `units` of `period` to `total`.
+///
+/// An unknown period returns `None` unless `ago` occurred in the input, in which case it is
+/// treated as seconds. Span validation failures are returned as `Some(Err(_))`.
+fn span(total: Span, period: &str, units: i64, ago: bool) -> Option<Result<Span, Exn<Error>>> {
+    let period = period
+        .strip_suffix('s')
+        .or_else(|| period.strip_suffix('S'))
+        .unwrap_or(period);
+    let result = if period.eq_ignore_ascii_case("second") {
+        total.try_seconds(units)
+    } else if period.eq_ignore_ascii_case("minute") {
+        total.try_minutes(units)
+    } else if period.eq_ignore_ascii_case("hour") {
+        total.try_hours(units)
+    } else if period.eq_ignore_ascii_case("day") {
+        total.try_days(units)
+    } else if period.eq_ignore_ascii_case("week") {
+        total.try_weeks(units)
+    } else if period.eq_ignore_ascii_case("month") {
+        total.try_months(units)
+    } else if period.eq_ignore_ascii_case("year") {
+        total.try_years(units)
+    } else if ago {
+        // `ago` makes any period be counted as seconds.
+        total.try_seconds(units)
+    } else {
+        return None;
+    };
+    Some(result.or_raise(|| Error::new(format!("Couldn't parse span from '{period} {units}'"))))
 }
 
 fn subtract_span(now: Option<SystemTime>, span: Span) -> Result<Zoned, Exn<ValidationError>> {
@@ -61,20 +140,4 @@ fn subtract_span(now: Option<SystemTime>, span: Span) -> Result<Zoned, Exn<Valid
     let zdt = ts.to_zoned(TimeZone::UTC);
     zdt.checked_sub(span)
         .or_raise(|| Error::new(format!("Failed to subtract {zdt} from {span}")))
-}
-
-fn span(period: &str, units: i64) -> Option<Result<Span, Exn<Error>>> {
-    let period = period.strip_suffix('s').unwrap_or(period);
-    let result = match period {
-        "second" => Span::new().try_seconds(units),
-        "minute" => Span::new().try_minutes(units),
-        "hour" => Span::new().try_hours(units),
-        "day" => Span::new().try_days(units),
-        "week" => Span::new().try_weeks(units),
-        "month" => Span::new().try_months(units),
-        "year" => Span::new().try_years(units),
-        // Ignore values you don't know, assume seconds then (so does git)
-        _anything => Span::new().try_seconds(units),
-    };
-    Some(result.or_raise(|| Error::new(format!("Couldn't parse span from '{period} {units}'"))))
 }

@@ -130,6 +130,13 @@ baseline '946684800 +0000' 'RAW'
 baseline '1466000000 +0200' 'RAW'  # from git t0006
 baseline '1466000000 -0200' 'RAW'  # from git t0006
 
+# Git accepts a leading `@` before either of the two forms above. Re-formatting is not checked,
+# as the `@` isn't reproduced.
+baseline '@1234567890' ''
+baseline '@100000000' ''
+baseline '@1660874655 +0800' ''
+baseline '@1466000000 -0200' ''
+
 # Note: Git does not support negative timestamps through --type=expiry-date
 # gix-date does support them, but they can't be tested via the baseline.
 
@@ -195,3 +202,27 @@ baseline_relative '10 years ago' ''
 baseline_relative '20 years ago' ''
 
 # Note that we can't necessarily put 64bit dates here yet as `git` on the system might not yet support it.
+
+# ============================================================================
+# RELATIVE FORMS GIT ACCEPTS BEYOND "<n> <unit> ago"
+# ============================================================================
+# ascii-alnum is the for relevant partitions, so anything else separates them.
+baseline_relative '1.hour.ago' ''
+baseline_relative '1-hour-ago' ''
+
+# Unit names are case-insensitive
+baseline_relative '2 HOURS ago' ''
+baseline_relative '2 Days ago' ''
+baseline_relative '2 Days ago 1 hour' ''
+baseline_relative '2 Days 1 hour ago' ''
+baseline_relative '2 Days and 1 hour ago' ''
+
+# Counts can be spelled out, 1-10.
+baseline_relative 'zero days ago' ''
+baseline_relative 'two days ago' ''
+baseline_relative 'ten minutes ago' ''
+baseline_relative 'eleven minutes ago' ''
+
+# `last` is a count of one, and the trailing `ago` is not required.
+baseline_relative 'last week' ''
+baseline_relative 'last day ago' ''

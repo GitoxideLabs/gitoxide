@@ -54,6 +54,9 @@ use gix_error::{Exn, ResultExt};
 /// *   `1660874655 +0800`
 /// *   `-1660874655 +0800`
 ///
+/// A leading `@` may introduce either of the two forms above, as in `@1745582210 +0200`
+/// or `@1700000000`.
+///
 /// See also the [`parse_header()`].
 ///
 /// ### 8. GITOXIDE Format
@@ -66,13 +69,32 @@ use gix_error::{Exn, ResultExt};
 /// *   `Thu Sep 4 10:45:06 2022 -0400`
 /// *   `Mon Oct 27 10:30:00 2023 +0000`
 ///
-/// ### 10. Relative Dates (e.g., "2 minutes ago", "1 hour from now")
+/// ### 10. Relative Dates (e.g., "2 minutes ago")
 ///
 /// These dates are parsed *relative to a `now` timestamp*. The examples depend entirely on the value of `now`.
 /// If `now` is October 27, 2023 at 10:00:00 UTC:
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
+///
+/// The forms understood are `now`, `today`, `yesterday`, and one or more `<count> <unit>` pairs,
+/// as in `2 days 3 hours ago`. A count may be spelled out from `one` to `ten`, or be `last`, and
+/// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
+/// as `1 hour ago`. The trailing `ago` is optional.
+///
+/// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
+/// now` is an hour in the past to it, and to this function.
 pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Exn<Error>> {
+    // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
+    // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
+    // result through the generic loop, which skips the `@` and reads the digits as an epoch.
+    if let Some(rest) = input.strip_prefix('@') {
+        if let Some(val) = parse_raw(rest) {
+            return Ok(val);
+        }
+        if let Ok(seconds) = SecondsSinceUnixEpoch::from_str(rest) {
+            return Ok(Time::new(seconds, 0));
+        }
+    }
     Ok(if let Ok(val) = Date::strptime(SHORT.0, input) {
         let val = val
             .to_zoned(TimeZone::UTC)
