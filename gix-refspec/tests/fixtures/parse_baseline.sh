@@ -49,6 +49,8 @@ baseline push 'main~1'
 baseline fetch 'main~1'
 baseline push 'main~1:other~1'
 baseline push ':main~1'
+baseline push ':refs/heads/*'
+baseline push '+:refs/heads/*'
 
 baseline push 'refs/heads/*:refs/remotes/frotz'
 baseline push 'refs/heads:refs/remotes/frotz/*'
@@ -75,7 +77,11 @@ bad=$(printf '\011tab')
 baseline fetch "refs/heads/${bad}"
 baseline fetch 'refs/*/*'
 baseline fetch 'refs/heads/*'
+baseline fetch 'refs/heads/*:'
 baseline fetch '^refs/*/*'
+baseline push 'refs/*/x/*'
+baseline push 'refs/heads/[ab]*'
+baseline push 'refs/heads/*..bad'
 
 # valid
 baseline push '+:'
@@ -88,6 +94,7 @@ baseline fetch '+'
 baseline push 'refs/heads/main:refs/remotes/frotz/xyzzy'
 baseline fetch '55e825ebe8fd2ff78cad3826afb696b96b576a7e:refs/heads/main'
 baseline push 'refs/heads/*:refs/remotes/frotz/*'
+baseline push 'refs/heads/*'
 
 
 baseline fetch 'refs/heads/*:refs/remotes/frotz/*'
@@ -114,6 +121,8 @@ baseline fetch '^refs/heads/main'
 baseline fetch '^refs/heads/*'
 baseline fetch '^heads/main'
 baseline fetch '^heads/*'
+baseline fetch '^short'
+baseline push '^short'
 
 baseline push '+@'
 baseline fetch '+@'
@@ -141,3 +150,18 @@ baseline push 'refs/heads/*/for-linus:refs/remotes/mine/*'
 
 good=$(printf '\303\204')
 baseline fetch "refs/heads/${good}"
+
+# A non-glob push source is whatever the user wrote: Git means it to be an extended
+# SHA-1, but `parse_refspec()` has no repository to resolve one against.
+baseline push '::a'
+baseline push '~:refs/heads/x'
+baseline push 'a^{:refs/heads/x'
+baseline push ':/:refs/heads/x'
+baseline push 'a@{:refs/heads/x'
+baseline push 'a^{bogus}:refs/heads/x'
+baseline push 'a~-1:refs/heads/x'
+baseline push 'a b:refs/heads/x'
+
+# The destination is still checked, and a missing one makes the source a ref name.
+baseline push 'a^{bogus}:refs/heads/ x'
+baseline push 'a^{bogus}'

@@ -101,24 +101,6 @@ pub mod baseline {
         );
     }
 
-    pub fn invalid_specs_fail_to_parse_where_git_shows_surprising_behaviour<'a>(
-        specs: impl IntoIterator<Item = &'a str>,
-        err: gix_refspec::parse::Error,
-    ) {
-        let err = err.to_string();
-        let mut saw_err = false;
-        for spec in specs {
-            match gix_refspec::parse(spec.into(), Operation::Fetch) {
-                Ok(_) => {}
-                Err(e) if e.to_string() == err => {
-                    saw_err = true;
-                }
-                Err(err) => panic!("Unexpected parse error: {err:?}"),
-            }
-        }
-        assert!(saw_err, "Failed to see error when parsing specs: {err:?}");
-    }
-
     /// Here we checked by hand which refs are actually written with a particular refspec
     pub fn agrees_but_observable_refs_are_vague<'a, 'b>(
         specs: impl IntoIterator<Item = &'a str> + Clone,

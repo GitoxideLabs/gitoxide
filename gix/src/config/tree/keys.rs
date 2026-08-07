@@ -529,10 +529,6 @@ mod remote_name {
         }
 
         /// Try to validate `name` as symbolic remote name and return it.
-        #[expect(
-            clippy::result_large_err,
-            reason = "will be removed once `gix-error` is used consistently"
-        )]
         pub fn try_into_symbolic_name(
             &'static self,
             name: impl gix_utils::AsBStr,

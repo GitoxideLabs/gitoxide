@@ -3,7 +3,7 @@ use std::{borrow::Cow, ops::Range};
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_hash::ObjectId;
 
-use crate::{RefSpecRef, match_group::Item};
+use crate::{RefSpecRef, match_group::Item, types::Mode};
 
 /// A type keeping enough information about a ref-spec to be able to efficiently match it against multiple matcher items.
 #[derive(Debug)]
@@ -18,7 +18,7 @@ impl<'a> Matcher<'a> {
     /// Or return `(true, None)` if there was no `rhs` but the `item` matched.
     /// Lastly, return `(false, None)` if `item` didn't match at all.
     ///
-    /// This may involve resolving a glob with an allocation, as the destination is built using the matching portion of a glob.
+    /// This may allocate when constructing a destination from the portion matched by a ref pattern.
     pub fn matches_lhs(&self, item: Item<'_>) -> (bool, Option<Cow<'a, BStr>>) {
         match (self.lhs, self.rhs) {
             (Some(lhs), None) => (lhs.matches(item).is_match(), None),
@@ -32,7 +32,7 @@ impl<'a> Matcher<'a> {
     /// Or return `(true, None)` if there was no `lhs` but the `item` matched.
     /// Lastly, return `(false, None)` if `item` didn't match at all.
     ///
-    /// This may involve resolving a glob with an allocation, as the destination is built using the matching portion of a glob.
+    /// This may allocate when constructing a source from the portion matched by a ref pattern.
     pub fn matches_rhs(&self, item: Item<'_>) -> (bool, Option<Cow<'a, BStr>>) {
         match (self.lhs, self.rhs) {
             (None, Some(rhs)) => (rhs.matches(item).is_match(), None),
@@ -47,7 +47,6 @@ pub(crate) enum Needle<'a> {
     FullName(&'a BStr),
     PartialName(&'a BStr),
     Glob { name: &'a BStr, asterisk_pos: usize },
-    Pattern(&'a BStr),
     Object(ObjectId),
 }
 
@@ -104,17 +103,6 @@ impl<'a> Needle<'a> {
                 let end = item.full_ref_name.len() - tail.len();
                 Match::GlobRange(*asterisk_pos..end)
             }
-            Needle::Pattern(pattern) => {
-                if gix_glob::wildmatch(
-                    pattern,
-                    item.full_ref_name,
-                    gix_glob::wildmatch::Mode::NO_MATCH_SLASH_LITERAL,
-                ) {
-                    Match::Normal
-                } else {
-                    Match::None
-                }
-            }
             Needle::Object(id) => {
                 if *id == item.target {
                     return Match::Normal;
@@ -150,11 +138,7 @@ impl<'a> Needle<'a> {
                 name.insert_str(0, "refs/heads/");
                 Cow::Owned(name.into())
             }
-            (Needle::Pattern(name), None) => Cow::Borrowed(name),
             (Needle::Glob { .. }, None) => unreachable!("BUG: no range provided for glob pattern"),
-            (Needle::Pattern(_), Some(_)) => {
-                unreachable!("BUG: range provided for pattern, but patterns don't use ranges")
-            }
             (_, Some(_)) => {
                 unreachable!("BUG: range provided even though needle wasn't a glob. Globs are symmetric.")
             }
@@ -185,28 +169,15 @@ impl<'a> From<&'a BStr> for Needle<'a> {
 
 impl<'a> From<RefSpecRef<'a>> for Matcher<'a> {
     fn from(v: RefSpecRef<'a>) -> Self {
-        let mut m = Matcher {
-            lhs: v.src.map(Into::into),
-            rhs: v.dst.map(Into::into),
-        };
-        if m.rhs.is_none() {
-            if let Some(src) = v.src {
-                if must_use_pattern_matching(src) {
-                    m.lhs = Some(Needle::Pattern(src));
+        Matcher {
+            lhs: v.src.map(|src| {
+                if v.mode == Mode::Negative && src.find_byte(b'*').is_none() {
+                    Needle::FullName(src)
+                } else {
+                    src.into()
                 }
-            }
+            }),
+            rhs: v.dst.map(Into::into),
         }
-        m
     }
-}
-
-/// Check if a pattern is complex enough to require wildmatch instead of simple glob matching
-fn must_use_pattern_matching(pattern: &BStr) -> bool {
-    let asterisk_count = pattern.iter().filter(|&&b| b == b'*').count();
-    if asterisk_count > 1 {
-        return true;
-    }
-    pattern
-        .iter()
-        .any(|&b| b == b'?' || b == b'[' || b == b']' || b == b'\\')
 }

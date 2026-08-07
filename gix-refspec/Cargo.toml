@@ -21,11 +21,8 @@ sha1 = ["gix-hash/sha1"]
 sha256 = ["gix-hash/sha256"]
 
 [dependencies]
-gix-error = { version = "^0.2.5", path = "../gix-error" }
-gix-revision = { version = "^0.48.0", path = "../gix-revision", default-features = false }
 gix-validate = { version = "^0.11.3", path = "../gix-validate" }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
-gix-glob = { version = "^0.27.0", path = "../gix-glob" }
 
 bstr = { version = "1.12.0", default-features = false, features = ["std"] }
 thiserror = "2.0.18"
