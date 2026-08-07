@@ -167,6 +167,7 @@ mod with_overrides {
             .set("GIT_ICASE_PATHSPECS", "pathspecs-icase")
             .set("GIT_TERMINAL_PROMPT", "42")
             .set("GIT_SHALLOW_FILE", "shallow-file-env")
+            .set("GIT_INDEX_FILE", "index-file-env")
             .set("GIT_NAMESPACE", "namespace-env")
             .set("GIT_EXTERNAL_DIFF", "external-diff-env");
         let mut opts = gix::open::Options::isolated()
@@ -181,6 +182,7 @@ mod with_overrides {
                 "gitoxide.ssh.commandWithoutShellFallback=ssh-command-fallback-cli",
                 "gitoxide.http.proxyAuthMethod=proxy-auth-method-cli",
                 "gitoxide.core.shallowFile=shallow-file-cli",
+                "gitoxide.core.indexFile=index-file-cli",
                 "gitoxide.core.refsNamespace=namespace-cli",
             ])
             .config_overrides([
@@ -194,6 +196,7 @@ mod with_overrides {
                 "gitoxide.ssh.commandWithoutShellFallback=ssh-command-fallback-api",
                 "gitoxide.http.proxyAuthMethod=proxy-auth-method-api",
                 "gitoxide.core.shallowFile=shallow-file-api",
+                "gitoxide.core.indexFile=index-file-api",
                 "gitoxide.core.refsNamespace=namespace-api",
             ]);
         opts.permissions.env.git_prefix = Permission::Allow;
@@ -210,6 +213,10 @@ mod with_overrides {
         assert_eq!(
             config.strings("gitoxide.core.shallowFile").expect("at least one value"),
             ["shallow-file-cli", "shallow-file-api", "shallow-file-env"]
+        );
+        assert_eq!(
+            config.strings("gitoxide.core.indexFile").expect("at least one value"),
+            ["index-file-cli", "index-file-api", "index-file-env"]
         );
         assert_eq!(
             config
@@ -501,6 +508,159 @@ fn git_worktree_absolute_over_root_overrides_bare() -> gix_testtools::Result {
         repo.workdir(),
         Some(worktree.path()),
         "an absolute path with `..` beyond the root resolves to the configured worktree"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn git_index_file_overrides_the_index_in_the_git_dir() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let index_file = repository.path().join(".git").join("temporary-index");
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_INDEX_FILE", index_file.to_string_lossy());
+
+    let repo = gix::discover_opts(repository.path(), Default::default(), gix::open::Options::isolated())?;
+    assert_eq!(
+        repo.index_path(),
+        repo.git_dir().join("index"),
+        "without environment overrides the index in the git-dir is used even though one is set"
+    );
+    #[cfg(feature = "index")]
+    {
+        assert_eq!(
+            repo.index()?.entries().len(),
+            1,
+            "the index in the git-dir has an entry, so it is distinguishable from the override"
+        );
+    }
+
+    let repo = discover_with_environment_overrides_isolated(repository.path())?;
+
+    assert_eq!(
+        repo.index_path(),
+        index_file,
+        "GIT_INDEX_FILE replaces the index in the git-dir just like it does in Git"
+    );
+
+    #[cfg(feature = "index")]
+    {
+        gix::index::File::from_state(gix::index::State::new(repo.object_hash()), index_file)
+            .write(Default::default())?;
+        assert!(
+            repo.index()?.entries().is_empty(),
+            "the override is read, not the index in the git-dir"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn git_index_file_relative_paths_use_the_cwd_when_opening() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let _cwd = gix_testtools::set_current_dir(repository.path())?;
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_INDEX_FILE", "temporary-index");
+
+    let repo = discover_with_environment_overrides_isolated(repository.path())?;
+
+    assert_eq!(
+        repo.index_path(),
+        repo.current_dir().join("temporary-index"),
+        "relative paths start at the captured CWD, which is where Git invokes hooks"
+    );
+    assert_ne!(
+        repo.index_path(),
+        repo.git_dir().join("temporary-index"),
+        "they are notably not relative to the git-dir"
+    );
+
+    #[cfg(feature = "index")]
+    {
+        gix::index::File::from_state(gix::index::State::new(repo.object_hash()), repo.index_path())
+            .write(Default::default())?;
+        assert!(
+            repo.index()?.entries().is_empty(),
+            "the relative path is resolved and read"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(feature = "index")]
+fn git_index_file_missing_yields_no_index() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let index_file = repository.join(".git").join("missing");
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_INDEX_FILE", index_file.to_string_lossy());
+
+    let repo = discover_with_environment_overrides_isolated(&repository)?;
+
+    assert!(
+        repo.git_dir().join("index").is_file(),
+        "the index in the git-dir exists and would be found without the override"
+    );
+    assert!(
+        repo.try_index()?.is_none(),
+        "a missing file reports no index instead of falling back to the git-dir"
+    );
+    assert!(
+        repo.index_or_empty()?.entries().is_empty(),
+        "and the usual empty-index semantics apply"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn git_index_file_empty_is_treated_as_unset() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let _env = gix_testtools::Env::new().unset("GIT_DIR").set("GIT_INDEX_FILE", "");
+
+    let repo = discover_with_environment_overrides_isolated(&repository)?;
+
+    assert_eq!(
+        repo.index_path(),
+        repo.git_dir().join("index"),
+        "an empty value would otherwise resolve to the current directory itself"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(feature = "index")]
+fn git_index_file_receives_writes_while_the_git_dir_index_is_locked() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let index_file = repository.path().join(".git").join("temporary-index");
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_INDEX_FILE", index_file.to_string_lossy());
+
+    let repo = discover_with_environment_overrides_isolated(repository.path())?;
+    let git_dir_index = repo.git_dir().join("index");
+    let git_dir_index_before = std::fs::read(&git_dir_index)?;
+
+    // `git commit <paths>` holds this lock for the duration of the commit, hooks included.
+    std::fs::write(repo.git_dir().join("index.lock"), [])?;
+
+    let mut index = (**repo.index_or_empty()?).clone();
+    index.write(Default::default())?;
+
+    assert!(
+        index_file.is_file(),
+        "the write lands on the override, so the lock in the git-dir isn't contended"
+    );
+    assert_eq!(
+        std::fs::read(&git_dir_index)?,
+        git_dir_index_before,
+        "and the index in the git-dir is left untouched"
     );
     Ok(())
 }

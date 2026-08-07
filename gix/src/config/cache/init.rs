@@ -506,6 +506,10 @@ fn apply_environment_overrides(
                     (env(key), key.name)
                 },
                 {
+                    let key = &gitoxide::Core::INDEX_FILE;
+                    (env(key), key.name)
+                },
+                {
                     let key = &gitoxide::Core::REFS_NAMESPACE;
                     (env(key), key.name)
                 },

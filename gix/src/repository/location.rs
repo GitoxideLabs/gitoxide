@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::bstr::BStr;
+use crate::{bstr::BStr, config::tree::gitoxide};
 
 impl crate::Repository {
     /// Return the path to the repository itself, containing objects, references, configuration, and more.
@@ -38,7 +38,15 @@ impl crate::Repository {
 
     /// Return the path to the worktree index file, which may or may not exist.
     pub fn index_path(&self) -> PathBuf {
-        self.git_dir().join("index")
+        match self
+            .config
+            .resolved
+            .string_filter(gitoxide::Core::INDEX_FILE, &mut self.filter_config_section())
+            .filter(|path| !path.is_empty())
+        {
+            Some(path) => self.current_dir().join(gix_path::from_bstr(path)),
+            None => self.git_dir().join("index"),
+        }
     }
 
     /// The path to the `.gitmodules` file in the worktree, if a worktree is available.
