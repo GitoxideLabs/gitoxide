@@ -17,6 +17,7 @@ use crate::{
 };
 
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
+const COMMIT_PANE_WIDTH: u16 = 84;
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 
@@ -208,7 +209,7 @@ pub(crate) fn draw_with_worktree(
     let tree_summary = tree_changes.map(|changes| changes_summary(ChangePane::Tree, app, changes));
     let worktree_summary = worktree_changes.map(|changes| changes_summary(ChangePane::Worktree, app, changes));
     let commit_pane = app.show_commit.then(|| {
-        let width = 80.min(full_body.width / 2);
+        let width = COMMIT_PANE_WIDTH.min(full_body.width / 2);
         let [commits, message] = Layout::horizontal([Constraint::Min(0), Constraint::Length(width)]).areas(full_body);
         body.width = body.width.min(commits.width);
         let mut content = message.inner(Margin {
@@ -2200,20 +2201,37 @@ mod tests {
 
         app.update(Action::ToggleCommit);
         let mut wide_terminal = Terminal::new(TestBackend::new(200, 6))?;
+        let conventional_line = format!("{} word", "x".repeat(75));
         wide_terminal.draw(|frame| {
             super::draw(
                 frame,
                 &mut app,
                 &Decorations::new(),
                 &gix::mailmap::Snapshot::default(),
-                Some(b"subject".as_bstr()),
+                Some(conventional_line.as_bytes().as_bstr()),
                 None,
             );
         })?;
         assert_eq!(
-            wide_terminal.backend().buffer()[(122, 0)].symbol(),
-            "s",
-            "the pane remains eighty columns wide on a wide screen"
+            wide_terminal.backend().buffer()[(118, 0)].symbol(),
+            "x",
+            "the pane reserves eighty content columns on a wide screen"
+        );
+        assert!(
+            rendered_line(&wide_terminal, 0)
+                .chars()
+                .skip(118)
+                .take(80)
+                .collect::<String>()
+                .ends_with(" word")
+                && rendered_line(&wide_terminal, 1)
+                    .chars()
+                    .skip(118)
+                    .take(80)
+                    .collect::<String>()
+                    .trim()
+                    .is_empty(),
+            "an eighty-column message line does not wrap its final word"
         );
         Ok(())
     }
@@ -2815,7 +2833,7 @@ mod tests {
             ChangesLayout::SideBySide,
             "sufficient remaining width still permits side-by-side changes"
         );
-        assert_eq!(wide_terminal.backend().buffer()[(160, 7)].symbol(), "│");
+        assert_eq!(wide_terminal.backend().buffer()[(156, 7)].symbol(), "│");
         Ok(())
     }
 
