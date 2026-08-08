@@ -6,21 +6,28 @@
 # Shares its script with `gix-worktree`; bakes `git check-ignore` baseline
 # output that may depend on the host git version.
 make_ignore_and_attributes_setup.tar
+make_ignore_and_attributes_setup_sha256.tar
 # Uses `ln -sf` to create a symlink in the working tree.
 make_mixed_without_submodules.tar
+make_mixed_without_submodules_sha256.tar
 # Uses `ln -sf` and adds a submodule; submodule .git/modules paths embed the
 # host absolute path of the parent worktree.
 make_mixed.tar
+make_mixed_sha256.tar
 # Despite its name, configures a `filter=arrow` clean filter whose effect on
 # the working tree depends on the test driver being available at run time;
 # generating once per host avoids drift.
 make_mixed_without_submodules_and_symlinks.tar
+make_mixed_without_submodules_and_symlinks_sha256.tar
 # Bakes `git check-attr` baseline output, which may vary by git version.
 make_attributes_baseline.tar
+make_attributes_baseline_sha256.tar
 # Constructs intentionally malicious symlinks (e.g., `FAKE-DIR`, `FAKE-FILE`);
 # these cannot be safely unpacked on every platform.
 make_dangerous_symlink.tar
+make_dangerous_symlink_sha256.tar
 # Indexes multiple paths that differ only by case (e.g. `FILE_X`/`file_x`).
 # Checking such an archive out fails on case-insensitive filesystems
 # (default macOS, Windows), so the fixture must be (re)generated locally.
 make_ignorecase_collisions.tar
+make_ignorecase_collisions_sha256.tar

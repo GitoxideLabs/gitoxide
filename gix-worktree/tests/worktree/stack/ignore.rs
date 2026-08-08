@@ -112,8 +112,20 @@ fn check_against_baseline() -> crate::Result {
     // Due to the way our setup differs from gits dynamic stack (which involves trying to read files from disk
     // by path) we can only test one case baseline, so we require multiple platforms (or filesystems) to run this.
     let case = probe_case()?;
-    let mut index = gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default())?;
-    let odb = gix_odb::at(git_dir.join("objects"))?;
+    let mut index = gix_index::File::at(
+        git_dir.join("index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let odb = gix_odb::at_opts(
+        git_dir.join("objects"),
+        Vec::new(),
+        gix_odb::store::init::Options {
+            object_hash: gix_testtools::object_hash(),
+            ..Default::default()
+        },
+    )?;
     let parse_ignore = gix_ignore::search::Ignore::default();
     let state = gix_worktree::stack::State::for_add(
         Default::default(),
