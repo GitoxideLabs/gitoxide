@@ -52,6 +52,7 @@ const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
+const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 struct FillRepository {
     path: PathBuf,
@@ -69,6 +70,11 @@ struct WorktreeWatcher {
     index: PathBuf,
 }
 
+struct RefWatcher {
+    _watcher: RecommendedWatcher,
+    events: mpsc::Receiver<notify::Result<notify::Event>>,
+}
+
 impl WorktreeWatcher {
     fn event_is_relevant(&self, event: &notify::Event) -> bool {
         worktree_event_is_relevant(event, &self.workdir, &self.dot_git, &self.git_dir, &self.index)
@@ -82,10 +88,37 @@ fn worktree_event_is_relevant(
     git_dir: &Path,
     index: &Path,
 ) -> bool {
-    !matches!(event.kind, notify::EventKind::Access(_))
-        && event.paths.iter().any(|path| {
-            path == index || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
-        })
+    event.need_rescan()
+        || (!matches!(event.kind, notify::EventKind::Access(_))
+            && event.paths.iter().any(|path| {
+                path == index || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
+            }))
+}
+
+fn notification_is_actionable(event: &notify::Event) -> bool {
+    event.need_rescan() || !matches!(event.kind, notify::EventKind::Access(_))
+}
+
+fn worktree_watcher_needed(repository_is_bare: bool, mode: Option<ChangesMode>) -> bool {
+    !repository_is_bare && mode == Some(ChangesMode::Both)
+}
+
+fn schedule_once(deadline: &mut Option<Instant>, now: Instant, delay: Duration) -> bool {
+    if deadline.is_some() {
+        false
+    } else {
+        *deadline = Some(now + delay);
+        true
+    }
+}
+
+fn take_due(deadline: &mut Option<Instant>, now: Instant) -> bool {
+    if deadline.is_some_and(|deadline| now >= deadline) {
+        *deadline = None;
+        true
+    } else {
+        false
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -632,7 +665,15 @@ fn event_loop(
         .context("could not open Git notes")?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
     let mut ref_snapshot = history::snapshot(&view_repository, &revisions, &hide)?;
-    let (mut ref_watcher, mut ref_events) = start_ref_watcher(&repository_path, &common_dir);
+    let mut watcher_retry_deadline = None;
+    let mut ref_watcher = match start_ref_watcher(&repository_path, &common_dir) {
+        Ok(watcher) => Some(watcher),
+        Err(err) => {
+            tracing::warn!(error = %err, "reference watcher startup failed");
+            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+            None
+        }
+    };
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
@@ -676,6 +717,16 @@ fn event_loop(
         repository_is_bare,
         line_diff_parallelism,
     )?;
+    if worktree_watcher_needed(repository_is_bare, app.changes_mode) {
+        match start_worktree_watcher(&view_repository) {
+            Ok(watcher) => worktree_watcher = Some(watcher),
+            Err(err) => {
+                tracing::warn!(error = %err, "worktree watcher startup failed");
+                app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+            }
+        }
+    }
     let mut decorations = Decorations::new();
     draw(
         terminal,
@@ -701,44 +752,128 @@ fn event_loop(
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
     let result: Result<Option<Duration>> = (|| loop {
+        let mut worktree_watch_error = None;
         if let Some(watcher) = worktree_watcher.as_mut() {
-            while let Ok(event) = watcher.events.try_recv() {
-                match event {
-                    Ok(event) if watcher.event_is_relevant(&event) => {
-                        worktree_refresh_deadline = Some(Instant::now() + WORKTREE_EVENT_IDLE);
+            let mut received = 0;
+            let mut relevant = 0;
+            let mut rescans = 0;
+            while received < EVENT_BATCH_SIZE {
+                match watcher.events.try_recv() {
+                    Ok(Ok(event)) => {
+                        received += 1;
+                        rescans += usize::from(event.need_rescan());
+                        if watcher.event_is_relevant(&event) {
+                            relevant += 1;
+                            schedule_once(&mut worktree_refresh_deadline, Instant::now(), WORKTREE_EVENT_IDLE);
+                        }
                     }
-                    Ok(_) => {}
-                    Err(err) => {
-                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
-                        worktree_watcher = None;
-                        worktree_refresh_deadline = None;
-                        dirty = true;
-                        urgent = true;
+                    Ok(Err(err)) => {
+                        worktree_watch_error = Some(err);
                         break;
                     }
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
                 }
             }
+            if received > 0 {
+                tracing::debug!(received, relevant, rescans, "processed worktree event batch");
+            }
         }
-        if worktree_refresh_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if let Some(err) = worktree_watch_error {
+            tracing::warn!(error = %err, "worktree watcher failed");
+            app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+            worktree_watcher = None;
             worktree_refresh_deadline = None;
-            invalidate_worktree_changes(&mut worktree_changes);
+            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
             dirty = true;
             urgent = true;
         }
-        while let Ok(event) = ref_events.try_recv() {
-            match event {
-                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
-                    refresh_pending = true;
-                    refresh_from_filesystem = true;
-                    if refresh_receiver.is_some() {
-                        refresh_select_top = true;
+        if take_due(&mut worktree_refresh_deadline, Instant::now()) {
+            let invalidated = invalidate_worktree_changes(&mut worktree_changes);
+            tracing::debug!(invalidated, "worktree event deadline elapsed");
+            dirty = true;
+            urgent = true;
+        }
+        let mut ref_watch_error = None;
+        if let Some(watcher) = ref_watcher.as_mut() {
+            let mut received = 0;
+            let mut actionable = 0;
+            let mut rescans = 0;
+            while received < EVENT_BATCH_SIZE {
+                match watcher.events.try_recv() {
+                    Ok(Ok(event)) => {
+                        received += 1;
+                        rescans += usize::from(event.need_rescan());
+                        if notification_is_actionable(&event) {
+                            actionable += 1;
+                            refresh_pending = true;
+                            refresh_from_filesystem = true;
+                            if refresh_receiver.is_some() {
+                                refresh_select_top = true;
+                            }
+                            if invalidate_worktree_changes(&mut worktree_changes) {
+                                dirty = true;
+                                urgent = true;
+                            }
+                        }
+                    }
+                    Ok(Err(err)) => {
+                        ref_watch_error = Some(err);
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+            if received > 0 {
+                tracing::debug!(received, actionable, rescans, "processed reference event batch");
+            }
+        }
+        if let Some(err) = ref_watch_error {
+            tracing::warn!(error = %err, "reference watcher failed");
+            ref_watcher = None;
+            app.manual_refresh = true;
+            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+        }
+        if take_due(&mut watcher_retry_deadline, Instant::now()) {
+            let mut retry = false;
+            if ref_watcher.is_none() {
+                match start_ref_watcher(&repository_path, &common_dir) {
+                    Ok(watcher) => {
+                        tracing::info!("reference watcher recovered");
+                        ref_watcher = Some(watcher);
+                        app.manual_refresh = false;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "reference watcher retry failed");
+                        retry = true;
                     }
                 }
-                Ok(_) => {}
-                Err(_) => {
-                    ref_watcher = None;
-                    app.manual_refresh = true;
+            }
+            if worktree_watcher_needed(repository_is_bare, app.changes_mode) && worktree_watcher.is_none() {
+                match start_worktree_watcher(&view_repository) {
+                    Ok(watcher) => {
+                        tracing::info!("worktree watcher recovered");
+                        worktree_watcher = Some(watcher);
+                        if app
+                            .worktree_changes
+                            .error
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("worktree watch:"))
+                        {
+                            app.worktree_changes.error = None;
+                        }
+                        invalidate_worktree_changes(&mut worktree_changes);
+                        dirty = true;
+                        urgent = true;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "worktree watcher retry failed");
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        retry = true;
+                    }
                 }
+            }
+            if retry {
+                schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
             }
         }
         if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
@@ -790,6 +925,7 @@ fn event_loop(
             match result {
                 Ok(result) => {
                     let result = result?;
+                    tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -848,9 +984,15 @@ fn event_loop(
                         true,
                         line_diff_parallelism,
                     )?;
-                    let (watcher, events) = start_ref_watcher(&repository_path, &repository_path);
-                    ref_watcher = watcher;
-                    ref_events = events;
+                    tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
+                    ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
+                        Ok(watcher) => Some(watcher),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "reference watcher recovery failed");
+                            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                            None
+                        }
+                    };
                     app.manual_refresh = ref_watcher.is_none();
                     app.notice = Some("worktree removed; using the common repository without worktree changes".into());
                     open_repository(&repository_path, true, true)
@@ -861,6 +1003,7 @@ fn event_loop(
             let next = history::snapshot(&repository, &revisions, &hide)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed;
+            tracing::debug!(tips_changed, hidden_changed, "compared reference snapshot");
             let select_top = std::mem::take(&mut refresh_from_filesystem);
             ref_snapshot = next;
             refresh_pending = false;
@@ -883,6 +1026,7 @@ fn event_loop(
                 refresh_select_top = select_top;
                 refresh_expand_hidden = false;
                 app.state = State::Loading;
+                tracing::info!(select_top, "started history refresh");
             } else {
                 let next = history::decorations(&repository)?;
                 let relation_changed = selection_relation
@@ -895,6 +1039,7 @@ fn event_loop(
                     app.selection_relation = None;
                     decorations = next;
                     dirty = true;
+                    tracing::debug!(relation_changed, "updated history decorations");
                 }
             }
         }
@@ -999,7 +1144,8 @@ fn event_loop(
         let worktree_timeout = worktree_refresh_deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .or_else(|| worktree_watcher.as_ref().map(|_| REF_EVENT_INTERVAL));
-        let wake_after = [repeat_timeout, watcher_timeout, worktree_timeout]
+        let retry_timeout = watcher_retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let wake_after = [repeat_timeout, watcher_timeout, worktree_timeout, retry_timeout]
             .into_iter()
             .flatten()
             .min();
@@ -1092,9 +1238,23 @@ fn event_loop(
             )?;
             if app.changes_mode == Some(ChangesMode::Both) {
                 invalidate_worktree_changes(&mut worktree_changes);
-                worktree_watcher = start_worktree_watcher(&view_repository);
-                if worktree_watcher.is_none() {
-                    app.worktree_changes.error = Some("worktree changes won't update automatically".into());
+                match start_worktree_watcher(&view_repository) {
+                    Ok(watcher) => {
+                        worktree_watcher = Some(watcher);
+                        if app
+                            .worktree_changes
+                            .error
+                            .as_deref()
+                            .is_some_and(|message| message.starts_with("worktree watch:"))
+                        {
+                            app.worktree_changes.error = None;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "worktree watcher startup failed");
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    }
                 }
             } else if previous_changes_mode == Some(ChangesMode::Both) {
                 worktree_watcher = None;
@@ -1304,19 +1464,12 @@ fn start_history_refresh(
     receiver
 }
 
-fn start_ref_watcher(
-    git_dir: &Path,
-    common_dir: &Path,
-) -> (
-    Option<RecommendedWatcher>,
-    mpsc::Receiver<notify::Result<notify::Event>>,
-) {
-    let (sender, receiver) = mpsc::channel();
-    let Ok(mut watcher) = notify::recommended_watcher(move |event| {
+fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
+    let (sender, events) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
-    }) else {
-        return (None, receiver);
-    };
+    })
+    .context("could not initialize reference watcher")?;
     let mut roots = vec![(common_dir.to_owned(), RecursiveMode::NonRecursive)];
     if git_dir != common_dir {
         roots.push((git_dir.to_owned(), RecursiveMode::NonRecursive));
@@ -1326,15 +1479,23 @@ fn start_ref_watcher(
             roots.push((root, RecursiveMode::Recursive));
         }
     }
-    if roots.into_iter().all(|(path, mode)| watcher.watch(&path, mode).is_ok()) {
-        (Some(watcher), receiver)
-    } else {
-        (None, receiver)
+    for (path, mode) in &roots {
+        watcher
+            .watch(path, *mode)
+            .with_context(|| format!("could not watch references at {}", path.display()))?;
     }
+    tracing::info!(?roots, "watching references");
+    Ok(RefWatcher {
+        _watcher: watcher,
+        events,
+    })
 }
 
-fn start_worktree_watcher(repository: &gix::Repository) -> Option<WorktreeWatcher> {
-    let workdir = repository.workdir()?.to_owned();
+fn start_worktree_watcher(repository: &gix::Repository) -> Result<WorktreeWatcher> {
+    let workdir = repository
+        .workdir()
+        .context("cannot watch a bare repository")?
+        .to_owned();
     let index = repository.index_path();
     let git_dir = repository.git_dir().to_owned();
     let dot_git = workdir.join(gix::discover::DOT_GIT_DIR);
@@ -1342,13 +1503,18 @@ fn start_worktree_watcher(repository: &gix::Repository) -> Option<WorktreeWatche
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
     })
-    .ok()?;
-    watcher.watch(&workdir, RecursiveMode::Recursive).ok()?;
-    let index_parent = index.parent()?;
+    .context("could not initialize worktree watcher")?;
+    watcher
+        .watch(&workdir, RecursiveMode::Recursive)
+        .with_context(|| format!("could not watch worktree at {}", workdir.display()))?;
+    let index_parent = index.parent().context("index path has no parent")?;
     if !index_parent.starts_with(&workdir) {
-        watcher.watch(index_parent, RecursiveMode::NonRecursive).ok()?;
+        watcher
+            .watch(index_parent, RecursiveMode::NonRecursive)
+            .with_context(|| format!("could not watch index at {}", index_parent.display()))?;
     }
-    Some(WorktreeWatcher {
+    tracing::info!(workdir = %workdir.display(), index = %index.display(), "watching worktree changes");
+    Ok(WorktreeWatcher {
         _watcher: watcher,
         events,
         workdir,
@@ -1358,10 +1524,15 @@ fn start_worktree_watcher(repository: &gix::Repository) -> Option<WorktreeWatche
     })
 }
 
-fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) {
+fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
     if let Some((marker, _)) = changes {
+        if *marker == usize::MAX {
+            return false;
+        }
         *marker = usize::MAX;
+        return true;
     }
+    false
 }
 
 fn visible_decorations_changed(old: &Decorations, new: &Decorations, rows: &[CommitRow]) -> bool {
@@ -1576,6 +1747,7 @@ fn draw(
             *tree_changes = Some((id, app.changes_parent, loaded));
         }
         if worktree_changes_to_load {
+            let started = Instant::now();
             repository.object_cache_size(OBJECT_CACHE_SIZE);
             let loaded = load_worktree_changes(
                 repository,
@@ -1586,10 +1758,23 @@ fn draw(
             repository.object_cache_size(None);
             match loaded {
                 Ok(loaded) => {
-                    app.worktree_changes.error = None;
+                    tracing::debug!(
+                        path_count = loaded.paths.len(),
+                        elapsed_ms = started.elapsed().as_millis(),
+                        "loaded worktree changes"
+                    );
+                    if !app
+                        .worktree_changes
+                        .error
+                        .as_deref()
+                        .is_some_and(|message| message.starts_with("worktree watch:"))
+                    {
+                        app.worktree_changes.error = None;
+                    }
                     *worktree_changes = Some((0, loaded));
                 }
                 Err(err) => {
+                    tracing::warn!(error = %err, "could not load worktree changes");
                     app.worktree_changes.error = Some(format!("status: {err:#}"));
                     if let Some((marker, _)) = worktree_changes.as_mut() {
                         *marker = 0;
@@ -3459,7 +3644,7 @@ mod tests {
 
     #[test]
     fn filters_worktree_watch_events_and_invalidates_cached_status() {
-        use notify::event::{AccessKind, ModifyKind};
+        use notify::event::{AccessKind, Flag, ModifyKind};
 
         let workdir = Path::new("/repo");
         let dot_git = workdir.join(".git");
@@ -3493,9 +3678,43 @@ mod tests {
         assert!(!worktree_event_is_relevant(
             &access, workdir, &dot_git, &git_dir, &index
         ));
+        assert!(!notification_is_actionable(&access));
+        let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
+        assert!(worktree_event_is_relevant(&rescan, workdir, &dot_git, &git_dir, &index));
+        assert!(notification_is_actionable(&rescan));
 
         let mut changes = Some((0, Changes::default()));
-        invalidate_worktree_changes(&mut changes);
+        assert!(invalidate_worktree_changes(&mut changes));
         assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(usize::MAX));
+        assert!(!invalidate_worktree_changes(&mut changes));
+    }
+
+    #[test]
+    fn starts_worktree_watching_for_the_combined_view() {
+        assert!(worktree_watcher_needed(false, Some(ChangesMode::Both)));
+        assert!(!worktree_watcher_needed(false, Some(ChangesMode::Tree)));
+        assert!(!worktree_watcher_needed(false, None));
+        assert!(!worktree_watcher_needed(true, Some(ChangesMode::Both)));
+    }
+
+    #[test]
+    fn event_deadlines_coalesce_without_extending_and_can_be_retried() {
+        let now = Instant::now();
+        let mut deadline = None;
+        assert!(schedule_once(&mut deadline, now, WORKTREE_EVENT_IDLE));
+        let first = deadline;
+        assert!(!schedule_once(
+            &mut deadline,
+            now + Duration::from_millis(50),
+            WORKTREE_EVENT_IDLE
+        ));
+        assert_eq!(deadline, first, "later events do not extend the debounce window");
+        assert!(!take_due(&mut deadline, now + Duration::from_millis(74)));
+        assert!(take_due(&mut deadline, now + WORKTREE_EVENT_IDLE));
+        assert_eq!(deadline, None);
+
+        assert!(schedule_once(&mut deadline, now, WATCH_RETRY_INTERVAL));
+        assert!(!take_due(&mut deadline, now + Duration::from_secs(4)));
+        assert!(take_due(&mut deadline, now + WATCH_RETRY_INTERVAL));
     }
 }
