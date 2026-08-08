@@ -6,8 +6,10 @@
 # pointing at a file outside the repo; both may vary by git version and host
 # path.
 make_ignore_and_attributes_setup.tar
+make_ignore_and_attributes_setup_sha256.tar
 # Bakes `git check-attr` baseline output, which may vary by git version.
 make_attributes_baseline.tar
+make_attributes_baseline_sha256.tar
 # Uses `ln -s` (including a symlink to the base directory); symlinks do not
 # unpack on Windows without elevated privileges.
 symlink_stack.tar
