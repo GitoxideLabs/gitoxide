@@ -211,7 +211,7 @@ impl crate::Repository {
                     source: err,
                 }
             })?,
-            self.git_dir().join("index"),
+            self.index_path(),
         ))
     }
 }

@@ -37,8 +37,12 @@ impl crate::Repository {
     }
 
     /// Return the path to the worktree index file, which may or may not exist.
+    ///
+    /// It may have been overridden with
+    /// [gitoxide.core.indexFile][crate::config::tree::gitoxide::Core::INDEX_FILE].
+    /// The path is selected when the repository is opened and only re-evaluated by [`reload()`](Self::reload()).
     pub fn index_path(&self) -> PathBuf {
-        self.git_dir().join("index")
+        self.index_path.clone()
     }
 
     /// The path to the `.gitmodules` file in the worktree, if a worktree is available.

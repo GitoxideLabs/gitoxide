@@ -6,6 +6,7 @@ impl crate::Repository {
         refs: crate::RefStore,
         mut objects: crate::OdbHandle,
         work_tree: Option<std::path::PathBuf>,
+        index_path: std::path::PathBuf,
         common_dir: Option<std::path::PathBuf>,
         config: crate::config::Cache,
         linked_worktree_options: crate::open::Options,
@@ -17,6 +18,7 @@ impl crate::Repository {
         crate::Repository {
             bufs: Some(RefCell::new(Vec::with_capacity(4))),
             work_tree,
+            index_path,
             common_dir,
             objects,
             refs,
@@ -37,7 +39,7 @@ impl crate::Repository {
 
     /// Reopen this repository in place using the stored open options.
     /// Use this to forcefully refresh Git configuration, drop caches, and release system resources
-    /// for opened object database resources.
+    /// for opened object database resources (if this is the last instance to a repository).
     ///
     /// This discards in-memory-only configuration edits and any other transient repository state that is recreated
     /// during opening.

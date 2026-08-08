@@ -9,6 +9,7 @@ impl Clone for crate::Repository {
             self.refs.clone(),
             self.objects.clone(),
             self.work_tree.clone(),
+            self.index_path.clone(),
             self.common_dir.clone(),
             self.config.clone(),
             self.options.clone(),
@@ -39,9 +40,12 @@ impl std::fmt::Debug for crate::Repository {
 
 impl PartialEq<crate::Repository> for crate::Repository {
     fn eq(&self, other: &crate::Repository) -> bool {
-        self.git_dir().canonicalize().ok() == other.git_dir().canonicalize().ok()
-            && self.work_tree.as_deref().and_then(|wt| wt.canonicalize().ok())
-                == other.work_tree.as_deref().and_then(|wt| wt.canonicalize().ok())
+        let realpath = |repo: &crate::Repository, path| {
+            gix_path::realpath_opts(path, repo.current_dir(), gix_path::realpath::MAX_SYMLINKS).ok()
+        };
+        realpath(self, self.git_dir()) == realpath(other, other.git_dir())
+            && self.work_tree.as_deref().and_then(|path| realpath(self, path))
+                == other.work_tree.as_deref().and_then(|path| realpath(other, path))
     }
 }
 
@@ -51,6 +55,7 @@ impl From<&crate::ThreadSafeRepository> for crate::Repository {
             repo.refs.clone(),
             gix_odb::memory::Proxy::from(gix_odb::Cache::from(repo.objects.to_handle())).with_write_passthrough(),
             repo.work_tree.clone(),
+            repo.index_path.clone(),
             repo.common_dir.clone(),
             repo.config.clone(),
             repo.linked_worktree_options.clone(),
@@ -69,6 +74,7 @@ impl From<crate::ThreadSafeRepository> for crate::Repository {
             repo.refs,
             gix_odb::memory::Proxy::from(gix_odb::Cache::from(repo.objects.to_handle())).with_write_passthrough(),
             repo.work_tree,
+            repo.index_path,
             repo.common_dir,
             repo.config,
             repo.linked_worktree_options,
@@ -87,6 +93,7 @@ impl From<crate::Repository> for crate::ThreadSafeRepository {
             refs: r.refs,
             objects: r.objects.into_inner().store(),
             work_tree: r.work_tree,
+            index_path: r.index_path,
             common_dir: r.common_dir,
             config: r.config,
             linked_worktree_options: r.options,

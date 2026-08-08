@@ -31,6 +31,11 @@ impl crate::Repository {
     /// Note that changes to the configuration are in-memory only and are observed only this instance
     /// of the [`Repository`](crate::Repository). Use [`reload()`](Self::reload()) to discard them and
     /// refresh the snapshot from disk.
+    ///
+    /// Values used to locate repository files are fixed when the repository is opened and aren't reapplied by
+    /// committing changes here. This includes `core.worktree` and `gitoxide.core.indexFile`; `GIT_DIR` likewise
+    /// cannot retarget an existing repository. Reload after changing persisted configuration or open another
+    /// repository to change these locations.
     pub fn config_snapshot_mut(&mut self) -> config::SnapshotMut<'_> {
         let config = self.config.resolved.as_ref().clone();
         config::SnapshotMut {

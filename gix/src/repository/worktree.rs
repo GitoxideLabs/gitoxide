@@ -48,7 +48,11 @@ impl crate::Repository {
         reason = "will be removed once `gix-error` is used consistently"
     )]
     pub fn main_repo(&self) -> Result<crate::Repository, crate::open::Error> {
-        crate::ThreadSafeRepository::open_opts(self.common_dir(), self.options.clone()).map(Into::into)
+        let options = match (self.kind(), self.options.clone()) {
+            (crate::repository::Kind::LinkedWorkTree, opts) => opts.without_repository_environment_overrides(),
+            (_, opts) => opts,
+        };
+        crate::ThreadSafeRepository::open_opts(self.common_dir(), options).map(Into::into)
     }
 
     /// Return the currently set worktree if there is one, acting as platform providing a validated worktree base path.

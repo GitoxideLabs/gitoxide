@@ -149,8 +149,8 @@ check:
 
 # Run `cargo doc` on all crates
 doc $RUSTDOCFLAGS='-D warnings':
-    cargo doc --workspace --no-deps --features need-more-recent-msrv
-    cargo doc --features=max,lean,small --workspace --no-deps --features need-more-recent-msrv
+    cargo doc --workspace --no-deps
+    cargo doc --features=max,lean,small --workspace --no-deps
 
 # Run all unit tests
 unit-tests:
@@ -225,7 +225,7 @@ unit-tests:
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-worktree-stream --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix-worktree-stream --features sha256 --no-fail-fast
     cargo nextest run -p gix --no-default-features --features basic,comfort,max-performance-safe --no-fail-fast
-    cargo nextest run -p gix --no-default-features --features basic,extras,comfort,need-more-recent-msrv --no-fail-fast
+    cargo nextest run -p gix --no-default-features --features basic,extras,comfort --no-fail-fast
     cargo nextest run -p gix --features async-network-client --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha256 cargo nextest run -p gix --features async-network-client --no-fail-fast
     cargo nextest run -p gix --features blocking-network-client --no-fail-fast

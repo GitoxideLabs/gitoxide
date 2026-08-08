@@ -75,7 +75,6 @@ impl<'repo> super::Editor<'repo> {
 }
 
 /// Tree editing
-#[cfg(feature = "tree-editor")]
 impl<'repo> crate::Tree<'repo> {
     /// Start editing a new tree based on this one.
     #[doc(alias = "treebuilder", alias = "git2")]

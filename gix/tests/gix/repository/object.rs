@@ -31,7 +31,6 @@ mod object_database_impl {
     }
 }
 
-#[cfg(feature = "tree-editor")]
 mod edit_tree {
     use gix::bstr::{BStr, BString};
     use gix_object::tree::EntryKind;

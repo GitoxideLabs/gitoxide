@@ -16,6 +16,7 @@ impl Default for Options {
             open_path_as_is: false,
             api_config_overrides: Vec::new(),
             cli_config_overrides: Vec::new(),
+            use_repository_local_environment: true,
             current_dir: None,
         }
     }
@@ -153,6 +154,14 @@ impl Options {
 }
 
 impl Options {
+    /// Prevent repository-local environment overrides from being inherited when opening another repository.
+    ///
+    /// To be used when opening a nested repository, like worktrees or submodules.
+    pub(crate) fn without_repository_environment_overrides(mut self) -> Self {
+        self.use_repository_local_environment = false;
+        self
+    }
+
     pub(crate) fn current_dir_or_empty(&self) -> &std::path::Path {
         self.current_dir.as_deref().unwrap_or(std::path::Path::new(""))
     }
@@ -172,6 +181,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 open_path_as_is: false,
                 api_config_overrides: Vec::new(),
                 cli_config_overrides: Vec::new(),
+                use_repository_local_environment: true,
                 current_dir: None,
             },
             gix_sec::Trust::Reduced => Options {
@@ -185,6 +195,7 @@ impl gix_sec::trust::DefaultForLevel for Options {
                 lossy_config: false,
                 api_config_overrides: Vec::new(),
                 cli_config_overrides: Vec::new(),
+                use_repository_local_environment: true,
                 current_dir: None,
             },
         }

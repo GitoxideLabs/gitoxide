@@ -167,6 +167,7 @@ mod with_overrides {
             .set("GIT_ICASE_PATHSPECS", "pathspecs-icase")
             .set("GIT_TERMINAL_PROMPT", "42")
             .set("GIT_SHALLOW_FILE", "shallow-file-env")
+            .set("GIT_INDEX_FILE", "index-file-env")
             .set("GIT_NAMESPACE", "namespace-env")
             .set("GIT_EXTERNAL_DIFF", "external-diff-env");
         let mut opts = gix::open::Options::isolated()
@@ -181,6 +182,7 @@ mod with_overrides {
                 "gitoxide.ssh.commandWithoutShellFallback=ssh-command-fallback-cli",
                 "gitoxide.http.proxyAuthMethod=proxy-auth-method-cli",
                 "gitoxide.core.shallowFile=shallow-file-cli",
+                "gitoxide.core.indexFile=index-file-cli",
                 "gitoxide.core.refsNamespace=namespace-cli",
             ])
             .config_overrides([
@@ -194,6 +196,7 @@ mod with_overrides {
                 "gitoxide.ssh.commandWithoutShellFallback=ssh-command-fallback-api",
                 "gitoxide.http.proxyAuthMethod=proxy-auth-method-api",
                 "gitoxide.core.shallowFile=shallow-file-api",
+                "gitoxide.core.indexFile=index-file-api",
                 "gitoxide.core.refsNamespace=namespace-api",
             ]);
         opts.permissions.env.git_prefix = Permission::Allow;
@@ -210,6 +213,10 @@ mod with_overrides {
         assert_eq!(
             config.strings("gitoxide.core.shallowFile").expect("at least one value"),
             ["shallow-file-cli", "shallow-file-api", "shallow-file-env"]
+        );
+        assert_eq!(
+            config.strings("gitoxide.core.indexFile").expect("at least one value"),
+            ["index-file-cli", "index-file-api", "index-file-env"]
         );
         assert_eq!(
             config
@@ -501,6 +508,215 @@ fn git_worktree_absolute_over_root_overrides_bare() -> gix_testtools::Result {
         repo.workdir(),
         Some(worktree.path()),
         "an absolute path with `..` beyond the root resolves to the configured worktree"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn repository_transitions_do_not_inherit_repository_environment_overrides() -> gix_testtools::Result {
+    fn assert_paths(
+        repo: &Repository,
+        git_dir: &Path,
+        worktree: &Path,
+        index: &Path,
+        context: &str,
+    ) -> gix_testtools::Result {
+        assert_eq!(
+            gix_path::realpath(repo.git_dir())?,
+            gix_path::realpath(git_dir)?,
+            "{context}: git directory"
+        );
+        assert_eq!(
+            repo.workdir().map(gix_path::realpath).transpose()?,
+            Some(gix_path::realpath(worktree)?),
+            "{context}: worktree"
+        );
+        assert_eq!(
+            gix_path::realpath(repo.index_path())?,
+            gix_path::realpath(index)?,
+            "{context}: index"
+        );
+        Ok(())
+    }
+
+    let fixture = gix_testtools::scripted_fixture_read_only_needs_archive("make_worktree_relative_linking.sh")?;
+    let main = std::fs::canonicalize(fixture.join("main"))?;
+    let main_git_dir = main.join(".git");
+    let main_index_file = main.join(".git/index");
+    let git_dir_override = main_git_dir.clone();
+    let worktree_override = fixture.to_owned();
+    let index_override = main.join(".git/temporary-index");
+    let _env = gix_testtools::Env::new()
+        .set("GIT_DIR", git_dir_override.to_string_lossy())
+        .set("GIT_WORK_TREE", worktree_override.to_string_lossy())
+        .set("GIT_INDEX_FILE", index_override.to_string_lossy());
+    let mut options = gix::open::Options::isolated();
+    options.permissions.env.git_prefix = Permission::Allow;
+
+    let mut main_repo = discover_with_environment_overrides_isolated(fixture.join("linked"))?;
+    assert_paths(
+        &main_repo,
+        &git_dir_override,
+        &worktree_override,
+        &index_override,
+        "the initial open uses all overrides",
+    )?;
+    main_repo.reload()?;
+    assert_paths(
+        &main_repo,
+        &git_dir_override,
+        &worktree_override,
+        &index_override,
+        "reloading the initial repository keeps all overrides",
+    )?;
+    let mut reopened_main_repo = main_repo.main_repo()?;
+    assert_paths(
+        &reopened_main_repo,
+        &git_dir_override,
+        &worktree_override,
+        &index_override,
+        "remaining in the main repository keeps all overrides",
+    )?;
+    reopened_main_repo.reload()?;
+    assert_paths(
+        &reopened_main_repo,
+        &git_dir_override,
+        &worktree_override,
+        &index_override,
+        "reloading the reopened main repository keeps all overrides",
+    )?;
+
+    let proxy = main_repo.worktrees()?.into_iter().next().expect("one linked worktree");
+    let expected_linked_worktree = proxy.base()?;
+    let expected_linked_git_dir = proxy.git_dir();
+    let expected_linked_index = proxy.git_dir().join("index");
+    let mut linked_repo_from_proxy = proxy.clone().into_repo()?;
+    assert_paths(
+        &linked_repo_from_proxy,
+        expected_linked_git_dir,
+        &expected_linked_worktree,
+        &expected_linked_index,
+        "opening a linked worktree uses its own repository paths",
+    )?;
+    linked_repo_from_proxy.reload()?;
+    assert_paths(
+        &linked_repo_from_proxy,
+        expected_linked_git_dir,
+        &expected_linked_worktree,
+        &expected_linked_index,
+        "reloading keeps the linked worktree repository paths",
+    )?;
+    let mut linked_repo_from_permissive_proxy = proxy.clone().into_repo_with_possibly_inaccessible_worktree()?;
+    assert_paths(
+        &linked_repo_from_permissive_proxy,
+        expected_linked_git_dir,
+        &expected_linked_worktree,
+        &expected_linked_index,
+        "the permissive proxy open also uses the linked worktree repository paths",
+    )?;
+    linked_repo_from_permissive_proxy.reload()?;
+    assert_paths(
+        &linked_repo_from_permissive_proxy,
+        expected_linked_git_dir,
+        &expected_linked_worktree,
+        &expected_linked_index,
+        "reloading the permissively opened repository keeps the linked worktree repository paths",
+    )?;
+
+    let mut linked_repo = gix::open_opts(proxy.base()?, options)?;
+    assert_paths(
+        &linked_repo,
+        expected_linked_git_dir,
+        &worktree_override,
+        &index_override,
+        "a direct open still uses repository environment overrides",
+    )?;
+    linked_repo.reload()?;
+    assert_paths(
+        &linked_repo,
+        expected_linked_git_dir,
+        &worktree_override,
+        &index_override,
+        "reloading a directly opened worktree keeps repository environment overrides",
+    )?;
+    let mut main_repo_from_linked = linked_repo.main_repo()?;
+    assert_paths(
+        &main_repo_from_linked,
+        &main_git_dir,
+        &main,
+        &main_index_file,
+        "returning to the main repository uses its own repository paths",
+    )?;
+    main_repo_from_linked.reload()?;
+    assert_paths(
+        &main_repo_from_linked,
+        &main_git_dir,
+        &main,
+        &main_index_file,
+        "reloading the main repository preserves its own repository paths",
+    )?;
+    Ok(())
+}
+
+#[test]
+#[serial]
+#[cfg(feature = "attributes")]
+fn git_index_file_override_is_not_inherited_by_opened_submodules() -> gix_testtools::Result {
+    let fixture = gix_testtools::scripted_fixture_read_only("make_submodules.sh")?;
+    let superproject = std::fs::canonicalize(fixture.join("with-submodules"))?;
+    let index_file = superproject.join(".git/index");
+    let _env = gix_testtools::Env::new().set("GIT_INDEX_FILE", index_file.to_string_lossy());
+    let mut options = gix::open::Options::isolated();
+    options.permissions.env.git_prefix = Permission::Allow;
+    let repo = gix::open_opts(superproject, options)?;
+    assert_eq!(repo.index_path(), index_file, "the superproject uses the override");
+
+    let submodule = repo
+        .submodules()?
+        .expect("modules present")
+        .next()
+        .expect("one submodule");
+    let mut submodule = submodule.open()?.expect("initialized submodule");
+    assert_eq!(
+        submodule.index_path(),
+        submodule.git_dir().join("index"),
+        "submodules use their own index"
+    );
+    submodule.reload()?;
+    assert_eq!(
+        submodule.index_path(),
+        submodule.git_dir().join("index"),
+        "reloading preserves the submodule's own index"
+    );
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn git_index_file_relative_paths_use_the_cwd_when_opening() -> gix_testtools::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let _cwd = gix_testtools::set_current_dir(repository.path())?;
+    let _env = gix_testtools::Env::new()
+        .unset("GIT_DIR")
+        .set("GIT_INDEX_FILE", "temporary-index");
+    std::fs::copy(repository.path().join(".git/index"), "temporary-index")?;
+
+    let repo = discover_with_environment_overrides_isolated(repository.path())?;
+
+    assert_eq!(
+        repo.index_path(),
+        Path::new("temporary-index"),
+        "relative paths start at the captured CWD, which is where Git invokes hooks"
+    );
+    assert!(
+        repo.index_path().is_file(),
+        "the repository retains its opening CWD, so the relative index path continues to identify the same file"
+    );
+    assert_ne!(
+        repo.index_path(),
+        repo.git_dir().join("temporary-index"),
+        "index file overrides notably are not relative to the git-dir"
     );
     Ok(())
 }
