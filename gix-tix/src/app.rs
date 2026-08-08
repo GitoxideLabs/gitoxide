@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -205,6 +206,7 @@ pub(crate) enum AttributionKind {
 
 pub(crate) type LoadedCommit = Commit<BString>;
 pub(crate) type CommitRow = Commit<Range<usize>>;
+pub(crate) type SharedCommitRow = Arc<CommitRow>;
 
 #[derive(Debug)]
 pub(crate) struct LoadedCommits {
@@ -304,8 +306,8 @@ pub(crate) enum Effect {
 
 #[derive(Debug)]
 pub(crate) struct App {
-    pub rows: Vec<CommitRow>,
-    all_rows: HashMap<ObjectId, CommitRow>,
+    pub rows: Vec<SharedCommitRow>,
+    all_rows: HashMap<ObjectId, SharedCommitRow>,
     all_order: Vec<ObjectId>,
     hidden_rows: HashSet<ObjectId>,
     pending_hidden_rows: Option<HashSet<ObjectId>>,
@@ -473,7 +475,7 @@ impl App {
         }
     }
 
-    fn store_commits(&mut self, commits: LoadedCommits) -> Vec<CommitRow> {
+    fn store_commits(&mut self, commits: LoadedCommits) -> Vec<SharedCommitRow> {
         let LoadedCommits { rows, attributions } = commits;
         self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
         let attribution_base = self.attributions.len();
@@ -493,7 +495,8 @@ impl App {
                     has_agent_marker: row.has_agent_marker,
                     signature: row.signature,
                 };
-                if self.all_rows.insert(row.id, row.clone()).is_none() {
+                let row = Arc::new(row);
+                if self.all_rows.insert(row.id, Arc::clone(&row)).is_none() {
                     self.all_order.push(row.id);
                 }
                 row
@@ -523,6 +526,7 @@ impl App {
         if row.metadata_loaded {
             return;
         }
+        let row = Arc::make_mut(row);
         let Metadata {
             committer_time,
             author,
@@ -542,7 +546,7 @@ impl App {
         row.metadata_loaded = true;
         row.has_agent_marker = has_agent_marker;
         row.signature = signature;
-        self.all_rows.insert(row.id, row.clone());
+        self.all_rows.insert(row.id, Arc::clone(&self.rows[index]));
     }
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
@@ -745,14 +749,18 @@ impl App {
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
-                let ids: Vec<_> = self.rows[start..end]
+                let changed: Vec<_> = self.rows[start..end]
                     .iter_mut()
                     .filter(|row| !self.hidden_rows.contains(&row.id) && row.signature == SignatureState::Unverified)
                     .map(|row| {
-                        row.signature = SignatureState::Verifying;
-                        row.id
+                        Arc::make_mut(row).signature = SignatureState::Verifying;
+                        (row.id, Arc::clone(row))
                     })
                     .collect();
+                for (id, row) in &changed {
+                    self.all_rows.insert(*id, Arc::clone(row));
+                }
+                let ids: Vec<_> = changed.into_iter().map(|(id, _)| id).collect();
                 if !ids.is_empty() {
                     self.signature_verification_running = true;
                     return vec![Effect::VerifySignatures(ids)];
@@ -804,7 +812,7 @@ impl App {
         Vec::new()
     }
 
-    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<CommitRow>> {
+    pub(crate) fn start_lane_computation(&mut self) -> Option<Vec<SharedCommitRow>> {
         match self.state {
             State::Loading => {
                 self.state = State::Computing;
@@ -831,7 +839,7 @@ impl App {
         view_tips: &[ObjectId],
         hidden_tips: &[ObjectId],
         select_top: bool,
-    ) -> Option<Vec<CommitRow>> {
+    ) -> Option<Vec<SharedCommitRow>> {
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -851,7 +859,7 @@ impl App {
             .all_order
             .iter()
             .filter(|id| visible.contains(*id) || boundary.contains(*id))
-            .filter_map(|id| self.all_rows.get(id).cloned())
+            .filter_map(|id| self.all_rows.get(id).map(Arc::clone))
             .collect();
         self.pending_hidden_rows = Some(boundary);
         self.select_top_after_refresh = select_top;
@@ -874,7 +882,7 @@ impl App {
         reachable
     }
 
-    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<CommitRow>, graph: Graph, lane_time: Duration) {
+    pub(crate) fn finish_lane_computation(&mut self, rows: Vec<SharedCommitRow>, graph: Graph, lane_time: Duration) {
         if self.state != State::Computing {
             return;
         }
@@ -908,6 +916,7 @@ impl App {
         }
         for row in &mut self.rows {
             if let Some(metadata) = metadata.get(&row.id) {
+                let row = Arc::make_mut(row);
                 row.committer_time = metadata.committer_time;
                 row.author = metadata.author;
                 row.attributions = metadata.attributions.clone();
@@ -964,16 +973,17 @@ impl App {
     pub(crate) fn finish_signature_verification(&mut self, results: Vec<(ObjectId, bool)>) {
         let mut failed = 0;
         for (id, valid) in results {
-            let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+            let Some(index) = self.rows.iter().position(|row| row.id == id) else {
                 continue;
             };
+            let row = Arc::make_mut(&mut self.rows[index]);
             row.signature = if valid {
                 SignatureState::Verified
             } else {
                 failed += 1;
                 SignatureState::Failed
             };
-            self.all_rows.insert(row.id, row.clone());
+            self.all_rows.insert(id, Arc::clone(&self.rows[index]));
         }
         self.signature_verification_running = false;
         self.signature_failures = failed;
@@ -1198,10 +1208,15 @@ impl App {
         if self.signature_failures == 0 {
             return;
         }
+        let mut changed = Vec::new();
         for row in &mut self.rows {
             if row.signature == SignatureState::Failed {
-                row.signature = SignatureState::Unverified;
+                Arc::make_mut(row).signature = SignatureState::Unverified;
+                changed.push((row.id, Arc::clone(row)));
             }
+        }
+        for (id, row) in changed {
+            self.all_rows.insert(id, row);
         }
         self.signature_failures = 0;
     }
@@ -1325,11 +1340,13 @@ impl App {
     }
 }
 
-fn estimate_lane_width(rows: &[CommitRow]) -> usize {
+fn estimate_lane_width(rows: &[SharedCommitRow]) -> usize {
     let mut rows = rows.to_vec();
     let known: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     for row in &mut rows {
-        row.parent_ids.retain(|id| known.contains_key(id));
+        if row.parent_ids.iter().any(|id| !known.contains_key(id)) {
+            Arc::make_mut(row).parent_ids.retain(|id| known.contains_key(id));
+        }
     }
     let graph = Graph::new(&rows);
     graph
@@ -1340,10 +1357,12 @@ fn estimate_lane_width(rows: &[CommitRow]) -> usize {
         .unwrap_or_default()
 }
 
-pub(crate) fn compute_lanes(mut rows: Vec<CommitRow>) -> (Vec<CommitRow>, Graph, Duration) {
+pub(crate) fn compute_lanes(mut rows: Vec<SharedCommitRow>) -> (Vec<SharedCommitRow>, Graph, Duration) {
     let positions: HashMap<_, _> = rows.iter().enumerate().map(|(index, row)| (row.id, index)).collect();
     for row in &mut rows {
-        row.parent_ids.retain(|id| positions.contains_key(id));
+        if row.parent_ids.iter().any(|id| !positions.contains_key(id)) {
+            Arc::make_mut(row).parent_ids.retain(|id| positions.contains_key(id));
+        }
     }
     let mut children = vec![0usize; rows.len()];
     for row in rows.iter() {
@@ -1397,7 +1416,7 @@ pub(crate) struct Graph {
 }
 
 impl Graph {
-    fn new(rows: &[CommitRow]) -> Self {
+    fn new(rows: &[SharedCommitRow]) -> Self {
         let mut state = LaneState::default();
         let mut graph = Graph {
             offsets: Vec::with_capacity(rows.len().div_ceil(CHECKPOINT_INTERVAL) + 1),
@@ -1414,7 +1433,7 @@ impl Graph {
         graph
     }
 
-    fn render(&self, rows: &[CommitRow], range: Range<usize>) -> RenderedLanes {
+    fn render(&self, rows: &[SharedCommitRow], range: Range<usize>) -> RenderedLanes {
         let start = range.start.min(rows.len());
         let end = range.end.min(rows.len());
         if start >= end {
@@ -1767,6 +1786,33 @@ mod tests {
             app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             [id(4), id(3), id(2), id(1)]
         );
+        assert!(
+            app.rows
+                .iter()
+                .all(|row| Arc::ptr_eq(row, app.all_rows.get(&row.id).expect("visible rows remain cached"))),
+            "the active projection shares its immutable rows with the append-only cache"
+        );
+    }
+
+    #[test]
+    fn lane_computation_keeps_cached_parents_outside_the_current_view() {
+        let mut app = App::new(3);
+        app.extend_commits(vec![row_with_parents(2, &[1])]);
+        app.extend_hidden_commits(vec![row_with_parents(1, &[0])]);
+        let rows = app
+            .start_lane_computation()
+            .expect("loading rows starts lane computation");
+        let (rows, graph, elapsed) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
+
+        let rows = app
+            .start_refresh(vec![row(0)].into(), &[id(2)], &[], false)
+            .expect("refresh projects the extended ancestry");
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(2), id(1), id(0)],
+            "lane pruning does not disconnect cached ancestry needed by a later expansion"
+        );
     }
 
     #[test]
@@ -1846,7 +1892,7 @@ mod tests {
         let mut app = App::new(2);
         app.extend_commits(vec![row(1), row(2), row(3)]);
         for row in &mut app.rows {
-            row.signature = SignatureState::Unverified;
+            Arc::make_mut(row).signature = SignatureState::Unverified;
         }
         app.offset = 1;
 
@@ -2049,7 +2095,7 @@ mod tests {
         app.extend_commits(vec![row(1), row(2), row(3)]);
         app.update(Action::Last);
         app.extend_hidden_commits(vec![row(4)]);
-        app.rows[3].signature = SignatureState::Unverified;
+        Arc::make_mut(&mut app.rows[3]).signature = SignatureState::Unverified;
 
         assert_eq!(
             app.selected,

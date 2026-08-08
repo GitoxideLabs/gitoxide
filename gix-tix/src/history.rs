@@ -44,10 +44,40 @@ pub(crate) struct SelectionRef {
     pub upstream: Option<Option<ObjectId>>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct CommitIndex(u32);
+
+impl CommitIndex {
+    fn new(index: usize) -> Result<Self> {
+        Ok(CommitIndex(
+            index
+                .try_into()
+                .context("tix cannot index more than u32::MAX commits")?,
+        ))
+    }
+
+    pub(crate) fn as_usize(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GraphCommit {
+    id: ObjectId,
+    parents: std::ops::Range<u32>,
+    commit_time: gix::date::SecondsSinceUnixEpoch,
+    generation: u32,
+    state: u8,
+}
+
+impl GraphCommit {
+    fn generation(&self) -> Option<gix::revwalk::graph::Generation> {
+        (self.generation != 0).then_some(self.generation)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct Node {
-    complete: bool,
-    stored: bool,
     flags: u8,
     expanded: u8,
     emitted: bool,
@@ -55,9 +85,12 @@ struct Node {
 
 #[derive(Debug, Default)]
 pub(crate) struct HistoryGraph {
-    commits: gix::revwalk::graph::IdMap<gix::revwalk::graph::Commit<Node>>,
-    tracking: HashMap<ObjectId, Vec<SelectionRef>>,
-    relations: HashMap<(ObjectId, ObjectId), (usize, usize)>,
+    commits: Vec<GraphCommit>,
+    parents: Vec<CommitIndex>,
+    by_id: HashMap<ObjectId, CommitIndex>,
+    stored_order: Vec<CommitIndex>,
+    tracking: HashMap<CommitIndex, Vec<SelectionRef>>,
+    relations: HashMap<(CommitIndex, CommitIndex), (usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,11 +99,11 @@ struct GenThenTime {
     time: gix::date::SecondsSinceUnixEpoch,
 }
 
-impl From<&gix::revwalk::graph::Commit<Node>> for GenThenTime {
-    fn from(commit: &gix::revwalk::graph::Commit<Node>) -> Self {
+impl From<&GraphCommit> for GenThenTime {
+    fn from(commit: &GraphCommit) -> Self {
         GenThenTime {
             generation: commit
-                .generation
+                .generation()
                 .unwrap_or(gix::commitgraph::GENERATION_NUMBER_INFINITY),
             time: commit.commit_time,
         }
@@ -90,6 +123,39 @@ impl PartialOrd for GenThenTime {
 }
 
 impl HistoryGraph {
+    fn intern(&mut self, id: ObjectId) -> Result<CommitIndex> {
+        if let Some(index) = self.by_id.get(&id) {
+            return Ok(*index);
+        }
+        let index = CommitIndex::new(self.commits.len())?;
+        self.commits.push(GraphCommit {
+            id,
+            parents: 0..0,
+            commit_time: 0,
+            generation: 0,
+            state: 0,
+        });
+        self.by_id.insert(id, index);
+        Ok(index)
+    }
+
+    fn index(&self, id: ObjectId) -> Option<CommitIndex> {
+        self.by_id.get(&id).copied()
+    }
+
+    pub(crate) fn id(&self, index: CommitIndex) -> ObjectId {
+        self.commits[index.as_usize()].id
+    }
+
+    fn parents(&self, index: CommitIndex) -> &[CommitIndex] {
+        let range = self.commits[index.as_usize()].parents.clone();
+        &self.parents[range.start as usize..range.end as usize]
+    }
+
+    fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
+        self.parents(index).iter().map(|parent| self.id(*parent)).collect()
+    }
+
     fn ensure_commit(
         &mut self,
         repo: &gix::Repository,
@@ -97,9 +163,10 @@ impl HistoryGraph {
         shallow: &HashSet<ObjectId>,
         id: ObjectId,
         buf: &mut Vec<u8>,
-    ) -> Result<()> {
-        if self.commits.contains_key(&id) {
-            return Ok(());
+    ) -> Result<CommitIndex> {
+        let index = self.intern(id)?;
+        if self.commits[index.as_usize()].state & NODE_LOADED != 0 {
+            return Ok(index);
         }
         let commit = gix::traverse::commit::find(cache, &repo.objects, &id, buf)
             .context("could not load commit for cached history traversal")?;
@@ -138,16 +205,27 @@ impl HistoryGraph {
         if shallow.contains(&id) {
             parents.clear();
         }
-        self.commits.insert(
-            id,
-            gix::revwalk::graph::Commit {
-                parents,
-                commit_time,
-                generation,
-                data: Node::default(),
-            },
-        );
-        Ok(())
+        let parents: Vec<_> = parents
+            .into_iter()
+            .map(|parent| self.intern(parent))
+            .collect::<Result<_>>()?;
+        let start: u32 = self
+            .parents
+            .len()
+            .try_into()
+            .context("tix cannot index more than u32::MAX parent edges")?;
+        self.parents.extend(parents);
+        let end: u32 = self
+            .parents
+            .len()
+            .try_into()
+            .context("tix cannot index more than u32::MAX parent edges")?;
+        let node = &mut self.commits[index.as_usize()];
+        node.parents = start..end;
+        node.commit_time = commit_time;
+        node.generation = generation.unwrap_or_default();
+        node.state |= NODE_LOADED;
+        Ok(index)
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -156,23 +234,24 @@ impl HistoryGraph {
         repo: &gix::Repository,
         cache: Option<&gix::commitgraph::Graph>,
         shallow: &HashSet<ObjectId>,
-        states: &mut HashMap<ObjectId, WalkState>,
-        queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, ObjectId>,
+        states: &mut Vec<WalkState>,
+        queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, CommitIndex>,
         buf: &mut Vec<u8>,
         id: ObjectId,
         flags: u8,
     ) -> Result<()> {
-        self.ensure_commit(repo, cache, shallow, id, buf)?;
-        let state = states.entry(id).or_default();
+        let index = self.ensure_commit(repo, cache, shallow, id, buf)?;
+        states.resize(self.commits.len(), WalkState::default());
+        let state = &mut states[index.as_usize()];
         if state.flags & flags != flags {
             state.flags |= flags;
-            queue.insert(self.commits[&id].commit_time, id);
+            queue.insert(self.commits[index.as_usize()].commit_time, index);
         }
         Ok(())
     }
 
     pub(crate) fn selection_refs(&self, id: ObjectId, decorations: &Decorations) -> Vec<SelectionRef> {
-        let tracked = self.tracking.get(&id);
+        let tracked = self.index(id).and_then(|index| self.tracking.get(&index));
         let mut refs: Vec<_> = decorations
             .get(&id)
             .into_iter()
@@ -205,11 +284,12 @@ impl HistoryGraph {
     ) -> Option<crate::app::SelectionRelation> {
         let has_upstream = refs.iter().any(|reference| reference.upstream.is_some());
         for upstream in refs.iter().filter_map(|reference| reference.upstream.flatten()) {
-            let relation = if let Some(relation) = self.relations.get(&(id, upstream)).copied() {
+            let pair = self.index(id).zip(self.index(upstream))?;
+            let relation = if let Some(relation) = self.relations.get(&pair).copied() {
                 Some(relation)
             } else {
                 let relation = self.paint(id, std::slice::from_ref(&upstream))?;
-                self.relations.insert((id, upstream), relation);
+                self.relations.insert(pair, relation);
                 Some(relation)
             };
             if let Some((ahead, behind)) = relation {
@@ -224,56 +304,53 @@ impl HistoryGraph {
     }
 
     fn paint(&self, first: ObjectId, others: &[ObjectId]) -> Option<(usize, usize)> {
-        if !self.commits.contains_key(&first) || others.iter().any(|id| !self.commits.contains_key(id)) {
-            return None;
-        }
-        let mut flags = HashMap::<ObjectId, u8>::new();
-        let mut queue = gix::revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
-        let mut queued = HashSet::new();
+        let first = self.index(first)?;
+        let others: Vec<_> = others.iter().map(|id| self.index(*id)).collect::<Option<_>>()?;
+        let mut flags = vec![0u8; self.commits.len()];
+        let mut queue = gix::revwalk::PriorityQueue::<GenThenTime, CommitIndex>::new();
+        let mut queued = vec![false; self.commits.len()];
         let mut pending = 0usize;
-        for (id, flag) in std::iter::once((first, VISIBLE)).chain(others.iter().copied().map(|id| (id, HIDDEN))) {
-            *flags.entry(id).or_default() |= flag;
-            if queued.insert(id) {
-                queue.insert(GenThenTime::from(&self.commits[&id]), id);
+        for (index, flag) in std::iter::once((first, VISIBLE)).chain(others.into_iter().map(|index| (index, HIDDEN))) {
+            flags[index.as_usize()] |= flag;
+            if !queued[index.as_usize()] {
+                queued[index.as_usize()] = true;
+                queue.insert(GenThenTime::from(&self.commits[index.as_usize()]), index);
                 pending += 1;
             }
         }
         while pending != 0 {
-            let Some((_priority, id)) = queue.pop() else { break };
-            queued.remove(&id);
-            let mut propagated = flags[&id];
+            let Some((_priority, index)) = queue.pop() else { break };
+            queued[index.as_usize()] = false;
+            let mut propagated = flags[index.as_usize()];
             if propagated & STALE == 0 {
                 pending -= 1;
             }
             if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
                 propagated |= STALE;
-                *flags.get_mut(&id).expect("queued commits have flags") = propagated;
+                flags[index.as_usize()] = propagated;
             }
-            for &parent in &self.commits[&id].parents {
-                let Some(commit) = self.commits.get(&parent) else {
-                    continue;
-                };
-                let parent_flags = flags.entry(parent).or_default();
+            for &parent in self.parents(index) {
+                let parent_flags = &mut flags[parent.as_usize()];
                 let previous = *parent_flags;
                 if previous & propagated != propagated {
                     *parent_flags = previous | propagated;
-                    if queued.contains(&parent) {
+                    if queued[parent.as_usize()] {
                         if previous & STALE == 0 && *parent_flags & STALE != 0 {
                             pending -= 1;
                         }
                     } else {
-                        queued.insert(parent);
+                        queued[parent.as_usize()] = true;
                         if *parent_flags & STALE == 0 {
                             pending += 1;
                         }
-                        queue.insert(GenThenTime::from(commit), parent);
+                        queue.insert(GenThenTime::from(&self.commits[parent.as_usize()]), parent);
                     }
                 }
             }
         }
         let mut ahead = 0;
         let mut behind = 0;
-        for flags in flags.into_values() {
+        for flags in flags {
             match flags & (VISIBLE | HIDDEN) {
                 VISIBLE => ahead += 1,
                 HIDDEN => behind += 1,
@@ -303,7 +380,7 @@ impl HistoryGraph {
             .context("could not open commit-graph for history refresh")?;
         let local_refs = local_refs_by_target(repo)?;
         let mut tracking = HashMap::new();
-        let mut states = HashMap::<ObjectId, WalkState>::new();
+        let mut states = vec![WalkState::default(); self.commits.len()];
         let mut queue = gix::revwalk::PriorityQueue::new();
         let mut buf = Vec::new();
         for id in refs.view_tips.iter().chain(&refs.hidden_tips).copied() {
@@ -331,7 +408,8 @@ impl HistoryGraph {
             )?;
         }
         for (&id, names) in &local_refs {
-            if self.commits.get(&id).is_none_or(|commit| !commit.data.stored) {
+            let Some(index) = self.index(id) else { continue };
+            if self.commits[index.as_usize()].state & NODE_STORED == 0 {
                 continue;
             }
             let tracked = resolve_tracking(repo, names)?;
@@ -359,24 +437,27 @@ impl HistoryGraph {
                     INTERNAL,
                 )?;
             }
-            tracking.insert(id, tracked);
+            tracking.insert(index, tracked);
         }
 
         let mut rows = Vec::new();
         let mut attributions = Vec::new();
-        while let Some((_time, id)) = queue.pop() {
-            let Some(state) = states.get_mut(&id) else { continue };
+        while let Some((_time, index)) = queue.pop() {
+            let state = &mut states[index.as_usize()];
             let delta = state.flags & !state.expanded;
             if delta == 0 {
                 continue;
             }
             state.expanded |= delta;
-            let commit = &self.commits[&id];
-            let was_stored = commit.data.stored;
-            let stop = commit.data.complete && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
+            let id = self.id(index);
+            let commit = &self.commits[index.as_usize()];
+            let was_stored = commit.state & NODE_STORED != 0;
+            let stop =
+                commit.state & NODE_COMPLETE != 0 && (delta & EXPAND == 0 || was_stored && !expand.contains(&id));
             let should_store = delta & (VISIBLE | EXPAND) != 0 && !was_stored;
-            let parent_ids = commit.parents.clone();
-            let generation = commit.generation;
+            let parent_indices = self.parents(index).to_vec();
+            let parent_ids = self.parent_ids(index);
+            let generation = commit.generation();
             if should_store {
                 if let Some(names) = local_refs.get(&id) {
                     let tracked = resolve_tracking(repo, names)?;
@@ -404,7 +485,7 @@ impl HistoryGraph {
                             INTERNAL,
                         )?;
                     }
-                    tracking.insert(id, tracked);
+                    tracking.insert(index, tracked);
                 }
                 let metadata = if generation.is_some() {
                     None
@@ -440,16 +521,13 @@ impl HistoryGraph {
                     has_agent_marker,
                     signature,
                 });
-                self.commits
-                    .get_mut(&id)
-                    .expect("loaded commit remains present")
-                    .data
-                    .stored = true;
+                self.commits[index.as_usize()].state |= NODE_STORED;
+                self.stored_order.push(index);
             }
             if stop {
                 continue;
             }
-            for parent in parent_ids {
+            for parent in parent_indices {
                 self.schedule_cached(
                     repo,
                     cache.as_ref(),
@@ -457,18 +535,14 @@ impl HistoryGraph {
                     &mut states,
                     &mut queue,
                     &mut buf,
-                    parent,
+                    self.id(parent),
                     delta & (VISIBLE | INTERNAL | EXPAND),
                 )?;
             }
         }
-        for (id, state) in states {
+        for (index, state) in states.into_iter().enumerate() {
             if state.expanded & (VISIBLE | INTERNAL | EXPAND) != 0 {
-                self.commits
-                    .get_mut(&id)
-                    .expect("walked commits remain cached")
-                    .data
-                    .complete = true;
+                self.commits[index].state |= NODE_COMPLETE;
             }
         }
         self.tracking = tracking;
@@ -505,39 +579,42 @@ const INTERNAL: u8 = 1 << 1;
 const HIDDEN: u8 = 1 << 2;
 const STALE: u8 = 1 << 3;
 const EXPAND: u8 = 1 << 4;
+const NODE_LOADED: u8 = 1 << 0;
+const NODE_COMPLETE: u8 = 1 << 1;
+const NODE_STORED: u8 = 1 << 2;
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct WalkState {
     flags: u8,
     expanded: u8,
 }
 
+#[expect(clippy::too_many_arguments)]
 fn schedule(
-    graph: &mut gix::revwalk::Graph<'_, '_, gix::revwalk::graph::Commit<Node>>,
-    queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, ObjectId>,
+    graph: &mut HistoryGraph,
+    repo: &gix::Repository,
+    cache: Option<&gix::commitgraph::Graph>,
+    states: &mut Vec<Node>,
+    queue: &mut gix::revwalk::PriorityQueue<gix::date::SecondsSinceUnixEpoch, CommitIndex>,
     shallow: &HashSet<ObjectId>,
+    buf: &mut Vec<u8>,
     id: ObjectId,
     flags: u8,
 ) -> Result<()> {
-    let Some(commit) = graph
-        .get_or_insert_full_commit(id, |commit| {
-            if shallow.contains(&id) {
-                commit.parents.clear();
-            }
-        })
-        .context("could not load commit for history traversal")?
-    else {
-        return Ok(());
-    };
-    if commit.data.flags & flags != flags {
-        commit.data.flags |= flags;
-        queue.insert(commit.commit_time, id);
+    let index = graph.ensure_commit(repo, cache, shallow, id, buf)?;
+    states.resize(graph.commits.len(), Node::default());
+    let state = &mut states[index.as_usize()];
+    if state.flags & flags != flags {
+        state.flags |= flags;
+        queue.insert(graph.commits[index.as_usize()].commit_time, index);
     }
     Ok(())
 }
 
 fn hidden_frontier(
-    graph: &mut gix::revwalk::Graph<'_, '_, gix::revwalk::graph::Commit<Node>>,
+    graph: &mut HistoryGraph,
+    repo: &gix::Repository,
+    cache: Option<&gix::commitgraph::Graph>,
     visible_tips: &[ObjectId],
     hidden_tips: &[ObjectId],
     shallow: &HashSet<ObjectId>,
@@ -545,56 +622,41 @@ fn hidden_frontier(
     if hidden_tips.is_empty() {
         return Ok(HashSet::new());
     }
-    let mut flags = HashMap::<ObjectId, u8>::new();
-    let mut queue = gix::revwalk::PriorityQueue::<GenThenTime, ObjectId>::new();
+    let mut flags = Vec::<u8>::new();
+    let mut queue = gix::revwalk::PriorityQueue::<GenThenTime, CommitIndex>::new();
+    let mut buf = Vec::new();
     for (tips, flag) in [(visible_tips, VISIBLE), (hidden_tips, HIDDEN)] {
         for &id in tips {
-            let Some(commit) = graph
-                .get_or_insert_full_commit(id, |commit| {
-                    if shallow.contains(&id) {
-                        commit.parents.clear();
-                    }
-                })
-                .context("could not load commit while preparing hidden history")?
-            else {
-                continue;
-            };
-            *flags.entry(id).or_default() |= flag;
-            queue.insert(GenThenTime::from(&*commit), id);
+            let index = graph.ensure_commit(repo, cache, shallow, id, &mut buf)?;
+            flags.resize(graph.commits.len(), 0);
+            flags[index.as_usize()] |= flag;
+            queue.insert(GenThenTime::from(&graph.commits[index.as_usize()]), index);
         }
     }
-    while queue
-        .iter_unordered()
-        .any(|id| flags.get(id).is_some_and(|flags| flags & STALE == 0))
-    {
-        let Some((_priority, id)) = queue.pop() else { break };
-        let mut propagated = flags[&id];
+    while queue.iter_unordered().any(|index| flags[index.as_usize()] & STALE == 0) {
+        let Some((_priority, index)) = queue.pop() else { break };
+        let mut propagated = flags[index.as_usize()];
         if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
             propagated |= STALE;
-            *flags.get_mut(&id).expect("queued commits have flags") = propagated;
+            flags[index.as_usize()] = propagated;
         }
-        let parents = graph.get(&id).expect("queued commits are loaded").parents.clone();
+        let parents = graph.parents(index).to_vec();
         for parent in parents {
-            let Some(commit) = graph
-                .get_or_insert_full_commit(parent, |commit| {
-                    if shallow.contains(&parent) {
-                        commit.parents.clear();
-                    }
-                })
-                .context("could not load hidden commit parent")?
-            else {
-                continue;
-            };
-            let parent_flags = flags.entry(parent).or_default();
+            let parent_id = graph.id(parent);
+            let parent = graph.ensure_commit(repo, cache, shallow, parent_id, &mut buf)?;
+            flags.resize(graph.commits.len(), 0);
+            let parent_flags = &mut flags[parent.as_usize()];
             if *parent_flags & propagated != propagated {
                 *parent_flags |= propagated;
-                queue.insert(GenThenTime::from(&*commit), parent);
+                queue.insert(GenThenTime::from(&graph.commits[parent.as_usize()]), parent);
             }
         }
     }
     Ok(flags
         .into_iter()
-        .filter_map(|(id, flags)| (flags & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN).then_some(id))
+        .enumerate()
+        .filter(|(_, flags)| flags & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN)
+        .map(|(index, _)| graph.id(CommitIndex(index as u32)))
         .collect())
 }
 
@@ -690,44 +752,80 @@ pub(crate) fn load(
     let commit_graph = repo
         .commit_graph_if_enabled()
         .context("could not open commit-graph for history traversal")?;
-    let mut graph = repo.revision_graph::<gix::revwalk::graph::Commit<Node>>(commit_graph.as_ref());
-    let hidden = hidden_frontier(&mut graph, &tips, &hidden_tips, &shallow)?;
+    let mut graph = HistoryGraph::default();
+    let hidden = hidden_frontier(&mut graph, repo, commit_graph.as_ref(), &tips, &hidden_tips, &shallow)?;
     let local_refs = local_refs_by_target(repo)?;
     let mut tracking = HashMap::new();
+    let mut states = vec![Node::default(); graph.commits.len()];
     let mut queue = gix::revwalk::PriorityQueue::new();
+    let mut buf = Vec::new();
     for &tip in &tips {
-        schedule(&mut graph, &mut queue, &shallow, tip, VISIBLE)?;
+        schedule(
+            &mut graph,
+            repo,
+            commit_graph.as_ref(),
+            &mut states,
+            &mut queue,
+            &shallow,
+            &mut buf,
+            tip,
+            VISIBLE,
+        )?;
     }
     let mut rows = Vec::with_capacity(COMMIT_BATCH_SIZE);
     let mut attributions = Vec::with_capacity(COMMIT_BATCH_SIZE);
     let mut connected = Vec::new();
     let mut connected_seen = HashSet::new();
-    while let Some((_time, id)) = queue.pop() {
+    while let Some((_time, index)) = queue.pop() {
         if cancelled.load(Ordering::Relaxed) {
             emit(Event::Cancelled);
             return Ok(());
         }
-        let commit = graph.get_mut(&id).expect("queued commits are loaded");
-        let delta = commit.data.flags & !commit.data.expanded;
-        if delta == 0 {
-            continue;
-        }
-        commit.data.expanded |= delta;
-        commit.data.complete = true;
-        let should_emit = delta & VISIBLE != 0 && !commit.data.emitted && !hidden.contains(&id);
-        commit.data.emitted |= should_emit;
-        commit.data.stored |= should_emit;
-        let parent_ids = commit.parents.clone();
-        let generation = commit.generation;
+        let id = graph.id(index);
+        let (delta, should_emit) = {
+            let state = &mut states[index.as_usize()];
+            let delta = state.flags & !state.expanded;
+            if delta == 0 {
+                continue;
+            }
+            state.expanded |= delta;
+            let should_emit = delta & VISIBLE != 0 && !state.emitted && !hidden.contains(&id);
+            state.emitted |= should_emit;
+            (delta, should_emit)
+        };
+        graph.commits[index.as_usize()].state |= NODE_COMPLETE;
+        let parent_indices = graph.parents(index).to_vec();
+        let parent_ids = graph.parent_ids(index);
+        let generation = graph.commits[index.as_usize()].generation();
         if should_emit && let Some(names) = local_refs.get(&id) {
             let refs = resolve_tracking(repo, names)?;
             if refs.iter().any(|reference| reference.upstream.flatten().is_some()) {
-                schedule(&mut graph, &mut queue, &shallow, id, INTERNAL)?;
+                schedule(
+                    &mut graph,
+                    repo,
+                    commit_graph.as_ref(),
+                    &mut states,
+                    &mut queue,
+                    &shallow,
+                    &mut buf,
+                    id,
+                    INTERNAL,
+                )?;
             }
             for upstream in refs.iter().filter_map(|reference| reference.upstream.flatten()) {
-                schedule(&mut graph, &mut queue, &shallow, upstream, INTERNAL)?;
+                schedule(
+                    &mut graph,
+                    repo,
+                    commit_graph.as_ref(),
+                    &mut states,
+                    &mut queue,
+                    &shallow,
+                    &mut buf,
+                    upstream,
+                    INTERNAL,
+                )?;
             }
-            tracking.insert(id, refs);
+            tracking.insert(index, refs);
         }
         let metadata = if !should_emit || generation.is_some() {
             None
@@ -767,6 +865,8 @@ pub(crate) fn load(
                 has_agent_marker,
                 signature,
             });
+            graph.commits[index.as_usize()].state |= NODE_STORED;
+            graph.stored_order.push(index);
             if rows.len() == COMMIT_BATCH_SIZE
                 && !emit(Event::Commits(LoadedCommits {
                     rows: std::mem::replace(&mut rows, Vec::with_capacity(COMMIT_BATCH_SIZE)),
@@ -781,14 +881,25 @@ pub(crate) fn load(
         } else {
             delta & (VISIBLE | INTERNAL)
         };
-        for parent in parent_ids {
-            let parent_flags = if hidden.contains(&parent) {
+        for parent in parent_indices {
+            let parent_id = graph.id(parent);
+            let parent_flags = if hidden.contains(&parent_id) {
                 propagated & !VISIBLE
             } else {
                 propagated
             };
             if parent_flags != 0 {
-                schedule(&mut graph, &mut queue, &shallow, parent, parent_flags)?;
+                schedule(
+                    &mut graph,
+                    repo,
+                    commit_graph.as_ref(),
+                    &mut states,
+                    &mut queue,
+                    &shallow,
+                    &mut buf,
+                    parent_id,
+                    parent_flags,
+                )?;
             }
         }
     }
@@ -796,7 +907,7 @@ pub(crate) fn load(
         return Ok(());
     }
     if !hidden_revisions.is_empty() {
-        connected.retain(|id| graph.get(id).is_none_or(|commit| !commit.data.emitted));
+        connected.retain(|id| graph.index(*id).is_none_or(|index| !states[index.as_usize()].emitted));
         let mut rows = Vec::with_capacity(connected.len());
         let mut attributions = Vec::new();
         let mut authors = gix::features::threading::lock(authors);
@@ -826,15 +937,10 @@ pub(crate) fn load(
                 has_agent_marker,
                 signature,
             });
-            if let Some(commit) = graph
-                .get_or_insert_full_commit(id, |commit| {
-                    if shallow.contains(&id) {
-                        commit.parents.clear();
-                    }
-                })
-                .context("could not retain connected hidden commit")?
-            {
-                commit.data.stored = true;
+            let index = graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, id, &mut buf)?;
+            if graph.commits[index.as_usize()].state & NODE_STORED == 0 {
+                graph.commits[index.as_usize()].state |= NODE_STORED;
+                graph.stored_order.push(index);
             }
         }
         if !rows.is_empty() && !emit(Event::HiddenCommits(LoadedCommits { rows, attributions })) {
@@ -842,11 +948,8 @@ pub(crate) fn load(
         }
     }
     emit(Event::VisibleComplete);
-    emit(Event::Complete(HistoryGraph {
-        commits: graph.detach(),
-        tracking,
-        relations: HashMap::new(),
-    }));
+    graph.tracking = tracking;
+    emit(Event::Complete(graph));
     Ok(())
 }
 
@@ -1165,6 +1268,24 @@ mod tests {
         ObjectId::Sha1(bytes)
     }
 
+    fn insert_commit(graph: &mut HistoryGraph, n: u8, parents: &[u8], generation: u32) {
+        let index = graph.intern(id(n)).expect("the small test graph fits in u32");
+        let parents: Vec<_> = parents
+            .iter()
+            .map(|parent| graph.intern(id(*parent)).expect("the small test graph fits in u32"))
+            .collect();
+        let start = graph.parents.len() as u32;
+        graph.parents.extend(parents);
+        let end = graph.parents.len() as u32;
+        graph.commits[index.as_usize()] = GraphCommit {
+            id: id(n),
+            parents: start..end,
+            commit_time: generation.into(),
+            generation,
+            state: NODE_LOADED,
+        };
+    }
+
     fn loaded(path: &std::path::Path, revisions: &[&str], hidden_revisions: &[&str]) -> Result<Vec<Event>> {
         let mut events = Vec::new();
         let authors =
@@ -1212,15 +1333,7 @@ mod tests {
             (6, vec![4], 4),
             (7, vec![5], 4),
         ] {
-            graph.commits.insert(
-                id(n),
-                gix::revwalk::graph::Commit {
-                    parents: parents.into_iter().map(id).collect(),
-                    commit_time: generation.into(),
-                    generation: Some(generation),
-                    data: Node::default(),
-                },
-            );
+            insert_commit(&mut graph, n, &parents, generation);
         }
 
         assert_eq!(
@@ -1435,10 +1548,17 @@ mod tests {
                 _ => None,
             })
             .expect("history loading returns the persistent graph");
-        let repo = gix::open(fixture.path())?;
-        let cached = graph.commits.get_mut(&main).expect("the tracking tip was scheduled");
-        assert!(cached.data.complete && !cached.data.stored);
-        cached.parents.push(id(255));
+        let repo = crate::open_test_repository(fixture.path())?;
+        let index = graph.index(main).expect("the tracking tip was scheduled");
+        let fake_parent = graph.intern(id(255)).expect("the small test graph fits in u32");
+        let mut parents = graph.parents(index).to_vec();
+        parents.push(fake_parent);
+        let start = graph.parents.len() as u32;
+        graph.parents.extend(parents);
+        let end = graph.parents.len() as u32;
+        let cached = &mut graph.commits[index.as_usize()];
+        assert!(cached.state & NODE_COMPLETE != 0 && cached.state & NODE_STORED == 0);
+        cached.parents = start..end;
 
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
