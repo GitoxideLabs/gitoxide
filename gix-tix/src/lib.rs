@@ -1606,6 +1606,25 @@ fn count_exclusive_commits(repo: &gix::Repository, tip: gix::ObjectId, hidden: g
     })
 }
 
+fn remembered_change_selection(view: &app::ChangesView, changes: Option<&Changes>) -> Option<(BString, usize)> {
+    changes.and_then(|changes| {
+        changes
+            .paths
+            .get(view.selected)
+            .map(|change| (change.path.clone(), view.selected.saturating_sub(view.offset)))
+    })
+}
+
+fn restore_change_selection(view: &mut app::ChangesView, changes: &Changes, remembered: Option<(BString, usize)>) {
+    let Some((path, viewport_row)) = remembered else {
+        return;
+    };
+    if let Some(selected) = changes.paths.iter().position(|change| change.path == path) {
+        view.selected = selected;
+        view.offset = selected.saturating_sub(viewport_row);
+    }
+}
+
 #[expect(clippy::too_many_arguments, reason = "drawing needs the complete view state")]
 fn draw(
     terminal: &mut ratatui::DefaultTerminal,
@@ -1687,9 +1706,17 @@ fn draw(
         && worktree_changes
             .as_ref()
             .is_none_or(|(marker, _)| *marker == usize::MAX);
-    if tree_changes_to_load.is_some() || worktree_changes_to_load {
-        app.reset_changes_view();
-    }
+    let tree_selection = tree_changes_to_load.and_then(|_| {
+        remembered_change_selection(&app.tree_changes, tree_changes.as_ref().map(|(_, _, changes)| changes))
+    });
+    let worktree_selection = worktree_changes_to_load
+        .then(|| {
+            remembered_change_selection(
+                &app.worktree_changes,
+                worktree_changes.as_ref().map(|(_, changes)| changes),
+            )
+        })
+        .flatten();
     if !app.show_commit || selected.is_none() {
         *commit_message = None;
     }
@@ -1744,6 +1771,7 @@ fn draw(
             repository.object_cache_size(None);
             let loaded = loaded?;
             app.changes_parent = loaded.parent.map_or(0, |parent| parent.index);
+            restore_change_selection(&mut app.tree_changes, &loaded, tree_selection);
             *tree_changes = Some((id, app.changes_parent, loaded));
         }
         if worktree_changes_to_load {
@@ -1771,6 +1799,7 @@ fn draw(
                     {
                         app.worktree_changes.error = None;
                     }
+                    restore_change_selection(&mut app.worktree_changes, &loaded, worktree_selection);
                     *worktree_changes = Some((0, loaded));
                 }
                 Err(err) => {
@@ -3695,6 +3724,34 @@ mod tests {
         assert!(!worktree_watcher_needed(false, Some(ChangesMode::Tree)));
         assert!(!worktree_watcher_needed(false, None));
         assert!(!worktree_watcher_needed(true, Some(ChangesMode::Both)));
+    }
+
+    #[test]
+    fn restores_changed_path_selection_after_reordering() {
+        let path = |path: &str| PathChange {
+            kind: ChangeKind::Modified,
+            group: ChangeGroup::Unstaged,
+            source: None,
+            path: path.into(),
+            lines: None,
+        };
+        let previous = Changes {
+            paths: ["a", "b", "selected"].into_iter().map(path).collect(),
+            ..Changes::default()
+        };
+        let mut view = app::ChangesView::default();
+        view.selected = 2;
+        view.offset = 1;
+        let remembered = remembered_change_selection(&view, Some(&previous));
+        let refreshed = Changes {
+            paths: ["x", "y", "z", "selected"].into_iter().map(path).collect(),
+            ..Changes::default()
+        };
+
+        restore_change_selection(&mut view, &refreshed, remembered);
+
+        assert_eq!(view.selected, 3, "the same path remains selected");
+        assert_eq!(view.offset, 2, "the path retains its relative viewport row");
     }
 
     #[test]
