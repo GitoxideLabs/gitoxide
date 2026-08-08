@@ -22,8 +22,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use app::{
-    Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, CommitRow, ComparedParent, Effect,
-    PathChange, SelectionRelation, State,
+    Action, App, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesMode, ComparedParent, Effect, PathChange,
+    SelectionRelation, SharedCommitRow, State,
 };
 use crossterm::{
     clipboard::CopyToClipboard,
@@ -1398,7 +1398,7 @@ fn prepare_inline_exit(app: &mut App) {
     app.show_selection_tail = false;
 }
 
-fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, app::Graph, Duration)> {
+fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(app::compute_lanes(rows));
