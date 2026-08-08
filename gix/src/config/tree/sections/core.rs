@@ -62,6 +62,8 @@ impl Core {
     pub const SYMLINKS: keys::Boolean = keys::Boolean::new_boolean("symlinks", &config::Tree::CORE);
     /// The `core.trustCTime` key.
     pub const TRUST_C_TIME: keys::Boolean = keys::Boolean::new_boolean("trustCTime", &config::Tree::CORE);
+    /// The `core.untrackedCache` key.
+    pub const UNTRACKED_CACHE: keys::Any = keys::Any::new("untrackedCache", &config::Tree::CORE);
     /// The `core.worktree` key.
     pub const WORKTREE: keys::Any = keys::Any::new("worktree", &config::Tree::CORE)
         .with_environment_override("GIT_WORK_TREE")
@@ -129,6 +131,7 @@ impl Section for Core {
             &Self::REPOSITORY_FORMAT_VERSION,
             &Self::SYMLINKS,
             &Self::TRUST_C_TIME,
+            &Self::UNTRACKED_CACHE,
             &Self::WORKTREE,
             &Self::PROTECT_HFS,
             &Self::PROTECT_NTFS,

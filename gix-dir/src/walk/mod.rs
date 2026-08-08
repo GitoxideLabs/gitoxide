@@ -142,6 +142,13 @@ pub enum ForDeletionMode {
 /// Options for use in [`walk()`](function::walk()) function.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Options<'a> {
+    /// If `true`, use a compatible `UNTR` index extension to avoid reading unchanged directories.
+    ///
+    /// Callers must only enable this when Git configuration permits use of the cache.
+    /// The cache is otherwise validated against the worktree and configured exclude files before use.
+    pub use_untracked_cache: bool,
+    /// The effective `core.excludesFile`, including Git's user-level default, to validate against the `UNTR` extension.
+    pub untracked_cache_excludes_file: Option<&'a std::path::Path>,
     /// If `true`, the filesystem will store paths as decomposed unicode, i.e. `ä` becomes `"a\u{308}"`, which means that
     /// we have to turn these forms back from decomposed to precomposed unicode before storing it in the index or generally
     /// using it. This also applies to input received from the command-line, so callers may have to be aware of this and
@@ -308,3 +315,4 @@ pub enum Error {
 mod classify;
 pub(crate) mod function;
 mod readdir;
+mod untracked_cache;

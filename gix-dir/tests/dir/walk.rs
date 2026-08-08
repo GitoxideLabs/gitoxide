@@ -20,6 +20,47 @@ use crate::walk_utils::{
 };
 
 #[test]
+fn untracked_cache_avoids_reading_unchanged_directories() {
+    let root = fixture("only-untracked");
+    let mut without_cache_options = options();
+    without_cache_options.use_untracked_cache = false;
+    without_cache_options.emit_untracked = CollapseDirectory;
+    let ((without_cache, _), expected) =
+        collect(&root, None, |keep, ctx| walk(&root, ctx, without_cache_options, keep));
+
+    let mut with_cache_options = options();
+    with_cache_options.emit_untracked = CollapseDirectory;
+    let ((with_cache, _), actual) = collect(&root, None, |keep, ctx| walk(&root, ctx, with_cache_options, keep));
+
+    assert_eq!(actual, expected, "UNTR replay must produce the same entries");
+    assert!(
+        with_cache.read_dir_calls < without_cache.read_dir_calls,
+        "UNTR replay should reduce directory reads, got {} with cache and {} without",
+        with_cache.read_dir_calls,
+        without_cache.read_dir_calls
+    );
+}
+
+#[test]
+fn untracked_cache_does_not_replay_descendants_after_inherited_ignore_changes() {
+    let root = fixture("untracked-cache-changed-parent-ignore");
+    let mut without_cache_options = options();
+    without_cache_options.use_untracked_cache = false;
+    without_cache_options.emit_untracked = CollapseDirectory;
+    let (_, expected) = collect(&root, None, |keep, ctx| walk(&root, ctx, without_cache_options, keep));
+
+    let mut with_cache_options = options();
+    with_cache_options.emit_untracked = CollapseDirectory;
+    let (_, actual) = collect(&root, None, |keep, ctx| walk(&root, ctx, with_cache_options, keep));
+
+    assert_eq!(
+        actual, expected,
+        "rejecting a parent cache must invalidate descendants that inherited its excludes"
+    );
+    assert_eq!(actual, [entry("child", Untracked, Directory)]);
+}
+
+#[test]
 #[cfg(unix)]
 fn root_is_fifo() {
     let root = fixture_in("fifo", "top-level");
@@ -1056,9 +1097,9 @@ fn only_untracked_with_prefix_deletion() -> crate::Result {
 #[test]
 fn only_untracked() -> crate::Result {
     let root = fixture("only-untracked");
-    let ((out, _root), entries) = collect(&root, None, |keep, ctx| walk(&root, ctx, options(), keep));
+    let ((without_cache, _root), entries) = collect(&root, None, |keep, ctx| walk(&root, ctx, options(), keep));
     assert_eq!(
-        out,
+        without_cache,
         walk::Outcome {
             read_dir_calls: 3,
             returned_entries: entries.len(),
@@ -1108,13 +1149,12 @@ fn only_untracked() -> crate::Result {
         )
     });
     assert_eq!(
-        out,
-        walk::Outcome {
-            read_dir_calls: 3,
-            returned_entries: entries.len(),
-            seen_entries: 7 + 2,
-        },
-        "There are 2 extra directories that we fold into, but ultimately discard"
+        out.read_dir_calls, 0,
+        "UNTR supplies the cached entries without opening directories"
+    );
+    assert!(
+        out.read_dir_calls < without_cache.read_dir_calls,
+        "UNTR should reduce directory reads"
     );
     assert_eq!(
         entries,
@@ -1331,9 +1371,9 @@ fn expendable_and_precious() {
     assert_eq!(
         out,
         walk::Outcome {
-            read_dir_calls: 6,
+            read_dir_calls: 0,
             returned_entries: entries.len(),
-            seen_entries: 16 + 2,
+            seen_entries: 8,
         }
     );
 
@@ -1395,11 +1435,11 @@ fn subdir_untracked() -> crate::Result {
     assert_eq!(
         out,
         walk::Outcome {
-            read_dir_calls: 3,
+            read_dir_calls: 0,
             returned_entries: entries.len(),
-            seen_entries: 7 + 1,
+            seen_entries: 2,
         },
-        "there is a folded directory we added"
+        "UNTR supplies only the entries needed to produce the folded directory"
     );
     assert_eq!(entries, [entry("d/d", Untracked, Directory)]);
     Ok(())
@@ -1966,11 +2006,11 @@ fn untracked_and_ignored() -> crate::Result {
     assert_eq!(
         out,
         walk::Outcome {
-            read_dir_calls: 5,
+            read_dir_calls: 0,
             returned_entries: entries.len(),
-            seen_entries: 21 + 1,
+            seen_entries: 5,
         },
-        "we still encounter the same amount of entries, and 1 folded directory"
+        "UNTR supplies only the entries needed for aggregation"
     );
     assert_eq!(
         entries,
@@ -4460,6 +4500,47 @@ fn type_mismatch_ignore_case() {
             entry("File-is-Dir", Untracked, Directory).with_index_kind(File)
         ],
         "this is the same as in the non-icase version, which means that icase lookup works"
+    );
+}
+
+#[test]
+fn untracked_cache_honors_case_insensitive_tracked_directories() {
+    let root = fixture("untracked-cache-icase");
+    let ((out, _root), entries) = try_collect_filtered_opts_collect(
+        &root,
+        None,
+        |keep, ctx| {
+            walk(
+                &root,
+                ctx,
+                walk::Options {
+                    emit_untracked: CollapseDirectory,
+                    ignore_case: true,
+                    ..options()
+                },
+                keep,
+            )
+        },
+        None::<&str>,
+        Options {
+            fresh_index: false,
+            ..Default::default()
+        },
+    )
+    .expect("success");
+    assert_eq!(
+        out,
+        walk::Outcome {
+            read_dir_calls: 0,
+            returned_entries: 1,
+            seen_entries: 1,
+        },
+        "the cached directory and its tracked contents are accounted for without filesystem reads"
+    );
+    assert_eq!(
+        entries,
+        [entry("dir/untracked", Untracked, File)],
+        "case-folded tracked contents prevent collapsing their untracked sibling"
     );
 }
 
