@@ -1,5 +1,5 @@
 use crate::{ErrorWithSource, debug_string, new_tree_error};
-use gix_error::{Error, ErrorExt, ValidationError, message};
+use gix_error::{CorruptionError, Error, ErrorExt, NotFoundError, RetryableError, ValidationError, message};
 use std::error::Error as _;
 
 #[test]
@@ -133,6 +133,34 @@ fn from_any_error_with_source() {
 }
 
 #[test]
+fn classification_survives_raising_a_converted_error() {
+    let converted = Error::from_error(ErrorWithSource(
+        "object lookup failed",
+        ValidationError::new("invalid object header"),
+    ));
+    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+
+    assert!(err.is_validation());
+}
+
+#[test]
+fn raising_a_converted_error_preserves_stored_types() {
+    let converted =
+        Error::from(ValidationError::new("invalid object header").and_raise(message("object lookup failed")));
+    let converted = Error::from_error(converted);
+    let err = Error::from(converted.and_raise(message("revision parsing failed")));
+
+    assert!(
+        err.sources().any(<dyn std::error::Error>::is::<ValidationError>),
+        "the nested Error retains its typed frames"
+    );
+    assert!(
+        err.probable_cause().is::<ValidationError>(),
+        "probable_cause() returns the stored error, not a string-backed copy"
+    );
+}
+
+#[test]
 fn validation_error_displays_input_with_debug_formatting() {
     let err = ValidationError::new_with_input("invalid input", "hello\n ");
     assert_eq!(
@@ -140,4 +168,44 @@ fn validation_error_displays_input_with_debug_formatting() {
         "invalid input: \"hello\\n \"",
         "it won't hide whitespace and other special characters"
     );
+    assert!(Error::from_error(err).is_validation());
+    assert!(Error::from_error(ErrorWithSource("validation failed", ValidationError::new("invalid"))).is_validation());
+}
+
+#[test]
+fn retryability_is_discovered_in_the_error_chain() {
+    let retryable =
+        std::io::Error::new(std::io::ErrorKind::TimedOut, "too slow").and_raise(message("network operation failed"));
+    assert!(Error::from(retryable).can_retry());
+
+    let permanent = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied")
+        .and_raise(message("network operation failed"));
+    assert!(!Error::from(permanent).can_retry());
+
+    let dependency_specific =
+        RetryableError::new(message("HTTP/2 stream failed")).and_raise(message("network operation failed"));
+    assert!(Error::from(dependency_specific).can_retry());
+}
+
+#[test]
+fn corruption_is_discovered_in_the_error_chain() {
+    let corrupt = CorruptionError::new("checksum mismatch").and_raise(message("failed to open object database"));
+    assert!(Error::from(corrupt).is_corrupted());
+
+    assert!(!Error::from(message("repository was not found").raise()).is_corrupted());
+}
+
+#[test]
+fn not_found_is_discovered_in_well_known_errors() {
+    let classified = NotFoundError::new("reference does not exist").and_raise(message("failed to resolve HEAD"));
+    assert!(Error::from(classified).is_not_found());
+
+    let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing index")
+        .and_raise(message("failed to open repository"));
+    assert!(Error::from(io).is_not_found());
+
+    let boxed = Box::new(std::io::Error::new(std::io::ErrorKind::NotFound, "missing object"));
+    assert!(Error::from_boxed(boxed).is_not_found());
+
+    assert!(!Error::from(message("permission denied").raise()).is_not_found());
 }

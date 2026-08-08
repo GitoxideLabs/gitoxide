@@ -9,12 +9,45 @@ mod _impl {
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
             let root = self.inner.frame();
-            root.probable_cause().unwrap_or(root).error()
+            let cause = root.probable_cause().unwrap_or(root).error();
+            cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
         pub fn sources(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> + '_ {
-            self.inner.frame().iter_frames().map(|f| f.error() as _)
+            let mut out = Vec::new();
+            self.collect_sources(&mut out);
+            out.into_iter()
+        }
+
+        fn collect_sources<'a>(&'a self, out: &mut Vec<&'a (dyn std::error::Error + 'static)>) {
+            for frame in self.inner.frame().iter_frames() {
+                let err = frame.error() as &(dyn std::error::Error + 'static);
+                out.push(err);
+                if let Some(err) = err.downcast_ref::<Error>() {
+                    err.collect_sources(out);
+                }
+            }
+        }
+
+        /// Return `true` if retrying the failed operation might succeed.
+        pub fn can_retry(&self) -> bool {
+            self.sources().any(super::is_retryable)
+        }
+
+        /// Return `true` if malformed or internally inconsistent data caused the failure.
+        pub fn is_corrupted(&self) -> bool {
+            self.sources().any(super::is_corrupted)
+        }
+
+        /// Return `true` if a requested resource was not found.
+        pub fn is_not_found(&self) -> bool {
+            self.sources().any(super::is_not_found)
+        }
+
+        /// Return `true` if invalid input caused the failure.
+        pub fn is_validation(&self) -> bool {
+            self.sources().any(super::is_validation)
         }
     }
 
@@ -38,6 +71,12 @@ mod _impl {
             Error {
                 inner: Inner::ExnAsError(Exn::new(error).into()),
             }
+        }
+
+        /// Create a new instance representing an already boxed `error`.
+        #[track_caller]
+        pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+            Self::from_error(super::BoxedError(error))
         }
     }
 
@@ -63,7 +102,11 @@ mod _impl {
         /// Return the first source of an [Exn] error, or the source of a boxed error.
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             match &self.inner {
-                Inner::ExnAsError(frame) | Inner::Exn(frame) => frame.children().first().map(|f| f.error() as _),
+                Inner::ExnAsError(frame) | Inner::Exn(frame) => frame
+                    .children()
+                    .first()
+                    .map(|f| f.error() as _)
+                    .or_else(|| frame.error().source()),
             }
         }
     }
@@ -92,17 +135,51 @@ mod _impl {
         /// Return the error that is most likely the root cause, based on heuristics.
         /// Note that if there is nothing but this error, i.e. no source or children, this error is returned.
         pub fn probable_cause(&self) -> &(dyn std::error::Error + 'static) {
-            use std::error::Error;
-            self.inner
-                .source()
-                .unwrap_or(self as &(dyn std::error::Error + 'static))
+            let cause = std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .find(|err| err.is_probable_cause)
+                .map_or(self as &(dyn std::error::Error + 'static), |err| err.err.as_ref());
+            cause.downcast_ref::<Error>().map_or(cause, Error::probable_cause)
         }
 
         /// Return an iterator over all errors in the tree in breadth-first order, starting with this one.
         pub fn sources(&self) -> impl Iterator<Item = &(dyn std::error::Error + 'static)> + '_ {
-            std::iter::successors(Some(&self.inner as &(dyn std::error::Error + 'static)), |err| {
-                err.source()
-            })
+            let mut out = Vec::new();
+            self.collect_sources(&mut out);
+            out.into_iter()
+        }
+
+        fn collect_sources<'a>(&'a self, out: &mut Vec<&'a (dyn std::error::Error + 'static)>) {
+            for chained in std::iter::successors(Some(&self.inner), |err| err.source.as_deref()) {
+                let err = chained.err.as_ref() as &(dyn std::error::Error + 'static);
+                out.push(err);
+                if let Some(err) = err.downcast_ref::<Error>() {
+                    err.collect_sources(out);
+                }
+            }
+        }
+
+        /// Return `true` if retrying the failed operation might succeed.
+        pub fn can_retry(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_retryable(err.err.as_ref()))
+        }
+
+        /// Return `true` if malformed or internally inconsistent data caused the failure.
+        pub fn is_corrupted(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_corrupted(err.err.as_ref()))
+        }
+
+        /// Return `true` if a requested resource was not found.
+        pub fn is_not_found(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_not_found(err.err.as_ref()))
+        }
+
+        /// Return `true` if invalid input caused the failure.
+        pub fn is_validation(&self) -> bool {
+            std::iter::successors(Some(&self.inner), |err| err.source.as_deref())
+                .any(|err| super::is_validation(err.err.as_ref()))
         }
     }
 
@@ -113,6 +190,12 @@ mod _impl {
             Error {
                 inner: Exn::new(error).into_chain(),
             }
+        }
+
+        /// Create a new instance representing an already boxed `error`.
+        #[track_caller]
+        pub fn from_boxed(error: Box<dyn std::error::Error + Send + Sync + 'static>) -> Self {
+            Self::from_error(super::BoxedError(error))
         }
     }
 
@@ -145,4 +228,89 @@ mod _impl {
             }
         }
     }
+}
+
+struct BoxedError(Box<dyn std::error::Error + Send + Sync + 'static>);
+
+impl std::fmt::Display for BoxedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for BoxedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BoxedError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+/// Return `true` if `err` or any error in its source chain indicates that retrying might succeed.
+pub fn can_retry(err: &(dyn std::error::Error + 'static)) -> bool {
+    is_retryable(err)
+}
+
+fn is_retryable(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        if let Some(err) = err.downcast_ref::<crate::Error>() {
+            return err.can_retry();
+        }
+        if err.is::<crate::RetryableError>() {
+            return true;
+        }
+        let Some(err) = err.downcast_ref::<std::io::Error>() else {
+            return false;
+        };
+        use std::io::ErrorKind::*;
+        matches!(
+            err.kind(),
+            Interrupted
+                | UnexpectedEof
+                | OutOfMemory
+                | TimedOut
+                | BrokenPipe
+                | AddrInUse
+                | ConnectionAborted
+                | ConnectionReset
+                | ConnectionRefused
+        )
+    })
+}
+
+fn is_corrupted(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        err.downcast_ref::<crate::Error>()
+            .is_some_and(crate::Error::is_corrupted)
+            || err.is::<crate::CorruptionError>()
+    })
+}
+
+fn is_not_found(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        err.downcast_ref::<crate::Error>()
+            .is_some_and(crate::Error::is_not_found)
+            || err.is::<crate::NotFoundError>()
+            || err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    })
+}
+
+fn is_validation(err: &(dyn std::error::Error + 'static)) -> bool {
+    error_chain(err).any(|err| {
+        err.downcast_ref::<crate::Error>()
+            .is_some_and(crate::Error::is_validation)
+            || err.is::<crate::ValidationError>()
+    })
+}
+
+fn error_chain<'a>(
+    err: &'a (dyn std::error::Error + 'static),
+) -> impl Iterator<Item = &'a (dyn std::error::Error + 'static)> {
+    std::iter::successors(Some(err), |err| err.source())
 }

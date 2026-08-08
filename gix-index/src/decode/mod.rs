@@ -11,23 +11,71 @@ mod error {
     use std::collections::TryReserveError;
 
     /// The error returned by [`State::from_bytes()`][crate::State::from_bytes()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        Header(#[from] decode::header::Error),
-        #[error("Could not hash index data")]
-        Hasher(#[from] gix_hash::hasher::Error),
-        #[error("Index data would require more memory than can be reserved")]
+        Header(gix_error::Error),
+        Hasher(gix_hash::hasher::Error),
         OutOfMemory,
-        #[error("Could not parse entry at index {index}")]
         Entry { index: u32 },
-        #[error("Mandatory extension wasn't implemented or malformed.")]
-        Extension(#[from] extension::decode::Error),
-        #[error("Index trailer should have been {expected} bytes long, but was {actual}")]
+        Extension(gix_error::Error),
         UnexpectedTrailerLength { expected: usize, actual: usize },
-        #[error("Shared index checksum mismatch")]
-        Verify(#[from] gix_hash::verify::Error),
+        Verify(gix_hash::verify::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Header(err) => std::fmt::Display::fmt(err, f),
+                Error::Hasher(_) => f.write_str("Could not hash index data"),
+                Error::OutOfMemory => f.write_str("Index data would require more memory than can be reserved"),
+                Error::Entry { index } => write!(f, "Could not parse entry at index {index}"),
+                Error::Extension(_) => f.write_str("Mandatory extension wasn't implemented or malformed."),
+                Error::UnexpectedTrailerLength { expected, actual } => {
+                    write!(
+                        f,
+                        "Index trailer should have been {expected} bytes long, but was {actual}"
+                    )
+                }
+                Error::Verify(_) => f.write_str("Shared index checksum mismatch"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Header(err) => err.source(),
+                Error::Hasher(err) => Some(err),
+                Error::Extension(err) => Some(err),
+                Error::Verify(err) => Some(err),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<decode::header::Error> for Error {
+        fn from(err: decode::header::Error) -> Self {
+            Error::Header(err.into_error())
+        }
+    }
+
+    impl From<gix_hash::hasher::Error> for Error {
+        fn from(err: gix_hash::hasher::Error) -> Self {
+            Error::Hasher(err)
+        }
+    }
+
+    impl From<extension::decode::Error> for Error {
+        fn from(err: extension::decode::Error) -> Self {
+            Error::Extension(err.into_error())
+        }
+    }
+
+    impl From<gix_hash::verify::Error> for Error {
+        fn from(err: gix_hash::verify::Error) -> Self {
+            Error::Verify(err)
+        }
     }
 
     impl From<TryReserveError> for Error {
@@ -38,6 +86,7 @@ mod error {
     }
 }
 pub use error::Error;
+use gix_error::ErrorExt;
 use gix_features::parallel::InOrderIter;
 
 use crate::util::read_u32;
@@ -82,7 +131,11 @@ impl State {
         let (version, num_entries, post_header_data) = header::decode(data, object_hash)?;
         let start_of_extensions = extension::end_of_index_entry::decode(data, object_hash)?;
         if num_entries as usize > entries::max_entries_possible(data.len(), start_of_extensions, object_hash, version) {
-            return Err(header::Error::Corrupt("Declared entry count exceeds possible entries for file size").into());
+            return Err(Error::Header(
+                gix_error::CorruptionError::new("Declared entry count exceeds possible entries for file size")
+                    .raise()
+                    .into_error(),
+            ));
         }
 
         let mut num_threads = gix_features::parallel::num_threads(thread_limit);

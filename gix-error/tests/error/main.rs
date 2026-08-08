@@ -34,15 +34,15 @@ mod utils {
     }
 
     #[derive(Debug)]
-    pub struct ErrorWithSource(pub &'static str, pub Message);
+    pub struct ErrorWithSource<E = Message>(pub &'static str, pub E);
 
-    impl std::fmt::Display for ErrorWithSource {
+    impl<E> std::fmt::Display for ErrorWithSource<E> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}", self.0)
         }
     }
 
-    impl std::error::Error for ErrorWithSource {
+    impl<E: std::error::Error + 'static> std::error::Error for ErrorWithSource<E> {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
             Some(&self.1)
         }

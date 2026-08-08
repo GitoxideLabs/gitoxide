@@ -17,15 +17,51 @@ pub enum Kind {
 mod error {
     use bstr::BString;
     /// The error returned by [`parse::Lines`][crate::parse::Lines].
-    #[derive(thiserror::Error, Debug)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(r"Line {line_number} has a negative pattern, for literal characters use \!: {line}")]
         PatternNegation { line_number: usize, line: BString },
-        #[error("Attribute in line {line_number} has an invalid name: {attribute}")]
         AttributeName { line_number: usize, attribute: BString },
-        #[error("Macro in line {line_number} has an invalid name: {macro_name}")]
         MacroName { line_number: usize, macro_name: BString },
+        Unquote(gix_quote::ansi_c::undo::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::PatternNegation { line_number, line } => write!(
+                    f,
+                    r"Line {line_number} has a negative pattern, for literal characters use \!: {line}"
+                ),
+                Error::AttributeName { line_number, attribute } => write!(
+                    f,
+                    "Attribute in line {line_number} has non-ascii characters or starts with '-': {attribute}"
+                ),
+                Error::MacroName {
+                    line_number,
+                    macro_name,
+                } => write!(
+                    f,
+                    "Macro in line {line_number} has non-ascii characters or starts with '-': {macro_name}"
+                ),
+                Error::Unquote(_) => f.write_str("Could not unquote attributes line"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Unquote(err) => Some(&**err),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<gix_quote::ansi_c::undo::Error> for Error {
+        fn from(source: gix_quote::ansi_c::undo::Error) -> Self {
+            Error::Unquote(source)
+        }
     }
 }
 pub use error::Error;

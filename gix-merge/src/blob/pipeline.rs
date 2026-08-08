@@ -118,25 +118,74 @@ pub mod convert_to_mergeable {
     use gix_object::tree::EntryKind;
 
     /// The error returned by [Pipeline::convert_to_mergeable()](super::Pipeline::convert_to_mergeable()).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}")]
         InvalidEntryKind { rela_path: BString, actual: EntryKind },
-        #[error("Entry at '{rela_path}' could not be read as symbolic link")]
         ReadLink { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be opened for reading or read from")]
         OpenOrRead { rela_path: BString, source: std::io::Error },
-        #[error("Entry at '{rela_path}' could not be copied from a filter process to a memory buffer")]
         StreamCopy { rela_path: BString, source: std::io::Error },
-        #[error(transparent)]
-        FindObject(#[from] gix_object::find::existing_object::Error),
-        #[error(transparent)]
-        ConvertToWorktree(#[from] gix_filter::pipeline::convert::to_worktree::Error),
-        #[error(transparent)]
-        ConvertToGit(#[from] gix_filter::pipeline::convert::to_git::Error),
-        #[error("Memory allocation failed")]
-        OutOfMemory(#[from] TryReserveError),
+        FindObject(gix_object::find::existing_object::Error),
+        ConvertToWorktree(gix_error::Error),
+        OutOfMemory(TryReserveError),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::InvalidEntryKind { rela_path, actual } => {
+                    write!(
+                        f,
+                        "Entry at '{rela_path}' must be regular file or symlink, but was {actual:?}"
+                    )
+                }
+                Error::ReadLink { rela_path, .. } => {
+                    write!(f, "Entry at '{rela_path}' could not be read as symbolic link")
+                }
+                Error::OpenOrRead { rela_path, .. } => {
+                    write!(f, "Entry at '{rela_path}' could not be opened for reading or read from")
+                }
+                Error::StreamCopy { rela_path, .. } => write!(
+                    f,
+                    "Entry at '{rela_path}' could not be copied from a filter process to a memory buffer"
+                ),
+                Error::FindObject(err) => err.fmt(f),
+                Error::ConvertToWorktree(err) => err.fmt(f),
+                Error::OutOfMemory(_) => f.write_str("Memory allocation failed"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ReadLink { source, .. }
+                | Error::OpenOrRead { source, .. }
+                | Error::StreamCopy { source, .. } => Some(source),
+                Error::FindObject(err) => err.source(),
+                Error::ConvertToWorktree(err) => err.source(),
+                Error::OutOfMemory(err) => Some(err),
+                _ => None,
+            }
+        }
+    }
+
+    impl From<gix_object::find::existing_object::Error> for Error {
+        fn from(err: gix_object::find::existing_object::Error) -> Self {
+            Error::FindObject(err)
+        }
+    }
+
+    impl From<gix_filter::pipeline::convert::to_worktree::Error> for Error {
+        fn from(err: gix_filter::pipeline::convert::to_worktree::Error) -> Self {
+            Error::ConvertToWorktree(err.into_error())
+        }
+    }
+
+    impl From<TryReserveError> for Error {
+        fn from(err: TryReserveError) -> Self {
+            Error::OutOfMemory(err)
+        }
     }
 }
 

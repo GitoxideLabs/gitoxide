@@ -205,23 +205,49 @@ pub mod create_or_update {
         use std::path::PathBuf;
 
         /// The error returned when creating or appending to a reflog
-        #[derive(Debug, thiserror::Error)]
+        #[derive(Debug)]
         #[expect(missing_docs)]
         pub enum Error {
-            #[error("Could create one or more directories in {reflog_directory:?} to contain reflog file")]
             CreateLeadingDirectories {
                 source: std::io::Error,
                 reflog_directory: PathBuf,
             },
-            #[error("Could not open reflog file at {reflog_path:?} for appending")]
             Append {
                 source: std::io::Error,
                 reflog_path: PathBuf,
             },
-            #[error("reflog message must not contain newlines")]
             MessageWithNewlines,
-            #[error("reflog messages need a committer which isn't set")]
             MissingCommitter,
+        }
+
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    #[allow(clippy::unnecessary_debug_formatting)]
+                    // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
+                    Error::CreateLeadingDirectories { reflog_directory, .. } => write!(
+                        f,
+                        "Could create one or more directories in {reflog_directory:?} to contain reflog file"
+                    ),
+                    #[allow(clippy::unnecessary_debug_formatting)]
+                    // `{:?}` of a `Path` is what `thiserror` generated; keep the rendered text identical.
+                    Error::Append { reflog_path, .. } => {
+                        write!(f, "Could not open reflog file at {reflog_path:?} for appending")
+                    }
+                    Error::MessageWithNewlines => f.write_str("reflog message must not contain newlines"),
+                    Error::MissingCommitter => f.write_str("reflog messages need a committer which isn't set"),
+                }
+            }
+        }
+
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                match self {
+                    Error::CreateLeadingDirectories { source, .. } => Some(source),
+                    Error::Append { source, .. } => Some(source),
+                    Error::MessageWithNewlines | Error::MissingCommitter => None,
+                }
+            }
         }
     }
     pub use error::Error;
@@ -231,13 +257,41 @@ pub mod create_or_update {
 
 mod error {
     /// The error returned by [`crate::file::Store::reflog_iter()`].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The reflog name or path is not a valid ref name")]
-        RefnameValidation(#[from] crate::name::Error),
-        #[error("The reflog file could not read")]
-        Io(#[from] std::io::Error),
+        RefnameValidation(crate::name::Error),
+        Io(std::io::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::RefnameValidation(_) => f.write_str("The reflog name or path is not a valid ref name"),
+                Error::Io(_) => f.write_str("The reflog file could not read"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::RefnameValidation(err) => Some(err),
+                Error::Io(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<crate::name::Error> for Error {
+        fn from(err: crate::name::Error) -> Self {
+            Error::RefnameValidation(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::Io(err)
+        }
     }
 }
 pub use error::Error;

@@ -78,19 +78,45 @@ impl Default for Options {
 }
 
 /// The error returned by the pack generation iterator [`bytes::FromEntriesIter`][crate::data::output::bytes::FromEntriesIter].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
     CommitDecode(gix_object::decode::Error),
-    #[error(transparent)]
-    FindExisting(#[from] gix_object::find::existing::Error),
-    #[error(transparent)]
+    FindExisting(gix_object::find::existing::Error),
     InputIteration(Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error(transparent)]
     TreeTraverse(gix_traverse::tree::breadthfirst::Error),
-    #[error(transparent)]
     TreeChanges(gix_diff::tree::Error),
-    #[error("Operation interrupted")]
     Interrupted,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::CommitDecode(err) => std::fmt::Display::fmt(err, f),
+            Error::FindExisting(err) => std::fmt::Display::fmt(err, f),
+            Error::InputIteration(err) => std::fmt::Display::fmt(err, f),
+            Error::TreeTraverse(err) => std::fmt::Display::fmt(err, f),
+            Error::TreeChanges(err) => std::fmt::Display::fmt(err, f),
+            Error::Interrupted => f.write_str("Operation interrupted"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::CommitDecode(err) => err.source(),
+            Error::FindExisting(err) => err.source(),
+            Error::InputIteration(err) => err.source(),
+            Error::TreeTraverse(err) => err.source(),
+            Error::TreeChanges(err) => err.source(),
+            Error::Interrupted => None,
+        }
+    }
+}
+
+impl From<gix_object::find::existing::Error> for Error {
+    fn from(err: gix_object::find::existing::Error) -> Self {
+        Error::FindExisting(err)
+    }
 }

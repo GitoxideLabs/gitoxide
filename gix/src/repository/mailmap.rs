@@ -1,4 +1,5 @@
 use crate::{Id, bstr::ByteSlice, config::tree::Mailmap};
+use gix_error::ErrorExt;
 
 impl crate::Repository {
     /// Similar to [`open_mailmap_into()`][crate::Repository::open_mailmap_into()], but ignores all errors and returns at worst
@@ -26,7 +27,12 @@ impl crate::Repository {
         let mut buf = Vec::new();
         let mut blob_id = self.config.resolved.string(Mailmap::BLOB).and_then(|spec| {
             self.rev_parse_single(spec.as_bstr())
-                .map_err(|e| err.get_or_insert(e.into()))
+                .map_err(|e| {
+                    err.get_or_insert(
+                        e.and_raise(gix_error::message("The configured mailmap.blob could not be parsed"))
+                            .into(),
+                    )
+                })
                 .map(Id::detach)
                 .ok()
         });
@@ -46,36 +52,73 @@ impl crate::Repository {
                     .open(root.join(".mailmap"))
                     .map_err(|e| {
                         if e.kind() != std::io::ErrorKind::NotFound {
-                            err.get_or_insert(e.into());
+                            err.get_or_insert(
+                                e.and_raise(gix_error::message(
+                                    "The mailmap file declared in `mailmap.file` could not be read",
+                                ))
+                                .into(),
+                            );
                         }
                     })
                 {
                     buf.clear();
                     std::io::copy(&mut file, &mut buf)
-                        .map_err(|e| err.get_or_insert(e.into()))
+                        .map_err(|e| {
+                            err.get_or_insert(
+                                e.and_raise(gix_error::message(
+                                    "The mailmap file declared in `mailmap.file` could not be read",
+                                ))
+                                .into(),
+                            )
+                        })
                         .ok();
                     target.merge(gix_mailmap::parse_ignore_errors(&buf));
                 }
             }
         }
 
-        if let Some(blob) = blob_id.and_then(|id| self.find_object(id).map_err(|e| err.get_or_insert(e.into())).ok()) {
+        if let Some(blob) = blob_id.and_then(|id| {
+            self.find_object(id)
+                .map_err(|e| {
+                    err.get_or_insert(
+                        e.and_raise(gix_error::message("Could not find object configured in `mailmap.blob`"))
+                            .into(),
+                    )
+                })
+                .ok()
+        }) {
             target.merge(gix_mailmap::parse_ignore_errors(&blob.data));
         }
 
         let configured_path = self
             .config_snapshot()
             .trusted_path(Mailmap::FILE)
-            .map_err(|e| err.get_or_insert(e.into()))
+            .map_err(|e| err.get_or_insert(gix_error::Error::from_error(e)))
             .ok()
             .flatten();
 
-        if let Some(mut file) =
-            configured_path.and_then(|path| std::fs::File::open(path).map_err(|e| err.get_or_insert(e.into())).ok())
-        {
+        if let Some(mut file) = configured_path.and_then(|path| {
+            std::fs::File::open(path)
+                .map_err(|e| {
+                    err.get_or_insert(
+                        e.and_raise(gix_error::message(
+                            "The mailmap file declared in `mailmap.file` could not be read",
+                        ))
+                        .into(),
+                    )
+                })
+                .ok()
+        }) {
             buf.clear();
             std::io::copy(&mut file, &mut buf)
-                .map_err(|e| err.get_or_insert(e.into()))
+                .map_err(|e| {
+                    err.get_or_insert(
+                        e.and_raise(gix_error::message(
+                            "The mailmap file declared in `mailmap.file` could not be read",
+                        ))
+                        .into(),
+                    )
+                })
                 .ok();
             target.merge(gix_mailmap::parse_ignore_errors(&buf));
         }

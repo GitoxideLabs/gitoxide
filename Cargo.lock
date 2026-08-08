@@ -1518,7 +1518,6 @@ dependencies = [
  "futures-lite",
  "gix",
  "gix-archive",
- "gix-error",
  "gix-fsck",
  "gix-pack",
  "gix-status",
@@ -1533,7 +1532,6 @@ dependencies = [
  "smallvec",
  "sysinfo",
  "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "tracing-forest 0.2.0",
  "tracing-subscriber",
@@ -1612,7 +1610,6 @@ dependencies = [
  "signal-hook 0.4.4",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1667,7 +1664,6 @@ dependencies = [
  "gix-trace",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -1701,7 +1697,6 @@ dependencies = [
  "gix-worktree",
  "pretty_assertions",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1750,6 +1745,7 @@ dependencies = [
  "document-features",
  "gix-config",
  "gix-config-value",
+ "gix-error",
  "gix-features",
  "gix-glob",
  "gix-path",
@@ -1761,7 +1757,6 @@ dependencies = [
  "serde",
  "serial_test",
  "smallvec",
- "thiserror 2.0.18",
  "unicode-bom",
 ]
 
@@ -1775,7 +1770,6 @@ dependencies = [
  "gix-path",
  "libc",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1795,7 +1789,6 @@ dependencies = [
  "gix-trace",
  "gix-url",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1823,6 +1816,7 @@ dependencies = [
  "getrandom 0.4.3",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -1841,7 +1835,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "shell-words",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1861,7 +1854,6 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "pretty_assertions",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1879,7 +1871,6 @@ dependencies = [
  "is_ci",
  "serial_test",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1924,6 +1915,7 @@ dependencies = [
  "encoding_rs",
  "gix-attributes",
  "gix-command",
+ "gix-error",
  "gix-filter",
  "gix-hash",
  "gix-object",
@@ -1935,7 +1927,6 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1944,13 +1935,13 @@ version = "0.22.0"
 dependencies = [
  "bstr",
  "crossbeam-channel",
+ "gix-error",
  "gix-features",
  "gix-path",
  "gix-utils",
  "is_ci",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -1984,12 +1975,12 @@ version = "0.26.0"
 dependencies = [
  "document-features",
  "faster-hex",
+ "gix-error",
  "gix-features",
  "gix-testtools",
  "serde",
  "sha1-checked",
  "sha2",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2041,6 +2032,7 @@ dependencies = [
  "filetime",
  "fnv",
  "gix-bitmap",
+ "gix-error",
  "gix-features",
  "gix-fs",
  "gix-hash",
@@ -2060,7 +2052,6 @@ dependencies = [
  "rustix",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2074,7 +2065,6 @@ dependencies = [
  "gix-tempfile",
  "gix-utils",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2109,6 +2099,7 @@ dependencies = [
  "document-features",
  "gix-command",
  "gix-diff",
+ "gix-error",
  "gix-filter",
  "gix-fs",
  "gix-hash",
@@ -2129,7 +2120,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2173,7 +2163,6 @@ dependencies = [
  "serde",
  "smallvec",
  "termtree",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2203,7 +2192,6 @@ dependencies = [
  "pretty_assertions",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2234,7 +2222,6 @@ dependencies = [
  "parking_lot",
  "serde",
  "smallvec",
- "thiserror 2.0.18",
  "uluru",
 ]
 
@@ -2249,13 +2236,13 @@ dependencies = [
  "faster-hex",
  "futures-io",
  "futures-lite",
+ "gix-error",
  "gix-hash",
  "gix-odb",
  "gix-pack",
  "gix-trace",
  "pin-project-lite",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2267,7 +2254,6 @@ dependencies = [
  "gix-trace",
  "gix-validate",
  "serial_test",
- "thiserror 2.0.18",
  "windows 0.62.2",
  "winreg",
 ]
@@ -2284,7 +2270,6 @@ dependencies = [
  "gix-path",
  "gix-testtools",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2298,7 +2283,6 @@ dependencies = [
  "parking_lot",
  "rustix",
  "serial_test",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2314,6 +2298,7 @@ dependencies = [
  "futures-lite",
  "gix-credentials",
  "gix-date",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-lock",
@@ -2330,7 +2315,6 @@ dependencies = [
  "gix-utils",
  "nonempty",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2369,7 +2353,6 @@ dependencies = [
  "libc",
  "memmap2",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2382,7 +2365,6 @@ dependencies = [
  "gix-validate",
  "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2420,7 +2402,6 @@ dependencies = [
  "gix-object",
  "gix-testtools",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2445,12 +2426,12 @@ name = "gix-shallow"
 version = "0.13.0"
 dependencies = [
  "bstr",
+ "gix-error",
  "gix-hash",
  "gix-lock",
  "nonempty",
  "serde",
  "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2477,7 +2458,6 @@ dependencies = [
  "hashbrown 0.16.1",
  "portable-atomic",
  "pretty_assertions",
- "thiserror 2.0.18",
  "windows-sys 0.61.2",
 ]
 
@@ -2493,7 +2473,6 @@ dependencies = [
  "gix-refspec",
  "gix-testtools",
  "gix-url",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2569,6 +2548,7 @@ dependencies = [
  "futures-lite",
  "gix-command",
  "gix-credentials",
+ "gix-error",
  "gix-features",
  "gix-hash",
  "gix-pack",
@@ -2582,7 +2562,6 @@ dependencies = [
  "pin-project-lite",
  "reqwest",
  "serde",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2601,7 +2580,6 @@ dependencies = [
  "gix-testtools",
  "insta",
  "smallvec",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2615,13 +2593,13 @@ dependencies = [
  "assert_matches",
  "bstr",
  "document-features",
+ "gix-error",
  "gix-path",
  "gix-testtools",
  "gix-utils",
  "percent-encoding",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2683,7 +2661,6 @@ dependencies = [
  "gix-worktree",
  "gix-worktree-state",
  "io-close",
- "thiserror 2.0.18",
  "walkdir",
 ]
 
@@ -2713,7 +2690,6 @@ version = "0.1.0"
 dependencies = [
  "bstr",
  "serde",
- "thiserror 2.0.18",
  "zlib-rs",
 ]
 

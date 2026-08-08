@@ -8,42 +8,109 @@ pub(crate) mod error {
     use crate::{loose, pack};
 
     /// Returned by [`Handle::try_find()`][gix_pack::Find::try_find()]
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("An error occurred while obtaining an object from the loose object store")]
-        Loose(#[from] loose::find::Error),
-        #[error("An error occurred while obtaining an object from the packed object store")]
-        Pack(#[from] pack::data::decode::Error),
-        #[error(transparent)]
-        LoadIndex(#[from] crate::store::load_index::Error),
-        #[error(transparent)]
-        LoadPack(#[from] std::io::Error),
-        #[error(transparent)]
-        EntryType(#[from] gix_pack::data::entry::decode::Error),
-        #[error("Reached recursion limit of {} while resolving ref delta bases for {}", .max_depth, .id)]
+        Loose(loose::find::Error),
+        Pack(pack::data::decode::Error),
+        LoadIndex(crate::store::load_index::Error),
+        LoadPack(std::io::Error),
+        EntryType(gix_pack::data::entry::decode::Error),
         DeltaBaseRecursionLimit {
             /// the maximum recursion depth we encountered.
             max_depth: usize,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
-        #[error("The base object {} could not be found but is required to decode {}", .base_id, .id)]
         DeltaBaseMissing {
             /// the id of the base object which failed to lookup
             base_id: gix_hash::ObjectId,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
-        #[error("An error occurred when looking up a ref delta base object {} to decode {}", .base_id, .id)]
         DeltaBaseLookup {
-            #[source]
             err: Box<Self>,
             /// the id of the base object which failed to lookup
             base_id: gix_hash::ObjectId,
             /// The original object to lookup
             id: gix_hash::ObjectId,
         },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Loose(_) => {
+                    f.write_str("An error occurred while obtaining an object from the loose object store")
+                }
+                Error::Pack(_) => {
+                    f.write_str("An error occurred while obtaining an object from the packed object store")
+                }
+                Error::LoadIndex(err) => std::fmt::Display::fmt(err, f),
+                Error::LoadPack(err) => std::fmt::Display::fmt(err, f),
+                Error::EntryType(err) => std::fmt::Display::fmt(err, f),
+                Error::DeltaBaseRecursionLimit { max_depth, id } => {
+                    write!(
+                        f,
+                        "Reached recursion limit of {max_depth} while resolving ref delta bases for {id}"
+                    )
+                }
+                Error::DeltaBaseMissing { base_id, id } => {
+                    write!(
+                        f,
+                        "The base object {base_id} could not be found but is required to decode {id}"
+                    )
+                }
+                Error::DeltaBaseLookup { base_id, id, .. } => write!(
+                    f,
+                    "An error occurred when looking up a ref delta base object {base_id} to decode {id}"
+                ),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Loose(err) => Some(err),
+                Error::Pack(err) => Some(err),
+                Error::LoadIndex(err) => err.source(),
+                Error::LoadPack(err) => err.source(),
+                Error::EntryType(err) => err.source(),
+                Error::DeltaBaseLookup { err, .. } => Some(&**err),
+                Error::DeltaBaseRecursionLimit { .. } | Error::DeltaBaseMissing { .. } => None,
+            }
+        }
+    }
+
+    impl From<loose::find::Error> for Error {
+        fn from(err: loose::find::Error) -> Self {
+            Error::Loose(err)
+        }
+    }
+
+    impl From<pack::data::decode::Error> for Error {
+        fn from(err: pack::data::decode::Error) -> Self {
+            Error::Pack(err)
+        }
+    }
+
+    impl From<crate::store::load_index::Error> for Error {
+        fn from(err: crate::store::load_index::Error) -> Self {
+            Error::LoadIndex(err)
+        }
+    }
+
+    impl From<std::io::Error> for Error {
+        fn from(err: std::io::Error) -> Self {
+            Error::LoadPack(err)
+        }
+    }
+
+    impl From<gix_pack::data::entry::decode::Error> for Error {
+        fn from(err: gix_pack::data::entry::decode::Error) -> Self {
+            Error::EntryType(err)
+        }
     }
 
     #[derive(Copy, Clone)]

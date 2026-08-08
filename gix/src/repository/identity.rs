@@ -58,9 +58,11 @@ impl crate::Repository {
                 .set_raw_value(gitoxide::Committer::EMAIL_FALLBACK, "noEmailAvailable@example.com")
                 .expect("works - statically known");
             let mut repo_config = self.config_snapshot_mut();
-            repo_config.append(config)?;
+            repo_config.append(config).map_err(gix_error::Error::from_error)?;
         }
-        Ok(self.committer().expect("committer was just set")?)
+        self.committer()
+            .expect("committer was just set")
+            .map_err(gix_error::Error::from_error)
     }
 
     /// Return the author as configured by this repository, which is determined by…

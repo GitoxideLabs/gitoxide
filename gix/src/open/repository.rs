@@ -1,5 +1,6 @@
 #![allow(clippy::result_large_err)]
 use gix_config::file::Metadata;
+use gix_error::ErrorExt;
 use gix_features::threading::OwnShared;
 use gix_object::bstr::ByteSlice;
 use gix_path::RelativePath;
@@ -22,6 +23,15 @@ use crate::{
     },
     open::Permissions,
 };
+
+fn not_a_repository(source: gix_discover::is_git::Error, path: PathBuf) -> Error {
+    source
+        .and_raise(gix_error::NotFoundError::new(format!(
+            "\"{}\" does not appear to be a git repository",
+            path.display()
+        )))
+        .into()
+}
 
 #[derive(Default, Clone)]
 pub(crate) struct EnvironmentOverrides {
@@ -82,25 +92,27 @@ impl ThreadSafeRepository {
                     Ok(kind) => (candidate, kind),
                     Err(_) => match gix_discover::is_git(&path) {
                         Ok(kind) => (path, kind),
-                        Err(err) => return Err(Error::NotARepository { source: err, path }),
+                        Err(err) => return Err(not_a_repository(err, path)),
                     },
                 },
                 None => match gix_discover::is_git(&path) {
                     Ok(kind) => (path, kind),
                     Err(err) => {
-                        return Err(Error::NotARepository { source: err, path });
+                        return Err(not_a_repository(err, path));
                     }
                 },
             }
         };
 
         // To be altered later based on `core.precomposeUnicode`.
-        let cwd = gix_fs::current_dir(false)?;
+        let cwd = gix_fs::current_dir(false).map_err(gix_error::Error::from_error)?;
         let (git_dir, worktree_dir) = gix_discover::repository::Path::from_dot_git_dir(path, kind, &cwd)
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         if options.git_dir_trust.is_none() {
-            options.git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir)?.into();
+            options.git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir)
+                .map_err(gix_error::Error::from_error)?
+                .into();
         }
         options.current_dir = Some(cwd);
         ThreadSafeRepository::open_from_paths(git_dir, worktree_dir, options)
@@ -124,33 +136,27 @@ impl ThreadSafeRepository {
         trust_map: gix_sec::trust::Mapping<Options>,
     ) -> Result<Self, Error> {
         let _span = gix_trace::coarse!("ThreadSafeRepository::open_with_environment_overrides()");
-        let overrides = EnvironmentOverrides::from_env()?;
+        let overrides = EnvironmentOverrides::from_env().map_err(gix_error::Error::from_error)?;
         let (path, path_kind): (PathBuf, _) = match overrides.git_dir {
             Some(git_dir) => gix_discover::is_git(&git_dir)
-                .map_err(|err| Error::NotARepository {
-                    source: err,
-                    path: git_dir.clone(),
-                })
+                .map_err(|err| not_a_repository(err, git_dir.clone()))
                 .map(|kind| (git_dir, kind))?,
             None => {
                 let fallback_directory = fallback_directory.into();
                 gix_discover::is_git(&fallback_directory)
-                    .map_err(|err| Error::NotARepository {
-                        source: err,
-                        path: fallback_directory.clone(),
-                    })
+                    .map_err(|err| not_a_repository(err, fallback_directory.clone()))
                     .map(|kind| (fallback_directory, kind))?
             }
         };
 
         // To be altered later based on `core.precomposeUnicode`.
-        let cwd = gix_fs::current_dir(false)?;
+        let cwd = gix_fs::current_dir(false).map_err(gix_error::Error::from_error)?;
         let (git_dir, worktree_dir) = gix_discover::repository::Path::from_dot_git_dir(path, path_kind, &cwd)
             .expect("we have sanitized path with is_git()")
             .into_repository_and_work_tree_directories();
         let worktree_dir = worktree_dir.or(overrides.worktree_dir);
 
-        let git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir)?;
+        let git_dir_trust = gix_sec::Trust::from_path_ownership(&git_dir).map_err(gix_error::Error::from_error)?;
         let mut options = trust_map.into_value_by_level(git_dir_trust);
         options.git_dir_trust = git_dir_trust.into();
         options.current_dir = Some(cwd);
@@ -185,7 +191,8 @@ impl ThreadSafeRepository {
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
 
         let mut common_dir = gix_discover::path::from_plain_file(git_dir.join("commondir").as_ref())
-            .transpose()?
+            .transpose()
+            .map_err(gix_error::Error::from_error)?
             .map(|cd| git_dir.join(cd));
         let repo_config = config::cache::StageOne::new(
             common_dir.as_deref().unwrap_or(&git_dir),
@@ -193,7 +200,13 @@ impl ThreadSafeRepository {
             *git_dir_trust,
             lossy_config,
             lenient_config,
-        )?;
+        )
+        .map_err(|err| {
+            use gix_error::ErrorExt;
+            gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(
+                "Repository configuration could not be loaded",
+            )))
+        })?;
 
         if repo_config.precompose_unicode {
             git_dir = gix_utils::str::precompose_path(git_dir.into()).into_owned();
@@ -273,9 +286,12 @@ impl ThreadSafeRepository {
             let original = worktree.clone();
             let worktree = worktree
                 .interpolate(interpolate_context(git_install_dir.as_deref(), home.as_deref()))
-                .map_err(|err| config::Error::PathInterpolation {
-                    path: original.value,
-                    source: err,
+                .map_err(|err| {
+                    use gix_error::ErrorExt;
+                    gix_error::Error::from(err.and_raise(gix_error::ValidationError::new_with_input(
+                        "The path at the 'core.worktree' configuration could not be interpolated",
+                        original.value,
+                    )))
                 })?;
             let worktree = match source {
                 gix_config::Source::Env
@@ -307,15 +323,13 @@ impl ThreadSafeRepository {
                     is_eligible_worktree_config_section(section, &git_dir, current_dir, &mut filter_config_section)
                 })
                 .map_err(|err| {
-                    Error::from(config::Error::ConfigTypedString(
-                        config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err),
-                    ))
+                    gix_error::Error::from(config::key::GenericErrorWithValue::from(&Core::WORKTREE).with_source(err))
                 })?
                 .is_some()
         {
-            return Err(Error::from(config::Error::ConfigTypedString(
-                config::key::GenericErrorWithValue::from(&Core::WORKTREE),
-            )));
+            return Err(gix_error::Error::from(config::key::GenericErrorWithValue::<
+                gix_config::value::Error,
+            >::from(&Core::WORKTREE)));
         }
 
         // Without an explicit path, a non-bare `.git` directory implies its parent as worktree.
@@ -421,7 +435,7 @@ impl ThreadSafeRepository {
                     Ok(Some(value)) => value,
                     Ok(None) => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
                     Err(_) if config.lenient_config => gitoxide::Objects::ALLOC_LIMIT_IF_REDUCED_TRUST_DEFAULT,
-                    Err(err) => return Err(Error::from(config::Error::from(err))),
+                    Err(err) => return Err(err.into()),
                 };
             if alloc_limit_if_reduced_trust != 0 {
                 config.alloc_limit_bytes = Some(alloc_limit_if_reduced_trust);
@@ -439,7 +453,7 @@ impl ThreadSafeRepository {
 
         let replacements = match prefix {
             Some(prefix) => {
-                let prefix: &RelativePath = prefix.as_bstr().try_into()?;
+                let prefix: &RelativePath = prefix.as_bstr().try_into().map_err(gix_error::Error::from_error)?;
 
                 Some(prefix).and_then(|prefix| {
                     let _span = gix_trace::detail!("find replacement objects");
@@ -462,18 +476,21 @@ impl ThreadSafeRepository {
         let replacements = replacements.unwrap_or_default();
 
         Ok(ThreadSafeRepository {
-            objects: OwnShared::new(gix_odb::Store::at_opts(
-                common_dir_ref.join("objects"),
-                &mut replacements.into_iter(),
-                gix_odb::store::init::Options {
-                    slots: object_store_slots,
-                    object_hash: config.object_hash,
-                    use_multi_pack_index: config.use_multi_pack_index,
-                    alloc_limit_bytes: config.alloc_limit_bytes,
-                    loose_compression: config.loose_compression,
-                    current_dir: current_dir.to_owned().into(),
-                },
-            )?),
+            objects: OwnShared::new(
+                gix_odb::Store::at_opts(
+                    common_dir_ref.join("objects"),
+                    &mut replacements.into_iter(),
+                    gix_odb::store::init::Options {
+                        slots: object_store_slots,
+                        object_hash: config.object_hash,
+                        use_multi_pack_index: config.use_multi_pack_index,
+                        alloc_limit_bytes: config.alloc_limit_bytes,
+                        loose_compression: config.loose_compression,
+                        current_dir: current_dir.to_owned().into(),
+                    },
+                )
+                .map_err(gix_error::Error::from_error)?,
+            ),
             common_dir,
             refs,
             work_tree: worktree_dir,
@@ -564,7 +581,7 @@ fn replacement_objects_refs_prefix(
     mut filter_config_section: fn(&gix_config::file::Metadata) -> bool,
 ) -> Result<Option<BString>, Error> {
     let is_disabled = config::shared::is_replace_refs_enabled(config, lenient, filter_config_section)
-        .map_err(config::Error::ConfigBoolean)?
+        .map_err(gix_error::Error::from)?
         .unwrap_or(true);
 
     if is_disabled {
@@ -629,6 +646,9 @@ fn check_safe_directories(
     if is_safe {
         Ok(())
     } else {
-        Err(Error::UnsafeGitDir { path: path_to_test })
+        Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+            "The git directory at '{}' is considered unsafe as it's not owned by the current user.",
+            path_to_test.display()
+        ))))
     }
 }

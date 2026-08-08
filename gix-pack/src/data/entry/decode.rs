@@ -6,16 +6,25 @@ use super::{BLOB, COMMIT, OFS_DELTA, REF_DELTA, TAG, TREE};
 use crate::data;
 
 /// The error returned by [data::Entry::from_bytes()].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("Object type {type_id} is unsupported")]
     UnsupportedType { type_id: u8 },
-    #[error("Pack entry is truncated: {message}")]
     Corrupt { message: &'static str },
-    #[error("Pack entry header value overflowed while decoding")]
     Overflow,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::UnsupportedType { type_id } => write!(f, "Object type {type_id} is unsupported"),
+            Error::Corrupt { message } => write!(f, "Pack entry is truncated: {message}"),
+            Error::Overflow => f.write_str("Pack entry header value overflowed while decoding"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// Decoding
 impl data::Entry {
@@ -81,6 +90,7 @@ impl data::Entry {
                 let mut buf = gix_hash::Kind::buf();
                 let hash = &mut buf[..hash_len];
                 r.read_exact(hash)?;
+                #[allow(clippy::redundant_slicing)]
                 let delta = RefDelta {
                     base_id: gix_hash::ObjectId::from_bytes_or_panic(&hash[..]),
                 };

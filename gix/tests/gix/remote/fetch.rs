@@ -80,8 +80,6 @@ mod blocking_and_async_io {
             gix_testtools::scripted_fixture_read_only_with_args("make_fetch_repos.sh", [base_repo_path()]).unwrap();
         dir.join(name)
     }
-
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw(
         name: &str,
     ) -> Result<(gix::Repository, gix_testtools::tempfile::TempDir), gix::open::Error> {
@@ -92,8 +90,6 @@ mod blocking_and_async_io {
         FastClone,
         CloneWithShallowSupport,
     }
-
-    #[expect(clippy::result_large_err)]
     pub(crate) fn try_repo_rw_args<S: Into<String>>(
         name: &str,
         args: impl IntoIterator<Item = S>,
@@ -260,8 +256,7 @@ mod blocking_and_async_io {
 
     #[test]
     #[cfg(feature = "blocking-network-client")]
-    #[expect(clippy::result_large_err)]
-    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error<std::io::Error>> {
+    fn collate_fetch_error() -> Result<(), gix::env::collate::fetch::Error> {
         let (repo, _tmp) = try_repo_rw("two-origins")?;
         let remote = repo
             .head()?
@@ -278,7 +273,7 @@ mod blocking_and_async_io {
             repo.path()
                 .join("HEAD")
                 .metadata()
-                .map_err(gix::env::collate::fetch::Error::Other)?
+                .map_err(gix::Error::from_error)?
                 .is_file(),
             "just to show off the 'Other' error type"
         );

@@ -150,7 +150,8 @@ fn records_status_quo_sha1() -> crate::Result {
                 &objects,
                 &mut |id| id.to_hex_with_len(7).to_string(),
                 options.clone(),
-            )?
+            )
+            .map_err(gix_error::Exn::into_error)?
             .tree_merge;
             let conflicted = outcome.has_unresolved_conflicts(git_kind);
             let conflicted_with_forced_resolution = outcome.has_unresolved_conflicts(forced_resolution);

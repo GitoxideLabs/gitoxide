@@ -2,6 +2,7 @@
 use crate::fetch::response::ShallowUpdate;
 use crate::handshake::{Ref, refs, refs::parse::Error};
 use crate::transport::client::async_io::ReadlineBufRead;
+use gix_error::{ResultExt, message};
 
 /// Parse refs from the given input line by line. Protocol V2 is required for this to succeed.
 pub async fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>, Error> {
@@ -9,8 +10,10 @@ pub async fn from_v2_refs(in_refs: &mut dyn ReadlineBufRead) -> Result<Vec<Ref>,
     while let Some(line) = in_refs
         .readline()
         .await
-        .transpose()?
-        .transpose()?
+        .transpose()
+        .or_raise(|| message("Could not read advertised ref"))?
+        .transpose()
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         out_refs.push(refs::shared::parse_v2(line)?);
@@ -38,8 +41,10 @@ pub async fn from_v1_refs_received_as_part_of_handshake_and_capabilities<'a>(
     while let Some(line) = in_refs
         .readline()
         .await
-        .transpose()?
-        .transpose()?
+        .transpose()
+        .or_raise(|| message("Could not read advertised ref"))?
+        .transpose()
+        .or_raise(|| message("Could not decode advertised ref"))?
         .and_then(|l| l.as_bstr())
     {
         refs::shared::parse_v1(

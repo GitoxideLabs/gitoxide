@@ -72,6 +72,7 @@ path = "tests/async-protocol.rs"
 required-features = ["async-client"]
 
 [dependencies]
+gix-error = { version = "^0.2.5", path = "../gix-error" }
 gix-features = { version = "^0.49.0", path = "../gix-features", features = [
     "progress",
 ] }
@@ -90,7 +91,6 @@ gix-credentials = { version = "^0.39.1", path = "../gix-credentials", optional =
 gix-refspec = { version = "^0.44.0", path = "../gix-refspec", optional = true }
 gix-lock = { version = "^24.0.0", path = "../gix-lock", optional = true }
 
-thiserror = "2.0.18"
 nonempty = "0.12.0"
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "derive",

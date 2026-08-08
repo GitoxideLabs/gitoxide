@@ -3,34 +3,62 @@ use std::cmp::Ordering;
 use crate::{ObjectId, Prefix, oid};
 
 /// The error returned by [`Prefix::new()`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(
-        "The minimum hex length of a short object id is {}, got {hex_len}",
-        Prefix::MIN_HEX_LEN
-    )]
     TooShort { hex_len: usize },
-    #[error("An object of kind {object_kind} cannot be larger than {} in hex, but {hex_len} was requested", object_kind.len_in_hex())]
     TooLong { object_kind: crate::Kind, hex_len: usize },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::TooShort { hex_len } => write!(
+                f,
+                "The minimum hex length of a short object id is {}, got {hex_len}",
+                Prefix::MIN_HEX_LEN
+            ),
+            Error::TooLong { object_kind, hex_len } => write!(
+                f,
+                "An object of kind {object_kind} cannot be larger than {} in hex, but {hex_len} was requested",
+                object_kind.len_in_hex()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 ///
 pub mod from_hex {
     /// The error returned by [`Prefix::from_hex`][super::Prefix::from_hex()].
-    #[derive(Debug, Eq, PartialEq, thiserror::Error)]
+    #[derive(Debug, Eq, PartialEq)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error(
-            "The minimum hex length of a short object id is {}, got {hex_len}",
-            super::Prefix::MIN_HEX_LEN
-        )]
         TooShort { hex_len: usize },
-        #[error("An id cannot be larger than {} chars in hex, but {hex_len} was requested", crate::Kind::longest().len_in_hex())]
         TooLong { hex_len: usize },
-        #[error("Invalid hex character")]
         Invalid,
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::TooShort { hex_len } => write!(
+                    f,
+                    "The minimum hex length of a short object id is {}, got {hex_len}",
+                    super::Prefix::MIN_HEX_LEN
+                ),
+                Error::TooLong { hex_len } => write!(
+                    f,
+                    "An id cannot be larger than {} chars in hex, but {hex_len} was requested",
+                    crate::Kind::longest().len_in_hex()
+                ),
+                Error::Invalid => f.write_str("Invalid hex character"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 impl Prefix {

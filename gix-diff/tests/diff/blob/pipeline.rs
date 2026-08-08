@@ -33,32 +33,36 @@ pub(crate) mod convert_to_diffable {
             let a_name = "a";
             let a_content = "a-content";
             std::fs::write(tmp.path().join(a_name), a_content.as_bytes())?;
-            let out = filter.convert_to_diffable(
-                &does_not_matter,
-                EntryKind::Blob,
-                a_name.into(),
-                ResourceKind::OldOrSource,
-                &mut |_, _| {},
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &does_not_matter,
+                    EntryKind::Blob,
+                    a_name.into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, _| {},
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert!(out.driver_index.is_none(), "there was no driver");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
             assert_eq!(buf.as_bstr(), a_content, "there is no transformations configured");
 
             let link_name = "link";
             gix_fs::symlink::create(a_name.as_ref(), &tmp.path().join(link_name))?;
-            let out = filter.convert_to_diffable(
-                &does_not_matter,
-                EntryKind::Link,
-                link_name.into(),
-                ResourceKind::OldOrSource,
-                &mut |_, _| {},
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &does_not_matter,
+                    EntryKind::Link,
+                    link_name.into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, _| {},
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -73,16 +77,18 @@ pub(crate) mod convert_to_diffable {
             let b_content = "b-content";
             let id = insert(&db, b_content)?;
 
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Blob,
-                a_name.into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, _| {},
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    a_name.into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, _| {},
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none(), "there was no driver");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -113,32 +119,36 @@ pub(crate) mod convert_to_diffable {
         let a_name = "a";
         let large_content = "a\0b";
         std::fs::write(tmp.path().join(a_name), large_content.as_bytes())?;
-        let out = filter.convert_to_diffable(
-            &does_not_matter,
-            EntryKind::BlobExecutable,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &does_not_matter,
+                EntryKind::BlobExecutable,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }), "detected in buffer");
         assert_eq!(buf.len(), 0, "it should avoid querying that data in the first place");
 
         let db = object_db();
         let id = insert(&db, large_content)?;
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &db,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &db,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }));
@@ -168,16 +178,18 @@ pub(crate) mod convert_to_diffable {
         let a_name = "a";
         let large_content = "hello";
         std::fs::write(tmp.path().join(a_name), large_content.as_bytes())?;
-        let out = filter.convert_to_diffable(
-            &does_not_matter,
-            EntryKind::BlobExecutable,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &does_not_matter,
+                EntryKind::BlobExecutable,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 5 }));
         assert_eq!(buf.len(), 0, "it should avoid querying that data in the first place");
@@ -188,16 +200,18 @@ pub(crate) mod convert_to_diffable {
         if !cfg!(windows) {
             let link_name = "link";
             gix_fs::symlink::create(large_content.as_ref(), &tmp.path().join(link_name))?;
-            let out = filter.convert_to_diffable(
-                &does_not_matter,
-                EntryKind::Link,
-                link_name.into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, _| {},
-                &gix_object::find::Never,
-                pipeline::Mode::default(),
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &does_not_matter,
+                    EntryKind::Link,
+                    link_name.into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, _| {},
+                    &gix_object::find::Never,
+                    pipeline::Mode::default(),
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(
@@ -212,16 +226,18 @@ pub(crate) mod convert_to_diffable {
         let db = object_db();
         let id = insert(&db, large_content)?;
 
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &db,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &db,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 5 }));
@@ -250,31 +266,35 @@ pub(crate) mod convert_to_diffable {
             !tmp.path().join(a_name).exists(),
             "precondition: worktree file doesn't exist"
         );
-        let out = filter.convert_to_diffable(
-            &null,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &null,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, None);
         assert_eq!(buf.len(), 0, "always cleared");
 
         buf.push(1);
-        let out = filter.convert_to_diffable(
-            &null,
-            EntryKind::Link,
-            "link".into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &null,
+                EntryKind::Link,
+                "link".into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none());
         assert_eq!(out.data, None);
         assert_eq!(buf.len(), 0, "always cleared");
@@ -282,16 +302,18 @@ pub(crate) mod convert_to_diffable {
         drop(tmp);
 
         buf.push(1);
-        let out = filter.convert_to_diffable(
-            &null,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &null,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, None);
@@ -328,16 +350,18 @@ pub(crate) mod convert_to_diffable {
         let a_name = "a";
         let a_content = "a-content\n";
         std::fs::write(tmp.path().join(a_name), a_content.as_bytes())?;
-        let out = filter.convert_to_diffable(
-            &does_not_matter,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &does_not_matter,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -349,16 +373,18 @@ pub(crate) mod convert_to_diffable {
         let b_name = "b";
         let b_content = "a\r\nb";
         std::fs::write(tmp.path().join(b_name), b_content.as_bytes())?;
-        let out = filter.convert_to_diffable(
-            &does_not_matter,
-            EntryKind::Blob,
-            b_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::ToGit,
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &does_not_matter,
+                EntryKind::Blob,
+                b_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::ToGit,
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -373,16 +399,18 @@ pub(crate) mod convert_to_diffable {
             let link_name = "link";
             let link_content = "hello\n";
             gix_fs::symlink::create(link_content.as_ref(), &tmp.path().join(link_name))?;
-            let out = filter.convert_to_diffable(
-                &does_not_matter,
-                EntryKind::Link,
-                link_name.into(),
-                ResourceKind::OldOrSource,
-                &mut |_, _| {},
-                &gix_object::find::Never,
-                pipeline::Mode::default(),
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &does_not_matter,
+                    EntryKind::Link,
+                    link_name.into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, _| {},
+                    &gix_object::find::Never,
+                    pipeline::Mode::default(),
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert!(out.driver_index.is_none());
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -398,16 +426,18 @@ pub(crate) mod convert_to_diffable {
         let b_content = "b-content\n";
         let id = insert(&db, b_content)?;
 
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &db,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &db,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -416,16 +446,18 @@ pub(crate) mod convert_to_diffable {
         let db = object_db();
         let b_content = "b\n";
         let id = insert(&db, b_content)?;
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &db,
-            pipeline::Mode::ToGit,
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &db,
+                pipeline::Mode::ToGit,
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
@@ -469,16 +501,18 @@ pub(crate) mod convert_to_diffable {
         let a_name = "a";
         let a_content = "a\0b";
         std::fs::write(tmp.path().join(a_name), a_content.as_bytes())?;
-        let out = filter.convert_to_diffable(
-            &does_not_matter,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::OldOrSource,
-            &mut |_, _| {},
-            &gix_object::find::Never,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &does_not_matter,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::OldOrSource,
+                &mut |_, _| {},
+                &gix_object::find::Never,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 3 }));
         assert_eq!(buf.len(), 0, "binary files aren't stored, even if we read them");
@@ -491,16 +525,18 @@ pub(crate) mod convert_to_diffable {
         let b_content = "b-co\0ntent\n";
         let id = insert(&db, b_content)?;
 
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            a_name.into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, _| {},
-            &db,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                a_name.into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, _| {},
+                &db,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert!(out.driver_index.is_none(), "there was no driver");
         assert_eq!(out.data, Some(pipeline::Data::Binary { size: 11 }));
@@ -509,18 +545,20 @@ pub(crate) mod convert_to_diffable {
         let platform = attributes.at_entry("c", None, &gix_object::find::Never)?;
 
         let id = insert(&db, "b")?;
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            "c".into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, out| {
-                let _ = platform.matching_attributes(out);
-            },
-            &db,
-            pipeline::Mode::default(),
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                "c".into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, out| {
+                    let _ = platform.matching_attributes(out);
+                },
+                &db,
+                pipeline::Mode::default(),
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
 
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
@@ -599,18 +637,20 @@ pub(crate) mod convert_to_diffable {
             pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
         ];
         for mode in worktree_modes {
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Blob,
-                "a".into(),
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Blob,
+                    "a".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(0));
             assert_eq!(
                 out.data,
@@ -621,25 +661,47 @@ pub(crate) mod convert_to_diffable {
             assert_eq!(buf.as_bstr(), "to-text\na\n", "filter was applied");
         }
 
-        let out = filter.convert_to_diffable(
-            &null,
-            EntryKind::Blob,
-            "a".into(),
-            ResourceKind::OldOrSource,
-            &mut |_, out| {
-                let _ = platform.matching_attributes(out);
-            },
-            &gix_object::find::Never,
-            pipeline::Mode::ToGit,
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &null,
+                EntryKind::Blob,
+                "a".into(),
+                ResourceKind::OldOrSource,
+                &mut |_, out| {
+                    let _ = platform.matching_attributes(out);
+                },
+                &gix_object::find::Never,
+                pipeline::Mode::ToGit,
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(buf.as_bstr(), "a\n", "unconditionally use git according to mode");
 
         let id = insert(&db, "a\n")?;
         for mode in worktree_modes {
-            let out = filter.convert_to_diffable(
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "a".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
+            assert_eq!(out.driver_index, Some(0));
+            assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
+            assert_eq!(buf.as_bstr(), "to-text\na\n", "filter was applied");
+        }
+
+        let out = filter
+            .convert_to_diffable(
                 &id,
                 EntryKind::Blob,
                 "a".into(),
@@ -648,26 +710,10 @@ pub(crate) mod convert_to_diffable {
                     let _ = platform.matching_attributes(out);
                 },
                 &db,
-                mode,
+                pipeline::Mode::ToGit,
                 &mut buf,
-            )?;
-            assert_eq!(out.driver_index, Some(0));
-            assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
-            assert_eq!(buf.as_bstr(), "to-text\na\n", "filter was applied");
-        }
-
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            "a".into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, out| {
-                let _ = platform.matching_attributes(out);
-            },
-            &db,
-            pipeline::Mode::ToGit,
-            &mut buf,
-        )?;
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, Some(0));
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -679,53 +725,59 @@ pub(crate) mod convert_to_diffable {
         let platform = attributes.at_entry("missing", None, &gix_object::find::Never)?;
         for mode in all_modes {
             buf.push(1);
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Link,
-                "missing".into(), /* does not actually exist */
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Link,
+                    "missing".into(), /* does not actually exist */
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, None);
             assert_eq!(buf.len(), 0, "always cleared");
 
             buf.push(1);
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Link,
-                "missing".into(), /* does not actually exist */
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Link,
+                    "missing".into(), /* does not actually exist */
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, None);
             assert_eq!(buf.len(), 0, "always cleared");
 
             buf.push(1);
             let id = insert(&db, "link-target")?;
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Link,
-                "missing".into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Link,
+                    "missing".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(4), "despite missing, we get driver information");
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
             assert_eq!(
@@ -738,18 +790,20 @@ pub(crate) mod convert_to_diffable {
         let platform = attributes.at_entry("b", None, &gix_object::find::Never)?;
         for mode in all_modes {
             buf.push(1);
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Blob,
-                "b".into(),
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Blob,
+                    "b".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert_eq!(out.driver_index, Some(1));
             assert_eq!(
@@ -763,18 +817,20 @@ pub(crate) mod convert_to_diffable {
         let id = insert(&db, "b\n")?;
         for mode in all_modes {
             buf.push(1);
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Blob,
-                "b".into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "b".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
 
             assert_eq!(out.driver_index, Some(1));
             assert_eq!(
@@ -787,18 +843,20 @@ pub(crate) mod convert_to_diffable {
 
         let platform = attributes.at_entry("c", None, &gix_object::find::Never)?;
         for mode in worktree_modes {
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Blob,
-                "c".into(),
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Blob,
+                    "c".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(2));
             assert_eq!(
                 out.data,
@@ -815,18 +873,20 @@ pub(crate) mod convert_to_diffable {
 
         let id = insert(&db, "c\n")?;
         for mode in worktree_modes {
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Blob,
-                "c".into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "c".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(2));
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
             assert_eq!(
@@ -838,18 +898,20 @@ pub(crate) mod convert_to_diffable {
 
         let platform = attributes.at_entry("unset", None, &gix_object::find::Never)?;
         for mode in all_modes {
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Blob,
-                "unset".into(),
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Blob,
+                    "unset".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(
                 out.driver_index, None,
                 "no driver is associated, as `diff` is explicitly unset"
@@ -864,18 +926,20 @@ pub(crate) mod convert_to_diffable {
 
         let id = insert(&db, "unset\n")?;
         for mode in all_modes {
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Blob,
-                "unset".into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "unset".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(
                 out.driver_index, None,
                 "no driver is associated, as `diff` is explicitly unset"
@@ -891,18 +955,20 @@ pub(crate) mod convert_to_diffable {
         let platform = attributes.at_entry("d", None, &gix_object::find::Never)?;
         let id = insert(&db, "d-in-db")?;
         for mode in worktree_modes {
-            let out = filter.convert_to_diffable(
-                &null,
-                EntryKind::Blob,
-                "d".into(),
-                ResourceKind::OldOrSource,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &gix_object::find::Never,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &null,
+                    EntryKind::Blob,
+                    "d".into(),
+                    ResourceKind::OldOrSource,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &gix_object::find::Never,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(3));
             assert_eq!(
                 out.data,
@@ -916,18 +982,20 @@ pub(crate) mod convert_to_diffable {
                 "the worktree + text conversion was triggered for worktree source"
             );
 
-            let out = filter.convert_to_diffable(
-                &id,
-                EntryKind::Blob,
-                "d".into(),
-                ResourceKind::NewOrDestination,
-                &mut |_, out| {
-                    let _ = platform.matching_attributes(out);
-                },
-                &db,
-                mode,
-                &mut buf,
-            )?;
+            let out = filter
+                .convert_to_diffable(
+                    &id,
+                    EntryKind::Blob,
+                    "d".into(),
+                    ResourceKind::NewOrDestination,
+                    &mut |_, out| {
+                        let _ = platform.matching_attributes(out);
+                    },
+                    &db,
+                    mode,
+                    &mut buf,
+                )
+                .map_err(gix_error::Exn::into_error)?;
             assert_eq!(out.driver_index, Some(3));
             assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: true }));
             assert_eq!(
@@ -938,18 +1006,20 @@ pub(crate) mod convert_to_diffable {
         }
 
         let platform = attributes.at_entry("e-no-attr", None, &gix_object::find::Never)?;
-        let out = filter.convert_to_diffable(
-            &null,
-            EntryKind::Blob,
-            "e-no-attr".into(),
-            ResourceKind::OldOrSource,
-            &mut |_, out| {
-                let _ = platform.matching_attributes(out);
-            },
-            &gix_object::find::Never,
-            pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &null,
+                EntryKind::Blob,
+                "e-no-attr".into(),
+                ResourceKind::OldOrSource,
+                &mut |_, out| {
+                    let _ = platform.matching_attributes(out);
+                },
+                &gix_object::find::Never,
+                pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, None);
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(
@@ -959,18 +1029,20 @@ pub(crate) mod convert_to_diffable {
         );
 
         let id = insert(&db, "e-in-db")?;
-        let out = filter.convert_to_diffable(
-            &id,
-            EntryKind::Blob,
-            "e-no-attr".into(),
-            ResourceKind::NewOrDestination,
-            &mut |_, out| {
-                let _ = platform.matching_attributes(out);
-            },
-            &db,
-            pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
-            &mut buf,
-        )?;
+        let out = filter
+            .convert_to_diffable(
+                &id,
+                EntryKind::Blob,
+                "e-no-attr".into(),
+                ResourceKind::NewOrDestination,
+                &mut |_, out| {
+                    let _ = platform.matching_attributes(out);
+                },
+                &db,
+                pipeline::Mode::ToGitUnlessBinaryToTextIsPresent,
+                &mut buf,
+            )
+            .map_err(gix_error::Exn::into_error)?;
         assert_eq!(out.driver_index, None);
         assert_eq!(out.data, Some(pipeline::Data::Buffer { is_derived: false }));
         assert_eq!(

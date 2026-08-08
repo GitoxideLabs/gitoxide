@@ -3,12 +3,24 @@ use bstr::BString;
 use crate::protocol::{Context, ContextOptions};
 
 /// Indicates key or values contain errors that can't be encoded.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value.")]
     Encoding { key: String, value: BString },
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Encoding { key, value } => write!(
+                f,
+                "{key:?}={value:?} must not contain null bytes or newlines neither in key nor in value."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl Context {
     /// Create a context containing `url`, encoded and decoded according to `options`.

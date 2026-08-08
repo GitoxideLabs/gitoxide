@@ -3,6 +3,7 @@ pub mod from_tree {
     use std::collections::VecDeque;
 
     use bstr::{BStr, BString, ByteSlice, ByteVec};
+    use gix_error::{ErrorExt, message};
     use gix_object::{tree, tree::EntryKind};
     use gix_traverse::tree::{Visit, depthfirst, visit::Action};
 
@@ -12,17 +13,7 @@ pub mod from_tree {
     };
 
     /// The error returned by [State::from_tree()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("The path \"{path}\" is invalid")]
-        InvalidComponent {
-            path: BString,
-            source: gix_validate::path::component::Error,
-        },
-        #[error(transparent)]
-        Traversal(#[from] gix_traverse::tree::depthfirst::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 
     /// Initialization
     impl State {
@@ -77,9 +68,9 @@ pub mod from_tree {
                         .invalid_path
                         .take()
                         .expect("cancellation only happens on validation error");
-                    return Err(Error::InvalidComponent { path, source: err });
+                    return Err(err.and_raise(message!("The path \"{path}\" is invalid")));
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(err.and_raise(message("Tree traversal failed"))),
             }
 
             let CollectEntries {
@@ -92,7 +83,7 @@ pub mod from_tree {
             } = delegate;
 
             if let Some((path, err)) = invalid_path {
-                return Err(Error::InvalidComponent { path, source: err });
+                return Err(err.and_raise(message!("The path \"{path}\" is invalid")));
             }
 
             Ok(State {

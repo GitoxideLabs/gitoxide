@@ -190,14 +190,48 @@ use crate::{
     decode::{Error as DecodeError, LooseHeaderDecodeError, loose_header},
 };
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum LooseDecodeError {
-    #[error(transparent)]
-    InvalidHeader(#[from] LooseHeaderDecodeError),
-    #[error(transparent)]
-    InvalidContent(#[from] DecodeError),
-    #[error("Object sized {size} does not fit into memory - this can happen on 32 bit systems")]
+    InvalidHeader(LooseHeaderDecodeError),
+    InvalidContent(DecodeError),
     OutOfMemory { size: u64 },
+}
+
+impl std::fmt::Display for LooseDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LooseDecodeError::InvalidHeader(err) => std::fmt::Display::fmt(err, f),
+            LooseDecodeError::InvalidContent(err) => std::fmt::Display::fmt(err, f),
+            LooseDecodeError::OutOfMemory { size } => {
+                write!(
+                    f,
+                    "Object sized {size} does not fit into memory - this can happen on 32 bit systems"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LooseDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LooseDecodeError::InvalidHeader(err) => err.source(),
+            LooseDecodeError::InvalidContent(err) => err.source(),
+            LooseDecodeError::OutOfMemory { .. } => None,
+        }
+    }
+}
+
+impl From<LooseHeaderDecodeError> for LooseDecodeError {
+    fn from(err: LooseHeaderDecodeError) -> Self {
+        LooseDecodeError::InvalidHeader(err)
+    }
+}
+
+impl From<DecodeError> for LooseDecodeError {
+    fn from(err: DecodeError) -> Self {
+        LooseDecodeError::InvalidContent(err)
+    }
 }
 
 impl<'a> ObjectRef<'a> {

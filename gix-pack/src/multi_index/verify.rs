@@ -9,35 +9,110 @@ pub mod integrity {
     use crate::multi_index::EntryIndex;
 
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].
-    #[derive(thiserror::Error, Debug)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error("Object {id} should be at pack-offset {expected_pack_offset} but was found at {actual_pack_offset}")]
         PackOffsetMismatch {
             id: gix_hash::ObjectId,
             expected_pack_offset: u64,
             actual_pack_offset: u64,
         },
-        #[error(transparent)]
-        MultiIndexChecksum(#[from] crate::multi_index::verify::checksum::Error),
-        #[error(transparent)]
-        IndexIntegrity(#[from] crate::index::verify::integrity::Error),
-        #[error(transparent)]
-        BundleInit(#[from] crate::bundle::init::Error),
-        #[error("Counted {actual} objects, but expected {expected} as per multi-index")]
-        UnexpectedObjectCount { actual: usize, expected: usize },
-        #[error("{id} wasn't found in the index referenced in the multi-pack index")]
-        OidNotFound { id: gix_hash::ObjectId },
-        #[error("The object id at multi-index entry {index} wasn't in order")]
-        OutOfOrder { index: EntryIndex },
-        #[error("The fan at index {index} is out of order as it's larger then the following value.")]
-        Fan { index: usize },
-        #[error("The multi-index claims to have no objects")]
+        MultiIndexChecksum(crate::multi_index::verify::checksum::Error),
+        IndexIntegrity(crate::index::verify::integrity::Error),
+        BundleInit(crate::bundle::init::Error),
+        UnexpectedObjectCount {
+            actual: usize,
+            expected: usize,
+        },
+        OidNotFound {
+            id: gix_hash::ObjectId,
+        },
+        OutOfOrder {
+            index: EntryIndex,
+        },
+        Fan {
+            index: usize,
+        },
         Empty,
-        #[error("The multi-index path '{path}' has no parent directory")]
-        InvalidPath { path: std::path::PathBuf },
-        #[error("Interrupted")]
+        InvalidPath {
+            path: std::path::PathBuf,
+        },
         Interrupted,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::PackOffsetMismatch {
+                    id,
+                    expected_pack_offset,
+                    actual_pack_offset,
+                } => write!(
+                    f,
+                    "Object {id} should be at pack-offset {expected_pack_offset} but was found at {actual_pack_offset}"
+                ),
+                Error::MultiIndexChecksum(err) => std::fmt::Display::fmt(err, f),
+                Error::IndexIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::BundleInit(err) => std::fmt::Display::fmt(err, f),
+                Error::UnexpectedObjectCount { actual, expected } => {
+                    write!(
+                        f,
+                        "Counted {actual} objects, but expected {expected} as per multi-index"
+                    )
+                }
+                Error::OidNotFound { id } => {
+                    write!(f, "{id} wasn't found in the index referenced in the multi-pack index")
+                }
+                Error::OutOfOrder { index } => {
+                    write!(f, "The object id at multi-index entry {index} wasn't in order")
+                }
+                Error::Fan { index } => write!(
+                    f,
+                    "The fan at index {index} is out of order as it's larger then the following value."
+                ),
+                Error::Empty => f.write_str("The multi-index claims to have no objects"),
+                Error::InvalidPath { path } => {
+                    write!(f, "The multi-index path '{}' has no parent directory", path.display())
+                }
+                Error::Interrupted => f.write_str("Interrupted"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::MultiIndexChecksum(err) => err.source(),
+                Error::IndexIntegrity(err) => err.source(),
+                Error::BundleInit(err) => err.source(),
+                Error::PackOffsetMismatch { .. }
+                | Error::UnexpectedObjectCount { .. }
+                | Error::OidNotFound { .. }
+                | Error::OutOfOrder { .. }
+                | Error::Fan { .. }
+                | Error::Empty
+                | Error::InvalidPath { .. }
+                | Error::Interrupted => None,
+            }
+        }
+    }
+
+    impl From<crate::multi_index::verify::checksum::Error> for Error {
+        fn from(err: crate::multi_index::verify::checksum::Error) -> Self {
+            Error::MultiIndexChecksum(err)
+        }
+    }
+
+    impl From<crate::index::verify::integrity::Error> for Error {
+        fn from(err: crate::index::verify::integrity::Error) -> Self {
+            Error::IndexIntegrity(err)
+        }
+    }
+
+    impl From<crate::bundle::init::Error> for Error {
+        fn from(err: crate::bundle::init::Error) -> Self {
+            Error::BundleInit(err)
+        }
     }
 
     /// Returned by [`multi_index::File::verify_integrity()`][crate::multi_index::File::verify_integrity()].

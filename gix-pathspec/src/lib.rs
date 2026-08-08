@@ -51,14 +51,30 @@ pub mod normalize {
     use std::path::PathBuf;
 
     /// The error returned by [Pattern::normalize()](super::Pattern::normalize()).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The path '{}' is not inside of the worktree '{}'", path.display(), worktree_path.display())]
         AbsolutePathOutsideOfWorktree { path: PathBuf, worktree_path: PathBuf },
-        #[error("The path '{}' leaves the repository", path.display())]
         OutsideOfWorktree { path: PathBuf },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::AbsolutePathOutsideOfWorktree { path, worktree_path } => write!(
+                    f,
+                    "The path '{}' is not inside of the worktree '{}'",
+                    path.display(),
+                    worktree_path.display()
+                ),
+                Error::OutsideOfWorktree { path } => {
+                    write!(f, "The path '{}' leaves the repository", path.display())
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 mod pattern;

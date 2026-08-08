@@ -1,5 +1,6 @@
 use std::{ops::DerefMut, path::PathBuf, sync::atomic::AtomicBool};
 
+use gix_error::{ErrorExt, ResultExt};
 use gix_odb::store::RefreshMode;
 use gix_protocol::fetch::{Arguments, negotiate};
 #[cfg(feature = "async-network-client")]
@@ -99,10 +100,15 @@ where
         if ref_map.is_missing_required_mapping() {
             let mut specs = ref_map.refspecs.clone();
             specs.extend(ref_map.extra_refspecs.clone());
-            return Err(Error::NoMapping {
-                refspecs: specs,
-                num_remote_refs: ref_map.remote_refs.len(),
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "None of the refspec(s) {} matched any of the {} refs on the remote",
+                specs
+                    .iter()
+                    .map(|spec| spec.to_ref().instruction().to_bstring().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                ref_map.remote_refs.len()
+            ))));
         }
 
         let mut con = self.con.take().expect("receive() can only be called once");
@@ -110,10 +116,10 @@ where
 
         let expected_object_hash = repo.object_hash();
         if ref_map.object_hash != expected_object_hash {
-            return Err(Error::IncompatibleObjectHash {
-                local: expected_object_hash,
-                remote: ref_map.object_hash,
-            });
+            return Err(gix_error::Error::from_error(gix_error::ValidationError::new(format!(
+                "Cannot fetch from a remote that uses {} while local repository uses {expected_object_hash} for object hashes",
+                ref_map.object_hash
+            ))));
         }
 
         let fetch_options = gix_protocol::fetch::Options {
@@ -125,7 +131,10 @@ where
                     repo.config
                         .resolved
                         .boolean_filter("clone.rejectShallow", &mut repo.filter_config_section()),
-                )?
+                )
+                .or_raise(|| {
+                    gix_error::message("Could not obtain configuration to learn if shallow remotes should be rejected")
+                })?
                 .unwrap_or(false),
         };
         let context = gix_protocol::fetch::Context {
@@ -154,7 +163,11 @@ where
         };
         let cache = graph_repo.commit_graph_if_enabled().ok().flatten();
         let mut graph = graph_repo.revision_graph(cache.as_ref());
-        let alternates = repo.objects.store_ref().alternate_db_paths()?;
+        let alternates = repo
+            .objects
+            .store_ref()
+            .alternate_db_paths()
+            .map_err(gix_error::Error::from_error)?;
         let mut negotiate = Negotiate {
             objects: &graph_repo.objects,
             refs: &graph_repo.refs,
@@ -205,7 +218,13 @@ where
             context,
             fetch_options,
         )
-        .await?;
+        .await
+        .map_err(|err| match err {
+            gix_protocol::fetch::Error::Negotiate(_) => {
+                gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new("Fetch negotiation failed")))
+            }
+            err => gix_error::Error::from_error(err),
+        })?;
         let negotiate = res.map(|v| outcome::Negotiate {
             graph: graph.detach(),
             rounds: v.negotiate.rounds,
@@ -233,7 +252,12 @@ where
         if let Some(bundle) = write_pack_bundle.as_mut() {
             if !update_refs.edits.is_empty() || bundle.index.num_objects == 0 {
                 if let Some(path) = bundle.keep_path.take() {
-                    std::fs::remove_file(&path).map_err(|err| Error::RemovePackKeepFile { path, source: err })?;
+                    std::fs::remove_file(&path).map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::CorruptionError::new(format!(
+                            "Failed to remove .keep file at {:?}",
+                            path.display()
+                        ))))
+                    })?;
                 }
             }
         }

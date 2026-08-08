@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use bstr::{BStr, BString, ByteSlice, ByteVec};
 use gix_diff::tree_with_rewrites::{Change, ChangeRef};
+use gix_error::{OptionExt, ResultExt, message};
 use gix_hash::ObjectId;
 use gix_object::{
     tree,
@@ -179,8 +180,11 @@ where
 
     let merged_blob_id = prep
         .id_by_pick(pick, buf, write_blob_to_odb)
-        .map_err(|err| Error::WriteBlobToOdb(err.into()))?
-        .ok_or(Error::MergeResourceNotFound)?;
+        .map_err(std::io::Error::other)
+        .or_raise(|| message("Failed to write merged blob content as blob to the object database"))?
+        .ok_or_raise(|| {
+            message("The merge was performed, but the binary merge result couldn't be selected as it wasn't found")
+        })?;
     Ok((merged_blob_id, resolution))
 }
 

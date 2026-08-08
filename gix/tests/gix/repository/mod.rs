@@ -57,6 +57,10 @@ mod index {
     fn basics() -> crate::Result {
         let repo = crate::named_subrepo_opts("make_basic_repo.sh", "unborn", gix::open::Options::isolated())?;
         assert!(
+            repo.index().expect_err("the fixture has no index").is_not_found(),
+            "a missing index has standard not-found classification"
+        );
+        assert!(
             repo.index_or_load_from_head().is_err(),
             "can't read index if `HEAD^{{tree}}` can't be resolved"
         );

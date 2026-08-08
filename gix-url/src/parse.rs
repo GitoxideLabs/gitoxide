@@ -5,28 +5,65 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::Scheme;
 
 /// The error returned by [parse()](crate::parse()).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("{} \"{url}\" is not valid UTF-8", kind.as_str())]
     Utf8 {
         url: BString,
         kind: UrlKind,
         source: std::str::Utf8Error,
     },
-    #[error("{} {url:?} can not be parsed as valid URL", kind.as_str())]
     Url {
         url: String,
         kind: UrlKind,
         source: crate::simple_url::UrlParseError,
     },
 
-    #[error("The host portion of the following URL is too long ({} bytes, {len} bytes total): {truncated_url:?}", truncated_url.len())]
-    TooLong { truncated_url: BString, len: usize },
-    #[error("{} \"{url}\" does not specify a path to a repository", kind.as_str())]
-    MissingRepositoryPath { url: BString, kind: UrlKind },
-    #[error("URL {url:?} is relative which is not allowed in this context")]
-    RelativeUrl { url: String },
+    TooLong {
+        truncated_url: BString,
+        len: usize,
+    },
+    MissingRepositoryPath {
+        url: BString,
+        kind: UrlKind,
+    },
+    RelativeUrl {
+        url: String,
+    },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Utf8 { url, kind, .. } => {
+                write!(f, "{} \"{url}\" is not valid UTF-8", kind.as_str())
+            }
+            Error::Url { url, kind, .. } => {
+                write!(f, "{} {url:?} can not be parsed as valid URL", kind.as_str())
+            }
+            Error::TooLong { truncated_url, len } => write!(
+                f,
+                "The host portion of the following URL is too long ({} bytes, {len} bytes total): {truncated_url:?}",
+                truncated_url.len()
+            ),
+            Error::MissingRepositoryPath { url, kind } => {
+                write!(f, "{} \"{url}\" does not specify a path to a repository", kind.as_str())
+            }
+            Error::RelativeUrl { url } => {
+                write!(f, "URL {url:?} is relative which is not allowed in this context")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Utf8 { source, .. } => Some(source),
+            Error::Url { source, .. } => Some(source),
+            _ => None,
+        }
+    }
 }
 
 impl From<Infallible> for Error {

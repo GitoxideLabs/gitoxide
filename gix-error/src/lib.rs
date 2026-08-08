@@ -123,6 +123,8 @@
 //! |--------------------------------------------------------------|-----------------------|
 //! | General-purpose error messages                                | [`Message`]           |
 //! | Validation/parsing, optionally storing the offending input   | [`ValidationError`]   |
+//! | Malformed or internally inconsistent data                     | [`CorruptionError`]   |
+//! | A requested resource does not exist                            | [`NotFoundError`]     |
 //!
 //! For example, a validation function with no callee errors returns `Result<_, ValidationError>`,
 //! while a function that wraps I/O errors during parsing could return `Result<_, Exn<ValidationError>>`.
@@ -320,7 +322,7 @@ pub use exn::{ErrorExt, Exn, Frame, OptionExt, ResultExt, Something, Untyped};
 /// # Warning: `source()` information is stringified and type-erased
 ///
 /// All `source()` values when created with [`Error::from_error()`] are turned into frames,
-/// but lose their type information completely.
+/// but lose their type information completely. An existing `Error` is retained as a nested error instead.
 /// This is because they are only seen as reference and thus can't be stored.
 ///
 /// # The `auto-chain-error` feature
@@ -341,10 +343,12 @@ pub struct Error {
 pub type Result<T = ()> = std::result::Result<T, Error>;
 
 mod error;
+pub use error::can_retry;
 
 /// Various kinds of concrete errors that implement [`std::error::Error`].
 mod concrete;
 pub use concrete::chain::ChainedError;
+pub use concrete::classify::{CorruptionError, NotFoundError, RetryableError};
 pub use concrete::message::{Message, message};
 pub use concrete::validate::ValidationError;
 

@@ -6,12 +6,21 @@ pub mod for_label {
     use bstr::BString;
 
     /// The error returned by [for_label()][super::for_label()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("An encoding named '{name}' is not known")]
         Unknown { name: BString },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Unknown { name } => write!(f, "An encoding named '{name}' is not known"),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 /// Try to produce a new `Encoding` for `label` or report an error if it is not known.

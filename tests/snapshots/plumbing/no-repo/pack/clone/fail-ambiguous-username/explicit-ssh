@@ -1,1 +1,5 @@
-[2KError: Username '-Fconfigfile' could be mistaken for a command-line argument
+[2KError: Transport handshake failed
+
+Caused by:
+    0: SSH invocation failed
+    1: Username '-Fconfigfile' could be mistaken for a command-line argument

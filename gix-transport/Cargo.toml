@@ -99,6 +99,7 @@ gix-sec = { version = "^0.14.2", path = "../gix-sec" }
 gix-packetline = { version = "^0.22.0", path = "../gix-packetline" }
 gix-credentials = { version = "^0.39.1", path = "../gix-credentials", optional = true }
 gix-quote = { version = "^0.7.2", path = "../gix-quote" }
+gix-error = { version = "^0.2.5", path = "../gix-error" }
 
 serde = { version = "1.0.114", optional = true, default-features = false, features = [
     "std",
@@ -108,7 +109,6 @@ bstr = { version = "1.12.0", default-features = false, features = [
     "std",
     "unicode",
 ] }
-thiserror = "2.0.18"
 parking_lot = { version = "0.12.4", optional = true }
 
 # for async-client

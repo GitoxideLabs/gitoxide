@@ -1,30 +1,7 @@
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 mod error {
-    use crate::handshake::refs::parse;
-
     /// The error returned by invoking a [`super::function::LsRefsCommand`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Io(#[from] std::io::Error),
-        #[error(transparent)]
-        Transport(#[from] gix_transport::client::Error),
-        #[error(transparent)]
-        Parse(#[from] parse::Error),
-        #[error(transparent)]
-        ArgumentValidation(#[from] crate::command::validate_argument_prefixes::Error),
-    }
-
-    impl gix_transport::IsSpuriousError for Error {
-        fn is_spurious(&self) -> bool {
-            match self {
-                Error::Io(err) => err.is_spurious(),
-                Error::Transport(err) => err.is_spurious(),
-                _ => false,
-            }
-        }
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 #[cfg(any(feature = "blocking-client", feature = "async-client"))]
 pub use error::Error;
@@ -37,6 +14,7 @@ pub(crate) mod function {
     use std::collections::HashSet;
 
     use bstr::{BString, ByteVec};
+    use gix_error::{ResultExt, message};
     use gix_features::progress::Progress;
     use gix_transport::client::Capabilities;
 
@@ -163,8 +141,9 @@ pub(crate) mod function {
                         },
                         trace,
                     )
-                    .await?;
-                Ok($from_v2_refs(&mut remote_refs).await?)
+                    .await
+                    .or_raise(|| message("Could not invoke ls-refs"))?;
+                $from_v2_refs(&mut remote_refs).await
             }
         };
     }

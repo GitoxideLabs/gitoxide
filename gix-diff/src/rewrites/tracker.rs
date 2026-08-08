@@ -11,6 +11,7 @@
 use std::ops::Range;
 
 use bstr::{BStr, ByteSlice};
+use gix_error::ResultExt;
 use gix_object::tree::{EntryKind, EntryMode};
 
 use crate::{
@@ -136,18 +137,7 @@ pub mod visit {
 ///
 pub mod emit {
     /// The error returned by [Tracker::emit()](super::Tracker::emit()).
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error("Could not find blob for similarity checking")]
-        FindExistingBlob(#[from] gix_object::find::existing_object::Error),
-        #[error("Could not obtain exhaustive item set to use as possible sources for copy detection")]
-        GetItemsForExhaustiveCopyDetection(#[source] Box<dyn std::error::Error + Send + Sync>),
-        #[error(transparent)]
-        SetResource(#[from] crate::blob::platform::set_resource::Error),
-        #[error(transparent)]
-        PrepareDiff(#[from] crate::blob::platform::prepare_diff::Error),
-    }
+    pub type Error = gix_error::Exn<gix_error::Message>;
 }
 
 /// Lifecycle
@@ -310,7 +300,11 @@ impl<T: Change> Tracker<T> {
                                 self.items.last_mut().expect("just pushed").emitted = true;
                             }
                         })
-                        .map_err(|err| emit::Error::GetItemsForExhaustiveCopyDetection(Box::new(err)))?;
+                        .or_raise(|| {
+                            gix_error::message(
+                                "Could not obtain exhaustive item set to use as possible sources for copy detection",
+                            )
+                        })?;
                         self.sort_items_by_id_and_location();
 
                         self.match_pairs_of_kind(
@@ -774,7 +768,9 @@ fn find_match<'a, T: Change>(
                 ResourceKind::OldOrSource,
                 objects,
             )?;
-            let prep = diff_cache.prepare_diff()?;
+            let prep = diff_cache
+                .prepare_diff()
+                .or_raise(|| gix_error::message("Could not prepare resources for similarity checking"))?;
             stats.num_similarity_checks += 1;
             *num_checks += 1;
             match prep.operation {

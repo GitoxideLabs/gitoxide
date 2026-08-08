@@ -18,13 +18,41 @@ use crate::file::{SectionId, write::platform_newline};
 /// Errors related to changing values in a section.
 pub mod value {
     /// The error returned when adding or changing a value in a section.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        ValueName(#[from] crate::parse::section::value_name::Error),
-        #[error(transparent)]
-        Span(#[from] crate::parse::span::Error),
+        ValueName(crate::parse::section::value_name::Error),
+        Span(crate::parse::span::Error),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ValueName(err) => std::fmt::Display::fmt(err, f),
+                Error::Span(err) => std::fmt::Display::fmt(err, f),
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::ValueName(err) => err.source(),
+                Error::Span(err) => err.source(),
+            }
+        }
+    }
+
+    impl From<crate::parse::section::value_name::Error> for Error {
+        fn from(err: crate::parse::section::value_name::Error) -> Self {
+            Error::ValueName(err)
+        }
+    }
+
+    impl From<crate::parse::span::Error> for Error {
+        fn from(err: crate::parse::span::Error) -> Self {
+            Error::Span(err)
+        }
     }
 }
 

@@ -38,7 +38,7 @@ fn from_git_dir() -> crate::Result {
             worktree_dir.join("c.config").display().to_string(),
         );
 
-    let config = gix_config::File::from_git_dir(git_dir)?;
+    let config = gix_config::File::from_git_dir(git_dir).map_err(gix_error::Exn::into_error)?;
     assert_eq!(
         config.string_by("a", None, "local").expect("present"),
         "value",
@@ -88,7 +88,7 @@ fn from_git_dir_with_worktree_extension() -> crate::Result {
     let git_dir = crate::scripted_fixture_read_only("config_with_worktree_extension.sh")?
         .join("main-worktree")
         .join(".git");
-    let config = gix_config::File::from_git_dir(git_dir)?;
+    let config = gix_config::File::from_git_dir(git_dir).map_err(gix_error::Exn::into_error)?;
 
     assert_eq!(
         config

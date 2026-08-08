@@ -22,25 +22,91 @@ pub mod integrity {
     pub type Options<F> = pack::index::verify::integrity::Options<F>;
 
     /// Returned by [`Store::verify_integrity()`][crate::Store::verify_integrity()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
+    #[derive(Debug)]
+    #[allow(missing_docs)]
     pub enum Error {
-        #[error(transparent)]
-        MultiIndexIntegrity(#[from] pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>),
-        #[error(transparent)]
-        IndexIntegrity(#[from] pack::index::traverse::Error<pack::index::verify::integrity::Error>),
-        #[error(transparent)]
-        IndexOpen(#[from] pack::index::init::Error),
-        #[error(transparent)]
-        LooseObjectStoreIntegrity(#[from] crate::loose::verify::integrity::Error),
-        #[error(transparent)]
-        MultiIndexOpen(#[from] pack::multi_index::init::Error),
-        #[error(transparent)]
-        PackOpen(#[from] pack::data::init::Error),
-        #[error(transparent)]
-        InitializeODB(#[from] crate::store::load_index::Error),
-        #[error("The disk on state changed while performing the operation, and we observed the change.")]
+        MultiIndexIntegrity(pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>),
+        IndexIntegrity(pack::index::traverse::Error<pack::index::verify::integrity::Error>),
+        IndexOpen(pack::index::init::Error),
+        LooseObjectStoreIntegrity(crate::loose::verify::integrity::Error),
+        MultiIndexOpen(pack::multi_index::init::Error),
+        PackOpen(pack::data::init::Error),
+        InitializeODB(crate::store::load_index::Error),
         NeedsRetryDueToChangeOnDisk,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::MultiIndexIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::IndexIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::IndexOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::LooseObjectStoreIntegrity(err) => std::fmt::Display::fmt(err, f),
+                Error::MultiIndexOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::PackOpen(err) => std::fmt::Display::fmt(err, f),
+                Error::InitializeODB(err) => std::fmt::Display::fmt(err, f),
+                Error::NeedsRetryDueToChangeOnDisk => {
+                    f.write_str("The disk on state changed while performing the operation, and we observed the change.")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::MultiIndexIntegrity(err) => err.source(),
+                Error::IndexIntegrity(err) => err.source(),
+                Error::IndexOpen(err) => err.source(),
+                Error::LooseObjectStoreIntegrity(err) => err.source(),
+                Error::MultiIndexOpen(err) => err.source(),
+                Error::PackOpen(err) => err.source(),
+                Error::InitializeODB(err) => err.source(),
+                Error::NeedsRetryDueToChangeOnDisk => None,
+            }
+        }
+    }
+
+    impl From<pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>> for Error {
+        fn from(err: pack::index::traverse::Error<pack::multi_index::verify::integrity::Error>) -> Self {
+            Error::MultiIndexIntegrity(err)
+        }
+    }
+
+    impl From<pack::index::traverse::Error<pack::index::verify::integrity::Error>> for Error {
+        fn from(err: pack::index::traverse::Error<pack::index::verify::integrity::Error>) -> Self {
+            Error::IndexIntegrity(err)
+        }
+    }
+
+    impl From<pack::index::init::Error> for Error {
+        fn from(err: pack::index::init::Error) -> Self {
+            Error::IndexOpen(err)
+        }
+    }
+
+    impl From<crate::loose::verify::integrity::Error> for Error {
+        fn from(err: crate::loose::verify::integrity::Error) -> Self {
+            Error::LooseObjectStoreIntegrity(err)
+        }
+    }
+
+    impl From<pack::multi_index::init::Error> for Error {
+        fn from(err: pack::multi_index::init::Error) -> Self {
+            Error::MultiIndexOpen(err)
+        }
+    }
+
+    impl From<pack::data::init::Error> for Error {
+        fn from(err: pack::data::init::Error) -> Self {
+            Error::PackOpen(err)
+        }
+    }
+
+    impl From<crate::store::load_index::Error> for Error {
+        fn from(err: crate::store::load_index::Error) -> Self {
+            Error::InitializeODB(err)
+        }
     }
 
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
@@ -56,7 +122,7 @@ pub mod integrity {
     #[derive(Debug, PartialEq, Eq, Hash, Ord, PartialOrd, Clone)]
     #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     /// Traversal statistics of packs governed by single indices or multi-pack indices.
-    #[expect(missing_docs)]
+    #[allow(missing_docs)]
     pub enum SingleOrMultiStatistics {
         Single(pack::index::traverse::Statistics),
         Multi(Vec<(PathBuf, pack::index::traverse::Statistics)>),

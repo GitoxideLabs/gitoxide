@@ -56,10 +56,10 @@ fn empty_to_new_tree_without_rename_tracking() -> crate::Result {
             &mut |_, _, _, _| true,
         )
         .unwrap_err();
-        assert_eq!(
-            format!("{err:?}"),
-            r#"Callback(Custom { kind: Other, error: "custom error" })"#,
-            "custom errors made visible and not squelched"
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("The callback indicated failure") && rendered.contains("custom error"),
+            "custom errors made visible and not squelched: {rendered}"
         );
     }
     Ok(())
@@ -1386,7 +1386,8 @@ mod util {
             }),
             &mut pathspecs,
             &mut |_, _, _, _| false,
-        )?;
+        )
+        .map_err(gix_error::Exn::into_error)?;
         Ok((out, rewrites_info))
     }
 
@@ -1406,7 +1407,7 @@ mod util {
                 std::io::Error::other(format!("Could not read '{}': {}", tree_id_path.display(), err))
             })?;
             let tree_id = gix_hash::ObjectId::from_hex(hex_id.trim().as_bytes())?;
-            Ok(gix_index::State::from_tree(&tree_id, odb, Default::default())?)
+            Ok(gix_index::State::from_tree(&tree_id, odb, Default::default()).map_err(gix_error::Exn::into_error)?)
         }
     }
 }

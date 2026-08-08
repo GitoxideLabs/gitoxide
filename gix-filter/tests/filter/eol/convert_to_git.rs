@@ -181,7 +181,8 @@ fn round_trip_check() -> crate::Result {
                 }),
                 config: Default::default(),
             },
-        )?;
+        )
+        .map_err(gix_error::Exn::into_error)?;
         assert!(
             changed,
             "in warn mode, we will get a result even though it won't round-trip"

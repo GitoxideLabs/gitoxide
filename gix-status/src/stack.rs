@@ -8,9 +8,16 @@ use gix_fs::{Stack, stack::ToNormalPathComponents};
 
 use crate::SymlinkCheck;
 
-#[derive(Debug, thiserror::Error)]
-#[error("Cannot step through symlink to perform an lstat")]
+#[derive(Debug)]
 struct CannotStepThroughSymlink;
+
+impl std::fmt::Display for CannotStepThroughSymlink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Cannot step through symlink to perform an lstat")
+    }
+}
+
+impl std::error::Error for CannotStepThroughSymlink {}
 
 pub(crate) fn is_symlink_step_error(err: &std::io::Error) -> bool {
     err.get_ref()

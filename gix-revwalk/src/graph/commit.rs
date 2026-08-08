@@ -149,27 +149,93 @@ impl Iterator for Parents<'_, '_> {
 ///
 pub mod iter_parents {
     /// The error returned by the [`Parents`][super::Parents] iterator.
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("An error occurred when parsing commit parents")]
-        DecodeCommit(#[from] gix_object::decode::Error),
-        #[error("An error occurred when parsing parents from the commit graph")]
-        DecodeCommitGraph(#[from] gix_error::Message),
+        DecodeCommit(gix_object::decode::Error),
+        DecodeCommitGraph(gix_error::Message),
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::DecodeCommit(_) => f.write_str("An error occurred when parsing commit parents"),
+                Error::DecodeCommitGraph(_) => {
+                    f.write_str("An error occurred when parsing parents from the commit graph")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::DecodeCommit(err) => Some(err),
+                Error::DecodeCommitGraph(err) => Some(err),
+            }
+        }
+    }
+
+    impl From<gix_object::decode::Error> for Error {
+        fn from(err: gix_object::decode::Error) -> Self {
+            Error::DecodeCommit(err)
+        }
+    }
+
+    impl From<gix_error::Message> for Error {
+        fn from(err: gix_error::Message) -> Self {
+            Error::DecodeCommitGraph(err)
+        }
     }
 }
 
 ///
 pub mod to_owned {
     /// The error returned by [`to_owned()`][crate::graph::LazyCommit::to_owned()].
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("A commit could not be decoded during traversal")]
-        Decode(#[from] gix_object::decode::Error),
-        #[error("Could not find commit position in graph when traversing parents")]
-        CommitGraphParent(#[from] gix_error::Message),
-        #[error("Commit-graph time could not be presented as signed integer: {actual}")]
+        Decode(gix_object::decode::Error),
+        CommitGraphParent(gix_error::Message),
         CommitGraphTime { actual: u64 },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Decode(_) => f.write_str("A commit could not be decoded during traversal"),
+                Error::CommitGraphParent(_) => {
+                    f.write_str("Could not find commit position in graph when traversing parents")
+                }
+                Error::CommitGraphTime { actual } => {
+                    write!(
+                        f,
+                        "Commit-graph time could not be presented as signed integer: {actual}"
+                    )
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Decode(err) => Some(err),
+                Error::CommitGraphParent(err) => Some(err),
+                Error::CommitGraphTime { .. } => None,
+            }
+        }
+    }
+
+    impl From<gix_object::decode::Error> for Error {
+        fn from(err: gix_object::decode::Error) -> Self {
+            Error::Decode(err)
+        }
+    }
+
+    impl From<gix_error::Message> for Error {
+        fn from(err: gix_error::Message) -> Self {
+            Error::CommitGraphParent(err)
+        }
     }
 }

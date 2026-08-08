@@ -138,29 +138,53 @@ impl TryFrom<&BStr> for Update {
 }
 
 /// The error returned by [File::fetch_recurse()](crate::File::fetch_recurse) and [File::ignore()](crate::File::ignore).
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
-#[error("The '{field}' field of submodule '{submodule}' was invalid: '{actual}'")]
 pub struct Error {
     pub field: &'static str,
     pub submodule: BString,
     pub actual: BString,
 }
 
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "The '{}' field of submodule '{}' was invalid: '{}'",
+            self.field, self.submodule, self.actual
+        )
+    }
+}
+
+impl std::error::Error for Error {}
+
 ///
 pub mod branch {
     use bstr::BString;
 
     /// The error returned by [File::branch()](crate::File::branch).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
-    #[error(
-        "The value '{actual}' of the 'branch' field of submodule '{submodule}' couldn't be turned into a valid fetch refspec"
-    )]
     pub struct Error {
         pub submodule: BString,
         pub actual: BString,
         pub source: gix_refspec::parse::Error,
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "The value '{}' of the 'branch' field of submodule '{}' couldn't be turned into a valid fetch refspec",
+                self.actual, self.submodule
+            )
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.source)
+        }
     }
 }
 
@@ -169,14 +193,31 @@ pub mod update {
     use bstr::BString;
 
     /// The error returned by [File::update()](crate::File::update).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The 'update' field of submodule '{submodule}' tried to set command '{actual}' to be shared")]
         CommandForbiddenInModulesConfiguration { submodule: BString, actual: BString },
-        #[error("The 'update' field of submodule '{submodule}' was invalid: '{actual}'")]
         Invalid { submodule: BString, actual: BString },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::CommandForbiddenInModulesConfiguration { submodule, actual } => write!(
+                    f,
+                    "The 'update' field of submodule '{submodule}' tried to set command '{actual}' to be shared"
+                ),
+                Error::Invalid { submodule, actual } => {
+                    write!(
+                        f,
+                        "The 'update' field of submodule '{submodule}' was invalid: '{actual}'"
+                    )
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }
 
 ///
@@ -184,16 +225,41 @@ pub mod url {
     use bstr::BString;
 
     /// The error returned by [File::url()](crate::File::url).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The url of submodule '{submodule}' could not be parsed")]
         Parse {
             submodule: BString,
             source: gix_url::parse::Error,
         },
-        #[error("The submodule '{submodule}' was missing its 'url' field or it was empty")]
-        Missing { submodule: BString },
+        Missing {
+            submodule: BString,
+        },
+    }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Parse { submodule, .. } => {
+                    write!(f, "The url of submodule '{submodule}' could not be parsed")
+                }
+                Error::Missing { submodule } => {
+                    write!(
+                        f,
+                        "The submodule '{submodule}' was missing its 'url' field or it was empty"
+                    )
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            match self {
+                Error::Parse { source, .. } => Some(source),
+                Error::Missing { .. } => None,
+            }
+        }
     }
 }
 
@@ -202,14 +268,32 @@ pub mod path {
     use bstr::BString;
 
     /// The error returned by [File::path()](crate::File::path).
-    #[derive(Debug, thiserror::Error)]
+    #[derive(Debug)]
     #[expect(missing_docs)]
     pub enum Error {
-        #[error("The path '{actual}' of submodule '{submodule}' needs to be relative")]
         Absolute { actual: BString, submodule: BString },
-        #[error("The submodule '{submodule}' was missing its 'path' field or it was empty")]
         Missing { submodule: BString },
-        #[error("The path '{actual}' would lead outside of the repository worktree")]
         OutsideOfWorktree { actual: BString, submodule: BString },
     }
+
+    impl std::fmt::Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::Absolute { actual, submodule } => {
+                    write!(f, "The path '{actual}' of submodule '{submodule}' needs to be relative")
+                }
+                Error::Missing { submodule } => {
+                    write!(
+                        f,
+                        "The submodule '{submodule}' was missing its 'path' field or it was empty"
+                    )
+                }
+                Error::OutsideOfWorktree { actual, .. } => {
+                    write!(f, "The path '{actual}' would lead outside of the repository worktree")
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for Error {}
 }

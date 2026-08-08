@@ -8,15 +8,17 @@ mod convert_to_worktree;
 #[test]
 fn default() -> crate::Result {
     let mut filters = gix_filter::Pipeline::default();
-    let out = filters.convert_to_worktree(
-        b"hi",
-        "file".into(),
-        &mut |_, _| {},
-        to_worktree::Options {
-            can_delay: gix_filter::driver::apply::Delay::Allow,
-            unknown_encoding: to_worktree::UnknownEncoding::Fail,
-        },
-    )?;
+    let out = filters
+        .convert_to_worktree(
+            b"hi",
+            "file".into(),
+            &mut |_, _| {},
+            to_worktree::Options {
+                can_delay: gix_filter::driver::apply::Delay::Allow,
+                unknown_encoding: to_worktree::UnknownEncoding::Fail,
+            },
+        )
+        .map_err(gix_error::Exn::into_error)?;
     assert_eq!(
         out.as_bytes().expect("unchanged").as_bstr(),
         "hi",

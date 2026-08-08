@@ -10,18 +10,54 @@ use gix_features::progress::{self, Progress};
 use crate::{cache::delta::Tree, data};
 
 /// Returned by [`Tree::from_offsets_in_pack()`]
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("{message}")]
     Io { source: io::Error, message: &'static str },
-    #[error(transparent)]
-    Header(#[from] crate::data::header::decode::Error),
-    #[error("Could find object with id {id} in this pack. Thin packs are not supported")]
+    Header(crate::data::header::decode::Error),
     UnresolvedRefDelta { id: gix_hash::ObjectId },
-    #[error(transparent)]
-    Tree(#[from] crate::cache::delta::Error),
-    #[error("Interrupted")]
+    Tree(crate::cache::delta::Error),
     Interrupted,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Io { message, .. } => f.write_str(message),
+            Error::Header(err) => std::fmt::Display::fmt(err, f),
+            Error::UnresolvedRefDelta { id } => {
+                write!(
+                    f,
+                    "Could find object with id {id} in this pack. Thin packs are not supported"
+                )
+            }
+            Error::Tree(err) => std::fmt::Display::fmt(err, f),
+            Error::Interrupted => f.write_str("Interrupted"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Io { source, .. } => Some(source),
+            Error::Header(err) => err.source(),
+            Error::Tree(err) => err.source(),
+            Error::UnresolvedRefDelta { .. } | Error::Interrupted => None,
+        }
+    }
+}
+
+impl From<crate::data::header::decode::Error> for Error {
+    fn from(err: crate::data::header::decode::Error) -> Self {
+        Error::Header(err)
+    }
+}
+
+impl From<crate::cache::delta::Error> for Error {
+    fn from(err: crate::cache::delta::Error) -> Self {
+        Error::Tree(err)
+    }
 }
 
 const PACK_HEADER_LEN: usize = 12;

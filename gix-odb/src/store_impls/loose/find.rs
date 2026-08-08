@@ -3,26 +3,62 @@ use std::{cmp::Ordering, collections::HashSet, io, path::PathBuf};
 use crate::store_impls::loose::{HEADER_MAX_SIZE, Store, hash_path};
 
 /// Returned by [`Store::try_find()`]
-#[derive(thiserror::Error, Debug)]
-#[expect(missing_docs)]
+#[derive(Debug)]
+#[allow(missing_docs)]
 pub enum Error {
-    #[error("decompression of loose object at '{path}' failed")]
     DecompressFile {
         source: gix_zlib::inflate::Error,
         path: PathBuf,
     },
-    #[error("file at '{path}' showed invalid size of inflated data, expected {expected}, got {actual}")]
-    SizeMismatch { actual: u64, expected: u64, path: PathBuf },
-    #[error(transparent)]
-    Decode(#[from] gix_object::decode::LooseHeaderDecodeError),
-    #[error("Cannot store {size} in memory as it's not representable")]
-    OutOfMemory { size: u64 },
-    #[error("Could not {action} data at '{path}'")]
+    SizeMismatch {
+        actual: u64,
+        expected: u64,
+        path: PathBuf,
+    },
+    Decode(gix_object::decode::LooseHeaderDecodeError),
+    OutOfMemory {
+        size: u64,
+    },
     Io {
         source: std::io::Error,
         action: &'static str,
         path: PathBuf,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::DecompressFile { path, .. } => {
+                write!(f, "decompression of loose object at '{}' failed", path.display())
+            }
+            Error::SizeMismatch { actual, expected, path } => write!(
+                f,
+                "file at '{}' showed invalid size of inflated data, expected {expected}, got {actual}",
+                path.display()
+            ),
+            Error::Decode(err) => std::fmt::Display::fmt(err, f),
+            Error::OutOfMemory { size } => write!(f, "Cannot store {size} in memory as it's not representable"),
+            Error::Io { action, path, .. } => write!(f, "Could not {action} data at '{}'", path.display()),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::DecompressFile { source, .. } => Some(source),
+            Error::Decode(err) => err.source(),
+            Error::Io { source, .. } => Some(source),
+            Error::SizeMismatch { .. } | Error::OutOfMemory { .. } => None,
+        }
+    }
+}
+
+impl From<gix_object::decode::LooseHeaderDecodeError> for Error {
+    fn from(err: gix_object::decode::LooseHeaderDecodeError) -> Self {
+        Error::Decode(err)
+    }
 }
 
 /// Object lookup
@@ -257,7 +293,7 @@ mod mmap {
     pub fn read_only(path: &Path) -> std::io::Result<memmap2::Mmap> {
         let file = std::fs::File::open(path)?;
         // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
-        #[expect(unsafe_code)]
+        #[allow(unsafe_code)]
         unsafe {
             memmap2::MmapOptions::new().map_copy_read_only(&file)
         }

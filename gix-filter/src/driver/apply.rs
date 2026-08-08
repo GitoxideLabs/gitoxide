@@ -24,25 +24,60 @@ pub enum Delay {
 }
 
 /// The error returned by [State::apply()][super::State::apply()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    Init(#[from] driver::init::Error),
-    #[error("Could not write entire object to driver")]
-    WriteSource(#[from] std::io::Error),
-    #[error("Filter process delayed an entry even though that was not requested")]
+    Init(gix_error::Error),
+    WriteSource(std::io::Error),
     DelayNotAllowed,
-    #[error("Failed to invoke '{command}' command")]
     ProcessInvoke {
         source: process::client::invoke::Error,
         command: String,
     },
-    #[error("The invoked command '{command}' in process indicated an error: {status:?}")]
     ProcessStatus {
         status: driver::process::Status,
         command: String,
     },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Init(err) => err.fmt(f),
+            Error::WriteSource(_) => f.write_str("Could not write entire object to driver"),
+            Error::DelayNotAllowed => f.write_str("Filter process delayed an entry even though that was not requested"),
+            Error::ProcessInvoke { command, .. } => write!(f, "Failed to invoke '{command}' command"),
+            Error::ProcessStatus { status, command } => {
+                write!(
+                    f,
+                    "The invoked command '{command}' in process indicated an error: {status:?}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::Init(err) => err.source(),
+            Error::WriteSource(err) => Some(err),
+            Error::ProcessInvoke { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+impl From<driver::init::Error> for Error {
+    fn from(err: driver::init::Error) -> Self {
+        Error::Init(err.into_error())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::WriteSource(err)
+    }
 }
 
 /// Additional information for use in the [`State::apply()`] method.

@@ -11,7 +11,8 @@ impl Remote<'_> {
         gix_url::parse::Error: From<E>,
     {
         self.url_inner(
-            url.try_into().map_err(|err| remote::init::Error::Url(err.into()))?,
+            url.try_into()
+                .map_err(|err| gix_error::Error::from_error(gix_url::parse::Error::from(err)))?,
             true,
         )
     }
@@ -26,7 +27,8 @@ impl Remote<'_> {
         gix_url::parse::Error: From<E>,
     {
         self.url_inner(
-            url.try_into().map_err(|err| remote::init::Error::Url(err.into()))?,
+            url.try_into()
+                .map_err(|err| gix_error::Error::from_error(gix_url::parse::Error::from(err)))?,
             false,
         )
     }
@@ -51,7 +53,8 @@ impl Remote<'_> {
         gix_url::parse::Error: From<E>,
     {
         self.push_url_inner(
-            url.try_into().map_err(|err| remote::init::Error::Url(err.into()))?,
+            url.try_into()
+                .map_err(|err| gix_error::Error::from_error(gix_url::parse::Error::from(err)))?,
             true,
         )
     }
@@ -75,7 +78,8 @@ impl Remote<'_> {
         gix_url::parse::Error: From<E>,
     {
         self.push_url_inner(
-            url.try_into().map_err(|err| remote::init::Error::Url(err.into()))?,
+            url.try_into()
+                .map_err(|err| gix_error::Error::from_error(gix_url::parse::Error::from(err)))?,
             false,
         )
     }

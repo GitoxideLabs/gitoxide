@@ -19,12 +19,14 @@ fn no_driver_but_filter_with_autocrlf() -> gix_testtools::Result {
         )
     })?;
 
-    let mut out = pipe.convert_to_git(
-        "hi\r\n".as_bytes(),
-        Path::new("any.txt"),
-        &mut |_path, _attrs| {},
-        &mut no_object_in_index,
-    )?;
+    let mut out = pipe
+        .convert_to_git(
+            "hi\r\n".as_bytes(),
+            Path::new("any.txt"),
+            &mut |_path, _attrs| {},
+            &mut no_object_in_index,
+        )
+        .map_err(gix_error::Exn::into_error)?;
 
     assert_eq!(
         out.as_bytes().expect("read converted to buffer").as_bstr(),
@@ -54,17 +56,19 @@ fn all_stages_mean_streaming_is_impossible() -> gix_testtools::Result {
         _ => unimplemented!(),
     };
     let src = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
-    let mut out = pipe.convert_to_git(
-        src.as_bytes(),
-        Path::new("any.txt"),
-        &mut |path, attrs| {
-            cache
-                .at_entry(path, None, &gix_object::find::Never)
-                .expect("cannot fail")
-                .matching_attributes(attrs);
-        },
-        &mut no_object_in_index,
-    )?;
+    let mut out = pipe
+        .convert_to_git(
+            src.as_bytes(),
+            Path::new("any.txt"),
+            &mut |path, attrs| {
+                cache
+                    .at_entry(path, None, &gix_object::find::Never)
+                    .expect("cannot fail")
+                    .matching_attributes(attrs);
+            },
+            &mut no_object_in_index,
+        )
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(out.as_read().is_none(), "non-driver filters operate in-memory");
     let buf = out.as_bytes().expect("in-memory operation");
@@ -89,17 +93,19 @@ fn only_driver_means_streaming_is_possible() -> gix_testtools::Result {
         _ => unimplemented!(),
     };
     let src = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
-    let mut out = pipe.convert_to_git(
-        src.as_bytes(),
-        Path::new("subdir/doesnot/matter/any.txt"),
-        &mut |path, attrs| {
-            cache
-                .at_entry(path, None, &gix_object::find::Never)
-                .expect("cannot fail")
-                .matching_attributes(attrs);
-        },
-        &mut no_object_in_index,
-    )?;
+    let mut out = pipe
+        .convert_to_git(
+            src.as_bytes(),
+            Path::new("subdir/doesnot/matter/any.txt"),
+            &mut |path, attrs| {
+                cache
+                    .at_entry(path, None, &gix_object::find::Never)
+                    .expect("cannot fail")
+                    .matching_attributes(attrs);
+            },
+            &mut no_object_in_index,
+        )
+        .map_err(gix_error::Exn::into_error)?;
     assert!(out.is_changed(), "filters were applied");
     assert!(out.as_read().is_some(), "filter-only can be streamed");
     let mut buf = Vec::new();
@@ -124,17 +130,19 @@ fn no_filter_means_reader_is_returned_unchanged() -> gix_testtools::Result {
         _ => unimplemented!(),
     };
     let input = format!("➡a\r\n➡b\r\n➡$Id: {source_hash}$");
-    let mut out = pipe.convert_to_git(
-        input.as_bytes(),
-        Path::new("other.txt"),
-        &mut |path, attrs| {
-            cache
-                .at_entry(path, None, &gix_object::find::Never)
-                .expect("cannot fail")
-                .matching_attributes(attrs);
-        },
-        &mut no_call,
-    )?;
+    let mut out = pipe
+        .convert_to_git(
+            input.as_bytes(),
+            Path::new("other.txt"),
+            &mut |path, attrs| {
+                cache
+                    .at_entry(path, None, &gix_object::find::Never)
+                    .expect("cannot fail")
+                    .matching_attributes(attrs);
+            },
+            &mut no_call,
+        )
+        .map_err(gix_error::Exn::into_error)?;
     assert!(!out.is_changed(), "no filter was applied");
     let actual = out
         .as_read()

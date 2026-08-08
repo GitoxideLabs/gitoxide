@@ -1,11 +1,14 @@
 use std::sync::atomic::Ordering;
 
+#[cfg(feature = "parallel")]
+use gix_error::ErrorExt;
+use gix_error::ResultExt;
 use gix_status::index_as_worktree::{Change, EntryStatus};
 
 use crate::{
     bstr::BString,
     config::cache::util::ApplyLeniencyDefault,
-    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus, tree_index},
+    status::{Platform, index_worktree, index_worktree::BuiltinSubmoduleStatus},
     worktree::IndexPersistedOrInMemory,
 };
 
@@ -48,7 +51,12 @@ where
 
         let obtain_tree_id = || -> Result<Option<gix_hash::ObjectId>, crate::status::into_iter::Error> {
             Ok(match self.head_tree {
-                Some(None) => Some(self.repo.head_tree_id_or_empty()?.into()),
+                Some(None) => Some(
+                    self.repo
+                        .head_tree_id_or_empty()
+                        .or_raise(|| gix_error::message("Could not obtain the tree id pointed to by `HEAD`"))?
+                        .into(),
+                ),
                 Some(Some(tree_id)) => Some(tree_id),
                 None => None,
             })
@@ -56,10 +64,12 @@ where
 
         let skip_hash = crate::config::tree::Index::SKIP_HASH
             .enrich_error(self.repo.config.resolved.boolean(crate::config::tree::Index::SKIP_HASH))
-            .with_lenient_default(self.repo.config.lenient_config)?
+            .with_lenient_default(self.repo.config.lenient_config)
+            .map_err(gix_error::Error::from_error)?
             .unwrap_or_default();
         let should_interrupt = self.should_interrupt.clone().unwrap_or_default();
-        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)?;
+        let submodule = BuiltinSubmoduleStatus::new(self.repo.clone().into_sync(), self.submodules)
+            .map_err(gix_error::Error::from_error)?;
         #[cfg(feature = "parallel")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -105,7 +115,9 @@ where
                             )
                         }
                     })
-                    .map_err(crate::status::into_iter::Error::SpawnThread)?
+                    .map_err(|err| {
+                        gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
+                    })?
                     .into()
             } else {
                 None
@@ -139,7 +151,9 @@ where
                         })
                     }
                 })
-                .map_err(crate::status::into_iter::Error::SpawnThread)?;
+                .map_err(|err| {
+                    gix_error::Error::from(err.and_raise(gix_error::message("Failed to spawn producer thread")))
+                })?;
 
             Ok(Iter {
                 rx_and_join: Some((rx, join_index_worktree, join_tree_index)),
@@ -220,14 +234,7 @@ where
 }
 
 /// The error returned for each item returned by [`Iter`].
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    IndexWorktree(#[from] index_worktree::Error),
-    #[error(transparent)]
-    TreeIndex(#[from] tree_index::Error),
-}
+pub type Error = gix_error::Error;
 
 impl Iterator for Iter {
     type Item = Result<Item, Error>;
@@ -256,7 +263,7 @@ impl Iterator for Iter {
                     let tree_index = if let Some(handle) = tree_handle {
                         match handle.join().expect("no panic") {
                             Ok(out) => Some(out),
-                            Err(err) => break Some(Err(err.into())),
+                            Err(err) => break Some(Err(err)),
                         }
                     } else {
                         None
@@ -268,7 +275,7 @@ impl Iterator for Iter {
                             self.out = Some(out);
                             None
                         }
-                        Err(err) => Some(Err(err.into())),
+                        Err(err) => Some(Err(err)),
                     };
                 }
             }

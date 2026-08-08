@@ -69,7 +69,8 @@ fn run_baseline() -> crate::Result {
             &odb,
             &mut |id| id.to_hex_with_len(7).to_string(),
             options.clone(),
-        )?
+        )
+        .map_err(gix_error::Exn::into_error)?
         .tree_merge;
 
         let actual_id = actual.tree.write(|tree| odb.write(tree))?;
@@ -98,7 +99,8 @@ fn run_baseline() -> crate::Result {
             }
         }
 
-        let mut actual_index = gix_index::State::from_tree(&actual_id, &odb, Default::default())?;
+        let mut actual_index =
+            gix_index::State::from_tree(&actual_id, &odb, Default::default()).map_err(gix_error::Exn::into_error)?;
         let expected_index = {
             let deviating_index_path = root.join(".git").join(format!("{case_name}.index"));
             if deviating_index_path.exists() {
@@ -176,7 +178,8 @@ fn run_baseline() -> crate::Result {
                 &odb,
                 &mut |id| id.to_hex_with_len(7).to_string(),
                 options.clone(),
-            )?
+            )
+            .map_err(gix_error::Exn::into_error)?
             .tree_merge;
 
             let actual_id = actual.tree.write(|tree| odb.write(tree))?;

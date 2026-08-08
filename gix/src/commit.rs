@@ -1,39 +1,16 @@
 //!
 #![allow(clippy::empty_docs)]
 
-use std::convert::Infallible;
-
 /// An empty array of a type usable with the `gix::easy` API to help declaring no parents should be used
 pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
 
 /// The error returned by [`commit(…)`](crate::Repository::commit()).
-#[derive(Debug, thiserror::Error)]
-#[expect(missing_docs)]
-pub enum Error {
-    #[error(transparent)]
-    ParseTime(#[from] crate::config::time::Error),
-    #[error("Committer identity is not configured")]
-    CommitterMissing,
-    #[error("Author identity is not configured")]
-    AuthorMissing,
-    #[error(transparent)]
-    ReferenceNameValidation(#[from] gix_ref::name::Error),
-    #[error(transparent)]
-    WriteObject(#[from] crate::object::write::Error),
-    #[error(transparent)]
-    ReferenceEdit(#[from] crate::reference::edit::Error),
-}
-
-impl From<std::convert::Infallible> for Error {
-    fn from(_value: Infallible) -> Self {
-        unreachable!("cannot be invoked")
-    }
-}
+pub type Error = gix_error::Error;
 
 ///
 #[cfg(feature = "revision")]
 pub mod describe {
-    use gix_error::Exn;
+    use gix_error::ResultExt;
     use gix_hash::ObjectId;
     use gix_hashtable::HashMap;
     use std::borrow::Cow;
@@ -51,7 +28,10 @@ pub mod describe {
     impl Resolution<'_> {
         /// Turn this instance into something displayable.
         pub fn format(self) -> Result<gix_revision::describe::Format<'static>, Error> {
-            let prefix = self.id.shorten()?;
+            let prefix = self
+                .id
+                .shorten()
+                .or_raise(|| gix_error::message("Could not produce an unambiguous shortened id for formatting."))?;
             Ok(self.outcome.into_format(prefix.hex_len()))
         }
 
@@ -66,7 +46,10 @@ pub mod describe {
             self,
             dirty_suffix: impl Into<Option<String>>,
         ) -> Result<gix_revision::describe::Format<'static>, Error> {
-            let prefix = self.id.shorten()?;
+            let prefix = self
+                .id
+                .shorten()
+                .or_raise(|| gix_error::message("Could not produce an unambiguous shortened id for formatting."))?;
             let mut dirty_suffix = dirty_suffix.into();
             if dirty_suffix.is_some() && !self.id.repo.is_dirty()? {
                 dirty_suffix.take();
@@ -78,23 +61,7 @@ pub mod describe {
     }
 
     /// The error returned by [`try_format()`][Platform::try_format()].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        OpenCache(#[from] crate::repository::commit_graph_if_enabled::Error),
-        #[error(transparent)]
-        Describe(#[from] gix_revision::describe::Error),
-        #[error("Could not produce an unambiguous shortened id for formatting.")]
-        ShortId(#[from] crate::id::shorten::Error),
-        #[error(transparent)]
-        RefIter(#[from] crate::reference::iter::Error),
-        #[error(transparent)]
-        RefIterInit(#[from] crate::reference::iter::init::Error),
-        #[error(transparent)]
-        #[cfg(feature = "status")]
-        DetermineIsDirty(#[from] crate::status::is_dirty::Error),
-    }
+    pub type Error = gix_error::Error;
 
     /// A selector to choose what kind of references should contribute to names.
     #[derive(Default, Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
@@ -110,7 +77,7 @@ pub mod describe {
 
     impl SelectRef {
         fn names(&self, repo: &Repository) -> Result<HashMap<ObjectId, Cow<'static, BStr>>, Error> {
-            let platform = repo.references()?;
+            let platform = repo.references().map_err(gix_error::Error::from_error)?;
 
             Ok(match self {
                 SelectRef::AllTags | SelectRef::AllRefs => {
@@ -244,8 +211,7 @@ pub mod describe {
                     first_parent: self.first_parent,
                     max_candidates: self.max_candidates,
                 },
-            )
-            .map_err(Exn::into_inner)?;
+            )?;
 
             Ok(outcome.map(|outcome| Resolution {
                 outcome,

@@ -57,15 +57,44 @@ impl Outcome {
 pub type Result = std::result::Result<Option<Outcome>, Error>;
 
 /// The error used in the [credentials helper invocation][crate::helper::invoke()].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error(transparent)]
-    ContextDecode(#[from] protocol::context::decode::Error),
-    #[error("An IO error occurred while communicating to the credentials helper")]
-    Io(#[from] std::io::Error),
-    #[error(transparent)]
+    ContextDecode(protocol::context::decode::Error),
+    Io(std::io::Error),
     CredentialsHelperFailed { source: std::io::Error },
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::ContextDecode(err) => std::fmt::Display::fmt(err, f),
+            Error::Io(_) => f.write_str("An IO error occurred while communicating to the credentials helper"),
+            Error::CredentialsHelperFailed { source } => std::fmt::Display::fmt(source, f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::ContextDecode(err) => err.source(),
+            Error::Io(err) => Some(err),
+            Error::CredentialsHelperFailed { source } => source.source(),
+        }
+    }
+}
+
+impl From<protocol::context::decode::Error> for Error {
+    fn from(err: protocol::context::decode::Error) -> Self {
+        Error::ContextDecode(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err)
+    }
 }
 
 /// The action to perform by the credentials [helper][`crate::helper::invoke()`].

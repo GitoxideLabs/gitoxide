@@ -5,30 +5,54 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::{Defaults, MagicSignature, Pattern, SearchMode};
 
 /// The error returned by [parse()][crate::parse()].
-#[derive(thiserror::Error, Debug)]
+#[derive(Debug)]
 #[expect(missing_docs)]
 pub enum Error {
-    #[error("An empty string is not a valid pathspec")]
     EmptyString,
-    #[error("Found {keyword:?} in signature, which is not a valid keyword")]
     InvalidKeyword { keyword: BString },
-    #[error("Unimplemented short keyword: {short_keyword:?}")]
     Unimplemented { short_keyword: char },
-    #[error("Missing ')' at the end of pathspec signature")]
     MissingClosingParenthesis,
-    #[error("Attribute has non-ascii characters or starts with '-': {attribute:?}")]
     InvalidAttribute { attribute: BString },
-    #[error("Invalid character in attribute value: {character:?}")]
     InvalidAttributeValue { character: char },
-    #[error(r"Escape character '\' is not allowed as the last character in an attribute value")]
     TrailingEscapeCharacter,
-    #[error("Attribute specification cannot be empty")]
     EmptyAttribute,
-    #[error("Only one attribute specification is allowed in the same pathspec")]
     MultipleAttributeSpecifications,
-    #[error("'literal' and 'glob' keywords cannot be used together in the same pathspec")]
     IncompatibleSearchModes,
 }
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::EmptyString => f.write_str("An empty string is not a valid pathspec"),
+            Error::InvalidKeyword { keyword } => {
+                write!(f, "Found {keyword:?} in signature, which is not a valid keyword")
+            }
+            Error::Unimplemented { short_keyword } => write!(f, "Unimplemented short keyword: {short_keyword:?}"),
+            Error::MissingClosingParenthesis => f.write_str("Missing ')' at the end of pathspec signature"),
+            Error::InvalidAttribute { attribute } => {
+                write!(
+                    f,
+                    "Attribute has non-ascii characters or starts with '-': {attribute:?}"
+                )
+            }
+            Error::InvalidAttributeValue { character } => {
+                write!(f, "Invalid character in attribute value: {character:?}")
+            }
+            Error::TrailingEscapeCharacter => {
+                f.write_str(r"Escape character '\' is not allowed as the last character in an attribute value")
+            }
+            Error::EmptyAttribute => f.write_str("Attribute specification cannot be empty"),
+            Error::MultipleAttributeSpecifications => {
+                f.write_str("Only one attribute specification is allowed in the same pathspec")
+            }
+            Error::IncompatibleSearchModes => {
+                f.write_str("'literal' and 'glob' keywords cannot be used together in the same pathspec")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl Pattern {
     /// Try to parse a path-spec pattern from the given `input` bytes.
