@@ -39,12 +39,21 @@ pub enum IndexState {
     /// The index is active in memory because a mapping exists.
     Loaded,
     /// The index couldn't be unloaded as it was still in use, but that can happen another time.
+    ///
+    /// Dynamic stores no longer produce this state because stable handles retain resources outside the current catalog.
     Disposable,
     /// The index isn't loaded/memory mapped.
     Unloaded,
 }
 
 impl Store {
+    /// Mark the known disk state stale after the caller changed the object database.
+    ///
+    /// This only makes the next miss eligible for a refresh; it performs no I/O.
+    pub fn mark_disk_state_stale(&self) {
+        *self.last_successful_disk_state_consolidation.lock() = None;
+    }
+
     /// Return information about all files known to us as well as their loading state.
     ///
     /// Note that this call is expensive as it gathers additional information about loose object databases.
@@ -53,11 +62,13 @@ impl Store {
     /// changing on disk and somebody reading at the same time.
     pub fn structure(&self) -> Result<Vec<Record>, load_index::Error> {
         let _span = gix_features::trace::detail!("gix_odb::Store::structure()");
-        let index = self.index.load();
-        if !index.is_initialized() {
+        let catalog = self.catalog.load();
+        if !catalog.index.is_initialized() {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;
         }
-        let index = self.index.load();
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        let slots = &catalog.slots;
         let mut res: Vec<_> = index
             .loose_dbs
             .iter()
@@ -67,13 +78,11 @@ impl Store {
             })
             .collect();
 
-        for slot in index.slot_indices.iter().map(|idx| &self.files[*idx]) {
+        for slot in index.slot_indices.iter().map(|idx| &slots[*idx]) {
             let files = slot.files.load();
             let record = match &**files {
                 Some(index) => {
-                    let state = if index.is_disposable() {
-                        IndexState::Disposable
-                    } else if index.index_is_loaded() {
+                    let state = if index.index_is_loaded() {
                         IndexState::Loaded
                     } else {
                         IndexState::Unloaded
@@ -101,12 +110,13 @@ impl Store {
     ///
     /// Read more about alternates in the documentation of the [`resolve`][crate::alternate::resolve()] function.
     pub fn alternate_db_paths(&self) -> Result<Vec<PathBuf>, load_index::Error> {
-        let index = self.index.load();
-        if !index.is_initialized() {
+        let catalog = self.catalog.load();
+        if !catalog.index.is_initialized() {
             self.consolidate_with_disk_state(true, false /*load one new index*/, self.loose_compression)?;
         }
-        let index = self.index.load();
-        Ok(index
+        let catalog = self.catalog.load();
+        Ok(catalog
+            .index
             .loose_dbs
             .iter()
             .skip(
