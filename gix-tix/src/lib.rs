@@ -8,6 +8,7 @@ mod logging;
 mod ui;
 
 use std::{
+    collections::VecDeque,
     ffi::OsString,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -126,6 +127,42 @@ struct SelectionRelationCache {
     id: gix::ObjectId,
     refs: Vec<SelectionRef>,
     relation: Option<SelectionRelation>,
+}
+
+const TREE_CHANGES_CACHE_SIZE: usize = 8;
+type TreeChangesEntry = (gix::ObjectId, usize, Changes);
+
+#[derive(Default)]
+struct TreeChangesCache(VecDeque<TreeChangesEntry>);
+
+impl TreeChangesCache {
+    fn as_ref(&self) -> Option<&TreeChangesEntry> {
+        self.0.front()
+    }
+
+    fn activate(&mut self, id: gix::ObjectId, parent: usize) -> bool {
+        let Some(position) = self
+            .0
+            .iter()
+            .position(|(cached_id, cached_parent, _)| *cached_id == id && *cached_parent == parent)
+        else {
+            return false;
+        };
+        if position != 0 {
+            let entry = self.0.remove(position).expect("the cached position exists");
+            self.0.push_front(entry);
+        }
+        true
+    }
+
+    fn insert(&mut self, entry: TreeChangesEntry) {
+        self.0.push_front(entry);
+        self.0.truncate(TREE_CHANGES_CACHE_SIZE);
+    }
+
+    fn clear(&mut self) {
+        self.0.clear();
+    }
 }
 
 type LineCounts = Option<(u32, u32)>;
@@ -728,7 +765,7 @@ fn event_loop(
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
-    let mut tree_changes = None;
+    let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
     let mut worktree_watcher: Option<WorktreeWatcher> = None;
     let mut worktree_refresh_deadline: Option<Instant> = None;
@@ -1604,7 +1641,7 @@ fn draw(
     authors: &SharedAuthors,
     fill_repository: &mut FillRepository,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
-    tree_changes: &mut Option<(gix::ObjectId, usize, Changes)>,
+    tree_changes: &mut TreeChangesCache,
     worktree_changes: &mut Option<(usize, Changes)>,
     history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
@@ -1651,22 +1688,32 @@ fn draw(
     if changes_visible && selected.is_some() && tree_changes.as_ref().map(|(cached, _, _)| *cached) != selected {
         app.changes_parent = 0;
     }
-    let tree_changes_to_load = (changes_visible && app.changes_mode.is_some())
+    let desired_tree_changes = (changes_visible && app.changes_mode.is_some())
         .then_some(selected)
         .flatten()
-        .filter(|id| {
-            tree_changes
-                .as_ref()
-                .is_none_or(|(cached, parent, _)| *cached != *id || *parent != app.changes_parent)
-        });
+        .map(|id| (id, app.changes_parent));
+    let tree_changes_changed = desired_tree_changes.is_some_and(|(id, parent)| {
+        tree_changes
+            .as_ref()
+            .is_none_or(|(cached, cached_parent, _)| *cached != id || *cached_parent != parent)
+    });
+    let tree_selection = tree_changes_changed
+        .then(|| remembered_change_selection(&app.tree_changes, tree_changes.as_ref().map(|(_, _, changes)| changes)))
+        .flatten();
+    let tree_changes_to_load = desired_tree_changes
+        .filter(|(id, parent)| !tree_changes.activate(*id, *parent))
+        .map(|(id, _)| id);
+    if tree_changes_changed
+        && tree_changes_to_load.is_none()
+        && let Some(changes) = tree_changes.as_ref().map(|(_, _, changes)| changes)
+    {
+        restore_change_selection(&mut app.tree_changes, changes, tree_selection.clone());
+    }
     let worktree_changes_to_load = changes_visible
         && app.changes_mode == Some(ChangesMode::Both)
         && worktree_changes
             .as_ref()
             .is_none_or(|(marker, _)| *marker == usize::MAX);
-    let tree_selection = tree_changes_to_load.and_then(|_| {
-        remembered_change_selection(&app.tree_changes, tree_changes.as_ref().map(|(_, _, changes)| changes))
-    });
     let worktree_selection = worktree_changes_to_load
         .then(|| {
             remembered_change_selection(
@@ -1679,7 +1726,7 @@ fn draw(
         *commit_message = None;
     }
     if app.changes_mode.is_none() {
-        *tree_changes = None;
+        tree_changes.clear();
         *worktree_changes = None;
     }
     if let Some(id) = relation_to_load
@@ -1750,7 +1797,7 @@ fn draw(
             let loaded = loaded?;
             app.changes_parent = loaded.parent.map_or(0, |parent| parent.index);
             restore_change_selection(&mut app.tree_changes, &loaded, tree_selection);
-            *tree_changes = Some((id, app.changes_parent, loaded));
+            tree_changes.insert((id, app.changes_parent, loaded));
         }
         if worktree_changes_to_load {
             let started = Instant::now();
@@ -2778,6 +2825,57 @@ fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caches_recent_tree_changes_by_commit_and_parent() {
+        let id = |value| {
+            let mut bytes = [0; 20];
+            bytes[19] = value;
+            gix::ObjectId::Sha1(bytes)
+        };
+        let mut cache = TreeChangesCache::default();
+        cache.insert((id(42), 0, Changes::default()));
+        cache.insert((
+            id(42),
+            1,
+            Changes {
+                lines_added: 42,
+                ..Changes::default()
+            },
+        ));
+        assert!(cache.activate(id(42), 0));
+        assert_eq!(cache.as_ref().map(|(_, parent, _)| *parent), Some(0));
+        assert!(cache.activate(id(42), 1));
+        assert_eq!(
+            cache.as_ref().map(|(_, _, changes)| changes.lines_added),
+            Some(42),
+            "each merge parent retains its own diff result"
+        );
+        cache.clear();
+
+        for value in 0..=TREE_CHANGES_CACHE_SIZE as u8 {
+            cache.insert((
+                id(value),
+                usize::from(value),
+                Changes {
+                    lines_added: u64::from(value),
+                    ..Changes::default()
+                },
+            ));
+        }
+
+        assert!(
+            cache.activate(id(1), 1),
+            "a recently viewed commit and parent restores its computed diff"
+        );
+        assert_eq!(cache.as_ref().map(|(_, _, changes)| changes.lines_added), Some(1));
+        assert!(!cache.activate(id(0), 0), "the oldest entry is evicted at the bound");
+        cache.clear();
+        assert!(
+            cache.as_ref().is_none(),
+            "closing the changes view releases cached diffs"
+        );
+    }
 
     #[test]
     fn copies_the_selected_path_from_the_focused_changes_block() {
