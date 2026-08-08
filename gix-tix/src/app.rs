@@ -255,6 +255,8 @@ pub(crate) enum Action {
     Cancelled,
     MoveUp,
     MoveDown,
+    MoveUpBy(usize),
+    MoveDownBy(usize),
     ScrollLeft,
     ScrollRight,
     HalfPageUp,
@@ -597,8 +599,12 @@ impl App {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
             Action::MoveDown if self.changes_focus.is_some() => self.move_changes(1, true),
-            Action::MoveUp => self.move_reachable(false),
-            Action::MoveDown => self.move_reachable(true),
+            Action::MoveUpBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, false),
+            Action::MoveDownBy(distance) if self.changes_focus.is_some() => self.move_changes(distance, true),
+            Action::MoveUp => self.move_reachable(1, false),
+            Action::MoveDown => self.move_reachable(1, true),
+            Action::MoveUpBy(distance) => self.move_reachable(distance, false),
+            Action::MoveDownBy(distance) => self.move_reachable(distance, true),
             Action::ScrollLeft => {
                 if self.changes_focus.is_some() {
                     self.pan_changes(false);
@@ -1051,18 +1057,21 @@ impl App {
         self.ensure_visible();
     }
 
-    fn move_reachable(&mut self, down: bool) {
+    fn move_reachable(&mut self, distance: usize, down: bool) {
         let (Some(selected), Some(reachable)) = (self.selected, self.reachable_rows.as_ref()) else {
-            self.move_selection(1, down);
+            self.move_selection(distance, down);
             return;
         };
+        let distance = distance.max(1);
         let next = if down {
             (selected + 1..self.rows.len())
-                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .filter(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .nth(distance - 1)
         } else {
             (0..selected)
                 .rev()
-                .find(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .filter(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .nth(distance - 1)
         };
         if let Some(next) = next {
             self.select(next);
@@ -1186,6 +1195,9 @@ impl App {
     }
 
     fn retry_failed_signatures(&mut self) {
+        if self.signature_failures == 0 {
+            return;
+        }
         for row in &mut self.rows {
             if row.signature == SignatureState::Failed {
                 row.signature = SignatureState::Unverified;
@@ -2021,6 +2033,14 @@ mod tests {
         app.update(Action::First);
         assert_eq!(app.selected, Some(0), "First selects the newest commit");
         assert_eq!(app.offset, 0, "the newest commit is visible");
+        app.update(Action::MoveDownBy(3));
+        assert_eq!(
+            app.selected,
+            Some(3),
+            "batched mouse navigation moves once by its full distance"
+        );
+        app.update(Action::MoveUpBy(2));
+        assert_eq!(app.selected, Some(1));
     }
 
     #[test]
