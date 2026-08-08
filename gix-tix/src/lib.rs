@@ -4,6 +4,7 @@
 
 mod app;
 mod history;
+mod logging;
 mod ui;
 
 use std::{
@@ -374,6 +375,18 @@ pub enum Screen {
 
 /// Run the interactive commit graph for `repository`.
 pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
+    let _log_guard = match logging::init() {
+        Ok(guard) => Some(guard),
+        Err(err) => {
+            eprintln!("warning: could not initialize tix diagnostics: {err:#}");
+            None
+        }
+    };
+    tracing::info!(
+        revision_count = revisions.len(),
+        hidden_revision_count = options.hide.len(),
+        "starting tix"
+    );
     let terminal_height = match options.screen {
         Screen::Always => 0,
         Screen::Auto | Screen::Half => terminal::size().context("could not determine terminal size")?.1,
