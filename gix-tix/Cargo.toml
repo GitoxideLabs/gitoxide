@@ -25,9 +25,13 @@ sha256 = ["gix/sha256"]
 [dependencies]
 anyhow = "1.0.98"
 crossterm = { version = "0.29.0", features = ["osc52"] }
+directories = "6.0.0"
 gix = { version = "^0.86.0", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "notes", "parallel", "revision", "command", "status"] }
 notify = "8.2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+tracing = "0.1.37"
+tracing-appender = "0.2.4"
+tracing-subscriber = "0.3.17"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
