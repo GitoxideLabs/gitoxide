@@ -1,10 +1,12 @@
 use gix_revision::merge_base;
 
+use crate::odb_at;
+
 #[test]
 fn validate() -> crate::Result {
     let root = gix_testtools::scripted_fixture_read_only("make_merge_base_repos.sh")?;
     let mut count = 0;
-    let odb = gix_odb::at(root.join(".git/objects"))?;
+    let odb = odb_at(root.join(".git/objects"))?;
     for baseline_path in baseline::expectation_paths(&root)? {
         count += 1;
         for use_commitgraph in [false, true] {
@@ -39,11 +41,11 @@ fn validate() -> crate::Result {
 }
 
 mod octopus {
-    use crate::hex_to_id;
+    use crate::{hex_to_id, odb_at};
 
     #[test]
     fn three_sequential_commits() -> crate::Result {
-        let odb = odb_at("three-sequential-commits")?;
+        let odb = octopus_odb_at("three-sequential-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let first_commit = hex_to_id("e5d0542bd38431f105a8de8e982b3579647feb9f");
         let mut heads = vec![
@@ -62,7 +64,7 @@ mod octopus {
 
     #[test]
     fn three_parallel_commits() -> crate::Result {
-        let odb = odb_at("three-parallel-commits")?;
+        let odb = octopus_odb_at("three-parallel-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let base = hex_to_id("3ca3e3dd12585fabbef311d524a5e54678090528");
         let mut heads = vec![
@@ -81,7 +83,7 @@ mod octopus {
 
     #[test]
     fn three_forked_commits() -> crate::Result {
-        let odb = odb_at("three-forked-commits")?;
+        let odb = octopus_odb_at("three-forked-commits")?;
         let mut graph = gix_revision::Graph::new(&odb, None);
         let base = hex_to_id("3ca3e3dd12585fabbef311d524a5e54678090528");
         let mut heads = vec![
@@ -98,9 +100,9 @@ mod octopus {
         Ok(())
     }
 
-    fn odb_at(name: &str) -> crate::Result<gix_odb::Handle> {
+    fn octopus_odb_at(name: &str) -> crate::Result<gix_odb::Handle> {
         let root = gix_testtools::scripted_fixture_read_only("merge_base_octopus_repos.sh")?;
-        Ok(gix_odb::at(root.join(name).join(".git/objects"))?)
+        odb_at(root.join(name).join(".git/objects"))
     }
 }
 
