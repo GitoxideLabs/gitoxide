@@ -153,18 +153,32 @@ pub(crate) enum FileChange {
     Unavailable(&'static str),
 }
 
-type LineDiffResult = (usize, FileChange, Result<LineCounts>);
-
 struct LineDiffJob {
     index: usize,
     change: FileChange,
 }
 
+enum LineDiffMessage {
+    Job(LineDiffJob),
+    FinishBatch,
+}
+
+enum LineDiffResult {
+    Change(usize, FileChange, Result<LineCounts>),
+    BatchFinished,
+}
+
 struct LineDiffPool {
-    jobs: Option<mpsc::Sender<LineDiffJob>>,
+    jobs: Vec<mpsc::Sender<LineDiffMessage>>,
     results: mpsc::Receiver<LineDiffResult>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
+
+type LineDiffState = (
+    gix::Repository,
+    gix::diff::blob::Platform,
+    Option<gix::diff::blob::Platform>,
+);
 
 fn worktree_diff_cache(
     repository: &gix::Repository,
@@ -240,79 +254,106 @@ fn line_counts_for_change(
     Ok(counts.map(|counts| (counts.insertions, counts.removals)))
 }
 
+fn open_line_diff_state(repository_path: &Path, bare: bool) -> Result<LineDiffState> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository for parallel line diffs")?;
+    repository.object_cache_size(OBJECT_CACHE_SIZE);
+    let tree_cache = repository
+        .diff_resource_cache_for_tree_diff()
+        .context("could not initialize parallel line diffs")?;
+    let worktree_cache = if bare {
+        None
+    } else {
+        worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)?
+    };
+    Ok((repository, tree_cache, worktree_cache))
+}
+
 impl LineDiffPool {
     fn new(repository_path: &Path, bare: bool, parallelism: usize) -> Result<Self> {
-        let repository = open_repository(repository_path, bare, false)
-            .context("could not open repository for parallel line diffs")?
-            .into_sync();
-        let mut worker_state = Vec::with_capacity(parallelism);
-        for _ in 0..parallelism {
-            let mut repository = repository.to_thread_local();
-            repository.object_cache_size(OBJECT_CACHE_SIZE);
-            let tree_cache = repository
-                .diff_resource_cache_for_tree_diff()
-                .context("could not initialize parallel line diffs")?;
-            let worktree_cache = if bare {
-                None
-            } else {
-                worktree_diff_cache(&repository, gix::diff::blob::pipeline::Mode::ToGit)?
-            };
-            worker_state.push((repository, tree_cache, worktree_cache));
-        }
-
-        let (jobs, job_receiver) = mpsc::channel::<LineDiffJob>();
-        let job_receiver =
-            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(job_receiver));
+        drop(open_line_diff_state(repository_path, bare)?);
         let (result_sender, results) = mpsc::channel();
-        let workers = worker_state
-            .into_iter()
-            .map(|(repository, mut tree_cache, mut worktree_cache)| {
-                let job_receiver = gix::features::threading::OwnShared::clone(&job_receiver);
+        let mut jobs = Vec::with_capacity(parallelism);
+        let workers = (0..parallelism)
+            .map(|_| {
+                let (job_sender, job_receiver) = mpsc::channel();
+                jobs.push(job_sender);
                 let result_sender = result_sender.clone();
+                let repository_path = repository_path.to_owned();
                 std::thread::spawn(move || {
-                    loop {
-                        let Ok(job) = gix::features::threading::lock(&job_receiver).recv() else {
-                            break;
-                        };
-                        let result =
-                            line_counts_for_change(&repository, &job.change, &mut tree_cache, worktree_cache.as_mut());
-                        tree_cache.clear_resource_cache_keep_allocation();
-                        if let Some(cache) = worktree_cache.as_mut() {
-                            cache.clear_resource_cache_keep_allocation();
-                        }
-                        if result_sender.send((job.index, job.change, result)).is_err() {
-                            break;
+                    let mut state: Option<LineDiffState> = None;
+                    while let Ok(message) = job_receiver.recv() {
+                        match message {
+                            LineDiffMessage::Job(job) => {
+                                let result = (|| {
+                                    if state.is_none() {
+                                        state = Some(open_line_diff_state(&repository_path, bare)?);
+                                    }
+                                    let (repository, tree_cache, worktree_cache) =
+                                        state.as_mut().expect("line diff state was just initialized");
+                                    let result = line_counts_for_change(
+                                        repository,
+                                        &job.change,
+                                        tree_cache,
+                                        worktree_cache.as_mut(),
+                                    );
+                                    tree_cache.clear_resource_cache_keep_allocation();
+                                    if let Some(cache) = worktree_cache.as_mut() {
+                                        cache.clear_resource_cache_keep_allocation();
+                                    }
+                                    result
+                                })();
+                                if result_sender
+                                    .send(LineDiffResult::Change(job.index, job.change, result))
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            LineDiffMessage::FinishBatch => {
+                                state = None;
+                                if result_sender.send(LineDiffResult::BatchFinished).is_err() {
+                                    break;
+                                }
+                            }
                         }
                     }
                 })
             })
             .collect();
-        Ok(LineDiffPool {
-            jobs: Some(jobs),
-            results,
-            workers,
-        })
+        Ok(LineDiffPool { jobs, results, workers })
     }
 
     fn line_counts(&mut self, changes: Vec<FileChange>) -> Result<Vec<(FileChange, LineCounts)>> {
         let len = changes.len();
-        let jobs = self.jobs.as_ref().context("line diff pool is shutting down")?;
+        let worker_count = self.jobs.len();
         for (index, change) in changes.into_iter().enumerate() {
-            jobs.send(LineDiffJob { index, change })
+            self.jobs[index % worker_count]
+                .send(LineDiffMessage::Job(LineDiffJob { index, change }))
+                .context("line diff workers stopped unexpectedly")?;
+        }
+        for jobs in &self.jobs {
+            jobs.send(LineDiffMessage::FinishBatch)
                 .context("line diff workers stopped unexpectedly")?;
         }
 
         let mut out: Vec<_> = std::iter::repeat_with(|| None).take(len).collect();
         let mut first_error = None;
-        for _ in 0..len {
-            let (index, change, result) = self.results.recv().context("line diff workers stopped unexpectedly")?;
-            match result {
-                Ok(lines) => {
-                    *out.get_mut(index)
-                        .context("line diff worker returned an invalid result index")? = Some((change, lines));
+        let mut completed = 0;
+        let mut finished = 0;
+        while completed < len || finished < worker_count {
+            match self.results.recv().context("line diff workers stopped unexpectedly")? {
+                LineDiffResult::Change(index, change, Ok(lines)) => {
+                    *out.get_mut(index).expect("jobs preserve their original result index") = Some((change, lines));
+                    completed += 1;
                 }
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
+                LineDiffResult::Change(_, _, Err(err)) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                    completed += 1;
+                }
+                LineDiffResult::BatchFinished => finished += 1,
             }
         }
         if let Some(err) = first_error {
@@ -326,7 +367,7 @@ impl LineDiffPool {
 
 impl Drop for LineDiffPool {
     fn drop(&mut self) {
-        drop(self.jobs.take());
+        self.jobs.clear();
         for worker in self.workers.drain(..) {
             drop(worker.join());
         }
@@ -649,16 +690,15 @@ fn event_loop(
     } = options;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
-    let mut view_repository = gix::open(&repository_path).context("could not open repository for history view")?;
-    let mut repository_is_bare = view_repository.workdir().is_none();
-    view_repository.object_cache_size(None);
-    let mut mailmap = view_repository.open_mailmap();
-    let mut notes = view_repository
-        .notes()
-        .map_err(gix::Exn::into_error)
-        .context("could not open Git notes")?;
+    let (mut repository_is_bare, mut mailmap, mut ref_snapshot) = {
+        let mut repository = gix::open(&repository_path).context("could not open repository for history view")?;
+        repository.object_cache_size(None);
+        let bare = repository.workdir().is_none();
+        let mailmap = repository.open_mailmap();
+        let refs = history::snapshot(&repository, &revisions, &hide)?;
+        (bare, mailmap, refs)
+    };
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-    let mut ref_snapshot = history::snapshot(&view_repository, &revisions, &hide)?;
     let mut watcher_retry_deadline = None;
     let mut ref_watcher = match start_ref_watcher(&repository_path, &common_dir) {
         Ok(watcher) => Some(watcher),
@@ -709,7 +749,7 @@ fn event_loop(
         line_diff_parallelism,
     )?;
     if worktree_watcher_needed(repository_is_bare, app.changes_mode) {
-        match start_worktree_watcher(&view_repository) {
+        match start_worktree_watcher(&repository_path, repository_is_bare) {
             Ok(watcher) => worktree_watcher = Some(watcher),
             Err(err) => {
                 tracing::warn!(error = %err, "worktree watcher startup failed");
@@ -726,7 +766,6 @@ fn event_loop(
         &mailmap,
         &authors,
         &mut fill_repository,
-        &mut notes,
         &mut commit_message,
         &mut tree_changes,
         &mut worktree_changes,
@@ -840,7 +879,7 @@ fn event_loop(
                 }
             }
             if worktree_watcher_needed(repository_is_bare, app.changes_mode) && worktree_watcher.is_none() {
-                match start_worktree_watcher(&view_repository) {
+                match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => {
                         tracing::info!("worktree watcher recovered");
                         worktree_watcher = Some(watcher);
@@ -954,11 +993,6 @@ fn event_loop(
                     repository_path.clone_from(&common_dir);
                     repository_is_bare = true;
                     mailmap = recovered.open_mailmap();
-                    notes = recovered
-                        .notes()
-                        .map_err(gix::Exn::into_error)
-                        .context("could not reopen Git notes after worktree removal")?;
-                    view_repository = recovered;
                     fill_repository.path.clone_from(&repository_path);
                     fill_repository.bare = true;
                     fill_repository.retain = false;
@@ -986,8 +1020,7 @@ fn event_loop(
                     };
                     app.manual_refresh = ref_watcher.is_none();
                     app.notice = Some("worktree removed; using the common repository without worktree changes".into());
-                    open_repository(&repository_path, true, true)
-                        .context("could not inspect common repository references")?
+                    recovered
                 }
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
@@ -1042,7 +1075,6 @@ fn event_loop(
                 &mailmap,
                 &authors,
                 &mut fill_repository,
-                &mut notes,
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
@@ -1120,7 +1152,6 @@ fn event_loop(
                 &mailmap,
                 &authors,
                 &mut fill_repository,
-                &mut notes,
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
@@ -1229,7 +1260,7 @@ fn event_loop(
             )?;
             if app.changes_mode == Some(ChangesMode::Both) {
                 invalidate_worktree_changes(&mut worktree_changes);
-                match start_worktree_watcher(&view_repository) {
+                match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => {
                         worktree_watcher = Some(watcher);
                         if app
@@ -1266,7 +1297,6 @@ fn event_loop(
                 }
                 Effect::Reload(show_hidden) => {
                     app.show_hidden = show_hidden;
-                    notes = open_notes(&repository_path, repository_is_bare)?;
                     refresh_pending = true;
                     refresh_expand_hidden = true;
                 }
@@ -1338,7 +1368,6 @@ fn event_loop(
             &mailmap,
             &authors,
             &mut fill_repository,
-            &mut notes,
             &mut commit_message,
             &mut tree_changes,
             &mut worktree_changes,
@@ -1482,7 +1511,9 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
     })
 }
 
-fn start_worktree_watcher(repository: &gix::Repository) -> Result<WorktreeWatcher> {
+fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<WorktreeWatcher> {
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not open repository for worktree watcher setup")?;
     let workdir = repository
         .workdir()
         .context("cannot watch a bare repository")?
@@ -1624,7 +1655,6 @@ fn draw(
     mailmap: &gix::mailmap::Snapshot,
     authors: &SharedAuthors,
     fill_repository: &mut FillRepository,
-    notes: &mut gix::note::Platform,
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     tree_changes: &mut Option<(gix::ObjectId, usize, Changes)>,
     worktree_changes: &mut Option<(usize, Changes)>,
@@ -1643,23 +1673,11 @@ fn draw(
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(render_rows).min(app.rows.len());
-    for index in start..end {
-        let id = app.rows[index].id;
-        if app.notes_loaded(id) {
-            continue;
-        }
-        let loaded = notes
-            .get(id)
-            .map_err(gix::Exn::into_error)
-            .context("could not load visible commit notes")?
-            .into_iter()
-            .map(|note| {
-                let mut blob = note.blob;
-                BString::from(blob.take_data())
-            })
-            .collect();
-        app.set_notes(id, loaded);
-    }
+    let notes_to_load: Vec<_> = app.rows[start..end]
+        .iter()
+        .map(|row| row.id)
+        .filter(|id| !app.notes_loaded(*id))
+        .collect();
     let changes_visible = app.changes_visible();
     let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
     app.selection_relation = selection_cache
@@ -1715,7 +1733,8 @@ fn draw(
         *tree_changes = None;
         *worktree_changes = None;
     }
-    if app.rows[start..end].iter().any(|row| !row.metadata_loaded)
+    if !notes_to_load.is_empty()
+        || app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
         || worktree_changes_to_load
@@ -1730,6 +1749,25 @@ fn draw(
         } else {
             one_shot_repository.insert(open_fill_repository(&fill_repository.path, fill_repository.bare)?)
         };
+        if !notes_to_load.is_empty() {
+            let mut notes = repository
+                .notes()
+                .map_err(gix::Exn::into_error)
+                .context("could not open Git notes")?;
+            for id in notes_to_load {
+                let loaded = notes
+                    .get(id)
+                    .map_err(gix::Exn::into_error)
+                    .context("could not load visible commit notes")?
+                    .into_iter()
+                    .map(|note| {
+                        let mut blob = note.blob;
+                        BString::from(blob.take_data())
+                    })
+                    .collect();
+                app.set_notes(id, loaded);
+            }
+        }
         for index in start..end {
             if app.rows[index].metadata_loaded {
                 continue;
@@ -1864,16 +1902,6 @@ fn open_fill_repository(repository_path: &Path, bare: bool) -> Result<gix::Repos
         open_repository(repository_path, bare, false).context("could not open repository for history view")?;
     repository.object_cache_size(None);
     Ok(repository)
-}
-
-fn open_notes(repository_path: &Path, bare: bool) -> Result<gix::note::Platform> {
-    let mut repository =
-        open_repository(repository_path, bare, false).context("could not open repository for Git notes")?;
-    repository.object_cache_size(None);
-    repository
-        .notes()
-        .map_err(gix::Exn::into_error)
-        .context("could not open Git notes")
 }
 
 fn prepare_file_diff(repository_path: &Path, bare: bool, change: &FileChange, path: &PathChange) -> Result<FileDiff> {
