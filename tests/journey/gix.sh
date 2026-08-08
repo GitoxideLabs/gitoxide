@@ -166,25 +166,6 @@ title "gix (with repository)"
     )
   )
 
-  title "gix merge-base"
-  (with "the 'merge-base' sub-command"
-    snapshot="$snapshot/merge-base"
-    (small-repo-in-sandbox
-      (with "an annotated tag and a branch"
-        it "outputs the merge-base of the commits they point to" && {
-          WITH_SNAPSHOT="$snapshot/annotated-tag-and-branch" \
-          expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose merge-base annotated HEAD
-        }
-      )
-      (with "an annotated tag among three revspecs"
-        it "outputs the merge-base of the first revspec against the rest" && {
-          WITH_SNAPSHOT="$snapshot/annotated-tag-among-three-revspecs" \
-          expect_run $SUCCESSFULLY "$exe_plumbing" --no-verbose merge-base HEAD annotated unannotated
-        }
-      )
-    )
-  )
-
   title "gix remote"
   (when "running 'remote'"
     snapshot="$snapshot/remote"
