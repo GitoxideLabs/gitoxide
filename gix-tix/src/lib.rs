@@ -777,6 +777,7 @@ fn event_loop(
     let mut history_finished = false;
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
+    let mut pending_terminal_event = None;
     let result: Result<Option<Duration>> = (|| loop {
         let mut worktree_watch_error = None;
         if let Some(watcher) = worktree_watcher.as_mut() {
@@ -1162,10 +1163,13 @@ fn event_loop(
             .into_iter()
             .flatten()
             .min();
-        let terminal_event = match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
-            Some(timeout) if event::poll(timeout)? => Some(event::read()?),
-            Some(_) => None,
-            None => Some(event::read()?),
+        let terminal_event = match pending_terminal_event.take() {
+            Some(event) => Some(event),
+            None => match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
+                Some(timeout) if event::poll(timeout)? => Some(event::read()?),
+                Some(_) => None,
+                None => Some(event::read()?),
+            },
         };
         let Some(terminal_event) = terminal_event else {
             continue;
@@ -1177,7 +1181,21 @@ fn event_loop(
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
             TerminalEvent::Mouse(mouse) => {
-                let Some(action) = mouse_scroll_action(mouse.kind) else {
+                let kind = mouse.kind;
+                let mut distance = 1;
+                if matches!(kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown) {
+                    while distance < EVENT_BATCH_SIZE && event::poll(Duration::ZERO)? {
+                        let next = event::read()?;
+                        match next {
+                            TerminalEvent::Mouse(next) if next.kind == kind => distance += 1,
+                            next => {
+                                pending_terminal_event = Some(next);
+                                break;
+                            }
+                        }
+                    }
+                }
+                let Some(action) = mouse_scroll_action(kind, distance) else {
                     continue;
                 };
                 let repeats_history = app.changes_focus.is_none() && repeats_viewport(&action);
@@ -2705,6 +2723,8 @@ fn repeats_viewport(action: &Action) -> bool {
         action,
         Action::MoveUp
             | Action::MoveDown
+            | Action::MoveUpBy(_)
+            | Action::MoveDownBy(_)
             | Action::HalfPageUp
             | Action::HalfPageDown
             | Action::PageUp
@@ -2718,10 +2738,10 @@ fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>, changes_
     !changes_focused && kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
 }
 
-fn mouse_scroll_action(kind: MouseEventKind) -> Option<Action> {
+fn mouse_scroll_action(kind: MouseEventKind, distance: usize) -> Option<Action> {
     match kind {
-        MouseEventKind::ScrollUp => Some(Action::MoveUp),
-        MouseEventKind::ScrollDown => Some(Action::MoveDown),
+        MouseEventKind::ScrollUp => Some(Action::MoveUpBy(distance.max(1))),
+        MouseEventKind::ScrollDown => Some(Action::MoveDownBy(distance.max(1))),
         MouseEventKind::ScrollLeft => Some(Action::ScrollLeft),
         MouseEventKind::ScrollRight => Some(Action::ScrollRight),
         _ => None,
@@ -3479,22 +3499,28 @@ mod tests {
 
     #[test]
     fn maps_continuous_mouse_scrolling_to_navigation() {
-        assert_eq!(mouse_scroll_action(MouseEventKind::ScrollUp), Some(Action::MoveUp));
-        assert_eq!(mouse_scroll_action(MouseEventKind::ScrollDown), Some(Action::MoveDown));
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollLeft),
+            mouse_scroll_action(MouseEventKind::ScrollUp, 4),
+            Some(Action::MoveUpBy(4))
+        );
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::ScrollDown, 3),
+            Some(Action::MoveDownBy(3))
+        );
+        assert_eq!(
+            mouse_scroll_action(MouseEventKind::ScrollLeft, 1),
             Some(Action::ScrollLeft)
         );
         assert_eq!(
-            mouse_scroll_action(MouseEventKind::ScrollRight),
+            mouse_scroll_action(MouseEventKind::ScrollRight, 1),
             Some(Action::ScrollRight)
         );
-        assert_eq!(mouse_scroll_action(MouseEventKind::Moved), None);
+        assert_eq!(mouse_scroll_action(MouseEventKind::Moved, 1), None);
         assert!(repeats_viewport(
-            &mouse_scroll_action(MouseEventKind::ScrollDown).expect("vertical scrolling has an action")
+            &mouse_scroll_action(MouseEventKind::ScrollDown, 2).expect("vertical scrolling has an action")
         ));
         assert!(!repeats_viewport(
-            &mouse_scroll_action(MouseEventKind::ScrollRight).expect("horizontal scrolling has an action")
+            &mouse_scroll_action(MouseEventKind::ScrollRight, 1).expect("horizontal scrolling has an action")
         ));
     }
 
