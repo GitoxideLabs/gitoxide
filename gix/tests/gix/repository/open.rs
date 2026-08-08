@@ -1,6 +1,7 @@
 use std::{borrow::Cow, error::Error};
 
 use gix::bstr::BString;
+use gix::config::tree::Key;
 
 use crate::util::named_subrepo_opts;
 
@@ -12,15 +13,17 @@ fn open_permissions_is_isolated() {
 
 #[test]
 #[serial_test::serial]
-fn discover_with_git_dir_environment_override_sets_trust() -> crate::Result {
-    let tmp = gix_testtools::tempfile::TempDir::new()?;
-    let initialized = gix::init(tmp.path())?;
+fn discover_with_git_dir_environment_override_uses_it_and_sets_trust() -> crate::Result {
+    let fallback = gix_testtools::tempfile::TempDir::new()?;
+    gix::init(fallback.path())?;
+    let overridden = gix_testtools::tempfile::TempDir::new()?;
+    let overridden = gix::init(overridden.path())?;
     let _env = gix_testtools::Env::new()
         .unset("GIT_WORK_TREE")
-        .set("GIT_DIR", initialized.git_dir().to_string_lossy().into_owned());
+        .set("GIT_DIR", overridden.git_dir().to_string_lossy().into_owned());
 
     let repo = gix::ThreadSafeRepository::discover_with_environment_overrides_opts(
-        tmp.path(),
+        fallback.path(),
         Default::default(),
         gix_sec::trust::Mapping {
             full: crate::restricted(),
@@ -30,8 +33,8 @@ fn discover_with_git_dir_environment_override_sets_trust() -> crate::Result {
 
     assert_eq!(
         repo.git_dir(),
-        initialized.git_dir(),
-        "the git-dir from the environment opens without panicking on missing trust"
+        overridden.git_dir(),
+        "the git-dir from the environment replaces the fallback and opens without panicking on missing trust"
     );
     Ok(())
 }
@@ -139,6 +142,127 @@ fn bare_repo_with_index() -> crate::Result {
     );
     assert_eq!(repo.kind(), gix::repository::Kind::Common);
     assert_eq!(repo.workdir(), None);
+    Ok(())
+}
+
+#[test]
+fn git_index_file_overrides_the_index_in_the_git_dir() -> crate::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let index_file = repository.path().join(".git/temporary-index");
+    let repo = gix::open_opts(repository.path(), gix::open::Options::isolated())?;
+    assert_eq!(
+        repo.index_path(),
+        repo.git_dir().join("index"),
+        "this repo has no override"
+    );
+    #[cfg(feature = "index")]
+    assert_eq!(
+        repo.index()?.entries().len(),
+        1,
+        "the regular index is distinguishable from the override"
+    );
+
+    let mut repo = gix::open_opts(
+        repository.path(),
+        gix::open::Options::isolated().config_overrides([format!("gitoxide.core.indexFile={}", index_file.display())]),
+    )?;
+    assert_eq!(repo.index_path(), index_file, "the override was picked up");
+
+    let changed_index_file = repository.path().join(".git/changed-index");
+    {
+        let mut config = repo.config_snapshot_mut();
+        config.set_value(
+            &gix::config::tree::gitoxide::Core::INDEX_FILE,
+            changed_index_file.to_string_lossy(),
+        )?;
+    }
+    assert_eq!(
+        repo.index_path(),
+        index_file,
+        "the index location is repository state established during opening, like the git-dir and worktree"
+    );
+
+    #[cfg(feature = "index")]
+    {
+        gix::index::File::from_state(gix::index::State::new(repo.object_hash()), index_file)
+            .write(Default::default())?;
+        assert!(
+            repo.index()?.entries().is_empty(),
+            "the configured index is read, and it's initially empty"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "index")]
+fn git_index_file_missing_yields_no_index() -> crate::Result {
+    let repository = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let index_file = repository.join(".git/missing");
+    let repo = gix::open_opts(
+        &repository,
+        gix::open::Options::isolated().config_overrides([format!("gitoxide.core.indexFile={}", index_file.display())]),
+    )?;
+
+    assert!(
+        repo.git_dir().join("index").is_file(),
+        "the regular index would be found without the override"
+    );
+    assert!(repo.try_index()?.is_none(), "a missing override reports no index");
+    assert!(
+        repo.index_or_empty()?.entries().is_empty(),
+        "the usual empty-index semantics apply"
+    );
+    Ok(())
+}
+
+#[test]
+fn git_index_file_empty_is_invalid_even_with_lenient_config() -> crate::Result {
+    assert!(
+        gix::config::tree::gitoxide::Core::INDEX_FILE
+            .validated_assignment("".into())
+            .is_err(),
+        "the key itself rejects empty values"
+    );
+    let repository = gix_testtools::scripted_fixture_read_only("make_basic_repo.sh")?;
+    let err = gix::open_opts(
+        repository,
+        gix::open::Options::isolated().config_overrides(["gitoxide.core.indexFile="]),
+    )
+    .expect_err("an empty index path must be rejected");
+
+    assert_eq!(
+        err.source().expect("configuration error").to_string(),
+        "The key \"gitoxide.core.indexFile=\" (possibly from GIT_INDEX_FILE) was invalid",
+        "an empty index path is never ignored, even though configuration is lenient by default"
+    );
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "index")]
+fn git_index_file_receives_writes_while_the_git_dir_index_is_locked() -> crate::Result {
+    let repository = gix_testtools::scripted_fixture_writable("make_basic_repo.sh")?;
+    let index_file = repository.path().join(".git/temporary-index");
+    let repo = gix::open_opts(
+        repository.path(),
+        gix::open::Options::isolated().config_overrides([format!("gitoxide.core.indexFile={}", index_file.display())]),
+    )?;
+    let git_dir_index = repo.git_dir().join("index");
+    let git_dir_index_before = std::fs::read(&git_dir_index)?;
+
+    // `git commit <paths>` holds this lock for the duration of the commit, hooks included.
+    assert!(!index_file.exists());
+    std::fs::write(repo.git_dir().join("index.lock"), [])?;
+    let mut index = (**repo.index_or_empty()?).clone();
+    index.write(Default::default())?;
+
+    assert!(index_file.is_file(), "the write lands on the configured index");
+    assert_eq!(
+        std::fs::read(&git_dir_index)?,
+        git_dir_index_before,
+        "the regular index is left untouched"
+    );
     Ok(())
 }
 

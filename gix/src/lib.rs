@@ -449,6 +449,7 @@ pub fn config(git_dir: Option<&std::path::Path>, options: &open::Options) -> Res
         options.lenient_config,
         &options.api_config_overrides,
         &options.cli_config_overrides,
+        options.use_repository_local_environment,
     )
 }
 

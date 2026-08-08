@@ -41,6 +41,7 @@ impl Cache {
         lenient_config: bool,
         api_config_overrides: &[BString],
         cli_config_overrides: &[BString],
+        use_repository_local_environment: bool,
     ) -> Result<Self, Error> {
         let config = load(
             Some(git_dir_config),
@@ -55,6 +56,7 @@ impl Cache {
             lenient_config,
             api_config_overrides,
             cli_config_overrides,
+            use_repository_local_environment,
         )?;
 
         let hex_len = util::parse_core_abbrev(&config, object_hash).with_leniency(lenient_config)?;
@@ -234,6 +236,7 @@ pub(crate) fn load(
     lenient: bool,
     api_config_overrides: &[BString],
     cli_config_overrides: &[BString],
+    use_repository_local_environment: bool,
 ) -> Result<gix_config::File, Error> {
     let options = gix_config::file::init::Options {
         includes: if use_includes {
@@ -313,7 +316,14 @@ pub(crate) fn load(
             },
         )?;
     }
-    apply_environment_overrides(&mut globals, *git_prefix, http_transport, identity, objects)?;
+    apply_environment_overrides(
+        &mut globals,
+        *git_prefix,
+        http_transport,
+        identity,
+        objects,
+        use_repository_local_environment,
+    )?;
     if let Some(local_meta) = local_meta {
         globals.set_meta(local_meta);
     }
@@ -365,6 +375,7 @@ fn apply_environment_overrides(
     http_transport: Permission,
     identity: Permission,
     objects: Permission,
+    use_repository_local_environment: bool,
 ) -> Result<(), Error> {
     fn env(key: &'static dyn config::tree::Key) -> &'static str {
         key.the_environment_override()
@@ -380,7 +391,11 @@ fn apply_environment_overrides(
         (
             "core",
             None,
-            git_prefix,
+            if use_repository_local_environment {
+                git_prefix
+            } else {
+                Permission::Deny
+            },
             &[{
                 let key = &Core::WORKTREE;
                 (env(key), key.name)
@@ -499,25 +514,43 @@ fn apply_environment_overrides(
         (
             "gitoxide",
             Some("core"),
-            git_prefix,
+            if use_repository_local_environment {
+                git_prefix
+            } else {
+                Permission::Deny
+            },
             &[
                 {
                     let key = &gitoxide::Core::SHALLOW_FILE;
                     (env(key), key.name)
                 },
                 {
-                    let key = &gitoxide::Core::INDEX_FILE;
-                    (env(key), key.name)
-                },
-                {
                     let key = &gitoxide::Core::REFS_NAMESPACE;
                     (env(key), key.name)
                 },
-                {
-                    let key = &gitoxide::Core::EXTERNAL_COMMAND_STDERR;
-                    (env(key), key.name)
-                },
             ],
+        ),
+        (
+            "gitoxide",
+            Some("core"),
+            if use_repository_local_environment {
+                git_prefix
+            } else {
+                Permission::Deny
+            },
+            &[{
+                let key = &gitoxide::Core::INDEX_FILE;
+                (env(key), key.name)
+            }],
+        ),
+        (
+            "gitoxide",
+            Some("core"),
+            git_prefix,
+            &[{
+                let key = &gitoxide::Core::EXTERNAL_COMMAND_STDERR;
+                (env(key), key.name)
+            }],
         ),
         (
             "gitoxide",

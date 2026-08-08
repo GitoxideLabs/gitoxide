@@ -180,6 +180,7 @@ impl ThreadSafeRepository {
                 },
             ref api_config_overrides,
             ref cli_config_overrides,
+            use_repository_local_environment,
             ref mut current_dir,
         } = options;
         let git_dir_trust = git_dir_trust.as_mut().expect("trust must be determined by now");
@@ -254,8 +255,8 @@ impl ThreadSafeRepository {
             lenient_config,
             api_config_overrides,
             cli_config_overrides,
+            use_repository_local_environment,
         )?;
-
         // Git's precedence is: GIT_WORK_TREE, core.bare, core.worktree, inferred worktree.
         let configured_worktree = config
             .resolved
@@ -408,6 +409,22 @@ impl ThreadSafeRepository {
             config.resolved = resolved.into();
         }
 
+        let index_path = match config
+            .resolved
+            .string_filter(gitoxide::Core::INDEX_FILE, &mut filter_config_section)
+        {
+            Some(value) => {
+                gitoxide::Core::INDEX_FILE.validate(value.as_bstr()).map_err(|_| {
+                    config::Error::ConfigTypedString(config::key::GenericErrorWithValue::from_value(
+                        &gitoxide::Core::INDEX_FILE,
+                        value.clone(),
+                    ))
+                })?;
+                gix_path::from_bstr(value).into_owned()
+            }
+            None => git_dir.join("index"),
+        };
+
         refs.write_reflog = config::cache::util::reflog_or_default(config.reflog, worktree_dir.is_some());
         refs.namespace.clone_from(&config.refs_namespace);
         let prefix = replacement_objects_refs_prefix(&config.resolved, lenient_config, filter_config_section)?;
@@ -477,6 +494,7 @@ impl ThreadSafeRepository {
             common_dir,
             refs,
             work_tree: worktree_dir,
+            index_path,
             config,
             // used when spawning new repositories off this one when following worktrees
             linked_worktree_options: options,

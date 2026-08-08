@@ -55,11 +55,23 @@ impl ThreadSafeRepository {
     }
 
     /// Try to open a git repository directly from the environment, which reads `GIT_DIR`
-    /// if it is set. If unset, discover upwards from `directory` until one is found,
-    /// while applying `options` with overrides from the environment which includes:
+    /// if it is set. Once selected, the repository also honors these primary environment
+    /// overrides if permitted by its options:
+    ///
+    /// - `GIT_WORK_TREE`
+    /// - `GIT_INDEX_FILE`
+    /// - `GIT_SHALLOW_FILE`
+    /// - `GIT_NAMESPACE`
+    ///
+    /// If `GIT_DIR` is unset, discover upwards from `directory` until one is found,
+    /// while applying `options` with discovery overrides from the environment which includes:
     ///
     /// - `GIT_DISCOVERY_ACROSS_FILESYSTEM`
     /// - `GIT_CEILING_DIRECTORIES`
+    ///
+    /// This is particularly useful for hooks, as Git exports repository-local environment variables
+    /// to them. Honoring these variables preserves the repository and worktree context established by
+    /// Git, including temporary overrides, instead of relying only on discovery from `directory`.
     ///
     /// Finally, use the `trust_map` to determine which of our own repository options to use
     /// based on the trust level of the effective repository directory.

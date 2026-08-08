@@ -311,7 +311,12 @@ impl Submodule<'_> {
     /// The repository can also be used to learn about the submodule `HEAD`, i.e. where its working tree is at,
     /// which may differ compared to the superproject's index or `HEAD` commit.
     pub fn open(&self) -> Result<Option<Repository>, open::Error> {
-        let mut options = self.state.repo.options.clone();
+        let mut options = self
+            .state
+            .repo
+            .options
+            .clone()
+            .without_repository_environment_overrides();
         options.git_dir_trust = None;
         match crate::open_opts(self.git_dir_try_old_form()?, options) {
             Ok(mut repo) => {

@@ -83,6 +83,8 @@ mod subsections {
 
     /// The `gitoxide.allow.protocolFromUser` key.
     pub type RefsNamespace = keys::Any<super::validate::RefsNamespace>;
+    /// A path to an alternate index file.
+    pub type IndexFile = keys::Any<super::validate::NonEmptyPath>;
 
     impl RefsNamespace {
         /// Derive the negotiation algorithm identified by `name`, case-sensitively.
@@ -121,11 +123,15 @@ mod subsections {
                 "relative file paths will always be made relative to the git-common-dir, whereas `git` keeps them as is.",
             );
 
-        /// The `gitoxide.core.indexFile` key.
-        pub const INDEX_FILE: keys::Path = keys::Path::new_path("indexFile", &Gitoxide::CORE)
+        /// The `gitoxide.core.indexFile` key, which selects an alternate index file.
+        ///
+        /// `GIT_INDEX_FILE` is mapped to this key when environment overrides are enabled and takes precedence over
+        /// configured values. An empty value is invalid.
+        pub const INDEX_FILE: IndexFile =
+            keys::Any::new_with_validate("indexFile", &Gitoxide::CORE, super::validate::NonEmptyPath)
             .with_environment_override("GIT_INDEX_FILE")
             .with_deviation(
-                "relative file paths are relative to the current working directory when the repository was opened, whereas `git` resolves them each time. An empty value is treated as unset.",
+                "relative file paths are resolved against the current working directory captured when the repository was opened, whereas Git retains them and thus resolves them against the process's current directory on each use.",
             );
 
         /// The `gitoxide.core.filterProcessDelay` key (default `true`).
@@ -577,6 +583,7 @@ mod subsections {
 pub use subsections::{Allow, Author, Commit, Committer, Core, Credentials, Http, Https, Objects, Pathspec, Ssh, User};
 
 pub mod validate {
+    use gix_error::ValidationError;
     use std::error::Error;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
@@ -597,6 +604,17 @@ pub mod validate {
     impl Validate for RefsNamespace {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
             super::Core::REFS_NAMESPACE.try_into_refs_namespace(value)?;
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct NonEmptyPath;
+    impl Validate for NonEmptyPath {
+        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
+            if value.is_empty() {
+                return Err(ValidationError::new("index file path must not be empty").into());
+            }
             Ok(())
         }
     }

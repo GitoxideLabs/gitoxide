@@ -235,18 +235,28 @@ fn apply_cli_overrides() -> crate::Result {
 
 #[test]
 fn reload_reloads_on_disk_changes() -> crate::Result {
-    use std::io::Write;
-
     let (mut repo, _tmp) = repo_rw("make_config_repo.sh")?;
     assert_eq!(repo.config_snapshot().integer("core.abbrev"), None);
+    let original_index = repo.index_path();
+    let changed_index = repo.git_dir().join("changed-index");
 
     let config_path = repo.git_dir().join("config");
-    let mut config = std::fs::OpenOptions::new().append(true).open(config_path)?;
-    writeln!(config, "\n[core]\n\tabbrev = 4")?;
+    let mut config = gix_config::File::from_path_no_includes(config_path.clone(), gix_config::Source::Local)?;
+    config.set_raw_value("core.abbrev", "4")?;
+    config.set_raw_value("gitoxide.core.indexFile", gix_path::into_bstr(&changed_index).as_ref())?;
+    std::fs::write(config_path, config.to_bstring())?;
 
     assert_eq!(repo.config_snapshot().integer("core.abbrev"), None);
+    assert_eq!(repo.index_path(), original_index, "repository locations remain cached");
+
     repo.reload()?;
+
     assert_eq!(repo.config_snapshot().integer("core.abbrev"), Some(4));
+    assert_eq!(
+        repo.index_path(),
+        changed_index,
+        "reload reapplies repository locations"
+    );
     Ok(())
 }
 
