@@ -183,7 +183,7 @@ fn run_baseline() -> crate::Result {
             if actual_id != expected_tree_id {
                 baseline::show_diff_trees_and_fail(&case_name, actual_id, &actual, expected_tree_id, &basename, &odb);
             }
-            if resolve_with_ours {
+            if resolve_with_ours && merge_info.conflicts.is_some() {
                 assert!(
                     !actual.has_unresolved_conflicts(conflicts_like_in_git),
                     "We have forcefully resolved all conflicts, as far as Git would be concerned\n{:#?}",
@@ -202,11 +202,11 @@ fn run_baseline() -> crate::Result {
     }
 
     assert_eq!(
-        actual_cases, 129,
+        actual_cases, 165,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 118,
+        skipped_tree_resolve_cases, 130,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"

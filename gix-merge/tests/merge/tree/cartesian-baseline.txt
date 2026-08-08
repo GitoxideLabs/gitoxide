@@ -10,6 +10,7 @@ Git results come from `git merge-tree --write-tree`, which uses merge-ORT.
 The gix ours policy combines tree `ResolveWith::Ours` with text `ResolveWithOurs`, as the manual baseline does.
 Git's `-Xours` is not equivalent: it favors content and symlink conflicts but does not force all tree conflicts.
 The ours policy is directional, so both directions are checked independently rather than required to be identical.
+Ancestor resolution, early exit, and disabled rename detection are evaluated independently of Git.
 Exact-tree inverse differences include directional conflict-marker ordering; shape, conflict, and payload
 symmetry distinguish those presentation differences from structural or content loss.
 
@@ -37,6 +38,17 @@ gix ours unchanged default-clean merges: 124/124
 gix ours current-side payload retention: 120/120
 gix ours conflict provenance retained: 86/86
 gix ours clean-oracle passes: 53/53
+gix ancestor unresolved directional merges: 32/210
+gix ancestor unchanged default-clean merges: 122/124
+gix ancestor conflict provenance retained: 86/86
+gix ancestor clean-oracle passes: 53/53
+gix early-exit conflicting directional checks: 86/86
+gix early-exit clean directional checks: 124/124
+gix no-rewrites unresolved directional merges: 54/210
+gix no-rewrites inverse path-and-mode symmetry: 105/105
+gix no-rewrites inverse conflict symmetry: 105/105
+gix no-rewrites inverse payload symmetry: 105/105
+gix no-rewrites clean-oracle passes: 53/53
 
 ## Git/gix differences (0)
 - none
@@ -120,4 +132,29 @@ gix ours clean-oracle passes: 53/53
 - none
 
 ## gix ours clean-oracle failures (0)
+- none
+
+## gix ancestor changes to default-clean merges (2)
+- rename-free-a + rename-modify-free-a A+B
+- rename-free-a + rename-modify-free-a B+A
+
+## gix ancestor forgotten conflict provenance (0)
+- none
+
+## gix ancestor clean-oracle failures (0)
+- none
+
+## gix early-exit failures (0)
+- none
+
+## gix no-rewrites inverse path-and-mode differences (0)
+- none
+
+## gix no-rewrites inverse conflict differences (0)
+- none
+
+## gix no-rewrites inverse payload differences (0)
+- none
+
+## gix no-rewrites clean-oracle failures (0)
 - none

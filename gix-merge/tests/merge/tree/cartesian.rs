@@ -29,6 +29,9 @@ struct Result {
     tree: Tree,
     conflicted: bool,
     conflicted_with_forced_resolution: bool,
+    failed_on_first_unresolved_conflict: bool,
+    conflict_count: usize,
+    last_conflict_unresolved: bool,
 }
 
 /// Record the current behavior of merge-ORT and gix for a finite Cartesian model of tree changes.
@@ -80,6 +83,12 @@ fn records_status_quo_sha1() -> crate::Result {
         gix_merge::blob::builtin_driver::text::Conflict::ResolveWithOurs;
     let git_kind = gix_merge::tree::TreatAsUnresolved::git();
     let forced_resolution = gix_merge::tree::TreatAsUnresolved::forced_resolution();
+    let mut ancestor_options = options.clone();
+    ancestor_options.tree_merge.tree_conflicts = Some(gix_merge::tree::ResolveWith::Ancestor);
+    let mut fail_fast_options = options.clone();
+    fail_fast_options.tree_merge.fail_on_conflict = Some(git_kind);
+    let mut no_rewrites_options = options.clone();
+    no_rewrites_options.tree_merge.rewrites = None;
     let mut commit_trees = BTreeMap::<gix_hash::ObjectId, Tree>::new();
 
     let mut exact_agreement = 0;
@@ -116,6 +125,22 @@ fn records_status_quo_sha1() -> crate::Result {
     let mut ours_conflict_provenance_checks = 0;
     let mut ours_oracle_passes = 0;
     let mut ours_oracle_failures = Vec::new();
+    let mut ancestor_unresolved = 0;
+    let mut ancestor_changed_clean_merge = Vec::new();
+    let mut ancestor_forgot_conflict = Vec::new();
+    let mut ancestor_clean_directional_merges = 0;
+    let mut ancestor_conflict_provenance_checks = 0;
+    let mut ancestor_oracle_passes = 0;
+    let mut ancestor_oracle_failures = Vec::new();
+    let mut fail_fast_failures = Vec::new();
+    let mut fail_fast_conflict_checks = 0;
+    let mut fail_fast_clean_checks = 0;
+    let mut no_rewrites_conflicted = 0;
+    let mut no_rewrites_inverse_shape = Vec::new();
+    let mut no_rewrites_inverse_conflict = Vec::new();
+    let mut no_rewrites_inverse_payload = Vec::new();
+    let mut no_rewrites_oracle_passes = 0;
+    let mut no_rewrites_oracle_failures = Vec::new();
 
     for case in &cases {
         let case_name = format!("{} + {}", case.left_operation, case.right_operation);
@@ -154,12 +179,21 @@ fn records_status_quo_sha1() -> crate::Result {
             .tree_merge;
             let conflicted = outcome.has_unresolved_conflicts(git_kind);
             let conflicted_with_forced_resolution = outcome.has_unresolved_conflicts(forced_resolution);
+            let failed_on_first_unresolved_conflict = outcome.failed_on_first_unresolved_conflict;
+            let conflict_count = outcome.conflicts.len();
+            let last_conflict_unresolved = outcome
+                .conflicts
+                .last()
+                .is_some_and(|conflict| conflict.is_unresolved(git_kind));
             let tree_id = outcome.tree.write(|tree| objects.write(tree))?;
             Ok(Result {
                 tree_id,
                 tree: flatten_tree(tree_id, &objects)?,
                 conflicted,
                 conflicted_with_forced_resolution,
+                failed_on_first_unresolved_conflict,
+                conflict_count,
+                last_conflict_unresolved,
             })
         };
         let gix_forward = run_gix(
@@ -189,6 +223,48 @@ fn records_status_quo_sha1() -> crate::Result {
             &format!("B-{}", case.right_operation),
             &format!("A-{}", case.left_operation),
             &force_ours_options,
+        )?;
+        let ancestor_forward = run_gix(
+            case.left_commit,
+            case.right_commit,
+            &format!("A-{}", case.left_operation),
+            &format!("B-{}", case.right_operation),
+            &ancestor_options,
+        )?;
+        let ancestor_reverse = run_gix(
+            case.right_commit,
+            case.left_commit,
+            &format!("B-{}", case.right_operation),
+            &format!("A-{}", case.left_operation),
+            &ancestor_options,
+        )?;
+        let fail_fast_forward = run_gix(
+            case.left_commit,
+            case.right_commit,
+            &format!("A-{}", case.left_operation),
+            &format!("B-{}", case.right_operation),
+            &fail_fast_options,
+        )?;
+        let fail_fast_reverse = run_gix(
+            case.right_commit,
+            case.left_commit,
+            &format!("B-{}", case.right_operation),
+            &format!("A-{}", case.left_operation),
+            &fail_fast_options,
+        )?;
+        let no_rewrites_forward = run_gix(
+            case.left_commit,
+            case.right_commit,
+            &format!("A-{}", case.left_operation),
+            &format!("B-{}", case.right_operation),
+            &no_rewrites_options,
+        )?;
+        let no_rewrites_reverse = run_gix(
+            case.right_commit,
+            case.left_commit,
+            &format!("B-{}", case.right_operation),
+            &format!("A-{}", case.left_operation),
+            &no_rewrites_options,
         )?;
 
         let mut difference = Vec::new();
@@ -305,6 +381,69 @@ fn records_status_quo_sha1() -> crate::Result {
             }
         }
 
+        for (direction, normal, ancestor, fail_fast) in [
+            ("A+B", &gix_forward, &ancestor_forward, &fail_fast_forward),
+            ("B+A", &gix_reverse, &ancestor_reverse, &fail_fast_reverse),
+        ] {
+            ancestor_unresolved += usize::from(ancestor.conflicted);
+            if !normal.conflicted {
+                ancestor_clean_directional_merges += 1;
+                if ancestor.tree_id != normal.tree_id {
+                    ancestor_changed_clean_merge.push(format!("{case_name} {direction}"));
+                }
+                fail_fast_clean_checks += 1;
+                if fail_fast.failed_on_first_unresolved_conflict
+                    || fail_fast.conflicted
+                    || fail_fast.tree_id != normal.tree_id
+                {
+                    fail_fast_failures.push(format!("{case_name} {direction}: changed a clean merge"));
+                }
+            } else {
+                ancestor_conflict_provenance_checks += 1;
+                if !ancestor.conflicted_with_forced_resolution {
+                    ancestor_forgot_conflict.push(format!("{case_name} {direction}"));
+                }
+                fail_fast_conflict_checks += 1;
+                if !fail_fast.failed_on_first_unresolved_conflict
+                    || !fail_fast.conflicted
+                    || fail_fast.conflict_count == 0
+                    || !fail_fast.last_conflict_unresolved
+                    || fail_fast.conflict_count > normal.conflict_count
+                {
+                    fail_fast_failures.push(format!(
+                        "{case_name} {direction}: did not stop with one unresolved conflict last"
+                    ));
+                }
+            }
+        }
+
+        no_rewrites_conflicted +=
+            usize::from(no_rewrites_forward.conflicted) + usize::from(no_rewrites_reverse.conflicted);
+        if !same_shape(&no_rewrites_forward.tree, &no_rewrites_reverse.tree) {
+            no_rewrites_inverse_shape.push(case_name.clone());
+        }
+        if no_rewrites_forward.conflicted != no_rewrites_reverse.conflicted {
+            no_rewrites_inverse_conflict.push(case_name.clone());
+        }
+        let mut no_rewrites_payload_presence = [Vec::new(), Vec::new()];
+        for (direction_idx, result) in [&no_rewrites_forward, &no_rewrites_reverse].into_iter().enumerate() {
+            for (side, operation) in [
+                ("A", case.left_operation.as_str()),
+                ("B", case.right_operation.as_str()),
+            ] {
+                if let Some(payload) = payload(side, operation) {
+                    no_rewrites_payload_presence[direction_idx].push(contains(
+                        &result.tree,
+                        payload.as_bytes(),
+                        &objects,
+                    )?);
+                }
+            }
+        }
+        if no_rewrites_payload_presence[0] != no_rewrites_payload_presence[1] {
+            no_rewrites_inverse_payload.push(case_name.clone());
+        }
+
         if let Some(ideal) = unambiguous_merge(&base_tree, &left_tree, &right_tree) {
             oracle_cases += 1;
             let git_ok = [&git_forward, &git_reverse]
@@ -331,6 +470,22 @@ fn records_status_quo_sha1() -> crate::Result {
             } else {
                 ours_oracle_failures.push(case_name);
             }
+            if [&ancestor_forward, &ancestor_reverse]
+                .into_iter()
+                .all(|result| !result.conflicted && result.tree == ideal)
+            {
+                ancestor_oracle_passes += 1;
+            } else {
+                ancestor_oracle_failures.push(format!("{} + {}", case.left_operation, case.right_operation));
+            }
+            if [&no_rewrites_forward, &no_rewrites_reverse]
+                .into_iter()
+                .all(|result| !result.conflicted && result.tree == ideal)
+            {
+                no_rewrites_oracle_passes += 1;
+            } else {
+                no_rewrites_oracle_failures.push(format!("{} + {}", case.left_operation, case.right_operation));
+            }
         }
     }
 
@@ -353,6 +508,37 @@ fn records_status_quo_sha1() -> crate::Result {
     assert!(
         ours_forgot_conflict.is_empty(),
         "forced resolutions must remain visible to the strict conflict policy: {ours_forgot_conflict:#?}"
+    );
+    assert!(
+        ancestor_forgot_conflict.is_empty(),
+        "ancestor resolutions must remain visible to the strict conflict policy: {ancestor_forgot_conflict:#?}"
+    );
+    assert!(
+        fail_fast_failures.is_empty(),
+        "early exit must stop exactly when the full merge encounters its first unresolved conflict: \
+         {fail_fast_failures:#?}"
+    );
+    assert!(
+        no_rewrites_inverse_shape.is_empty(),
+        "disabling rename detection must not make tree shape depend on side order: {no_rewrites_inverse_shape:#?}"
+    );
+    assert!(
+        no_rewrites_inverse_conflict.is_empty(),
+        "disabling rename detection must not make conflict status depend on side order: \
+         {no_rewrites_inverse_conflict:#?}"
+    );
+    assert!(
+        no_rewrites_inverse_payload.is_empty(),
+        "disabling rename detection must not make payload retention depend on side order: \
+         {no_rewrites_inverse_payload:#?}"
+    );
+    assert!(
+        ancestor_oracle_failures.is_empty(),
+        "ancestor resolution must preserve every independently unambiguous merge: {ancestor_oracle_failures:#?}"
+    );
+    assert!(
+        no_rewrites_oracle_failures.is_empty(),
+        "disabling rename detection must preserve every independently unambiguous merge: {no_rewrites_oracle_failures:#?}"
     );
 
     let directional_merges = cases.len() * 2;
@@ -404,6 +590,10 @@ fn records_status_quo_sha1() -> crate::Result {
     writeln!(
         report,
         "The ours policy is directional, so both directions are checked independently rather than required to be identical."
+    )?;
+    writeln!(
+        report,
+        "Ancestor resolution, early exit, and disabled rename detection are evaluated independently of Git."
     )?;
     writeln!(
         report,
@@ -524,6 +714,62 @@ fn records_status_quo_sha1() -> crate::Result {
         report,
         "gix ours clean-oracle passes: {ours_oracle_passes}/{oracle_cases}"
     )?;
+    writeln!(
+        report,
+        "gix ancestor unresolved directional merges: {ancestor_unresolved}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "gix ancestor unchanged default-clean merges: {}/{}",
+        ancestor_clean_directional_merges - ancestor_changed_clean_merge.len(),
+        ancestor_clean_directional_merges
+    )?;
+    writeln!(
+        report,
+        "gix ancestor conflict provenance retained: {}/{}",
+        ancestor_conflict_provenance_checks - ancestor_forgot_conflict.len(),
+        ancestor_conflict_provenance_checks
+    )?;
+    writeln!(
+        report,
+        "gix ancestor clean-oracle passes: {ancestor_oracle_passes}/{oracle_cases}"
+    )?;
+    writeln!(
+        report,
+        "gix early-exit conflicting directional checks: {}/{}",
+        fail_fast_conflict_checks - fail_fast_failures.len(),
+        fail_fast_conflict_checks
+    )?;
+    writeln!(
+        report,
+        "gix early-exit clean directional checks: {fail_fast_clean_checks}/{fail_fast_clean_checks}"
+    )?;
+    writeln!(
+        report,
+        "gix no-rewrites unresolved directional merges: {no_rewrites_conflicted}/{directional_merges}"
+    )?;
+    writeln!(
+        report,
+        "gix no-rewrites inverse path-and-mode symmetry: {}/{}",
+        cases.len() - no_rewrites_inverse_shape.len(),
+        cases.len()
+    )?;
+    writeln!(
+        report,
+        "gix no-rewrites inverse conflict symmetry: {}/{}",
+        cases.len() - no_rewrites_inverse_conflict.len(),
+        cases.len()
+    )?;
+    writeln!(
+        report,
+        "gix no-rewrites inverse payload symmetry: {}/{}",
+        cases.len() - no_rewrites_inverse_payload.len(),
+        cases.len()
+    )?;
+    writeln!(
+        report,
+        "gix no-rewrites clean-oracle passes: {no_rewrites_oracle_passes}/{oracle_cases}"
+    )?;
 
     write_list(&mut report, "Git/gix differences", &implementation_differences)?;
     write_list(&mut report, "Git inverse exact-tree differences", &git_inverse_exact)?;
@@ -555,6 +801,42 @@ fn records_status_quo_sha1() -> crate::Result {
         &ours_forgot_conflict,
     )?;
     write_list(&mut report, "gix ours clean-oracle failures", &ours_oracle_failures)?;
+    write_list(
+        &mut report,
+        "gix ancestor changes to default-clean merges",
+        &ancestor_changed_clean_merge,
+    )?;
+    write_list(
+        &mut report,
+        "gix ancestor forgotten conflict provenance",
+        &ancestor_forgot_conflict,
+    )?;
+    write_list(
+        &mut report,
+        "gix ancestor clean-oracle failures",
+        &ancestor_oracle_failures,
+    )?;
+    write_list(&mut report, "gix early-exit failures", &fail_fast_failures)?;
+    write_list(
+        &mut report,
+        "gix no-rewrites inverse path-and-mode differences",
+        &no_rewrites_inverse_shape,
+    )?;
+    write_list(
+        &mut report,
+        "gix no-rewrites inverse conflict differences",
+        &no_rewrites_inverse_conflict,
+    )?;
+    write_list(
+        &mut report,
+        "gix no-rewrites inverse payload differences",
+        &no_rewrites_inverse_payload,
+    )?;
+    write_list(
+        &mut report,
+        "gix no-rewrites clean-oracle failures",
+        &no_rewrites_oracle_failures,
+    )?;
 
     let baseline = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/merge/tree/cartesian-baseline.txt");
     if std::env::var_os("GIX_MERGE_UPDATE_CARTESIAN_BASELINE").is_some() {
@@ -603,6 +885,9 @@ fn git_result(
         tree: flatten_tree(tree_id, objects)?,
         conflicted,
         conflicted_with_forced_resolution: conflicted,
+        failed_on_first_unresolved_conflict: false,
+        conflict_count: usize::from(conflicted),
+        last_conflict_unresolved: conflicted,
     })
 }
 
