@@ -41,7 +41,7 @@ use gix::{
     bstr::{BString, ByteSlice},
     prelude::TreeDiffChangeExt,
 };
-use history::{Authors, DecorationKind, Decorations, Event, SharedAuthors};
+use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
 
@@ -119,12 +119,6 @@ fn take_due(deadline: &mut Option<Instant>, now: Instant) -> bool {
     } else {
         false
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct SelectionRef {
-    name: BString,
-    upstream: Option<Option<gix::ObjectId>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -727,7 +721,7 @@ fn event_loop(
     }
     app.manual_refresh = ref_watcher.is_none();
     let mut lane_receiver = None;
-    let mut refresh_receiver: Option<mpsc::Receiver<Result<history::Refresh>>> = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
     let mut refresh_from_filesystem = false;
     let mut refresh_select_top = false;
@@ -739,6 +733,7 @@ fn event_loop(
     let mut worktree_watcher: Option<WorktreeWatcher> = None;
     let mut worktree_refresh_deadline: Option<Instant> = None;
     let mut selection_relation = None;
+    let mut history_graph = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
     let mut line_diff_pool = None;
     let mut fill_repository = FillRepository {
@@ -778,6 +773,7 @@ fn event_loop(
         &mut commit_message,
         &mut tree_changes,
         &mut worktree_changes,
+        &mut history_graph,
         &mut selection_relation,
         &mut line_diff_pool,
     )?;
@@ -962,7 +958,8 @@ fn event_loop(
         }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
-                Ok(result) => {
+                Ok((graph, result)) => {
+                    history_graph = Some(graph);
                     let result = result?;
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     decorations = result.decorations;
@@ -991,6 +988,7 @@ fn event_loop(
         if refresh_pending
             && refresh_receiver.is_none()
             && lane_receiver.is_none()
+            && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
@@ -1040,41 +1038,27 @@ fn event_loop(
             let select_top = std::mem::take(&mut refresh_from_filesystem);
             ref_snapshot = next;
             refresh_pending = false;
-            if tips_changed || refresh_expand_hidden {
-                let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
-                let expand = if refresh_expand_hidden || hidden_changed {
-                    app.hidden_ids()
-                } else {
-                    Default::default()
-                };
-                refresh_receiver = Some(start_history_refresh(
-                    repository_path.clone(),
-                    repository_is_bare,
-                    revisions.clone(),
-                    hidden,
-                    app.known_ids(),
-                    expand,
-                    gix::features::threading::OwnShared::clone(&authors),
-                ));
-                refresh_select_top = select_top;
-                refresh_expand_hidden = false;
-                app.state = State::Loading;
-                tracing::info!(select_top, "started history refresh");
+            let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
+            let expand = if refresh_expand_hidden || hidden_changed {
+                app.hidden_ids()
             } else {
-                let next = history::decorations(&repository)?;
-                let relation_changed = selection_relation
-                    .as_ref()
-                    .is_some_and(|cached: &SelectionRelationCache| {
-                        selection_refs(&repository, cached.id, &next) != cached.refs
-                    });
-                if visible_decorations_changed(&decorations, &next, &app.rows) || relation_changed {
-                    selection_relation = None;
-                    app.selection_relation = None;
-                    decorations = next;
-                    dirty = true;
-                    tracing::debug!(relation_changed, "updated history decorations");
-                }
-            }
+                Default::default()
+            };
+            refresh_receiver = Some(start_history_refresh(
+                repository_path.clone(),
+                repository_is_bare,
+                revisions.clone(),
+                hidden,
+                expand,
+                gix::features::threading::OwnShared::clone(&authors),
+                history_graph
+                    .take()
+                    .expect("refresh starts only with a cached history graph"),
+            ));
+            refresh_select_top = select_top;
+            refresh_expand_hidden = false;
+            app.state = State::Loading;
+            tracing::info!(select_top, "started history refresh");
         }
         if urgent {
             draw(
@@ -1087,6 +1071,7 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
+                &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
             )?;
@@ -1125,14 +1110,19 @@ fn event_loop(
                         history_requires_alternate_screen = true;
                     }
                 }
-                Event::Complete => {
-                    history_finished = true;
+                Event::VisibleComplete => {
                     resize_inline = true;
                     history_requires_alternate_screen =
                         history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
                     if let Some(rows) = app.start_lane_computation() {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
+                }
+                Event::Complete(graph) => {
+                    history_finished = true;
+                    history_graph = Some(graph);
+                    selection_relation = None;
+                    app.selection_relation = None;
                 }
                 Event::Cancelled => {
                     history_finished = true;
@@ -1164,6 +1154,7 @@ fn event_loop(
                 &mut commit_message,
                 &mut tree_changes,
                 &mut worktree_changes,
+                &mut history_graph,
                 &mut selection_relation,
                 &mut line_diff_pool,
             )?;
@@ -1380,6 +1371,7 @@ fn event_loop(
             &mut commit_message,
             &mut tree_changes,
             &mut worktree_changes,
+            &mut history_graph,
             &mut selection_relation,
             &mut line_diff_pool,
         )?;
@@ -1476,19 +1468,19 @@ fn start_history_refresh(
     bare: bool,
     revisions: Vec<OsString>,
     hidden_revisions: Vec<OsString>,
-    known: std::collections::HashSet<gix::ObjectId>,
     expand: std::collections::HashSet<gix::ObjectId>,
     authors: SharedAuthors,
-) -> mpsc::Receiver<Result<history::Refresh>> {
+    mut graph: HistoryGraph,
+) -> mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = open_repository(&repository_path, bare, true)
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
-                history::refresh(&repository, &revisions, &hidden_revisions, &known, &expand, &authors)
+                graph.refresh(&repository, &revisions, &hidden_revisions, &expand, &authors)
             });
-        let _ = sender.send(result);
+        let _ = sender.send((graph, result));
     });
     receiver
 }
@@ -1566,77 +1558,6 @@ fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
     false
 }
 
-fn visible_decorations_changed(old: &Decorations, new: &Decorations, rows: &[CommitRow]) -> bool {
-    rows.iter().any(|row| old.get(&row.id) != new.get(&row.id))
-}
-
-fn selection_refs(repo: &gix::Repository, id: gix::ObjectId, decorations: &Decorations) -> Vec<SelectionRef> {
-    let mut refs: Vec<_> = decorations
-        .get(&id)
-        .into_iter()
-        .flatten()
-        .map(|decoration| {
-            let upstream = if decoration.kind == DecorationKind::Local {
-                let mut name = BString::from("refs/heads/");
-                name.extend_from_slice(&decoration.name);
-                repo.try_find_reference(name.as_bstr())
-                    .ok()
-                    .flatten()
-                    .and_then(|reference| reference.remote_tracking_ref_name(gix::remote::Direction::Fetch))
-                    .map(|name| {
-                        name.ok().and_then(|name| {
-                            repo.try_find_reference(name.as_bstr())
-                                .ok()
-                                .flatten()
-                                .and_then(|mut reference| reference.peel_to_id().ok().map(gix::Id::detach))
-                        })
-                    })
-            } else {
-                None
-            };
-            SelectionRef {
-                name: decoration.name.clone(),
-                upstream,
-            }
-        })
-        .collect();
-    refs.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.upstream.cmp(&b.upstream)));
-    refs
-}
-
-fn selection_relation(
-    repo: &gix::Repository,
-    id: gix::ObjectId,
-    refs: &[SelectionRef],
-    visible: Option<usize>,
-) -> Option<SelectionRelation> {
-    let has_upstream = refs.iter().any(|reference| reference.upstream.is_some());
-    for upstream in refs.iter().filter_map(|reference| reference.upstream.flatten()) {
-        let Ok(ahead) = count_exclusive_commits(repo, id, upstream) else {
-            continue;
-        };
-        let Ok(behind) = count_exclusive_commits(repo, upstream, id) else {
-            continue;
-        };
-        return Some(SelectionRelation::Tracking { ahead, behind });
-    }
-    (!has_upstream && !refs.is_empty())
-        .then_some(visible)
-        .flatten()
-        .map(SelectionRelation::Visible)
-}
-
-fn count_exclusive_commits(repo: &gix::Repository, tip: gix::ObjectId, hidden: gix::ObjectId) -> Result<usize> {
-    let mut walk = repo
-        .rev_walk([tip])
-        .with_hidden([hidden])
-        .all()
-        .context("could not compare branch with its upstream")?;
-    walk.try_fold(0usize, |count, info| {
-        info.context("could not traverse branch comparison").map(|_| count + 1)
-    })
-}
-
 fn remembered_change_selection(view: &app::ChangesView, changes: Option<&Changes>) -> Option<(BString, usize)> {
     changes.and_then(|changes| {
         changes
@@ -1667,6 +1588,7 @@ fn draw(
     commit_message: &mut Option<(gix::ObjectId, BString)>,
     tree_changes: &mut Option<(gix::ObjectId, usize, Changes)>,
     worktree_changes: &mut Option<(usize, Changes)>,
+    history_graph: &mut Option<HistoryGraph>,
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
 ) -> Result<()> {
@@ -1742,12 +1664,20 @@ fn draw(
         *tree_changes = None;
         *worktree_changes = None;
     }
+    if let Some(id) = relation_to_load
+        && let Some(graph) = history_graph
+    {
+        let refs = graph.selection_refs(id, decorations);
+        let hidden: Vec<_> = app.hidden_ids().into_iter().collect();
+        let relation = graph.selection_relation(id, &refs, &hidden);
+        *selection_cache = Some(SelectionRelationCache { id, refs, relation });
+        app.selection_relation = relation;
+    }
     if !notes_to_load.is_empty()
         || app.rows[start..end].iter().any(|row| !row.metadata_loaded)
         || message_to_load.is_some()
         || tree_changes_to_load.is_some()
         || worktree_changes_to_load
-        || relation_to_load.is_some()
     {
         let mut one_shot_repository = None;
         let repository = if fill_repository.retain {
@@ -1787,14 +1717,6 @@ fn draw(
         }
         if let Some(id) = message_to_load {
             *commit_message = Some((id, load_commit_message(repository, id)?));
-        }
-        if let Some(id) = relation_to_load {
-            repository.object_cache_size(OBJECT_CACHE_SIZE);
-            let refs = selection_refs(repository, id, decorations);
-            let relation = selection_relation(repository, id, &refs, app.visible_ancestry_to_hidden(id));
-            repository.object_cache_size(None);
-            *selection_cache = Some(SelectionRelationCache { id, refs, relation });
-            app.selection_relation = relation;
         }
         if let Some(id) = tree_changes_to_load {
             repository.object_cache_size(OBJECT_CACHE_SIZE);
@@ -2885,41 +2807,55 @@ mod tests {
     #[test]
     fn selection_relation_prefers_tracking_counts_and_handles_missing_upstreams() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let mut repository = gix::open(&fixture)?;
-        repository.object_cache_size(OBJECT_CACHE_SIZE);
+        let repository = open_test_repository(&fixture)?;
         let topic = repository.rev_parse_single("topic")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut graph = None;
+        history::load(
+            &repository,
+            &[OsString::from("topic"), OsString::from("main")],
+            &[],
+            &authors,
+            &AtomicBool::new(false),
+            |event| {
+                if let Event::Complete(value) = event {
+                    graph = Some(value);
+                }
+                true
+            },
+        )?;
+        let mut graph = graph.expect("history traversal returns its graph");
         let tracking = SelectionRef {
             name: "topic".into(),
             upstream: Some(Some(main)),
         };
         assert_eq!(
-            selection_relation(&repository, topic, &[tracking.clone(), tracking], Some(99)),
+            graph.selection_relation(topic, &[tracking.clone(), tracking], &[]),
             Some(SelectionRelation::Tracking { ahead: 1, behind: 2 }),
             "one upstream comparison wins over the visible-history fallback"
         );
         assert_eq!(
-            selection_relation(
-                &repository,
+            graph.selection_relation(
                 topic,
                 &[SelectionRef {
                     name: "topic".into(),
                     upstream: Some(None),
                 }],
-                Some(1),
+                &[],
             ),
             None,
             "a configured but missing tracking ref does not masquerade as an untracked branch"
         );
         assert_eq!(
-            selection_relation(
-                &repository,
+            graph.selection_relation(
                 topic,
                 &[SelectionRef {
                     name: "tag: topic".into(),
                     upstream: None,
                 }],
-                Some(1),
+                &[main],
             ),
             Some(SelectionRelation::Visible(1))
         );
@@ -2950,19 +2886,31 @@ mod tests {
             .args(["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()])
             .status()?;
         assert!(status.success(), "the configured tracking ref exists");
-        let repository = gix::open(path)?;
-        let refs = selection_refs(
+        let repository = open_test_repository(path)?;
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut graph = None;
+        history::load(
             &repository,
-            topic,
-            &Decorations::from([(
-                topic,
-                vec![history::Decoration {
-                    name: "topic".into(),
-                    kind: DecorationKind::Local,
-                }],
-            )]),
-        );
+            &[OsString::from("topic")],
+            &[],
+            &authors,
+            &AtomicBool::new(false),
+            |event| {
+                if let Event::Complete(value) = event {
+                    graph = Some(value);
+                }
+                true
+            },
+        )?;
+        let mut graph = graph.expect("history traversal returns its graph");
+        let refs = graph.selection_refs(topic, &history::decorations(&repository)?);
         assert_eq!(refs[0].upstream, Some(Some(main)));
+        assert_eq!(
+            graph.selection_relation(topic, &refs, &[]),
+            Some(SelectionRelation::Tracking { ahead: 1, behind: 2 }),
+            "the dynamically scheduled upstream has enough cached ancestry for comparison"
+        );
         Ok(())
     }
 
