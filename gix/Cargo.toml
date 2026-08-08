@@ -67,12 +67,9 @@ extras = [
     "interrupt",
     "status",
     "dirwalk",
-    "blame"
+    "blame",
+    "merge"
 ]
-
-## A collection of features that need a larger MSRV, and thus are disabled by default.
-## * `blob-merge` should be in extras, but needs `tree-editor` for convenience.
-need-more-recent-msrv = ["merge", "tree-editor"]
 
 ## Various progress-related features that improve the look of progress message units.
 comfort = [
@@ -133,9 +130,6 @@ worktree-mutation = ["attributes", "dep:gix-worktree-state"]
 excludes = ["dep:gix-ignore", "dep:gix-worktree", "index"]
 
 ## Provide facilities to edit trees conveniently.
-##
-## Not that currently, this requires [Rust 1.75](https://caniuse.rs/features/return_position_impl_trait_in_trait).
-## This feature toggle is likely going away then.
 tree-editor = []
 
 ## Query attributes and excludes. Enables access to pathspecs, worktree checkouts, filter-pipelines and submodules.
@@ -420,9 +414,8 @@ parking_lot = { version = "0.12.4", optional = true }
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
-# For additional features that aren't enabled by default due to MSRV
 gix = { path = ".", default-features = false, features = [
-    "need-more-recent-msrv", "tree-error", "sha1", "sha256"
+    "merge", "tree-error", "sha1", "sha256"
 ] }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 pretty_assertions = "1.4.0"
@@ -441,7 +434,6 @@ features = [
     "max-performance",
     "blocking-network-client",
     "blocking-http-transport-curl",
-    "need-more-recent-msrv",
     "serde",
 ]
 
