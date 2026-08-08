@@ -129,9 +129,6 @@ worktree-mutation = ["attributes", "dep:gix-worktree-state"]
 ## Retrieve a worktree stack for querying exclude information
 excludes = ["dep:gix-ignore", "dep:gix-worktree", "index"]
 
-## Provide facilities to edit trees conveniently.
-tree-editor = []
-
 ## Query attributes and excludes. Enables access to pathspecs, worktree checkouts, filter-pipelines and submodules.
 attributes = [
     "excludes",
@@ -158,7 +155,7 @@ revparse-regex = ["regex", "revision"]
 blob-diff = ["gix-diff/blob", "attributes"]
 
 ## Add functions to specifically merge files, using the standard three-way merge that git offers.
-merge = ["tree-editor", "blob-diff", "dep:gix-merge", "attributes"]
+merge = ["blob-diff", "dep:gix-merge", "attributes"]
 
 ## Add blame command similar to `git blame`.
 blame = ["dep:gix-blame", "blob-diff"]

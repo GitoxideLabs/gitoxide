@@ -324,7 +324,6 @@ pub mod diff_resource_cache {
 }
 
 ///
-#[cfg(feature = "tree-editor")]
 pub mod edit_tree {
     /// The error returned by [Repository::edit_tree()](crate::Repository::edit_tree).
     #[derive(Debug, thiserror::Error)]

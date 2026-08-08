@@ -14,7 +14,6 @@ use crate::repository::{new_commit, new_commit_as};
 use crate::{Blob, Commit, Id, Object, Reference, Tag, Tree, commit, ext::ObjectIdExt, object, tag};
 
 /// Tree editing
-#[cfg(feature = "tree-editor")]
 impl crate::Repository {
     /// Return an editor for adjusting the tree at `id`.
     ///
