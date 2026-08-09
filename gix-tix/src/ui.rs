@@ -586,7 +586,8 @@ pub(crate) fn draw_with_worktree(
         }
     }
 
-    let status = match app.state {
+    let history_state = app.deferred_history_state.unwrap_or(app.state);
+    let status = match history_state {
         State::Loading => "",
         State::Cancelling => " · cancelling",
         State::Computing => " · computing",
@@ -646,7 +647,7 @@ pub(crate) fn draw_with_worktree(
     if app.preview_author_copy && app.manual_refresh {
         footer_spans.extend([
             Span::raw(" · "),
-            toggle("R refresh", matches!(app.state, State::Complete | State::Cancelled)),
+            toggle("R refresh", matches!(history_state, State::Complete | State::Cancelled)),
         ]);
     }
     footer_spans.push(Span::raw(if app.preview_author_copy {
@@ -668,7 +669,7 @@ pub(crate) fn draw_with_worktree(
         ]);
     }
     if app.changes_focus.is_none() {
-        if app.state == State::Loading {
+        if history_state == State::Loading {
             footer_spans.push(Span::raw(" · Esc cancel"));
         }
         footer_spans.push(Span::raw(" · q quit"));
@@ -680,7 +681,7 @@ pub(crate) fn draw_with_worktree(
 }
 
 fn history_position(app: &App) -> String {
-    match (app.state, app.selected) {
+    match (app.deferred_history_state.unwrap_or(app.state), app.selected) {
         (State::Complete, Some(selected)) => format!("#{}", app.rows.len().saturating_sub(selected)),
         _ => format!("{} commits", app.rows.len()),
     }
@@ -1451,6 +1452,54 @@ mod tests {
         assert_eq!(history_position(&app), "#2");
         app.update(Action::MoveDown);
         assert_eq!(history_position(&app), "#1");
+    }
+
+    #[test]
+    fn keeps_the_completed_footer_while_background_progress_is_deferred() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let completed = rendered_line(&terminal, 1);
+
+        app.deferred_history_state = Some(State::Complete);
+        app.state = State::Computing;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            rendered_line(&terminal, 1),
+            completed,
+            "short lane computation preserves the completed footer"
+        );
+
+        app.deferred_history_state = None;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let computing = rendered_line(&terminal, 1);
+        assert!(
+            computing.contains("1 commits · computing"),
+            "expired deferral reveals computation progress"
+        );
+        assert_ne!(computing, completed, "visible progress changes the footer");
+
+        app.deferred_history_state = Some(State::Complete);
+        app.state = State::Loading;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(
+            rendered_line(&terminal, 1),
+            completed,
+            "short traversal setup also preserves the completed footer"
+        );
+        Ok(())
     }
 
     #[test]

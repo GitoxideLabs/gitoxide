@@ -49,6 +49,7 @@ use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const HISTORY_STATUS_DELAY: Duration = Duration::from_millis(500);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
@@ -823,6 +824,7 @@ fn event_loop(
     let mut history_finished = false;
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
+    let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
     let result: Result<Option<Duration>> = (|| loop {
         let mut worktree_watch_error = None;
@@ -946,6 +948,11 @@ fn event_loop(
                 schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
             }
         }
+        if take_due(&mut history_status_deadline, Instant::now()) {
+            app.deferred_history_state = None;
+            dirty = true;
+            urgent = true;
+        }
         if repeat_deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             repeat_deadline = None;
             if app.changes_suppressed {
@@ -974,6 +981,8 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
+                    history_status_deadline = None;
+                    app.deferred_history_state = None;
                     selection_relation = None;
                     app.selection_relation = None;
                     lane_receiver = None;
@@ -1026,6 +1035,7 @@ fn event_loop(
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
+            let refresh_started = Instant::now();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
                 Ok(repository) => repository,
                 Err(_err) if worktree_repository_is_gone(&repository_path) => {
@@ -1092,6 +1102,8 @@ fn event_loop(
             ));
             refresh_select_top = select_top;
             refresh_expand_hidden = false;
+            app.deferred_history_state = Some(app.state);
+            history_status_deadline = Some(refresh_started + HISTORY_STATUS_DELAY);
             app.state = State::Loading;
             tracing::info!(select_top, "started history refresh");
         }
@@ -1202,10 +1214,18 @@ fn event_loop(
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .or_else(|| worktree_watcher.as_ref().map(|_| REF_EVENT_INTERVAL));
         let retry_timeout = watcher_retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-        let wake_after = [repeat_timeout, watcher_timeout, worktree_timeout, retry_timeout]
-            .into_iter()
-            .flatten()
-            .min();
+        let history_status_timeout =
+            history_status_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+        let wake_after = [
+            repeat_timeout,
+            watcher_timeout,
+            worktree_timeout,
+            retry_timeout,
+            history_status_timeout,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let terminal_event = match pending_terminal_event.take() {
             Some(event) => Some(event),
             None => match poll_timeout(streaming, events, dirty, last_draw.elapsed(), wake_after) {
@@ -3870,5 +3890,18 @@ mod tests {
         assert!(schedule_once(&mut deadline, now, WATCH_RETRY_INTERVAL));
         assert!(!take_due(&mut deadline, now + Duration::from_secs(4)));
         assert!(take_due(&mut deadline, now + WATCH_RETRY_INTERVAL));
+
+        assert!(
+            schedule_once(&mut deadline, now, HISTORY_STATUS_DELAY),
+            "background progress gets its own deadline"
+        );
+        assert!(
+            !take_due(&mut deadline, now + Duration::from_millis(499)),
+            "the completed footer remains visible before 500 ms"
+        );
+        assert!(
+            take_due(&mut deadline, now + HISTORY_STATUS_DELAY),
+            "background progress becomes visible at 500 ms"
+        );
     }
 }
