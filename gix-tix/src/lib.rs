@@ -880,9 +880,6 @@ fn event_loop(
                             actionable += 1;
                             refresh_pending = true;
                             refresh_from_filesystem = true;
-                            if refresh_receiver.is_some() {
-                                refresh_select_top = true;
-                            }
                             if invalidate_worktree_changes(&mut worktree_changes) {
                                 dirty = true;
                                 urgent = true;
@@ -1073,7 +1070,7 @@ fn event_loop(
             let hidden_changed = next.hidden != ref_snapshot.hidden;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed;
             tracing::debug!(tips_changed, hidden_changed, "compared reference snapshot");
-            let select_top = std::mem::take(&mut refresh_from_filesystem);
+            let select_top = std::mem::take(&mut refresh_from_filesystem) && tips_changed;
             ref_snapshot = next;
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
