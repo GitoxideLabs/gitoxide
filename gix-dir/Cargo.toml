@@ -17,9 +17,9 @@ test = false
 
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
-sha1 = ["gix-index/sha1"]
+sha1 = ["gix-index/sha1", "gix-worktree/sha1"]
 ## Enable support for the SHA-256 hash by forwarding the feature to dependencies.
-sha256 = ["gix-index/sha256"]
+sha256 = ["gix-index/sha256", "gix-worktree/sha256"]
 
 [dependencies]
 gix-trace = { version = "^0.1.21", path = "../gix-trace" }

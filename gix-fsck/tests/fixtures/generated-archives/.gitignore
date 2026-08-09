@@ -3,3 +3,4 @@
 # whose alternates/promisor metadata embeds the host path of `./base`, so a
 # committed archive would not relocate to the test runner's checkout.
 make_test_repos.tar
+make_test_repos_sha256.tar

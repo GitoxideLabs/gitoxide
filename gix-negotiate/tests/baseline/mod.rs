@@ -23,11 +23,20 @@ fn run() -> crate::Result {
         ] {
             let obj_buf = RefCell::new(Vec::new());
             let buf = std::fs::read(base.join(format!("baseline.{algo_name}")))?;
-            let store = gix_odb::at(base.join("client").join(".git/objects"))?;
+            let object_hash = gix_testtools::object_hash();
+            let store = gix_odb::at_opts(
+                base.join("client").join(".git/objects"),
+                Vec::new(),
+                gix_odb::store::init::Options {
+                    object_hash,
+                    ..Default::default()
+                },
+            )?;
             let refs = gix_ref::file::Store::at(
                 base.join("client").join(".git"),
                 gix_ref::store::init::Options {
                     write_reflog: WriteReflog::Disable,
+                    object_hash,
                     ..Default::default()
                 },
             );
@@ -102,11 +111,16 @@ fn run() -> crate::Result {
                                 "b2.c0",
                             ]);
                         } else if case == "advertisement_as_filter" {
+                            let id = match gix_testtools::object_hash() {
+                                gix_hash::Kind::Sha1 => "f36cefa0be2ac180d360a54b1cc4214985cea60a",
+                                gix_hash::Kind::Sha256 => {
+                                    "03169d756e206a996a65e0c4734af4cddfd341d40a5694bda5712de7e78ca60c"
+                                }
+                                _ => unimplemented!(),
+                            };
                             haves = lookup_names(&["c2side", "c5", "origin/main"])
                                 .into_iter()
-                                .chain(Some(
-                                    gix_hash::ObjectId::from_hex(b"f36cefa0be2ac180d360a54b1cc4214985cea60a").unwrap(),
-                                ))
+                                .chain(Some(gix_hash::ObjectId::from_hex(id.as_bytes()).unwrap()))
                                 .collect();
                         }
                     }

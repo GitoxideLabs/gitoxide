@@ -13,7 +13,15 @@ fn check_missing<'a>(repo_name: &str, commits: impl IntoIterator<Item = &'a Obje
             .join(repo_name)
             .join(".git")
             .join("objects");
-        let mut db = gix_odb::at(fixture_path).expect("valid odb");
+        let mut db = gix_odb::at_opts(
+            fixture_path,
+            Vec::new(),
+            gix_odb::store::init::Options {
+                object_hash: gix_testtools::object_hash(),
+                ..Default::default()
+            },
+        )
+        .expect("valid odb");
         db.refresh_never();
         db
     };

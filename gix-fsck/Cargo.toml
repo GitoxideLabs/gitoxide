@@ -26,7 +26,7 @@ gix-hashtable = { version = "^0.16.0", path = "../gix-hashtable" }
 gix-object = { version = "^0.63.0", path = "../gix-object" }
 
 [dev-dependencies]
-gix-odb = { path = "../gix-odb" }
+gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 gix-testtools = { path = "../tests/tools" }
 
 [package.metadata.docs.rs]
