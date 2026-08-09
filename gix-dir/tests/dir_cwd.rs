@@ -24,6 +24,7 @@ fn prefixes_work_as_expected() -> gix_testtools::Result {
             read_dir_calls: 2,
             returned_entries: entries.len(),
             seen_entries: 3,
+            ..Default::default()
         }
     );
     assert_eq!(
