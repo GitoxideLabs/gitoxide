@@ -4,7 +4,8 @@ use gix_url::{Scheme, parse, testing::TestUrlExtension};
 fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
     let actual = gix_url::parse(url)?;
     assert_eq!(actual, expected);
-    if actual.scheme.as_str().starts_with("http") {
+    // Note that this must not match on the name, as `Scheme::Ext("http")` is a remote helper.
+    if matches!(actual.scheme, Scheme::Http | Scheme::Https) {
         assert!(
             actual.path.starts_with_str("/"),
             "paths are never empty and at least '/': {:?}",
@@ -79,6 +80,7 @@ fn url_alternate<'a, 'b>(
 
 mod file;
 mod invalid;
+mod remote_helper;
 mod ssh;
 
 mod radicle {

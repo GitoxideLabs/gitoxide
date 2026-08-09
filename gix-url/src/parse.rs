@@ -60,9 +60,34 @@ pub(crate) enum InputScheme {
     Url { protocol_end: usize },
     Scp { colon: usize },
     Local,
+    RemoteHelper { helper_end: usize },
+}
+
+/// Return the length of the leading remote-helper name if `input` uses the `<helper>::<address>` syntax
+/// of `gitremote-helpers(7)`.
+///
+/// The accepted names are those Git accepts in `is_urlschemechar()`, which is `[A-Za-z0-9][A-Za-z0-9+.-]*`.
+fn find_remote_helper_end(input: &BStr) -> Option<usize> {
+    let mut helper_end = 0;
+    for (idx, b) in input.iter().enumerate() {
+        let is_name_char = b.is_ascii_alphanumeric() || (idx != 0 && matches!(b, b'+' | b'-' | b'.'));
+        if !is_name_char {
+            break;
+        }
+        helper_end = idx + 1;
+    }
+    // Unlike Git, empty helper names are not accepted, see the deviation documented on `parse()`.
+    (helper_end != 0 && input[helper_end..].starts_with(b"::")).then_some(helper_end)
 }
 
 pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
+    // Git looks for the `<helper>::<address>` form of `gitremote-helpers(7)` in `transport_get()`, which
+    // happens before the location is examined as a URL. Hence this has to be checked first as well, as the
+    // address of a helper may itself contain `://`.
+    if let Some(helper_end) = find_remote_helper_end(input) {
+        return InputScheme::RemoteHelper { helper_end };
+    }
+
     // TODO: url's may only contain `:/`, we should additionally check if the characters used for
     //       protocol are all valid
     if let Some(protocol_end) = input.find("://") {
@@ -97,6 +122,25 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
     }
 
     InputScheme::Local
+}
+
+pub(crate) fn remote_helper(input: &BStr, helper_end: usize) -> crate::Url {
+    let helper = input[..helper_end]
+        .to_str()
+        .expect("remote helper names consist of ASCII characters only");
+    crate::Url {
+        serialize_alternative_form: true,
+        path_with_percent_escapes: None,
+        // Note that even names like `ssh` have to be kept as `Ext`, as Git dispatches them to a helper
+        // program as well instead of using its built-in transport of the same name.
+        scheme: Scheme::Ext(helper.to_owned()),
+        user: None,
+        password: None,
+        host: None,
+        port: None,
+        // The address is only meaningful to the helper program, so it's kept verbatim.
+        path: input[helper_end + "::".len()..].into(),
+    }
 }
 
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {

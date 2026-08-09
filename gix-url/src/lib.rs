@@ -54,17 +54,26 @@ mod simple_url;
 
 /// Parse a Git remote location from `input`.
 ///
-/// This accepts standard URLs, SCP-like SSH locations, and local paths. URL and SCP-like inputs must be UTF-8;
-/// local paths retain arbitrary bytes.
+/// This accepts standard URLs, SCP-like SSH locations, remote-helper locations and local paths. URL and SCP-like
+/// inputs must be UTF-8; remote-helper addresses and local paths retain arbitrary bytes.
+///
+/// Locations of the `<helper>::<address>` form described in `gitremote-helpers(7)` are recognized before any URL
+/// syntax, just like Git does in `transport_get()`, so an address may itself contain `://`. They are represented as
+/// [`Scheme::Ext`] holding the helper name, with the address kept verbatim in [`Url::path`] as only the helper
+/// program can interpret it.
 ///
 /// # Deviation
 ///
 /// Unlike Git, this rejects textual and overflowing ports in SSH and Git URLs. Git treats such port text as part of
 /// the hostname, which hides the malformed port and causes a less useful hostname-resolution error later.
+///
+/// Also unlike Git, an empty remote-helper name as in `::address` is not accepted, as the `git-remote-` program it
+/// would name cannot meaningfully exist.
 pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
     use parse::InputScheme;
     let input = input.as_bstr();
     match parse::find_scheme(input) {
+        InputScheme::RemoteHelper { helper_end } => Ok(parse::remote_helper(input, helper_end)),
         InputScheme::Local => parse::local(input),
         InputScheme::Url { protocol_end } if input[..protocol_end].eq_ignore_ascii_case(b"file") => {
             parse::file_url(input, protocol_end)
@@ -160,8 +169,10 @@ pub struct Url {
     pub host: Option<String>,
     /// Request alternative serialization, generally because the location was parsed in that form.
     ///
-    /// Alternative forms include SCP-like syntax (`user@host:path`) and bare file paths.
-    /// It is used only for SSH or file locations without a password or port; otherwise serialization uses canonical URL form.
+    /// Alternative forms include SCP-like syntax (`user@host:path`), bare file paths, and the `<helper>::<address>`
+    /// syntax of `gitremote-helpers(7)`.
+    /// It is used only for SSH or file locations without a password or port, and for [`Scheme::Ext`] locations that
+    /// have nothing but a path; otherwise serialization uses canonical URL form.
     pub serialize_alternative_form: bool,
     /// The explicit port, if parsed or assigned.
     ///
@@ -182,6 +193,9 @@ pub struct Url {
     ///
     /// This type has no separate query or fragment fields. For HTTP and HTTPS, `?`, `#`, and everything after them are
     /// stored in this field. For other URL schemes, Git treats `?` and `#` before the first slash as authority text.
+    ///
+    /// For locations in the `<helper>::<address>` form of `gitremote-helpers(7)`, this holds the address verbatim,
+    /// uninterpreted and possibly empty, as only the helper program can make sense of it.
     ///
     /// During serialization, SSH/Git URLs prepend `/` to paths not starting with `/`.
     ///
@@ -336,12 +350,15 @@ impl Url {
     /// Request alternative serialization, e.g. `file:///path` becomes `/path`.
     ///
     /// Parsed URLs set this automatically. Alternative form is used only for SSH or file locations without a password
-    /// or port; all other values serialize in canonical URL form.
+    /// or port, and for [`Scheme::Ext`] locations that have nothing but a path; all other values serialize in
+    /// canonical URL form.
     ///
     /// Setting `use_alternate_form` to `false` forces canonical serialization. For SCP-like SSH URLs this
     /// can be lossy: `user@host:path/repo` and `user@host:/path/repo` both serialize as
     /// `ssh://user@host/path/repo`, even though Git treats their repository paths as
     /// `path/repo` and `/path/repo` respectively when invoking the remote service.
+    /// It is lossy for remote-helper locations too, as `helper::address` then serializes as
+    /// `helper://address`, which Git hands to the helper as a different address.
     pub fn serialize_alternate_form(mut self, use_alternate_form: bool) -> Self {
         self.serialize_alternative_form = use_alternate_form;
         self
@@ -509,15 +526,23 @@ impl Url {
     pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
         // Since alternative form doesn't employ any escape syntax, password and
         // port number cannot be encoded.
-        if self.serialize_alternative_form
-            && (self.scheme == Scheme::File || self.scheme == Scheme::Ssh)
-            && self.password.is_none()
-            && self.port.is_none()
-        {
-            self.write_alternative_form_to(out)
-        } else {
-            self.write_canonical_form_to(out)
+        if self.serialize_alternative_form && self.password.is_none() && self.port.is_none() {
+            match &self.scheme {
+                Scheme::File | Scheme::Ssh => return self.write_alternative_form_to(out),
+                // `<helper>::<address>` has no way to express anything but the address.
+                Scheme::Ext(_) if self.user.is_none() && self.host.is_none() => {
+                    return self.write_remote_helper_form_to(out);
+                }
+                _ => {}
+            }
         }
+        self.write_canonical_form_to(out)
+    }
+
+    fn write_remote_helper_form_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        out.write_all(self.scheme.as_str().as_bytes())?;
+        out.write_all(b"::")?;
+        out.write_all(&self.path)
     }
 
     fn write_canonical_form_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {

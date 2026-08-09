@@ -16,7 +16,10 @@ pub enum Scheme {
     Https,
     /// Any other protocol or transport that isn't known at compile time.
     ///
-    /// It's used to support plug-in transports.
+    /// It's used to support plug-in transports, and carries the helper name of locations in the
+    /// `<helper>::<address>` form of `gitremote-helpers(7)`. Note that such a name may be one of the
+    /// built-in ones above, as `ssh::address` names the `git-remote-ssh` program rather than the
+    /// built-in SSH transport.
     Ext(String),
 }
 

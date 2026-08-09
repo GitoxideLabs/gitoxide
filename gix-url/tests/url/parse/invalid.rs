@@ -5,7 +5,9 @@ use crate::parse::parse;
 
 #[test]
 fn relative_path_due_to_double_colon() {
-    assert_matches!(parse("invalid:://host.xz/path/to/repo.git/"), Err(RelativeUrl { .. }));
+    // Note that a non-empty name before the `::` makes this a remote-helper location instead,
+    // as covered by `parse::remote_helper`.
+    assert_matches!(parse(":://host.xz/path/to/repo.git/"), Err(RelativeUrl { .. }));
 }
 
 #[test]
