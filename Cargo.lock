@@ -2106,6 +2106,7 @@ version = "0.19.0"
 dependencies = [
  "arbitrary",
  "bstr",
+ "criterion",
  "document-features",
  "gix-command",
  "gix-diff",

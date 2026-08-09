@@ -10,6 +10,24 @@ use gix_worktree::stack::state::attributes;
 
 use crate::tree::baseline::Deviation;
 
+/// Keep the production fallback recoverable, but require every conflict exercised by these broad fixtures to have a
+/// concrete classification.
+fn assert_no_unknown_conflicts(outcome: &gix_merge::tree::Outcome<'_>, context: &str) {
+    for conflict in &outcome.conflicts {
+        let (resolution, _, _) = conflict.clone().into_parts_by_resolution();
+        assert!(
+            !matches!(
+                resolution,
+                Err(gix_merge::tree::ResolutionFailure::Unknown)
+                    | Ok(gix_merge::tree::Resolution::Forced(
+                        gix_merge::tree::ResolutionFailure::Unknown
+                    ))
+            ),
+            "{context}: all exercised conflict pairs should have a concrete classification: {conflict:#?}"
+        );
+    }
+}
+
 /// ### How to add a new baseline test
 ///
 /// 1. Add it to the `tree_baseline.sh` script and don't forget to call the
@@ -71,6 +89,7 @@ fn run_baseline() -> crate::Result {
             options.clone(),
         )?
         .tree_merge;
+        assert_no_unknown_conflicts(&actual, &case_name);
 
         let actual_id = actual.tree.write(|tree| odb.write(tree))?;
         match &deviation {
@@ -178,12 +197,13 @@ fn run_baseline() -> crate::Result {
                 options.clone(),
             )?
             .tree_merge;
+            assert_no_unknown_conflicts(&actual, &basename);
 
             let actual_id = actual.tree.write(|tree| odb.write(tree))?;
             if actual_id != expected_tree_id {
                 baseline::show_diff_trees_and_fail(&case_name, actual_id, &actual, expected_tree_id, &basename, &odb);
             }
-            if resolve_with_ours {
+            if resolve_with_ours && merge_info.conflicts.is_some() {
                 assert!(
                     !actual.has_unresolved_conflicts(conflicts_like_in_git),
                     "We have forcefully resolved all conflicts, as far as Git would be concerned\n{:#?}",
@@ -202,11 +222,11 @@ fn run_baseline() -> crate::Result {
     }
 
     assert_eq!(
-        actual_cases, 129,
+        actual_cases, 165,
         "BUG: update this number, and don't forget to remove a filter in the end"
     );
     assert_eq!(
-        skipped_tree_resolve_cases, 118,
+        skipped_tree_resolve_cases, 130,
         "this is done when no case is skipped, and we don't want to accidentally skip them.\
         Some don't actually have conflicts.\
         The ones we skipped don't have irreconcilable conflicts"

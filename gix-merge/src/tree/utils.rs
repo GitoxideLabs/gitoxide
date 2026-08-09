@@ -26,6 +26,9 @@ use crate::{
 /// Assuming that `their_location` is the destination of *their* rewrite, check if *it* passes
 /// over a directory rewrite in *our* tree. If so, rewrite it so that we get the path
 /// it would have had if it had been renamed along with *our* directory.
+///
+/// For example, if ours renames directory `old` to `new` and theirs renames a file to `old/file`, return
+/// `new/file` so their destination follows our directory rename.
 pub fn possibly_rewritten_location(
     check_tree: &TreeNodes,
     their_location: &BStr,
@@ -40,6 +43,11 @@ pub fn possibly_rewritten_location(
     })
 }
 
+/// Translate `their_location` through the directory rewrite in `passed_change`.
+///
+/// For example, a rewrite from `a` to `b` maps `a/file` to `b/file`. Returns `None` unless `passed_change` is a
+/// [`Change::Rewrite`] whose destination is a tree and `their_location` starts with its source location. The caller must
+/// establish that the prefix ends at a path-component boundary, as [`TreeNodes::check_conflict()`] does.
 pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_change: &Change) -> Option<BString> {
     match passed_change {
         Change::Rewrite {
@@ -58,18 +66,19 @@ pub fn rewrite_location_with_renamed_directory(their_location: &BStr, passed_cha
     }
 }
 
-/// Produce a unique path within the directory that contains the file at `file_path` like `a/b`, using `editor`
-/// and `tree` to assure unique names, to obtain the tree at `a/` and `side_name` to more clearly signal
-/// where the file is coming from.
+/// Produce a side-qualified path for `file_path` like `a/b`, using `editor` and `tree` to assure uniqueness.
+///
+/// This normally keeps the file in its directory, as in `a/b~side`. If a non-tree component blocks that directory,
+/// the blocker itself is qualified instead, as in `a~side/b`, because changing only the child name could never make
+/// the path available.
 pub fn unique_path_in_tree(
     file_path: &BStr,
     editor: &tree::Editor<'_>,
     tree: &TreeNodes,
     side_name: &BStr,
 ) -> Result<BString, Error> {
-    let mut buf = file_path.to_owned();
-    buf.push(b'~');
-    buf.extend(
+    let mut qualifier = BString::from("~");
+    qualifier.extend(
         side_name
             .as_bytes()
             .iter()
@@ -77,15 +86,35 @@ pub fn unique_path_in_tree(
             .map(|b| if b == b'/' { b'_' } else { b }),
     );
 
-    // We could use a cursor here, but clashes are so unlikely that this wouldn't be meaningful for performance.
-    let base_len = buf.len();
-    let mut suffix = 0;
-    while editor.get(to_components_bstring_ref(&buf)).is_some() || tree.check_conflict(buf.as_bstr()).is_some() {
-        buf.truncate(base_len);
-        buf.push_str(format!("_{suffix}"));
-        suffix += 1;
+    let mut component_end = file_path.len();
+    loop {
+        let at_root = !file_path[..component_end].contains(&b'/');
+        let mut suffix = None;
+        loop {
+            let mut buf = file_path[..component_end].to_owned();
+            buf.extend_from_slice(&qualifier);
+            if let Some(suffix) = suffix {
+                buf.push_str(format!("_{suffix}"));
+            }
+            buf.extend_from_slice(&file_path[component_end..]);
+
+            let conflict = tree.check_conflict(buf.as_bstr());
+            if !at_root && matches!(conflict, Some(PossibleConflict::NonTreeToTree { .. })) {
+                break;
+            }
+            if editor.get(to_components_bstring_ref(&buf)).is_none()
+                && conflict.is_none_or(|conflict| matches!(conflict, PossibleConflict::PassedRewrittenDirectory { .. }))
+            {
+                return Ok(buf);
+            }
+            suffix = Some(suffix.map_or(0, |suffix| suffix + 1));
+        }
+
+        component_end = file_path[..component_end]
+            .iter()
+            .rposition(|byte| *byte == b'/')
+            .expect("a non-root component always has a preceding slash");
     }
-    Ok(buf)
 }
 
 /// Perform a merge between two blobs and return the result of its object id.
@@ -153,17 +182,20 @@ where
         buf
     }
 
-    if outer_side.is_swapped() {
+    let (current_location, other_location) = if outer_side.is_swapped() {
         (labels.current, labels.other) = (labels.other, labels.current);
-    }
+        (their_location, our_location)
+    } else {
+        (our_location, their_location)
+    };
 
     let (ancestor, current, other);
     let labels = if our_location == their_location {
         labels
     } else {
         ancestor = labels.ancestor.map(|side| combined(side, previous_location));
-        current = labels.current.map(|side| combined(side, our_location));
-        other = labels.other.map(|side| combined(side, their_location));
+        current = labels.current.map(|side| combined(side, current_location));
+        other = labels.other.map(|side| combined(side, other_location));
         crate::blob::builtin_driver::text::Labels {
             ancestor: ancestor.as_ref().map(|n| n.as_bstr()),
             current: current.as_ref().map(|n| n.as_bstr()),
@@ -243,6 +275,15 @@ enum ChangeState {
     Applied,
 }
 
+/// How handling a change affected the output editor.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ChangeDisposition {
+    /// The change was consumed without applying its effect.
+    Processed,
+    /// The change's effect is represented in the editor.
+    Applied,
+}
+
 impl TrackedChange {
     pub(super) fn new(
         inner: Change,
@@ -282,6 +323,14 @@ impl TrackedChange {
     /// Record that this change's effect is represented in the output editor.
     pub(super) fn mark_applied(&mut self) {
         self.state = ChangeState::Applied;
+    }
+
+    /// Record the final disposition chosen while resolving this change.
+    pub(super) fn mark(&mut self, disposition: ChangeDisposition) {
+        match disposition {
+            ChangeDisposition::Processed => self.mark_processed(),
+            ChangeDisposition::Applied => self.mark_applied(),
+        }
     }
 }
 
@@ -507,10 +556,12 @@ impl TreeNodes {
         }
     }
 
-    /// Search the tree with `our` changes for `theirs` by [`source_location()`](Change::source_location())).
-    /// If there is an entry but both are the same, or if there is no entry, return `None`.
+    /// Search our indexed change paths for a structural overlap with `theirs_location`.
+    ///
+    /// Return the kind of exact-path or tree/non-tree overlap found, including passage through
+    /// a rewritten directory, or `None` if the path does not interact with our indexed changes.
     pub fn check_conflict(&self, theirs_location: &BStr) -> Option<PossibleConflict> {
-        if self.0.len() == 1 {
+        if self.0[0].children.is_empty() {
             return None;
         }
         let components = to_components(theirs_location);
@@ -524,7 +575,7 @@ impl TreeNodes {
             match cursor.children.get(component).copied() {
                 // *their* change is outside *our* tree
                 None => {
-                    let res = if cursor.is_leaf_node() {
+                    let res = if cursor.is_leaf_node() && !cursor.change_is_tree {
                         Some(PossibleConflict::NonTreeToTree {
                             change_idx: cursor.change_idx,
                         })
@@ -573,6 +624,7 @@ impl TreeNodes {
     fn remove_change_inner(&mut self, location: &BStr, must_exist: bool) {
         let mut components = to_components(location).peekable();
         let mut cursor_idx = 0;
+        let mut ancestry = Vec::new();
         while let Some(component) = components.next() {
             match self.0[cursor_idx].children.get(component).copied() {
                 None => {
@@ -581,11 +633,9 @@ impl TreeNodes {
                     return;
                 }
                 Some(existing_idx) => {
+                    ancestry.push((cursor_idx, component.to_owned(), existing_idx));
                     let is_last = components.peek().is_none();
                     if is_last {
-                        if self.0[existing_idx].is_leaf_node() {
-                            self.0[cursor_idx].children.remove(component);
-                        }
                         let node = &mut self.0[existing_idx];
                         debug_assert!(!must_exist || node.change_idx.is_some(), "no change at '{location}'");
                         node.change_idx = None;
@@ -596,10 +646,21 @@ impl TreeNodes {
                 }
             }
         }
+
+        while let Some((parent_idx, component, child_idx)) = ancestry.pop() {
+            let child = &self.0[child_idx];
+            if child.change_idx.is_some() || !child.children.is_empty() {
+                break;
+            }
+            self.0[parent_idx].children.remove(component.as_bstr());
+        }
     }
 
-    /// Insert `new_change` which affects this tree into it and put it into `storage` to obtain the index.
-    /// Panic if that change already exists as it must be made so that it definitely doesn't overlap with this tree.
+    /// Insert the current location of a newly deferred change into this tree.
+    ///
+    /// A rewrite may arrive here after directory-rename handling deferred it to a relocated
+    /// destination. Its source is already represented by the original change tree; only the
+    /// rescheduled destination must become visible now.
     pub fn insert(&mut self, new_change: &Change, new_change_idx: usize) {
         let mut next_index = self.0.len();
         let mut cursor = &mut self.0[0];
@@ -617,10 +678,6 @@ impl TreeNodes {
             }
         }
 
-        debug_assert!(
-            !matches!(new_change, Change::Rewrite { .. }),
-            "BUG: we thought we wouldn't do that current.location is related?"
-        );
         cursor.change_idx = Some(new_change_idx);
         cursor.change_is_tree = new_change.entry_mode().is_tree();
         cursor.location = ChangeLocation::CurrentLocation;
@@ -712,5 +769,111 @@ mod tree_nodes_tests {
             ),
             "a missing `a` prefix must stop removal before an unrelated root-level `b`"
         );
+    }
+
+    #[test]
+    fn removing_a_change_prunes_empty_parent_nodes() {
+        let mut tree = TreeNodes::new();
+        tree.track_change(
+            &Change::Addition {
+                location: "e/e".into(),
+                relation: None,
+                entry_mode: EntryKind::Blob.into(),
+                id: gix_hash::Kind::Sha1.null(),
+            },
+            0,
+        );
+
+        tree.remove_existing_change("e/e".into());
+        assert!(
+            tree.check_conflict("e".into()).is_none(),
+            "an empty former parent isn't a leaf change or a path conflict"
+        );
+    }
+
+    #[test]
+    fn passing_a_rewritten_directory_does_not_occupy_every_path_below_it() {
+        let mut tree = TreeNodes::new();
+        tree.track_change(
+            &Change::Rewrite {
+                source_location: "old".into(),
+                source_entry_mode: EntryKind::Tree.into(),
+                source_relation: None,
+                source_id: gix_hash::Kind::Sha1.null(),
+                diff: None,
+                entry_mode: EntryKind::Tree.into(),
+                id: gix_hash::Kind::Sha1.null(),
+                location: "new".into(),
+                relation: None,
+                copy: false,
+            },
+            0,
+        );
+        tree.track_change(
+            &Change::Modification {
+                location: "old/existing".into(),
+                previous_entry_mode: EntryKind::Blob.into(),
+                previous_id: gix_hash::Kind::Sha1.null(),
+                entry_mode: EntryKind::Blob.into(),
+                id: gix_hash::Kind::Sha1.null(),
+            },
+            1,
+        );
+
+        assert!(
+            matches!(
+                tree.check_conflict("old/file~side".into()),
+                Some(PossibleConflict::PassedRewrittenDirectory { change_idx: 0 })
+            ),
+            "the path still has to follow the directory rename"
+        );
+    }
+
+    #[test]
+    fn a_tracked_tree_without_tracked_children_does_not_occupy_paths_below_it() {
+        let mut tree = TreeNodes::new();
+        tree.track_change(
+            &Change::Addition {
+                location: "dir".into(),
+                relation: None,
+                entry_mode: EntryKind::Tree.into(),
+                id: gix_hash::Kind::Sha1.null(),
+            },
+            0,
+        );
+
+        assert!(
+            !matches!(
+                tree.check_conflict("dir/file~side".into()),
+                Some(PossibleConflict::NonTreeToTree { .. })
+            ),
+            "a tracked tree permits children even if no child change is currently tracked"
+        );
+    }
+
+    #[test]
+    fn unique_path_qualifies_a_non_tree_parent_instead_of_looping_over_child_names() -> Result<(), Error> {
+        let mut tree = TreeNodes::new();
+        tree.track_change(
+            &Change::Addition {
+                location: "dir".into(),
+                relation: None,
+                entry_mode: EntryKind::Blob.into(),
+                id: gix_hash::Kind::Sha1.null(),
+            },
+            0,
+        );
+        let editor = tree::Editor::new(
+            gix_object::Tree::default(),
+            &gix_object::find::Never,
+            gix_hash::Kind::Sha1,
+        );
+
+        assert_eq!(
+            unique_path_in_tree("dir/file".into(), &editor, &tree, "OURS".into())?,
+            "dir~OURS/file",
+            "the blocking path component itself must be moved aside"
+        );
+        Ok(())
     }
 }
