@@ -459,7 +459,7 @@ mod find_remote {
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         assert_eq!(
             remote.rewrite_urls().unwrap_err().to_string(),
-            "The rewritten fetch url \"invalid:://gitoxide\" failed to parse",
+            "The rewritten fetch url \":://gitoxide\" failed to parse",
             "one malformed rewrite is reported"
         );
         assert_eq!(
@@ -530,7 +530,7 @@ mod find_remote {
         let mut remote = repo.try_find_remote_without_url_rewrite("origin").expect("exists")?;
         assert_eq!(
             remote.rewrite_urls().unwrap_err().to_string(),
-            "The rewritten push url \"invalid:://repo\" failed to parse",
+            "The rewritten push url \":://repo\" failed to parse",
             "explicit rewriting still reports the malformed push fallback rewrite"
         );
         assert_eq!(
@@ -546,7 +546,7 @@ mod find_remote {
     fn bad_explicit_push_url_rewriting_is_reported_as_push_url() -> crate::Result {
         let repo = remote::repo("bad-explicit-push-url-rewriting");
 
-        let expected_err_msg = "The rewritten push url \"invalid:://repo\" failed to parse";
+        let expected_err_msg = "The rewritten push url \":://repo\" failed to parse";
         assert_eq!(
             repo.find_remote("origin").unwrap_err().to_string(),
             expected_err_msg,
