@@ -40,11 +40,11 @@ gix-worktree-state = { path = ".", features = ["sha1", "sha256"] }
 gix-object = { path = "../gix-object" }
 gix-discover = { path = "../gix-discover" }
 gix-filter = { path = "../gix-filter" }
-gix-index = { path = "../gix-index" }
-gix-hash = { path = "../gix-hash", features = ["sha256"] }
+gix-index = { path = "../gix-index", features = ["sha1", "sha256"] }
+gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-fs = { path = "../gix-fs" }
 gix-testtools = { path = "../tests/tools", default-features = false }
-gix-odb = { path = "../gix-odb" }
+gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 walkdir = "2.3.2"
 
 [package.metadata.docs.rs]

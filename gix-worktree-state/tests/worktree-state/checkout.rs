@@ -13,7 +13,7 @@ use gix_testtools::tempfile::TempDir;
 use gix_worktree_state::checkout::Collision;
 use std::sync::LazyLock;
 
-use crate::fixture_path;
+use crate::{fixture_path, odb_at};
 
 static DRIVER: LazyLock<PathBuf> =
     LazyLock::new(|| gix_testtools::build_example_for_test("gix-filter", "arrow", env!("CARGO_TARGET_TMPDIR")));
@@ -773,8 +773,13 @@ fn checkout_index_in_tmp_dir_opts(
         }
     };
     let git_dir = source_tree.join(".git");
-    let mut index = gix_index::File::at(git_dir.join("index"), gix_hash::Kind::Sha1, false, Default::default())?;
-    let odb = gix_odb::at(git_dir.join("objects"))?.into_inner().into_arc()?;
+    let mut index = gix_index::File::at(
+        git_dir.join("index"),
+        gix_testtools::object_hash(),
+        false,
+        Default::default(),
+    )?;
+    let odb = odb_at(git_dir.join("objects"))?.into_inner().into_arc()?;
     let destination = gix_testtools::tempfile::tempdir_in(std::env::current_dir()?)?;
     prep_dest(destination.path()).expect("preparation must succeed");
 
