@@ -15,6 +15,11 @@ include = ["/src/**/*", "/LICENSE-*"]
 doctest = false
 test = false
 
+[[bench]]
+name = "dirwalk"
+harness = false
+path = "./benches/dirwalk.rs"
+
 [features]
 ## Enable support for the SHA-1 hash by forwarding the feature to dependencies.
 sha1 = ["gix-index/sha1"]
@@ -36,7 +41,11 @@ gix-utils = { version = "^0.3.5", path = "../gix-utils", features = ["bstr"] }
 bstr = { version = "1.12.0", default-features = false }
 thiserror = "2.0.18"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.2", default-features = false, features = ["system"] }
+
 [dev-dependencies]
+criterion = "0.8.2"
 gix-testtools = { path = "../tests/tools" }
 gix-fs = { path = "../gix-fs" }
 pretty_assertions = "1.4.0"

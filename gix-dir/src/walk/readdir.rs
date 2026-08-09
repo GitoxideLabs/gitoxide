@@ -15,6 +15,7 @@ use crate::{
         EmissionMode::CollapseDirectory,
         Error, ForDeletionMode, Options, Outcome, classify,
         function::{can_recurse, emit_entry},
+        untracked_cache,
     },
 };
 
@@ -32,96 +33,120 @@ pub(super) fn recursive(
     delegate: &mut dyn Delegate,
     out: &mut Outcome,
     state: &mut State,
+    cache_dir: Option<(&untracked_cache::State<'_>, usize)>,
 ) -> Result<(Action, bool), Error> {
     if ctx.should_interrupt.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
         return Err(Error::Interrupted);
     }
-    out.read_dir_calls += 1;
-    let entries = gix_fs::read_dir(current, opts.precompose_unicode).map_err(|err| Error::ReadDir {
-        path: current.to_owned(),
-        source: err,
-    })?;
 
     let mut num_entries = 0;
     let mark = state.mark(may_collapse);
     let mut prevent_collapse = false;
-    for entry in entries {
-        let entry = entry.map_err(|err| Error::DirEntry {
-            parent_directory: current.to_owned(),
-            source: err,
-        })?;
-        // Important to count right away, otherwise the directory could be seen as empty even though it's not.
-        // That is, this should be independent of the kind.
-        num_entries += 1;
 
-        let prev_len = current_bstr.len();
-        if prev_len != 0 {
-            current_bstr.push(b'/');
-        }
-        let file_name = entry.file_name();
-        current_bstr.extend_from_slice(
-            gix_path::try_os_str_into_bstr(Cow::Borrowed(file_name.as_ref()))
-                .expect("no illformed UTF-8")
-                .as_ref(),
-        );
-        current.push(file_name);
-
-        let mut info = classify::path(
-            current,
-            current_bstr,
-            if prev_len == 0 { 0 } else { prev_len + 1 },
-            None,
-            || entry.file_type().ok().map(Into::into),
-            opts,
-            ctx,
-        )?;
-
-        if can_recurse(
-            current_bstr.as_bstr(),
-            info,
-            opts.for_deletion,
-            false, /* is root */
-            delegate,
-        ) {
-            let subdir_may_collapse = state.may_collapse(current);
-            let (action, subdir_prevent_collapse) = recursive(
-                subdir_may_collapse,
+    let cached = cache_dir.and_then(|(cache, index)| {
+        cache
+            .directory(index, current, current_bstr.as_bstr(), current_info, ctx)
+            .map(|directory| (cache, index, directory))
+    });
+    if let Some((cache, directory_index, directory)) = cached {
+        let has_tracked_descendant =
+            untracked_cache::has_tracked_descendant(current_bstr.as_bstr(), opts.ignore_case, ctx);
+        prevent_collapse = has_tracked_descendant;
+        num_entries += usize::from(has_tracked_descendant);
+        for child_index in directory.sub_directories() {
+            let name = cache
+                .child_name(*child_index)
+                .expect("UNTR child indices were validated during decoding");
+            num_entries += 1;
+            let (action, child_prevent_collapse) = visit(
+                name,
+                Some(entry::Kind::Directory),
+                || None,
+                false,
+                Some((cache, *child_index)),
                 current,
                 current_bstr,
-                info,
                 ctx,
                 opts,
                 delegate,
                 out,
                 state,
             )?;
-            prevent_collapse |= subdir_prevent_collapse;
+            prevent_collapse |= child_prevent_collapse;
             if action.is_break() {
                 return Ok((action, prevent_collapse));
             }
-        } else {
-            if opts.for_deletion == Some(ForDeletionMode::IgnoredDirectoriesCanHideNestedRepositories)
-                && info.disk_kind == Some(entry::Kind::Directory)
-                && matches!(info.status, Status::Ignored(_))
-            {
-                info.disk_kind = classify::maybe_upgrade_to_repository(
-                    info.disk_kind,
-                    true,
-                    false,
-                    current,
-                    ctx.current_dir,
-                    ctx.git_dir_realpath,
-                );
+        }
+        for name in directory.untracked_entries() {
+            let is_directory = name.ends_with_str("/");
+            let name = name.strip_suffix(b"/").unwrap_or(name.as_bstr()).as_bstr();
+            if is_directory && cache.child_index(directory_index, name).is_some() {
+                continue;
             }
-            if !state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
-                let action = emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate);
-                if action.is_break() {
-                    return Ok((action, prevent_collapse));
-                }
+            num_entries += 1;
+            let on_demand_disk_kind = (!is_directory)
+                .then(|| {
+                    current
+                        .join(gix_path::from_bstr(name))
+                        .symlink_metadata()
+                        .ok()
+                        .map(|metadata| metadata.file_type().into())
+                })
+                .flatten();
+            let (action, child_prevent_collapse) = visit(
+                name,
+                is_directory.then_some(entry::Kind::Directory),
+                || on_demand_disk_kind,
+                is_directory,
+                None,
+                current,
+                current_bstr,
+                ctx,
+                opts,
+                delegate,
+                out,
+                state,
+            )?;
+            prevent_collapse |= child_prevent_collapse;
+            if action.is_break() {
+                return Ok((action, prevent_collapse));
             }
         }
-        current_bstr.truncate(prev_len);
-        current.pop();
+    } else {
+        out.read_dir_calls += 1;
+        let entries = gix_fs::read_dir(current, opts.precompose_unicode).map_err(|err| Error::ReadDir {
+            path: current.to_owned(),
+            source: err,
+        })?;
+        for entry in entries {
+            let entry = entry.map_err(|err| Error::DirEntry {
+                parent_directory: current.to_owned(),
+                source: err,
+            })?;
+            // Count before classification so unreadable entries still keep a directory from appearing empty.
+            num_entries += 1;
+            let file_name = gix_path::try_os_str_into_bstr(Cow::Borrowed(entry.file_name().as_ref()))
+                .expect("no illformed UTF-8")
+                .into_owned();
+            let (action, child_prevent_collapse) = visit(
+                file_name.as_bstr(),
+                None,
+                || entry.file_type().ok().map(Into::into),
+                false,
+                None,
+                current,
+                current_bstr,
+                ctx,
+                opts,
+                delegate,
+                out,
+                state,
+            )?;
+            prevent_collapse |= child_prevent_collapse;
+            if action.is_break() {
+                return Ok((action, prevent_collapse));
+            }
+        }
     }
 
     let res = mark.reduce_held_entries(
@@ -137,6 +162,87 @@ pub(super) fn recursive(
         delegate,
     );
     Ok((res, prevent_collapse))
+}
+
+#[expect(clippy::too_many_arguments)]
+fn visit(
+    name: &BStr,
+    disk_kind: Option<entry::Kind>,
+    on_demand_disk_kind: impl FnOnce() -> Option<entry::Kind>,
+    cached_leaf_directory: bool,
+    cache_dir: Option<(&untracked_cache::State<'_>, usize)>,
+    current: &mut PathBuf,
+    current_bstr: &mut BString,
+    ctx: &mut Context<'_>,
+    opts: Options<'_>,
+    delegate: &mut dyn Delegate,
+    out: &mut Outcome,
+    state: &mut State,
+) -> Result<(Action, bool), Error> {
+    let prev_len = current_bstr.len();
+    if prev_len != 0 {
+        current_bstr.push(b'/');
+    }
+    current_bstr.extend_from_slice(name);
+    current.push(gix_path::from_bstr(name));
+
+    let mut info = classify::path(
+        current,
+        current_bstr,
+        if prev_len == 0 { 0 } else { prev_len + 1 },
+        disk_kind,
+        on_demand_disk_kind,
+        opts,
+        ctx,
+    )?;
+
+    let mut prevent_collapse = false;
+    let action = if !cached_leaf_directory
+        && can_recurse(
+            current_bstr.as_bstr(),
+            info,
+            opts.for_deletion,
+            false, /* is root */
+            delegate,
+        ) {
+        let subdir_may_collapse = state.may_collapse(current);
+        let (action, subdir_prevent_collapse) = recursive(
+            subdir_may_collapse,
+            current,
+            current_bstr,
+            info,
+            ctx,
+            opts,
+            delegate,
+            out,
+            state,
+            cache_dir,
+        )?;
+        prevent_collapse = subdir_prevent_collapse;
+        action
+    } else {
+        if opts.for_deletion == Some(ForDeletionMode::IgnoredDirectoriesCanHideNestedRepositories)
+            && info.disk_kind == Some(entry::Kind::Directory)
+            && matches!(info.status, Status::Ignored(_))
+        {
+            info.disk_kind = classify::maybe_upgrade_to_repository(
+                info.disk_kind,
+                true,
+                false,
+                current,
+                ctx.current_dir,
+                ctx.git_dir_realpath,
+            );
+        }
+        if state.held_for_directory_collapse(current_bstr.as_bstr(), info, &opts) {
+            std::ops::ControlFlow::Continue(())
+        } else {
+            emit_entry(Cow::Borrowed(current_bstr.as_bstr()), info, None, opts, out, delegate)
+        }
+    };
+    current_bstr.truncate(prev_len);
+    current.pop();
+    Ok((action, prevent_collapse))
 }
 
 pub(super) struct State {

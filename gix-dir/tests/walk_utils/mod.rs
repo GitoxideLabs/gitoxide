@@ -18,12 +18,17 @@ pub fn fixture(name: &str) -> PathBuf {
 
 /// Default options
 pub fn options() -> walk::Options<'static> {
-    walk::Options::default()
+    walk::Options {
+        use_untracked_cache: true,
+        ..Default::default()
+    }
 }
 
 /// Default options
 pub fn options_emit_all() -> walk::Options<'static> {
     walk::Options {
+        use_untracked_cache: true,
+        untracked_cache_excludes_file: None,
         precompose_unicode: false,
         ignore_case: false,
         recurse_repositories: false,

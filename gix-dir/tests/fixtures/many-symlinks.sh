@@ -66,3 +66,13 @@ git init -q submodule-symlink
   rm -Rf sub
   ln -s ../module sub
 )
+
+# Populate UNTR caches so every directory-walk test exercises cache eligibility.
+find . -name .git -prune | while read -r git_dir
+do
+  repo=${git_dir%/.git}
+  git -C "$repo" config core.untrackedCache true
+  git -C "$repo" config core.excludesFile .git/no-global-excludes
+  git -C "$repo" update-index --untracked-cache --index-version 2
+  git -C "$repo" status --porcelain --ignore-submodules=all >/dev/null
+done

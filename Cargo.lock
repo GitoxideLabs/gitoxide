@@ -1849,6 +1849,7 @@ name = "gix-dir"
 version = "0.28.0"
 dependencies = [
  "bstr",
+ "criterion",
  "gix-discover",
  "gix-fs",
  "gix-ignore",
@@ -1861,6 +1862,7 @@ dependencies = [
  "gix-utils",
  "gix-worktree",
  "pretty_assertions",
+ "rustix",
  "thiserror 2.0.18",
 ]
 

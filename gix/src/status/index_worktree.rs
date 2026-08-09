@@ -136,6 +136,15 @@ impl Repository {
                 new_root: Some(workdir.to_owned()),
             },
         )?;
+        let excludes_file = self
+            .config
+            .effective_excludes_file()
+            .map_err(crate::repository::attributes::Error::from)?;
+        let mut dirwalk_options: Option<gix_dir::walk::Options<'_>> = options.dirwalk_options.map(Into::into);
+        if let Some(options) = dirwalk_options.as_mut() {
+            options.use_untracked_cache = self.config.use_untracked_cache();
+            options.untracked_cache_excludes_file = excludes_file.as_deref();
+        }
 
         let out = gix_status::index_as_worktree_with_renames(
             index,
@@ -165,7 +174,7 @@ impl Repository {
                     fscache,
                 },
                 fscache,
-                dirwalk: options.dirwalk_options.map(Into::into),
+                dirwalk: dirwalk_options,
                 rewrites: options.rewrites,
             },
         )?;
