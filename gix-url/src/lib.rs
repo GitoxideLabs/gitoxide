@@ -57,10 +57,13 @@ mod simple_url;
 /// This accepts standard URLs, SCP-like SSH locations, remote-helper locations and local paths. URL and SCP-like
 /// inputs must be UTF-8; remote-helper addresses and local paths retain arbitrary bytes.
 ///
-/// Locations of the `<helper>::<address>` form described in `gitremote-helpers(7)` are recognized before any URL
-/// syntax, just like Git does in `transport_get()`, so an address may itself contain `://`. They are represented as
-/// [`Scheme::Ext`] holding the helper name, with the address kept verbatim in [`Url::path`] as only the helper
-/// program can interpret it.
+/// Locations of the `<helper>::<address>` form described in
+/// [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers) are recognized before any URL
+/// syntax, so an address may itself contain `://`. They are represented as
+/// [`Scheme::Helper`] holding the helper name, with the address kept verbatim in [`Url::path`] as only the helper
+/// program can interpret it. The command-executing `ext` helper is represented as [`Scheme::Ext`] in both spellings;
+/// `ext://<address>` retains the entire URL as its command. Other unknown URL transports in the
+/// `<helper>://<address>` form are represented as [`Scheme::HelperUrl`].
 ///
 /// # Deviation
 ///
@@ -75,9 +78,7 @@ pub fn parse(input: impl AsBStr) -> Result<Url, parse::Error> {
     match parse::find_scheme(input) {
         InputScheme::RemoteHelper { helper_end } => Ok(parse::remote_helper(input, helper_end)),
         InputScheme::Local => parse::local(input),
-        InputScheme::Url { protocol_end } if input[..protocol_end].eq_ignore_ascii_case(b"file") => {
-            parse::file_url(input, protocol_end)
-        }
+        InputScheme::Url { protocol_end } if input[..protocol_end] == *b"file" => parse::file_url(input, protocol_end),
         InputScheme::Url { protocol_end } => parse::url(input, protocol_end),
         InputScheme::Scp { colon } => parse::scp(input, colon),
     }
@@ -170,9 +171,10 @@ pub struct Url {
     /// Request alternative serialization, generally because the location was parsed in that form.
     ///
     /// Alternative forms include SCP-like syntax (`user@host:path`), bare file paths, and the `<helper>::<address>`
-    /// syntax of `gitremote-helpers(7)`.
-    /// It is used only for SSH or file locations without a password or port, and for [`Scheme::Ext`] locations that
-    /// have nothing but a path; otherwise serialization uses canonical URL form.
+    /// syntax of [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers).
+    /// It is used only for SSH or file locations without a password or port. [`Scheme::Helper`] and [`Scheme::Ext`]
+    /// always use remote-helper form, and SCP-like form is also retained when canonical SSH form would change a
+    /// relative repository path.
     pub serialize_alternative_form: bool,
     /// The explicit port, if parsed or assigned.
     ///
@@ -194,7 +196,8 @@ pub struct Url {
     /// This type has no separate query or fragment fields. For HTTP and HTTPS, `?`, `#`, and everything after them are
     /// stored in this field. For other URL schemes, Git treats `?` and `#` before the first slash as authority text.
     ///
-    /// For locations in the `<helper>::<address>` form of `gitremote-helpers(7)`, this holds the address verbatim,
+    /// For locations in the `<helper>::<address>` form of
+    /// [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers), this holds the address verbatim,
     /// uninterpreted and possibly empty, as only the helper program can make sense of it.
     ///
     /// During serialization, SSH/Git URLs prepend `/` to paths not starting with `/`.
@@ -302,6 +305,11 @@ impl Url {
         path: BString,
         serialize_alternative_form: bool,
     ) -> Result<Self, parse::Error> {
+        if let Scheme::Helper(name) = &scheme {
+            if !parse::is_valid_remote_helper_name(name.as_bytes()) {
+                return Err(parse::Error::InvalidRemoteHelperName { name: name.clone() });
+            }
+        }
         let is_http = matches!(scheme, Scheme::Http | Scheme::Https);
         let mut parsed = parse(
             Url {
@@ -350,16 +358,12 @@ impl Url {
     /// Request alternative serialization, e.g. `file:///path` becomes `/path`.
     ///
     /// Parsed URLs set this automatically. Alternative form is used only for SSH or file locations without a password
-    /// or port, and for [`Scheme::Ext`] locations that have nothing but a path; all other values serialize in
-    /// canonical URL form.
+    /// or port; all other values serialize in canonical URL form.
     ///
-    /// Setting `use_alternate_form` to `false` forces canonical serialization. For SCP-like SSH URLs this
-    /// can be lossy: `user@host:path/repo` and `user@host:/path/repo` both serialize as
-    /// `ssh://user@host/path/repo`, even though Git treats their repository paths as
-    /// `path/repo` and `/path/repo` respectively when invoking the remote service.
-    /// It is lossy for remote-helper locations too, as `helper::address` then serializes as
-    /// `helper://address`, which Git hands to the helper as a different address.
-    pub fn serialize_alternate_form(mut self, use_alternate_form: bool) -> Self {
+    /// Setting `use_alternate_form` to `false` requests canonical, URL-like, serialization. SCP-like form is retained if
+    /// canonical SSH form would change a relative repository path. Remote-helper form is always retained because URL
+    /// form would change the address Git passes to the helper.
+    pub fn with_request_alternate_form(mut self, use_alternate_form: bool) -> Self {
         self.serialize_alternative_form = use_alternate_form;
         self
     }
@@ -494,7 +498,7 @@ impl Url {
                 Https => 443,
                 Ssh => 22,
                 Git => 9418,
-                File | Ext(_) => return None,
+                File | Ext | Helper(_) | HelperUrl(_) => return None,
             })
         })
     }
@@ -524,15 +528,38 @@ impl Url {
     /// escaping and canonicalization can change the original input spelling. Invalid combinations created through
     /// public field mutation may return an error.
     pub fn write_to(&self, out: &mut dyn std::io::Write) -> std::io::Result<()> {
+        if matches!(self.scheme, Scheme::Ext | Scheme::Helper(_)) {
+            if let Scheme::Helper(name) = &self.scheme {
+                if !parse::is_valid_remote_helper_name(name.as_bytes()) {
+                    return Err(std::io::Error::other("invalid remote-helper name"));
+                }
+            }
+            if self.user.is_some() || self.password.is_some() || self.host.is_some() || self.port.is_some() {
+                return Err(std::io::Error::other(
+                    "remote-helper form cannot represent user, password, host or port",
+                ));
+            }
+            return self.write_remote_helper_form_to(out);
+        }
+
+        if self.scheme == Scheme::Ssh
+            && !self.path.is_empty()
+            && !self.path.starts_with(b"/")
+            && !self.path.starts_with(b"~")
+        {
+            if self.password.is_none() && self.port.is_none() && self.host.is_some() {
+                return self.write_alternative_form_to(out);
+            }
+            return Err(std::io::Error::other(
+                "relative SSH paths cannot be serialized canonically without changing their meaning",
+            ));
+        }
+
         // Since alternative form doesn't employ any escape syntax, password and
         // port number cannot be encoded.
         if self.serialize_alternative_form && self.password.is_none() && self.port.is_none() {
             match &self.scheme {
                 Scheme::File | Scheme::Ssh => return self.write_alternative_form_to(out),
-                // `<helper>::<address>` has no way to express anything but the address.
-                Scheme::Ext(_) if self.user.is_none() && self.host.is_none() => {
-                    return self.write_remote_helper_form_to(out);
-                }
                 _ => {}
             }
         }

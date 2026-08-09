@@ -4,7 +4,7 @@ use gix_url::{Scheme, parse, testing::TestUrlExtension};
 fn assert_url(url: &str, expected: gix_url::Url) -> Result<gix_url::Url, crate::Error> {
     let actual = gix_url::parse(url)?;
     assert_eq!(actual, expected);
-    // Note that this must not match on the name, as `Scheme::Ext("http")` is a remote helper.
+    // Note that this must not match on the name, as `Scheme::Helper("http")` is a remote helper.
     if matches!(actual.scheme, Scheme::Http | Scheme::Https) {
         assert!(
             actual.path.starts_with_str("/"),
@@ -93,7 +93,7 @@ mod radicle {
         assert_url_roundtrip(
             "rad://hynkuwzskprmswzeo4qdtku7grdrs4ffj3g9tjdxomgmjzhtzpqf81@hwd1yregyf1dudqwkx85x5ps3qsrqw3ihxpx3ieopq6ukuuq597p6m8161c.git",
             url(
-                Scheme::Ext("rad".into()),
+                Scheme::HelperUrl("rad".into()),
                 "hynkuwzskprmswzeo4qdtku7grdrs4ffj3g9tjdxomgmjzhtzpqf81",
                 "hwd1yregyf1dudqwkx85x5ps3qsrqw3ihxpx3ieopq6ukuuq597p6m8161c.git",
                 None,
@@ -158,10 +158,16 @@ mod unknown {
     use crate::parse::{assert_url_roundtrip, url};
 
     #[test]
-    fn any_protocol_is_supported_via_the_ext_scheme() -> crate::Result {
+    fn any_protocol_is_supported_via_a_remote_helper_url() -> crate::Result {
         assert_url_roundtrip(
             "abc://example.com/~byron/hello",
-            url(Scheme::Ext("abc".into()), None, "example.com", None, b"/~byron/hello"),
+            url(
+                Scheme::HelperUrl("abc".into()),
+                None,
+                "example.com",
+                None,
+                b"/~byron/hello",
+            ),
         )
     }
 }

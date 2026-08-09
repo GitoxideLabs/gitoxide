@@ -27,6 +27,8 @@ pub enum Error {
     MissingRepositoryPath { url: BString, kind: UrlKind },
     #[error("URL {url:?} is relative which is not allowed in this context")]
     RelativeUrl { url: String },
+    #[error("{name:?} is not a valid remote-helper name")]
+    InvalidRemoteHelperName { name: String },
 }
 
 impl From<Infallible> for Error {
@@ -64,26 +66,23 @@ pub(crate) enum InputScheme {
 }
 
 /// Return the length of the leading remote-helper name if `input` uses the `<helper>::<address>` syntax
-/// of `gitremote-helpers(7)`.
-///
-/// The accepted names are those Git accepts in `is_urlschemechar()`, which is `[A-Za-z0-9][A-Za-z0-9+.-]*`.
+/// of [`gitremote-helpers`](https://git-scm.com/docs/gitremote-helpers).
+pub(crate) fn is_valid_remote_helper_name(input: &[u8]) -> bool {
+    input.first().is_some_and(u8::is_ascii_alphanumeric)
+        && input[1..]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+}
+
 fn find_remote_helper_end(input: &BStr) -> Option<usize> {
-    let mut helper_end = 0;
-    for (idx, b) in input.iter().enumerate() {
-        let is_name_char = b.is_ascii_alphanumeric() || (idx != 0 && matches!(b, b'+' | b'-' | b'.'));
-        if !is_name_char {
-            break;
-        }
-        helper_end = idx + 1;
-    }
-    // Unlike Git, empty helper names are not accepted, see the deviation documented on `parse()`.
-    (helper_end != 0 && input[helper_end..].starts_with(b"::")).then_some(helper_end)
+    let helper_end = input.find("::")?;
+    // Unlike Git, empty helper names are not accepted.
+    is_valid_remote_helper_name(&input[..helper_end]).then_some(helper_end)
 }
 
 pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
-    // Git looks for the `<helper>::<address>` form of `gitremote-helpers(7)` in `transport_get()`, which
-    // happens before the location is examined as a URL. Hence this has to be checked first as well, as the
-    // address of a helper may itself contain `://`.
+    // Git looks for the `<helper>::<address>` form, which happens before the location is examined as a URL.
+    // Hence this has to be checked first as well, as the address of a helper may itself contain `://`.
     if let Some(helper_end) = find_remote_helper_end(input) {
         return InputScheme::RemoteHelper { helper_end };
     }
@@ -124,6 +123,8 @@ pub(crate) fn find_scheme(input: &BStr) -> InputScheme {
     InputScheme::Local
 }
 
+/// Parse remote-helper syntax like `codecommit::eu-central-1://repository`, with `helper_end` pointing at the first
+/// colon. This is only for the `<helper>::<address>` form; `<helper>://<address>` is parsed as a URL instead.
 pub(crate) fn remote_helper(input: &BStr, helper_end: usize) -> crate::Url {
     let helper = input[..helper_end]
         .to_str()
@@ -131,9 +132,12 @@ pub(crate) fn remote_helper(input: &BStr, helper_end: usize) -> crate::Url {
     crate::Url {
         serialize_alternative_form: true,
         path_with_percent_escapes: None,
-        // Note that even names like `ssh` have to be kept as `Ext`, as Git dispatches them to a helper
-        // program as well instead of using its built-in transport of the same name.
-        scheme: Scheme::Ext(helper.to_owned()),
+        // `ext` is special because callers need to know that its address is an executable command line.
+        scheme: if helper == "ext" {
+            Scheme::Ext
+        } else {
+            Scheme::Helper(helper.to_owned())
+        },
         user: None,
         password: None,
         host: None,
@@ -146,10 +150,8 @@ pub(crate) fn remote_helper(input: &BStr, helper_end: usize) -> crate::Url {
 pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error> {
     const MAX_LEN: usize = 1024;
     let input_after_protocol = &input[protocol_end + "://".len()..];
-    let is_http = {
-        let scheme = &input[..protocol_end];
-        scheme.eq_ignore_ascii_case(b"http") || scheme.eq_ignore_ascii_case(b"https")
-    };
+    let scheme = &input[..protocol_end];
+    let is_http = scheme == "http" || scheme == "https";
     let bytes_to_path = input_after_protocol
         .iter()
         .filter(|b| !b.is_ascii_whitespace())
@@ -163,6 +165,20 @@ pub(crate) fn url(input: &BStr, protocol_end: usize) -> Result<crate::Url, Error
         });
     }
     let (input, url) = input_to_utf8_and_url(input, UrlKind::Url)?;
+    if url.scheme == "ext" {
+        return Ok(crate::Url {
+            serialize_alternative_form: true,
+            path_with_percent_escapes: None,
+            scheme: Scheme::Ext,
+            user: None,
+            password: None,
+            host: None,
+            port: None,
+            // Git passes the entire URL where git-remote-ext expects its command line. Keeping it verbatim makes
+            // `ext::ext://...` serialization preserve that argument while normalizing all uses to `Scheme::Ext`.
+            path: input.into(),
+        });
+    }
     let scheme = Scheme::from(url.scheme.as_str());
 
     if matches!(scheme, Scheme::Git | Scheme::Ssh) && url.path.is_empty() {
@@ -249,6 +265,11 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     // should never differ in any other way (ssh URLs should not contain a query or fragment part).
     // To avoid the various off-by-one errors caused by the `/` characters, we keep using the path
     // determined above and can therefore skip parsing it here as well.
+    // Split at the last `@`, just as OpenSSH does. Feeding the user through URL parsing would mistake `:` for a
+    // password delimiter even though SCP-like syntax cannot represent passwords.
+    let (user, host) = host
+        .rsplit_once('@')
+        .map_or((None, host), |(user, host)| (Some(user.to_owned()), host));
     // In SCP-like syntax `%` is literal host data, but the synthesized URL parser treats it as an escape introducer.
     let url_string = format!("ssh://{}", host.replace('%', "%25"));
     let url = crate::simple_url::ParsedUrl::parse(&url_string).map_err(|source| Error::Url {
@@ -261,12 +282,6 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
     // e.g., "user@host:/~repo" -> path is "~repo", not "/~repo"
     let path = if path.starts_with("/~") { &path[1..] } else { path };
 
-    let user = if url.username.is_empty() && url.password.is_none() {
-        None
-    } else {
-        Some(url.username)
-    };
-    let password = url.password;
     let port = url.port;
 
     // For SCP-like SSH URLs, strip brackets from IPv6 addresses
@@ -283,7 +298,7 @@ pub(crate) fn scp(input: &BStr, colon: usize) -> Result<crate::Url, Error> {
         path_with_percent_escapes: None,
         scheme: Scheme::from(url.scheme.as_str()),
         user,
-        password,
+        password: None,
         host,
         port,
         path: path.into(),
