@@ -7,8 +7,11 @@
 # Several other sub-repos clone with relative URLs that resolve via the host's
 # working directory.
 many.tar
+many_sha256.tar
 # Uses `ln -s`, including breakout symlinks (`../..`) that cannot be safely
 # extracted on Windows.
 many-symlinks.tar
+many-symlinks_sha256.tar
 # Uses `mkfifo`; FIFOs cannot be represented in archives extracted on Windows.
 fifo.tar
+fifo_sha256.tar

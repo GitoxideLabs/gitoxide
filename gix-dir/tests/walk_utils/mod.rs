@@ -287,12 +287,12 @@ pub fn try_collect_filtered_opts(
 ) -> Result<(walk::Outcome, PathBuf), walk::Error> {
     let git_dir = worktree_root.join(git_dir.unwrap_or(".git"));
     let mut index = std::fs::read(git_dir.join("index")).ok().map_or_else(
-        || gix_index::State::new(gix_index::hash::Kind::Sha1),
+        || gix_index::State::new(gix_testtools::object_hash()),
         |bytes| {
             gix_index::State::from_bytes(
                 &bytes,
                 std::time::UNIX_EPOCH.into(),
-                gix_index::hash::Kind::Sha1,
+                gix_testtools::object_hash(),
                 Default::default(),
             )
             .map(|t| t.0)

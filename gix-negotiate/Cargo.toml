@@ -31,8 +31,8 @@ bitflags = "2"
 
 [dev-dependencies]
 gix-testtools = { path = "../tests/tools" }
-gix-odb = { path = "../gix-odb" }
-gix-ref = { path = "../gix-ref" }
+gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
+gix-ref = { path = "../gix-ref", features = ["sha1", "sha256"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 
 [package.metadata.docs.rs]
