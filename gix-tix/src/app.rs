@@ -695,7 +695,7 @@ impl App {
                     RefMode::None => RefMode::All,
                 };
             }
-            Action::Refresh if self.manual_refresh && matches!(self.state, State::Complete | State::Cancelled) => {
+            Action::Refresh if matches!(self.state, State::Complete | State::Cancelled) => {
                 return vec![Effect::Reload(self.show_hidden)];
             }
             Action::ToggleHidden
@@ -2419,7 +2419,6 @@ mod tests {
     #[test]
     fn refresh_reloads_only_finished_history() {
         let mut app = App::new(1);
-        app.manual_refresh = true;
         assert!(
             app.update(Action::Refresh).is_empty(),
             "a running walk cannot be replaced"
