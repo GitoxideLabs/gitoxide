@@ -178,9 +178,6 @@ pub enum Subcommands {
         /// Exit once all commits and graph lanes have been computed.
         #[clap(long)]
         quit_on_finish: bool,
-        /// Choose automatic, full alternate-screen, or compact half-screen display.
-        #[clap(long, value_name = "MODE", value_parser = ["auto", "always", "half"], default_value = "auto")]
-        screen: String,
         /// Hide this revision and every commit reachable from it.
         #[clap(short = 'h', long, value_name = "REVSPEC")]
         hide: Vec<std::ffi::OsString>,

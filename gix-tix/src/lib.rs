@@ -463,20 +463,6 @@ pub struct Options {
     pub quit_on_finish: bool,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
-    /// Legacy screen selection, ignored because tix always uses the alternate screen.
-    pub screen: Screen,
-}
-
-/// Legacy terminal screen selection.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Screen {
-    /// Select the screen automatically.
-    #[default]
-    Auto,
-    /// Use the alternate screen.
-    Always,
-    /// Use half of the main screen.
-    Half,
 }
 
 /// Run the interactive commit graph for `repository`.
@@ -539,11 +525,7 @@ fn event_loop(
     options: Options,
     enhanced_keyboard: bool,
 ) -> Result<Option<Duration>> {
-    let Options {
-        quit_on_finish,
-        hide,
-        screen: _,
-    } = options;
+    let Options { quit_on_finish, hide } = options;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
