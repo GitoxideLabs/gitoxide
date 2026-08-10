@@ -27,6 +27,13 @@ struct ChangesPaneArea {
     outer: Rect,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrameLayout {
+    pub history: Rect,
+    pub overlays: Vec<Rect>,
+    pub rows: Vec<(gix::ObjectId, u16)>,
+}
+
 fn changes_pane_areas(
     area: Rect,
     max_height: u16,
@@ -187,7 +194,7 @@ pub(crate) fn draw_with_worktree(
     commit_message: Option<&BStr>,
     tree_changes: Option<&Changes>,
     worktree_changes: Option<&Changes>,
-) {
+) -> FrameLayout {
     let [mut body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let full_body = body;
     let compared_parent = if app.changes_visible() {
@@ -342,6 +349,11 @@ pub(crate) fn draw_with_worktree(
     let selection_info_width = selection_info.width();
     let mut selection_info_area = None;
 
+    let rows = visible_rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| (row.id, body.y.saturating_add(index as u16)))
+        .collect();
     for (index, metadata) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
@@ -670,6 +682,15 @@ pub(crate) fn draw_with_worktree(
         footer_spans = vec![Span::raw(notice)];
     }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    FrameLayout {
+        history: body,
+        overlays: changes_panes
+            .iter()
+            .map(|pane| pane.outer)
+            .chain(commit_pane.map(|(outer, _)| outer))
+            .collect(),
+        rows,
+    }
 }
 
 fn history_position(app: &App) -> String {
