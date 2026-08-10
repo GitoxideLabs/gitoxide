@@ -82,6 +82,7 @@ pub fn checkout_exclusive(
         errors,
         collisions,
         files_updated,
+        files_removed: _,
         bytes_written,
         delayed_paths_unknown,
         delayed_paths_unprocessed,
@@ -89,6 +90,7 @@ pub fn checkout_exclusive(
         Some(repo) => gix::worktree::state::checkout(
             &mut index,
             dest_directory,
+            None,
             EmptyOrDb {
                 empty_files,
                 db: repo.objects.into_arc()?,
@@ -101,6 +103,7 @@ pub fn checkout_exclusive(
         None => gix::worktree::state::checkout(
             &mut index,
             dest_directory,
+            None,
             Empty,
             &files,
             &bytes,

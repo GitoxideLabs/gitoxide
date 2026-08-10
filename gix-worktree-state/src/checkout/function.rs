@@ -7,6 +7,13 @@ use crate::checkout::chunk;
 
 /// Checkout the entire `index` into `dir`, and resolve objects found in index entries with `objects` to write their content to their
 /// respective path in `dir`.
+/// If `previous_index` is `Some`, remove files that are tracked in it but absent from `index` before writing anything,
+/// along with directories that become empty that way, similar to how `git checkout` removes files when switching revisions.
+/// Untracked files are never removed. Files that appear to have changed on disk since `previous_index` was written
+/// are not removed either, but instead cause a [`RemovalPrevented`](crate::checkout::Error::RemovalPrevented) error,
+/// unless [`overwrite_existing`](crate::checkout::Options::overwrite_existing) is set.
+/// Pass `None` to leave everything but the checked out files alone, which is all that's needed when
+/// checking out into an empty directory.
 /// Use `files` to count each fully checked out file, and count the amount written `bytes`. If `should_interrupt` is `true`, the
 /// operation will abort.
 /// `options` provide a lot of context on how to perform the operation.
@@ -15,9 +22,11 @@ use crate::checkout::chunk;
 ///
 /// Note that interruption still produce an `Ok(…)` value, so the caller should look at `should_interrupt` to communicate the outcome.
 ///
+#[expect(clippy::too_many_arguments)]
 pub fn checkout<Find>(
     index: &mut gix_index::State,
     dir: impl Into<std::path::PathBuf>,
+    previous_index: Option<&gix_index::State>,
     objects: Find,
     files: &dyn gix_features::progress::Count,
     bytes: &dyn gix_features::progress::Count,
@@ -28,7 +37,17 @@ where
     Find: gix_object::Find + Send + Clone,
 {
     let paths = index.take_path_backing();
-    let res = checkout_inner(index, &paths, dir, objects, files, bytes, should_interrupt, options);
+    let res = checkout_inner(
+        index,
+        &paths,
+        dir,
+        previous_index,
+        objects,
+        files,
+        bytes,
+        should_interrupt,
+        options,
+    );
     index.return_path_backing(paths);
     res
 }
@@ -38,6 +57,7 @@ fn checkout_inner<Find>(
     index: &mut gix_index::State,
     paths: &gix_index::PathStorage,
     dir: impl Into<std::path::PathBuf>,
+    previous_index: Option<&gix_index::State>,
     objects: Find,
     files: &dyn gix_features::progress::Count,
     bytes: &dyn gix_features::progress::Count,
@@ -50,6 +70,20 @@ where
     let num_files = files.counter();
     let num_bytes = bytes.counter();
     let dir = dir.into();
+
+    let mut removal_errors = Vec::new();
+    let files_removed = match previous_index {
+        Some(previous_index) => super::removal::remove_stale_entries(
+            &dir,
+            previous_index,
+            index,
+            paths,
+            &mut removal_errors,
+            should_interrupt,
+            &options,
+        )?,
+        None => 0,
+    };
     let (chunk_size, thread_limit, num_threads) = gix_features::parallel::optimize_chunk_size_and_thread_limit(
         100,
         index.entries().len().into(),
@@ -146,10 +180,12 @@ where
             as u64;
     }
 
+    removal_errors.extend(errors);
     Ok(crate::checkout::Outcome {
         files_updated,
+        files_removed,
         collisions,
-        errors,
+        errors: removal_errors,
         bytes_written,
         delayed_paths_unknown,
         delayed_paths_unprocessed,

@@ -131,6 +131,7 @@ pub mod main_worktree {
             let outcome = gix_worktree_state::checkout(
                 &mut index,
                 workdir,
+                None,
                 repo.objects.clone().into_arc()?,
                 &files,
                 &bytes,

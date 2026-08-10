@@ -24,6 +24,8 @@ pub struct ErrorRecord {
 pub struct Outcome {
     /// The amount of files updated, or created.
     pub files_updated: usize,
+    /// The amount of files removed as they were tracked in the previous index, but not in the index that was checked out.
+    pub files_removed: usize,
     /// The amount of bytes written to disk,
     pub bytes_written: u64,
     /// The encountered collisions, which can happen on a case-insensitive filesystem.
@@ -54,6 +56,8 @@ pub struct Options {
     /// If true, default false, worktree entries on disk will be overwritten with content from the index
     /// even if they appear to be changed. When creating directories that clash with existing worktree entries,
     /// these will try to delete the existing entry.
+    /// Additionally, files that are tracked in the previous index but not in the index to be checked out will
+    /// be removed even if they appear to be changed.
     /// This is similar in behaviour as `git checkout --force`.
     ///
     /// Note that when `destination_is_initially_empty` is `false`, existing files may still have their
@@ -100,8 +104,11 @@ pub enum Error {
     FilterPathUnknown { rela_path: BString },
     #[error("The following paths were delayed and apparently forgotten to be processed by the filter driver: ")]
     FilterPathsUnprocessed { rela_paths: Vec<BString> },
+    #[error("Refusing to remove '{rela_path}' which changed on disk after it was checked out last")]
+    RemovalPrevented { rela_path: BString },
 }
 
 mod chunk;
 mod entry;
 pub(crate) mod function;
+mod removal;

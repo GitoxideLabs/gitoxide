@@ -814,6 +814,7 @@ fn checkout_index_in_tmp_dir_opts(
     let outcome = gix_worktree_state::checkout(
         &mut index,
         destination.path(),
+        None,
         db,
         &progress::Discard,
         &progress::Discard,
@@ -860,6 +861,130 @@ fn setup_filter_pipeline(opts: &mut gix_filter::pipeline::Options) {
         process: Some((driver_exe() + " process").into()),
         required: true,
     }];
+}
+
+#[test]
+fn stale_files_are_removed_when_previous_index_is_provided() -> crate::Result {
+    let mut opts = opts_from_probe();
+    let (source_tree, destination, index, _outcome) =
+        checkout_index_in_tmp_dir(opts.clone(), "make_mixed_without_submodules_and_symlinks", None)?;
+
+    let mut new_index = (*index).clone();
+    new_index.remove_entries(|_, path, _| path == "executable" || path.starts_with_str("dir/"));
+
+    std::fs::write(destination.path().join("untracked"), b"untracked")?;
+    std::fs::write(destination.path().join("dir").join("untracked"), b"untracked in dir")?;
+
+    opts.destination_is_initially_empty = false;
+    let odb = odb_at(source_tree.join(".git").join("objects"))?
+        .into_inner()
+        .into_arc()?;
+    let outcome = gix_worktree_state::checkout(
+        &mut new_index,
+        destination.path(),
+        Some(&index),
+        odb,
+        &progress::Discard,
+        &progress::Discard,
+        &AtomicBool::default(),
+        opts,
+    )?;
+
+    assert_eq!(
+        outcome.files_removed, 3,
+        "'executable', 'dir/content' and 'dir/sub-dir/file' are stale"
+    );
+    assert!(outcome.errors.is_empty());
+    assert!(outcome.collisions.is_empty());
+    let dest = destination.path();
+    assert!(!dest.join("executable").exists());
+    assert!(!dest.join("dir").join("content").exists());
+    assert!(
+        !dest.join("dir").join("sub-dir").exists(),
+        "directories that become empty are removed as well"
+    );
+    assert!(
+        dest.join("dir").join("untracked").is_file(),
+        "untracked files are kept, along with the directories that contain them"
+    );
+    assert!(dest.join("untracked").is_file());
+    assert!(dest.join("empty").is_file());
+    assert!(dest.join(".gitattributes").is_file());
+    Ok(())
+}
+
+#[test]
+fn stale_files_with_local_changes_are_not_removed() -> crate::Result {
+    let mut opts = opts_from_probe();
+    let (source_tree, destination, index, _outcome) =
+        checkout_index_in_tmp_dir(opts.clone(), "make_mixed_without_submodules_and_symlinks", None)?;
+    let objects_dir = source_tree.join(".git").join("objects");
+
+    let mut new_index = (*index).clone();
+    new_index.remove_entries(|_, path, _| path == "executable");
+    std::fs::write(
+        destination.path().join("executable"),
+        b"modified content that is longer than before",
+    )?;
+
+    opts.destination_is_initially_empty = false;
+    let err = gix_worktree_state::checkout(
+        &mut new_index,
+        destination.path(),
+        Some(&index),
+        odb_at(objects_dir.clone())?.into_inner().into_arc()?,
+        &progress::Discard,
+        &progress::Discard,
+        &AtomicBool::default(),
+        opts.clone(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            gix_worktree_state::checkout::Error::RemovalPrevented { ref rela_path } if rela_path == "executable"
+        ),
+        "without keep-going, a locally modified stale file aborts the checkout: {err}"
+    );
+    assert!(
+        destination.path().join("executable").is_file(),
+        "the modified file is kept"
+    );
+
+    opts.keep_going = true;
+    let outcome = gix_worktree_state::checkout(
+        &mut new_index,
+        destination.path(),
+        Some(&index),
+        odb_at(objects_dir.clone())?.into_inner().into_arc()?,
+        &progress::Discard,
+        &progress::Discard,
+        &AtomicBool::default(),
+        opts.clone(),
+    )?;
+    assert_eq!(outcome.files_removed, 0);
+    assert_eq!(outcome.errors.len(), 1);
+    assert_eq!(outcome.errors[0].path, "executable");
+    assert!(destination.path().join("executable").is_file());
+
+    opts.keep_going = false;
+    opts.overwrite_existing = true;
+    let outcome = gix_worktree_state::checkout(
+        &mut new_index,
+        destination.path(),
+        Some(&index),
+        odb_at(objects_dir)?.into_inner().into_arc()?,
+        &progress::Discard,
+        &progress::Discard,
+        &AtomicBool::default(),
+        opts,
+    )?;
+    assert_eq!(
+        outcome.files_removed, 1,
+        "overwrite-existing removes even modified files, like checkout --force"
+    );
+    assert!(!destination.path().join("executable").exists());
+    Ok(())
 }
 
 #[test]
