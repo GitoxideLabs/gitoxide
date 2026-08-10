@@ -1086,30 +1086,6 @@ fn contains_agent_marker(message: &[u8]) -> bool {
         .any(|marker| message.windows(marker.len()).any(|window| window == *marker))
 }
 
-pub(crate) fn count_up_to(
-    repo: &gix::Repository,
-    revisions: &[OsString],
-    hidden_revisions: &[OsString],
-    limit: usize,
-) -> Result<usize> {
-    let Some(tips) = resolve_tips(repo, revisions)? else {
-        return Ok(0);
-    };
-    let hidden_tips = resolve_revisions(repo, hidden_revisions, "hidden ")?;
-    let walk = repo
-        .rev_walk(tips)
-        .with_hidden(hidden_tips)
-        .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default()))
-        .all()
-        .context("could not start revision walk")?;
-    let mut count = 0;
-    for info in walk.take(limit) {
-        info.context("could not traverse revision history")?;
-        count += 1;
-    }
-    Ok(count)
-}
-
 fn resolve_tips(repo: &gix::Repository, revisions: &[OsString]) -> Result<Option<Vec<ObjectId>>> {
     if revisions.is_empty() {
         repo.head()
@@ -1716,18 +1692,6 @@ mod tests {
             connected,
             [repo.rev_parse_single("topic^")?.detach()],
             "only the excluded parent directly connected to visible history is retained"
-        );
-        let revisions = [OsString::from("topic")];
-        let hidden = [OsString::from("main")];
-        assert_eq!(
-            count_up_to(&repo, &revisions, &hidden, 1)?,
-            actual.len().min(1),
-            "the screen-size probe stops at its limit"
-        );
-        assert_eq!(
-            count_up_to(&repo, &revisions, &hidden, usize::MAX)?,
-            actual.len(),
-            "the screen-size probe uses the same hidden history"
         );
         assert!(
             matches!(events.last(), Some(Event::Complete(_))),

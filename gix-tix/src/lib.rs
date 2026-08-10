@@ -35,8 +35,8 @@ use crossterm::{
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    style::{Print, ResetColor},
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    style::ResetColor,
+    terminal::{self, Clear, ClearType},
 };
 use gix::{
     bstr::{BString, ByteSlice},
@@ -44,7 +44,7 @@ use gix::{
 };
 use history::{Authors, Decorations, Event, HistoryGraph, SelectionRef, SharedAuthors};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use ratatui::{TerminalOptions, Viewport, backend::CrosstermBackend, text::Line};
+use ratatui::{backend::CrosstermBackend, text::Line};
 
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
@@ -463,20 +463,6 @@ pub struct Options {
     pub quit_on_finish: bool,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
-    /// How much of the terminal to use.
-    pub screen: Screen,
-}
-
-/// How `gix-tix` occupies the terminal.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Screen {
-    /// Use the main screen for short histories, otherwise the alternate screen.
-    #[default]
-    Auto,
-    /// Always use the alternate screen.
-    Always,
-    /// Use half of the main screen.
-    Half,
 }
 
 /// Run the interactive commit graph for `repository`.
@@ -493,43 +479,14 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         hidden_revision_count = options.hide.len(),
         "starting tix"
     );
-    let terminal_height = match options.screen {
-        Screen::Always => 0,
-        Screen::Auto | Screen::Half => terminal::size().context("could not determine terminal size")?.1,
-    };
-    let visible_commits = match options.screen {
-        Screen::Auto | Screen::Half => history::count_up_to(
-            &repository.to_thread_local(),
-            &revisions,
-            &options.hide,
-            half_height(terminal_height) as usize,
-        )?,
-        Screen::Always => 0,
-    };
-    let inline_height = inline_height(options.screen, terminal_height, visible_commits);
-    let mut terminal = match inline_height {
-        Some(height) => ratatui::try_init_with_options(TerminalOptions {
-            viewport: Viewport::Inline(height),
-        }),
-        None => ratatui::try_init(),
-    }
-    .context("could not initialize terminal")?;
+    let mut terminal = ratatui::try_init().context("could not initialize terminal")?;
     let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
     let keyboard_setup = enable_input(terminal.backend_mut(), enhanced_keyboard);
     let result = keyboard_setup
         .context("could not enable enhanced keyboard events")
-        .and_then(|()| {
-            event_loop(
-                &mut terminal,
-                repository,
-                revisions,
-                options,
-                inline_height.is_some(),
-                enhanced_keyboard,
-            )
-        });
+        .and_then(|()| event_loop(&mut terminal, repository, revisions, options, enhanced_keyboard));
     let keyboard_restore = disable_input(terminal.backend_mut(), enhanced_keyboard);
-    let restore = restore_terminal(&mut terminal, inline_height.is_some());
+    let restore = ratatui::try_restore().context("could not restore terminal");
     let lane_time = result?;
     keyboard_restore.context("could not restore keyboard events")?;
     restore?;
@@ -561,165 +518,14 @@ fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keybo
     execute!(backend, DisableMouseCapture, DisableFocusChange)
 }
 
-fn half_height(terminal_height: u16) -> u16 {
-    (terminal_height / 2).max(1)
-}
-
-fn inline_height(screen: Screen, terminal_height: u16, visible_commits: usize) -> Option<u16> {
-    let half = half_height(terminal_height);
-    let compact = u16::try_from(visible_commits).unwrap_or(u16::MAX).saturating_add(3);
-    match screen {
-        Screen::Always => None,
-        Screen::Half => Some(compact.min(half)),
-        Screen::Auto if visible_commits < half as usize => Some(compact),
-        Screen::Auto => None,
-    }
-}
-
-fn restore_terminal(terminal: &mut ratatui::DefaultTerminal, inline: bool) -> Result<()> {
-    if !inline {
-        return ratatui::try_restore().context("could not restore terminal");
-    }
-
-    let cursor = (|| {
-        let area = terminal.get_frame().area();
-        let terminal_height = terminal.size()?.height;
-        execute!(
-            terminal.backend_mut(),
-            cursor::MoveTo(0, area.bottom().saturating_sub(1)),
-            Clear(ClearType::CurrentLine)
-        )?;
-        if area.bottom() < terminal_height {
-            execute!(terminal.backend_mut(), cursor::MoveTo(0, area.bottom()))
-        } else {
-            execute!(
-                terminal.backend_mut(),
-                cursor::MoveTo(0, terminal_height.saturating_sub(1)),
-                Print("\r\n")
-            )
-        }
-        .and_then(|()| terminal.show_cursor())
-    })();
-    let raw_mode = terminal::disable_raw_mode();
-    cursor.context("could not restore terminal cursor")?;
-    raw_mode.context("could not disable terminal raw mode")?;
-    Ok(())
-}
-
-fn enter_alternate_screen(
-    terminal: &mut ratatui::DefaultTerminal,
-    enhanced_keyboard: bool,
-) -> std::io::Result<ratatui::DefaultTerminal> {
-    disable_input(terminal.backend_mut(), enhanced_keyboard)?;
-    let alternate = ratatui::Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    let inline = std::mem::replace(terminal, alternate);
-    enable_input(terminal.backend_mut(), enhanced_keyboard)?;
-    Ok(inline)
-}
-
-fn leave_alternate_screen(
-    terminal: &mut ratatui::DefaultTerminal,
-    inline: ratatui::DefaultTerminal,
-    enhanced_keyboard: bool,
-) -> std::io::Result<()> {
-    disable_input(terminal.backend_mut(), enhanced_keyboard)?;
-    drop(std::mem::replace(terminal, inline));
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    enable_input(terminal.backend_mut(), enhanced_keyboard)?;
-    terminal.hide_cursor()
-}
-
-fn should_switch_screen(started_inline: bool, needs_alternate_screen: bool, in_alternate_screen: bool) -> bool {
-    started_inline && needs_alternate_screen != in_alternate_screen
-}
-
-fn configure_initial_screen(app: &mut App, inline: bool) {
-    app.inline = inline;
-    if inline {
-        app.changes_mode = None;
-    }
-}
-
-fn history_needs_alternate_screen(screen: Screen, terminal_height: u16, commits: usize) -> bool {
-    screen == Screen::Auto && inline_height(screen, terminal_height, commits).is_none()
-}
-
-fn needs_alternate_screen(
-    show_panel: bool,
-    history_requires_alternate_screen: bool,
-    current_inline_height: Option<u16>,
-) -> bool {
-    show_panel || history_requires_alternate_screen || current_inline_height.is_none()
-}
-
-fn resize_inline_screen(terminal: &mut ratatui::DefaultTerminal, height: u16) -> std::io::Result<()> {
-    if terminal.get_frame().area().height == height {
-        return Ok(());
-    }
-    let resized = ratatui::Terminal::with_options(
-        CrosstermBackend::new(std::io::stdout()),
-        TerminalOptions {
-            viewport: Viewport::Inline(height),
-        },
-    )?;
-    drop(std::mem::replace(terminal, resized));
-    terminal.hide_cursor()
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "screen transitions need the complete terminal state"
-)]
-fn sync_screen(
-    terminal: &mut ratatui::DefaultTerminal,
-    app: &mut App,
-    screen: Screen,
-    started_inline: bool,
-    history_requires_alternate_screen: bool,
-    resize_inline: bool,
-    inline_terminal: &mut Option<ratatui::DefaultTerminal>,
-    enhanced_keyboard: bool,
-) -> Result<()> {
-    let inline_height = inline_height(screen, terminal::size()?.1, app.rows.len());
-    let needs_alternate_screen = needs_alternate_screen(
-        app.show_commit || app.changes_mode.is_some(),
-        history_requires_alternate_screen,
-        inline_height,
-    );
-    if !should_switch_screen(started_inline, needs_alternate_screen, inline_terminal.is_some()) {
-        if let (true, Some(height)) = (started_inline && app.inline && resize_inline, inline_height) {
-            resize_inline_screen(terminal, height).context("could not resize the inline history")?;
-        }
-        return Ok(());
-    }
-    if needs_alternate_screen {
-        *inline_terminal =
-            Some(enter_alternate_screen(terminal, enhanced_keyboard).context("could not enter the alternate screen")?);
-        app.inline = false;
-    } else if let Some(inline) = inline_terminal.take() {
-        leave_alternate_screen(terminal, inline, enhanced_keyboard).context("could not leave the alternate screen")?;
-        app.inline = true;
-        if let Some(height) = inline_height {
-            resize_inline_screen(terminal, height).context("could not resize the inline history")?;
-        }
-    }
-    Ok(())
-}
-
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut repository: gix::ThreadSafeRepository,
     revisions: Vec<OsString>,
     options: Options,
-    started_inline: bool,
     enhanced_keyboard: bool,
 ) -> Result<Option<Duration>> {
-    let Options {
-        quit_on_finish,
-        hide,
-        screen,
-    } = options;
+    let Options { quit_on_finish, hide } = options;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -780,7 +586,6 @@ fn event_loop(
         retained: None,
         retain: false,
     };
-    configure_initial_screen(&mut app, started_inline);
     app.set_worktree_changes_available(!repository_is_bare);
     app.configure_hidden_filter(!hide.is_empty());
     sync_line_diff_pool(
@@ -818,9 +623,6 @@ fn event_loop(
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
-    let mut inline_terminal = None;
-    let mut history_requires_alternate_screen = false;
-    let mut resize_inline_pending = false;
     let mut history_finished = false;
     let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
@@ -986,9 +788,6 @@ fn event_loop(
                     selection_relation = None;
                     app.selection_relation = None;
                     lane_receiver = None;
-                    history_requires_alternate_screen =
-                        history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
-                    resize_inline_pending = true;
                     dirty = true;
                     if quit_on_finish {
                         return Ok(app.lane_time);
@@ -1132,7 +931,6 @@ fn event_loop(
             continue;
         }
         let mut events = 0;
-        let mut resize_inline = std::mem::take(&mut resize_inline_pending);
         while !history_finished && events < EVENT_BATCH_SIZE {
             let message = match receiver.try_recv() {
                 Ok(message) => message,
@@ -1145,22 +943,9 @@ fn event_loop(
             dirty = true;
             match message? {
                 Event::Decorations(value) => decorations = value,
-                Event::Commits(rows) => {
-                    app.extend_commits(rows);
-                    if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
-                        history_requires_alternate_screen = true;
-                    }
-                }
-                Event::HiddenCommits(rows) => {
-                    app.extend_hidden_commits(rows);
-                    if history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len()) {
-                        history_requires_alternate_screen = true;
-                    }
-                }
+                Event::Commits(rows) => app.extend_commits(rows),
+                Event::HiddenCommits(rows) => app.extend_hidden_commits(rows),
                 Event::VisibleComplete => {
-                    resize_inline = true;
-                    history_requires_alternate_screen =
-                        history_needs_alternate_screen(screen, terminal::size()?.1, app.rows.len());
                     if let Some(rows) = app.start_lane_computation() {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
@@ -1177,16 +962,6 @@ fn event_loop(
                 }
             }
         }
-        sync_screen(
-            terminal,
-            &mut app,
-            screen,
-            started_inline,
-            history_requires_alternate_screen,
-            resize_inline,
-            &mut inline_terminal,
-            enhanced_keyboard,
-        )?;
         let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
             || verification_receiver.is_some()
             || repeat_deadline.is_some();
@@ -1408,57 +1183,8 @@ fn event_loop(
                 Effect::Quit => return Ok(None),
             }
         }
-        sync_screen(
-            terminal,
-            &mut app,
-            screen,
-            started_inline,
-            history_requires_alternate_screen,
-            false,
-            &mut inline_terminal,
-            enhanced_keyboard,
-        )?;
     })();
-    let restore = inline_terminal
-        .map(|inline| leave_alternate_screen(terminal, inline, enhanced_keyboard))
-        .transpose();
-    restore.context("could not restore the inline terminal")?;
-    let outcome = result?;
-    if outcome.is_none() && started_inline {
-        prepare_inline_exit(&mut app);
-        sync_line_diff_pool(
-            &mut line_diff_pool,
-            false,
-            &repository_path,
-            repository_is_bare,
-            line_diff_parallelism,
-        )?;
-        draw(
-            terminal,
-            &mut app,
-            &decorations,
-            &mailmap,
-            &authors,
-            &mut fill_repository,
-            &mut commit_message,
-            &mut tree_changes,
-            &mut worktree_changes,
-            &mut history_graph,
-            &mut selection_relation,
-            &mut line_diff_pool,
-        )?;
-    }
-    Ok(outcome)
-}
-
-fn prepare_inline_exit(app: &mut App) {
-    app.inline = true;
-    app.show_commit = false;
-    app.changes_mode = None;
-    app.changes_suppressed = false;
-    app.changes_focus = None;
-    app.reset_changes_view();
-    app.show_selection_tail = false;
+    result
 }
 
 fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCommitRow>, app::Graph, Duration)> {
@@ -1664,11 +1390,7 @@ fn draw(
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
 ) -> Result<()> {
-    let render_rows = terminal
-        .get_frame()
-        .area()
-        .height
-        .saturating_sub(1 + 2 * u16::from(app.inline)) as usize;
+    let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
         return Ok(());
     }
@@ -3416,95 +3138,6 @@ mod tests {
     }
 
     #[test]
-    fn chooses_screen_from_terminal_and_history_height() {
-        assert_eq!(
-            inline_height(Screen::Auto, 20, 7),
-            Some(10),
-            "short histories occupy only their rows, spacers, and footer"
-        );
-        assert_eq!(
-            inline_height(Screen::Auto, 20, 8),
-            Some(11),
-            "spacers do not force an otherwise short history into the alternate screen"
-        );
-        assert_eq!(
-            inline_height(Screen::Auto, 20, 10),
-            None,
-            "the auto cutoff remains half the terminal height"
-        );
-        assert_eq!(
-            inline_height(Screen::Half, 21, 3),
-            Some(6),
-            "half mode shrinks to the rows, spacers, and footer needed by short histories"
-        );
-        assert_eq!(
-            inline_height(Screen::Half, 21, 10),
-            Some(10),
-            "half mode is capped at half the terminal, rounded down"
-        );
-        assert_eq!(
-            inline_height(Screen::Half, 21, 0),
-            Some(3),
-            "an empty history only needs its spacers and footer"
-        );
-        assert_eq!(
-            inline_height(Screen::Always, 20, 0),
-            None,
-            "always mode uses the alternate screen"
-        );
-    }
-
-    #[test]
-    fn switches_screens_for_inline_commit_panes_and_large_histories() {
-        let mut inline = App::new(1);
-        configure_initial_screen(&mut inline, true);
-        assert!(inline.inline);
-        assert_eq!(
-            inline.changes_mode, None,
-            "inline startup hides the default changes view"
-        );
-        let mut alternate = App::new(1);
-        configure_initial_screen(&mut alternate, false);
-        assert!(!alternate.inline);
-        assert!(
-            alternate.changes_mode == Some(ChangesMode::Both),
-            "alternate-screen startup keeps the default tree and worktree changes view"
-        );
-
-        assert!(
-            should_switch_screen(true, true, false),
-            "opening the commit pane from inline mode enters the alternate screen"
-        );
-        assert!(
-            should_switch_screen(true, false, true),
-            "closing the commit pane returns to inline mode"
-        );
-        assert!(
-            !should_switch_screen(false, true, true),
-            "a session that started in the alternate screen stays there"
-        );
-        assert!(
-            !should_switch_screen(true, true, true),
-            "an already-active alternate screen is not re-entered"
-        );
-        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 7));
-        assert!(!history_needs_alternate_screen(Screen::Auto, 20, 8));
-        assert!(history_needs_alternate_screen(Screen::Auto, 20, 10));
-        assert!(
-            needs_alternate_screen(false, false, None),
-            "current terminal geometry overrides a stale history-fit flag"
-        );
-        assert!(
-            !needs_alternate_screen(false, false, Some(11)),
-            "a fitting current layout may return to inline mode"
-        );
-        assert!(
-            !history_needs_alternate_screen(Screen::Half, 20, usize::MAX),
-            "half-screen mode never switches because history grows"
-        );
-    }
-
-    #[test]
     fn maps_navigation_and_control_c() {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
@@ -3697,24 +3330,6 @@ mod tests {
         assert!(!repeats_viewport(
             &mouse_scroll_action(MouseEventKind::ScrollRight, 1).expect("horizontal scrolling has an action")
         ));
-    }
-
-    #[test]
-    fn prepares_a_reduced_selection_after_leaving_the_alternate_screen() {
-        let mut app = App::new(1);
-        app.show_commit = true;
-        app.changes_mode = Some(ChangesMode::Tree);
-        app.changes_focus = Some(ChangePane::Tree);
-
-        prepare_inline_exit(&mut app);
-
-        assert!(app.inline, "the final frame is drawn into the restored inline screen");
-        assert!(
-            !app.show_commit && app.changes_mode.is_none(),
-            "alternate-screen panels are omitted from the final frame"
-        );
-        assert_eq!(app.changes_focus, None, "the hidden panel no longer owns focus");
-        assert!(!app.show_selection_tail, "only the left selection marker remains");
     }
 
     #[test]

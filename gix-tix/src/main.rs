@@ -8,7 +8,7 @@ fn main() -> Result<()> {
     let (revisions, options, help) = arguments(gix::env::args_os().skip(1))?;
     if help {
         println!(
-            "Usage: tix [--quit-on-finish] [--screen MODE] [-h|--hide REVSPEC] [REVISION]...\n\nBrowse commits reachable from HEAD or the given revisions.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n      --screen MODE   Use auto, always, or half screen mode [default: auto]\n      --help          Print help"
+            "Usage: tix [--quit-on-finish] [-h|--hide REVSPEC] [REVISION]...\n\nBrowse commits reachable from HEAD or the given revisions.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n      --help          Print help"
         );
         return Ok(());
     }
@@ -29,21 +29,6 @@ fn arguments(mut args: impl Iterator<Item = OsString>) -> Result<(Vec<OsString>,
             break;
         } else if arg == "--quit-on-finish" {
             options.quit_on_finish = true;
-        } else if arg == "--screen" {
-            let value = args.next().context("--screen requires one of: auto, always, half")?;
-            if value == "--help" {
-                help = true;
-                break;
-            }
-            options.screen = match value {
-                value if value == "auto" => gix_tix::Screen::Auto,
-                value if value == "always" => gix_tix::Screen::Always,
-                value if value == "half" => gix_tix::Screen::Half,
-                value => anyhow::bail!(
-                    "invalid --screen value {}; expected auto, always, or half",
-                    value.display()
-                ),
-            };
         } else if arg == "-h" || arg == "--hide" {
             let revision = args.next().context("-h/--hide requires a revision to hide")?;
             if revision == "--help" {
@@ -70,23 +55,12 @@ mod tests {
     #[test]
     fn separates_options_from_revisions() -> Result<()> {
         let (revisions, options, help) = arguments(
-            [
-                "--quit-on-finish",
-                "--screen",
-                "half",
-                "-h",
-                "main",
-                "--hide",
-                "tag",
-                "topic",
-                "--help",
-            ]
-            .into_iter()
-            .map(OsString::from),
+            ["--quit-on-finish", "-h", "main", "--hide", "tag", "topic", "--help"]
+                .into_iter()
+                .map(OsString::from),
         )?;
 
         assert!(options.quit_on_finish);
-        assert_eq!(options.screen, gix_tix::Screen::Half);
         assert_eq!(options.hide, ["main", "tag"], "both hide options are retained");
         assert_eq!(revisions, ["topic"], "only positional revisions remain");
         assert!(help, "--help remains available without claiming -h");
@@ -100,19 +74,6 @@ mod tests {
                 "--help wins regardless of its position"
             );
         }
-        assert_eq!(
-            arguments(std::iter::empty())?.1.screen,
-            gix_tix::Screen::Auto,
-            "auto is the default"
-        );
-        assert!(
-            arguments(["--screen"].into_iter().map(OsString::from)).is_err(),
-            "a missing screen mode is rejected"
-        );
-        assert!(
-            arguments(["--screen", "other"].into_iter().map(OsString::from)).is_err(),
-            "an unknown screen mode is rejected"
-        );
         Ok(())
     }
 }
