@@ -52,6 +52,7 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const HISTORY_STATUS_DELAY: Duration = Duration::from_millis(500);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
+const REF_EVENT_IDLE: Duration = Duration::from_millis(100);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
@@ -568,6 +569,7 @@ fn event_loop(
     let mut refresh_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
     let mut refresh_from_filesystem = false;
+    let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_select_top = false;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
@@ -682,12 +684,7 @@ fn event_loop(
                         rescans += usize::from(event.need_rescan());
                         if notification_is_actionable(&event) {
                             actionable += 1;
-                            refresh_pending = true;
-                            refresh_from_filesystem = true;
-                            if invalidate_worktree_changes(&mut worktree_changes) {
-                                dirty = true;
-                                urgent = true;
-                            }
+                            ref_refresh_deadline = Some(Instant::now() + REF_EVENT_IDLE);
                         }
                     }
                     Ok(Err(err)) => {
@@ -704,8 +701,17 @@ fn event_loop(
         if let Some(err) = ref_watch_error {
             tracing::warn!(error = %err, "reference watcher failed");
             ref_watcher = None;
+            ref_refresh_deadline = None;
             app.manual_refresh = true;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+        }
+        if take_due(&mut ref_refresh_deadline, Instant::now()) {
+            refresh_pending = true;
+            refresh_from_filesystem = true;
+            if invalidate_worktree_changes(&mut worktree_changes) {
+                dirty = true;
+                urgent = true;
+            }
         }
         if take_due(&mut watcher_retry_deadline, Instant::now()) {
             let mut retry = false;
@@ -985,6 +991,8 @@ fn event_loop(
         }
         let repeat_timeout = repeat_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let watcher_timeout = ref_watcher.as_ref().map(|_| REF_EVENT_INTERVAL);
+        let ref_refresh_timeout =
+            ref_refresh_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let worktree_timeout = worktree_refresh_deadline
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
             .or_else(|| worktree_watcher.as_ref().map(|_| REF_EVENT_INTERVAL));
@@ -994,6 +1002,7 @@ fn event_loop(
         let wake_after = [
             repeat_timeout,
             watcher_timeout,
+            ref_refresh_timeout,
             worktree_timeout,
             retry_timeout,
             history_status_timeout,
@@ -2566,6 +2575,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reference_watcher_observes_new_loose_refs() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = open_test_repository(fixture.path())?;
+        let watcher = start_ref_watcher(repository.git_dir(), repository.common_dir())?;
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let status = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["update-ref", "refs/heads/watched", &topic.to_hex().to_string()])
+            .status()?;
+        assert!(status.success(), "git updates a loose reference");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut paths = Vec::new();
+        while Instant::now() < deadline {
+            let event = watcher
+                .events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))??;
+            assert!(notification_is_actionable(&event), "the reference update is actionable");
+            paths.extend(event.paths);
+            if paths.iter().any(|path| path.ends_with("refs/heads/watched")) {
+                break;
+            }
+        }
+        assert!(
+            paths.iter().any(|path| path.ends_with("refs/heads/watched")),
+            "the final loose reference is reported after its lock file: {paths:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn caches_recent_tree_changes_by_commit_and_parent() {
         let id = |value| {
             let mut bytes = [0; 20];
@@ -3518,5 +3558,13 @@ mod tests {
             take_due(&mut deadline, now + HISTORY_STATUS_DELAY),
             "background progress becomes visible at 500 ms"
         );
+
+        let last_event = now + Duration::from_millis(75);
+        deadline = Some(last_event + REF_EVENT_IDLE);
+        assert!(
+            !take_due(&mut deadline, now + REF_EVENT_IDLE),
+            "reference inspection waits for the final transaction event"
+        );
+        assert!(take_due(&mut deadline, last_event + REF_EVENT_IDLE));
     }
 }
