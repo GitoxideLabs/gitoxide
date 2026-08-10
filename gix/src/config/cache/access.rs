@@ -203,7 +203,7 @@ impl Cache {
     }
 
     #[cfg(any(feature = "blocking-network-client", feature = "async-network-client"))]
-    pub(crate) fn url_scheme(&self) -> Result<&remote::url::SchemePermission, config::protocol::allow::Error> {
+    pub(crate) fn url_scheme(&self) -> Result<&remote::url::SchemePermission, remote::url::scheme_permission::Error> {
         self.url_scheme
             .get_or_try_init(|| remote::url::SchemePermission::from_config(&self.resolved, self.filter_config_section))
     }

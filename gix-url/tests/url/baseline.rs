@@ -1,6 +1,47 @@
 use bstr::ByteSlice;
 
 #[test]
+fn parse_remote_helpers_like_git() {
+    let base = gix_testtools::scripted_fixture_read_only("make_baseline.sh").expect("fixture is generated");
+    let baseline = std::fs::read(base.join("git-baseline.remote-helper")).expect("baseline exists");
+    let mut count = 0;
+    for line in baseline.lines() {
+        let mut fields = line.split(|b| b == &b'\t');
+        let helper = fields.next().expect("helper name is recorded");
+        let input = fields.next().expect("original URL is recorded");
+        let address = fields.next().expect("remote-helper address is recorded");
+        assert!(fields.next().is_none(), "the helper receives exactly two arguments");
+
+        let actual = gix_url::parse(input).expect("Git-accepted remote-helper syntax parses");
+        let helper = helper.to_str().expect("helper names are UTF-8").to_owned();
+        assert_eq!(
+            actual.scheme,
+            if input.starts_with_str("ext::") {
+                gix_url::Scheme::Ext
+            } else if input.contains_str("::") {
+                gix_url::Scheme::Helper(helper)
+            } else {
+                gix_url::Scheme::HelperUrl(helper)
+            }
+        );
+        if input.contains_str("::") {
+            assert_eq!(actual.path, address);
+            assert_eq!(actual.to_bstring(), input, "remote-helper form roundtrips exactly");
+        } else {
+            assert_eq!(
+                gix_url::parse(actual.to_bstring())
+                    .expect("serialized URL parses")
+                    .scheme,
+                actual.scheme,
+                "Git's case-sensitive helper name survives serialization"
+            );
+        }
+        count += 1;
+    }
+    assert_eq!(count, 28, "all helper, address and syntax combinations ran");
+}
+
+#[test]
 fn parse_and_compare_baseline_urls() {
     let mut passed = 0;
     let mut failed = 0;

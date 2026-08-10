@@ -4,7 +4,7 @@ use percent_encoding::percent_decode_str;
 /// This is a replacement for the `url` crate dependency.
 #[derive(Debug)]
 pub(crate) struct ParsedUrl {
-    pub scheme: String,           // Owned to allow normalization to lowercase
+    pub scheme: String,
     pub username: String,         // Owned to allow percent-decoding
     pub password: Option<String>, // Owned to allow percent-decoding
     pub host: Option<String>,     // Owned to allow normalization to lowercase
@@ -111,8 +111,6 @@ impl ParsedUrl {
         // Find scheme by looking for first ':'
         let first_colon = input.find(':').ok_or(UrlParseError::RelativeUrlWithoutBase)?;
         let scheme_str = &input[..first_colon];
-        // Normalize scheme to lowercase for case-insensitive matching (matches url crate behavior)
-        let scheme = scheme_str.to_ascii_lowercase();
         let Some(after_scheme) = input[first_colon..].strip_prefix("://") else {
             return Err(UrlParseError::RelativeUrlWithoutBase);
         };
@@ -130,7 +128,7 @@ impl ParsedUrl {
         }
 
         // Git treats query and fragment delimiters as authority text outside HTTP URLs.
-        let path_start = if matches!(scheme.as_str(), "http" | "https") {
+        let path_start = if matches!(scheme_str, "http" | "https") {
             after_scheme.find(['/', '?', '#'])
         } else {
             after_scheme.find('/')
@@ -147,8 +145,8 @@ impl ParsedUrl {
             (String::new(), None)
         };
 
-        let allow_unbracketed_ipv6 = matches!(scheme.as_str(), "git" | "ssh" | "git+ssh" | "ssh+git");
-        let strict_authority = matches!(scheme.as_str(), "http" | "https");
+        let allow_unbracketed_ipv6 = matches!(scheme_str, "git" | "ssh" | "git+ssh" | "ssh+git");
+        let strict_authority = matches!(scheme_str, "http" | "https");
 
         // Parse authority: [user[:password]@]host[:port]
         let (username, password, host, port) = if let Some((user_info, host_port)) = authority.rsplit_once('@') {
@@ -179,14 +177,13 @@ impl ParsedUrl {
         };
 
         // Standard schemes (http, https, git, ssh) require a host
-        // Scheme is already lowercase at this point
-        let requires_host = matches!(scheme.as_str(), "http" | "https" | "git" | "ssh" | "ftp" | "ftps");
+        let requires_host = matches!(scheme_str, "http" | "https" | "git" | "ssh" | "ftp" | "ftps");
         if requires_host && host.is_none() {
             return Err(UrlParseError::SchemeRequiresHost);
         }
 
         Ok(ParsedUrl {
-            scheme,
+            scheme: scheme_str.into(),
             username,
             password,
             host,

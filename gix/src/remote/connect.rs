@@ -24,7 +24,7 @@ mod error {
         #[error("Could not access remote repository at \"{}\"", directory.display())]
         InvalidRemoteRepositoryPath { directory: std::path::PathBuf },
         #[error(transparent)]
-        SchemePermission(#[from] config::protocol::allow::Error),
+        SchemePermission(#[from] remote::url::scheme_permission::Error),
         #[error("Protocol {scheme:?} of url {url:?} is denied per configuration")]
         ProtocolDenied { url: BString, scheme: gix_url::Scheme },
         #[error(transparent)]

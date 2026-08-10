@@ -186,6 +186,9 @@ EOF
   } > baseline.git
 )
 
+# Note that the URLs used to make rewrites fail carry no name before the `::`, as `name::address`
+# is the remote-helper syntax documented at https://git-scm.com/docs/gitremote-helpers
+# and parses successfully.
 git init --bare bad-url-rewriting
 (cd bad-url-rewriting
 
@@ -195,7 +198,7 @@ git init --bare bad-url-rewriting
 [remote "origin"]
   pushUrl = "file://dev/null"
 
-[url "invalid:://"]
+[url ":://"]
   pushInsteadOf = "file://"
 
 [url "https://github.com/byron/"]
@@ -230,16 +233,16 @@ git init --bare multiple-bad-url-rewriting
   git config --add remote.origin.url https://github.com/foobar/gitoxide
   git config --add remote.origin.url bad:gitoxide
   git config --add url.https://github.com/byron/.insteadOf https://github.com/foobar/
-  git config --add url.invalid:://.insteadOf bad:
+  git config --add url.:://.insteadOf bad:
 )
 
 git init --bare multiple-urls-with-empty-reset
 (cd multiple-urls-with-empty-reset
 
-  git config --add remote.origin.url invalid:://old
+  git config --add remote.origin.url :://old
   git config --add remote.origin.url ""
   git config --add remote.origin.url alias:new
-  git config --add remote.origin.pushUrl invalid:://push-old
+  git config --add remote.origin.pushUrl :://push-old
   git config --add remote.origin.pushUrl ""
   git config --add remote.origin.pushUrl push:new
 
@@ -272,7 +275,7 @@ git init --bare bad-push-fallback-url-rewriting
 (cd bad-push-fallback-url-rewriting
 
   git config remote.origin.url alias:repo
-  git config url.invalid:://.pushInsteadOf alias:
+  git config url.:://.pushInsteadOf alias:
 )
 
 git init --bare bad-explicit-push-url-rewriting
@@ -280,7 +283,7 @@ git init --bare bad-explicit-push-url-rewriting
 
   git config remote.origin.url alias:repo
   git config remote.origin.pushUrl bad:repo
-  git config url.invalid:://.insteadOf bad:
+  git config url.:://.insteadOf bad:
 )
 
 git clone --shared base protocol_denied

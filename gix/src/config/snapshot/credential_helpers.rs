@@ -111,7 +111,7 @@ pub(super) mod function {
         if let Some(credential_sections) = config.sections_by_name_and_filter("credential", &mut filter) {
             for section in credential_sections {
                 let section = match section.header().subsection_name() {
-                    Some(pattern) => gix_url::parse(pattern).ok().and_then(|mut pattern| {
+                    Some(pattern) => parse_pattern(pattern).and_then(|mut pattern| {
                         normalize(&mut pattern);
                         let is_http = matches!(pattern.scheme, gix_url::Scheme::Https | gix_url::Scheme::Http);
                         let scheme = &pattern.scheme;
@@ -250,9 +250,30 @@ pub(super) mod function {
     }
 
     fn normalize(url: &mut gix_url::Url) {
+        // Transport dispatch is case-sensitive, but Git's credential URL matcher follows URL semantics.
+        url.scheme = match &url.scheme {
+            gix_url::Scheme::HelperUrl(name) if name.eq_ignore_ascii_case("http") => gix_url::Scheme::Http,
+            gix_url::Scheme::HelperUrl(name) if name.eq_ignore_ascii_case("https") => gix_url::Scheme::Https,
+            scheme => scheme.clone(),
+        };
+        if matches!(url.scheme, gix_url::Scheme::Http | gix_url::Scheme::Https) && url.path.is_empty() {
+            url.path = "/".into();
+        }
         if !url.path_is_root() && url.path.ends_with(b"/") {
             url.path.pop();
         }
+    }
+
+    fn parse_pattern(pattern: &crate::bstr::BStr) -> Option<gix_url::Url> {
+        let mut pattern = pattern.to_owned();
+        if let Some(scheme_end) = pattern.find("://") {
+            let scheme = &mut pattern[..scheme_end];
+            if scheme.eq_ignore_ascii_case(b"http") || scheme.eq_ignore_ascii_case(b"https") {
+                // Transport dispatch is case-sensitive, but Git's credential URL matcher follows URL semantics.
+                scheme.make_ascii_lowercase();
+            }
+        }
+        gix_url::parse(pattern).ok()
     }
 
     trait IgnoreEmptyPath {

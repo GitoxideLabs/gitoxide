@@ -120,6 +120,41 @@ do
   git -C temp-repo fetch-pack --diag-url "$url"
 done >git-baseline.windows
 
+# `fetch-pack --diag-url` rejects remote-helper syntax before reaching Git's remote-helper
+# dispatch. Use a minimal helper to record how Git splits `<helper>::<address>` instead.
+remote_helper_baseline="$PWD/git-baseline.remote-helper"
+mkdir remote-helper-bin
+cat >remote-helper-bin/helper <<'EOF'
+#!/bin/sh
+helper=${0##*/}
+helper=${helper##*\\}
+printf '%s\t%s\t%s\n' "${helper#git-remote-}" "$1" "$2" >>"$REMOTE_HELPER_BASELINE"
+while read -r command
+do
+  case "$command" in
+    capabilities|list) echo ;;
+    '') exit ;;
+  esac
+done
+EOF
+remote_helper_names=(baseline CodeCommit SSH GIT HTTP HTTPS FILE)
+remote_helper_addresses=(address https://example.com/repo)
+: >"$remote_helper_baseline"
+for helper in "${remote_helper_names[@]}"
+do
+  cp remote-helper-bin/helper "remote-helper-bin/git-remote-$helper"
+  chmod +x "remote-helper-bin/git-remote-$helper"
+  for address in "${remote_helper_addresses[@]}"
+  do
+    for url in "$helper::$address" "$helper://$address"
+    do
+      REMOTE_HELPER_BASELINE="$remote_helper_baseline" GIT_EXEC_PATH="$PWD/remote-helper-bin" \
+        PATH="$PWD/remote-helper-bin:$PATH" git ls-remote "$url"
+    done
+  done
+done
+rm -rf remote-helper-bin
+
 # `fetch-pack --diag-url` doesn't support HTTP, so use Git's credential parser as the baseline oracle.
 for url in "${credential_urls[@]}"
 do

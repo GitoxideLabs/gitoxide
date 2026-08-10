@@ -399,7 +399,7 @@ impl crate::Repository {
                     Ok(Some(Box::new(opts)))
                 }
             }
-            File | Git | Ssh | Ext(_) => Ok(None),
+            File | Git | Ssh | Ext | Helper(_) | HelperUrl(_) => Ok(None),
         }
     }
 }

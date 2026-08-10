@@ -870,12 +870,13 @@ mod gitoxide {
 
         #[test]
         fn protocol_from_user() {
-            assert!(
-                gitoxide::Allow::PROTOCOL_FROM_USER.validate("1".into()).is_ok(),
-                "this really is the only valid value"
-            );
-            assert!(gitoxide::Allow::PROTOCOL_FROM_USER.validate("true".into()).is_err());
-            assert!(gitoxide::Allow::PROTOCOL_FROM_USER.validate("0".into()).is_err());
+            for value in ["1", "true", "yes", "0", "false", "no"] {
+                assert!(
+                    gitoxide::Allow::PROTOCOL_FROM_USER.validate(value.into()).is_ok(),
+                    "Git accepts {value:?} as a boolean"
+                );
+            }
+            assert!(gitoxide::Allow::PROTOCOL_FROM_USER.validate("invalid".into()).is_err());
         }
     }
     mod commit {

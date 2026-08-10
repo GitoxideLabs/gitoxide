@@ -184,6 +184,41 @@ fn scp_like_with_user_and_relative_path_keep_relative_path() -> crate::Result {
 }
 
 #[test]
+fn canonical_form_is_used_only_if_it_preserves_scp_path_semantics() -> crate::Result {
+    assert_eq!(
+        gix_url::parse("user@host.xz:relative")?
+            .with_request_alternate_form(false)
+            .to_bstring(),
+        "user@host.xz:relative",
+        "canonical form would turn the relative path into an absolute one"
+    );
+    assert_eq!(
+        gix_url::parse("user@host.xz:/absolute")?
+            .with_request_alternate_form(false)
+            .to_bstring(),
+        "ssh://user@host.xz/absolute",
+        "an absolute path has a lossless canonical form"
+    );
+    assert_eq!(
+        gix_url::parse("user@host.xz:~user/repo")?
+            .with_request_alternate_form(false)
+            .to_bstring(),
+        "ssh://user@host.xz/~user/repo",
+        "Git treats this canonical spelling as the same home-relative path"
+    );
+    for request_alternative_form in [false, true] {
+        assert!(
+            url(Scheme::Ssh, None, "host.xz", 22, b"relative")
+                .with_request_alternate_form(request_alternative_form)
+                .write_to(&mut Vec::new())
+                .is_err(),
+            "a port prevents using lossless SCP-like form"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn scp_like_with_windows_path() -> crate::Result {
     let url = assert_url(
         "user@host.xz:C:/strange/absolute/path",
@@ -234,6 +269,17 @@ fn scp_like_with_username_including_at() -> crate::Result {
     Ok(())
 }
 
+#[test]
+fn scp_like_username_with_colon_is_not_mistaken_for_a_password() -> crate::Result {
+    let input = "[:[@]:\x1a";
+    let url = gix_url::parse(input)?;
+    assert_eq!(url.user(), Some("[:["), "OpenSSH splits user and host at the last @");
+    assert_eq!(url.host(), Some("]"), "the remainder is the host");
+    assert_eq!(url.password(), None, "SCP-like syntax has no password field");
+    assert_eq!(url.to_bstring(), input, "successfully parsed inputs must serialize");
+    Ok(())
+}
+
 // Git does not care that the host is named `file`, it still treats it as an SCP url.
 // I btw tested this, yes you can really clone a repository from there, just `git init`
 // in the directory above your home directory on the remote machine.
@@ -247,7 +293,7 @@ fn strange_scp_like_with_host_named_file() -> crate::Result {
 #[test]
 fn bad_alternative_form_with_password() -> crate::Result {
     let url = url_with_pass(Scheme::Ssh, "user", "password", "host.xz", None, b"/")
-        .serialize_alternate_form(true)
+        .with_request_alternate_form(true)
         .to_bstring();
     assert_eq!(url, "ssh://user:password@host.xz/");
     Ok(())
@@ -352,7 +398,7 @@ fn scoped_ipv6_address_with_empty_port() -> crate::Result {
 
 #[test]
 fn bracketed_host_is_percent_decoded_once() -> crate::Result {
-    let url = gix_url::parse("SSh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
+    let url = gix_url::parse("ssh://[::81ssssssssssssssssssssssssssssssssssssss%2585]:/00%2585]://")?;
     assert_eq!(
         url.host(),
         Some("::81ssssssssssssssssssssssssssssssssssssss%85"),
