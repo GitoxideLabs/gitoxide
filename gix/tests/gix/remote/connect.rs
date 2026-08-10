@@ -24,20 +24,36 @@ mod blocking_io {
         #[test]
         #[serial]
         fn user() -> crate::Result {
-            for (env_value, should_allow) in [(None, true), (Some("0"), false), (Some("1"), true)] {
+            for (env_value, should_allow) in [
+                (None, Some(true)),
+                (Some("0"), Some(false)),
+                (Some("false"), Some(false)),
+                (Some("1"), Some(true)),
+                (Some("true"), Some(true)),
+                (Some("invalid"), None),
+            ] {
                 let _env = env_value.map(|value| gix_testtools::Env::new().set("GIT_PROTOCOL_FROM_USER", value));
                 let repo = gix::open_opts(
                     remote::repo("protocol_file_user").git_dir(),
                     gix::open::Options::isolated().permissions(gix::open::Permissions {
                         env: gix::open::permissions::Environment {
                             git_prefix: gix_sec::Permission::Allow,
+                            http_transport: gix_sec::Permission::Deny,
                             ..gix::open::permissions::Environment::all()
                         },
                         ..gix::open::Permissions::isolated()
                     }),
                 )?;
                 let remote = repo.find_remote("origin")?;
-                assert_eq!(remote.connect(Fetch).is_ok(), should_allow, "Value = {env_value:?}");
+                let result = remote.connect(Fetch);
+                if let Some(should_allow) = should_allow {
+                    assert_eq!(result.is_ok(), should_allow, "Value = {env_value:?}");
+                } else {
+                    assert!(
+                        matches!(result, Err(gix::remote::connect::Error::SchemePermission(_))),
+                        "invalid booleans must be reported"
+                    );
+                }
             }
             Ok(())
         }

@@ -13,8 +13,19 @@ pub enum Allow {
     Always,
     /// Forbid using this protocol
     Never,
-    /// Only supported if the `GIT_PROTOCOL_FROM_USER` is unset or is set to `1`.
+    /// Only supported if `GIT_PROTOCOL_FROM_USER` is unset or evaluates to true.
     User,
+}
+
+/// The error returned when obtaining transport permissions from configuration.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The value of `protocol[.<name>].allow` was invalid.
+    #[error(transparent)]
+    Allow(#[from] config::protocol::allow::Error),
+    /// `GIT_PROTOCOL_FROM_USER` was not a valid Git boolean.
+    #[error(transparent)]
+    ProtocolFromUser(#[from] config::boolean::Error),
 }
 
 impl Allow {
@@ -43,7 +54,7 @@ impl TryFrom<&BStr> for Allow {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SchemePermission {
-    /// `None`, env-var is unset or wasn't queried, otherwise true if `GIT_PROTOCOL_FROM_USER` is `1`.
+    /// `None` if the env-var is unset, otherwise its parsed boolean value.
     user_allowed: Option<bool>,
     /// The general allow value from `protocol.allow`.
     allow: Option<Allow>,
@@ -57,13 +68,12 @@ impl SchemePermission {
     pub fn from_config(
         config: &gix_config::File,
         mut filter: fn(&gix_config::file::Metadata) -> bool,
-    ) -> Result<Self, config::protocol::allow::Error> {
+    ) -> Result<Self, Error> {
         let allow: Option<Allow> = config
             .string_filter("protocol.allow", &mut filter)
             .map(|value| Protocol::ALLOW.try_into_allow(value, None))
             .transpose()?;
 
-        let mut saw_user = allow == Some(Allow::User);
         let allow_per_scheme = match config.sections_by_name_and_filter("protocol", &mut filter) {
             Some(it) => {
                 let mut map = BTreeMap::default();
@@ -78,7 +88,6 @@ impl SchemePermission {
                         .map(|value| Protocol::ALLOW.try_into_allow(value, Some(scheme)))
                         .transpose()?
                     {
-                        saw_user |= value == Allow::User;
                         map.insert(scheme.to_owned(), value);
                     }
                 }
@@ -87,11 +96,8 @@ impl SchemePermission {
             None => Default::default(),
         };
 
-        let user_allowed = saw_user.then(|| {
-            config
-                .string_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter)
-                .is_none_or(|val| val == "1")
-        });
+        let user_allowed = gitoxide::Allow::PROTOCOL_FROM_USER
+            .enrich_error(config.boolean_filter(gitoxide::Allow::PROTOCOL_FROM_USER, &mut filter))?;
         Ok(SchemePermission {
             allow,
             allow_per_scheme,
@@ -111,7 +117,14 @@ impl SchemePermission {
                     use gix_url::Scheme::*;
                     match scheme {
                         File | Git | Ssh | Http | Https => true,
-                        Ext | Helper(_) | HelperUrl(_) => false,
+                        Ext => false,
+                        Helper(name) | HelperUrl(name) => match name.as_str() {
+                            // Git applies its known-safe defaults by transport name even when that name selects a
+                            // remote helper, so e.g. `ssh::address` inherits the default policy of `ssh`.
+                            "http" | "https" | "git" | "ssh" => true,
+                            "ext" => false,
+                            _ => Allow::User.to_bool(self.user_allowed),
+                        },
                     }
                 },
                 |allow| allow.to_bool(self.user_allowed),
@@ -134,5 +147,47 @@ mod tests {
         assert!(permissions.allow(&gix_url::Scheme::Helper("foo".into())));
         assert!(permissions.allow(&gix_url::Scheme::HelperUrl("foo".into())));
         assert!(permissions.allow(&gix_url::Scheme::Ext));
+    }
+
+    #[test]
+    fn unknown_helpers_default_to_user_while_ext_remains_denied() {
+        for scheme in [
+            gix_url::Scheme::Helper("foo".into()),
+            gix_url::Scheme::HelperUrl("foo".into()),
+        ] {
+            let permissions = |user_allowed| SchemePermission {
+                user_allowed,
+                allow: None,
+                allow_per_scheme: Default::default(),
+            };
+            assert!(
+                permissions(None).allow(&scheme),
+                "by default, extra helpers are allowed"
+            );
+            assert!(permissions(Some(true)).allow(&scheme));
+            assert!(!permissions(Some(false)).allow(&scheme), "but they can be disallowed");
+        }
+
+        let permissions = SchemePermission {
+            user_allowed: None,
+            allow: None,
+            allow_per_scheme: Default::default(),
+        };
+        assert!(
+            !permissions.allow(&gix_url::Scheme::Ext),
+            "extension commands are disallowed, they can invoke any command otherwise"
+        );
+        assert!(!permissions.allow(&gix_url::Scheme::HelperUrl("ext".into())));
+
+        let no_user = SchemePermission {
+            user_allowed: Some(false),
+            ..permissions
+        };
+        assert!(no_user.allow(&gix_url::Scheme::Helper("ssh".into())));
+        assert!(no_user.allow(&gix_url::Scheme::HelperUrl("https".into())));
+        assert!(
+            !no_user.allow(&gix_url::Scheme::Helper("file".into())),
+            "file::address invokes git-remote-file, which has the default user policy and is denied when GIT_PROTOCOL_FROM_USER is false"
+        );
     }
 }

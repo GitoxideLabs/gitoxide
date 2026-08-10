@@ -140,7 +140,7 @@ mod with_overrides {
             .set("ALL_PROXY", "all-proxy")
             .set("no_proxy", "no-proxy-lower")
             .set("NO_PROXY", "no-proxy")
-            .set("GIT_PROTOCOL_FROM_USER", "file-allowed")
+            .set("GIT_PROTOCOL_FROM_USER", "false")
             .set("GIT_REPLACE_REF_BASE", "refs/replace-mine")
             .set("GIT_NO_REPLACE_OBJECTS", "no-replace")
             .set("GIT_ALLOC_LIMIT", "7m")
@@ -309,7 +309,7 @@ mod with_overrides {
         for (key, expected) in [
             ("gitoxide.http.sslNoVerify", "true"),
             ("gitoxide.http.verbose", "true"),
-            ("gitoxide.allow.protocolFromUser", "file-allowed"),
+            ("gitoxide.allow.protocolFromUser", "false"),
             ("core.useReplaceRefs", "no-replace"),
             #[cfg(feature = "blob-diff")]
             ("diff.external", "external-diff-env"),

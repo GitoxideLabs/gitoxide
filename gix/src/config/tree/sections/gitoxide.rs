@@ -81,7 +81,7 @@ mod subsections {
     #[derive(Copy, Clone, Default)]
     pub struct Core;
 
-    /// The `gitoxide.allow.protocolFromUser` key.
+    /// The `gitoxide.core.refsNamespace` key.
     pub type RefsNamespace = keys::Any<super::validate::RefsNamespace>;
     /// A path to an alternate index file.
     pub type IndexFile = keys::Any<super::validate::NonEmptyPath>;
@@ -284,16 +284,13 @@ mod subsections {
     pub struct Allow;
 
     /// The `gitoxide.allow.protocolFromUser` key.
-    pub type ProtocolFromUser = keys::Any<super::validate::ProtocolFromUser>;
+    pub type ProtocolFromUser = keys::Boolean;
 
     impl Allow {
         /// The `gitoxide.allow.protocolFromUser` key.
-        pub const PROTOCOL_FROM_USER: ProtocolFromUser = ProtocolFromUser::new_with_validate(
-            "protocolFromUser",
-            &Gitoxide::ALLOW,
-            super::validate::ProtocolFromUser,
-        )
-        .with_environment_override("GIT_PROTOCOL_FROM_USER");
+        pub const PROTOCOL_FROM_USER: ProtocolFromUser =
+            ProtocolFromUser::new_boolean("protocolFromUser", &Gitoxide::ALLOW)
+                .with_environment_override("GIT_PROTOCOL_FROM_USER");
     }
 
     impl Section for Allow {
@@ -587,17 +584,6 @@ pub mod validate {
     use std::error::Error;
 
     use crate::{bstr::BStr, config::tree::keys::Validate};
-
-    #[derive(Clone, Copy)]
-    pub struct ProtocolFromUser;
-    impl Validate for ProtocolFromUser {
-        fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            if value != "1" {
-                return Err("GIT_PROTOCOL_FROM_USER is either unset or as the value '1'".into());
-            }
-            Ok(())
-        }
-    }
 
     #[derive(Clone, Copy)]
     pub struct RefsNamespace;

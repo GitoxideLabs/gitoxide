@@ -585,7 +585,7 @@ fn apply_environment_overrides(
         (
             "gitoxide",
             Some("allow"),
-            http_transport,
+            git_prefix,
             &[("GIT_PROTOCOL_FROM_USER", "protocolFromUser")],
         ),
         (
