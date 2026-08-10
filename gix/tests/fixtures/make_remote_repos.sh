@@ -187,7 +187,8 @@ EOF
 )
 
 # Note that the URLs used to make rewrites fail carry no name before the `::`, as `name::address`
-# is the remote-helper syntax of `gitremote-helpers(7)` and parses successfully.
+# is the remote-helper syntax documented at https://git-scm.com/docs/gitremote-helpers
+# and parses successfully.
 git init --bare bad-url-rewriting
 (cd bad-url-rewriting
 

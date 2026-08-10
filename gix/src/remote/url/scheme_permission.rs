@@ -48,7 +48,7 @@ pub(crate) struct SchemePermission {
     /// The general allow value from `protocol.allow`.
     allow: Option<Allow>,
     /// Per scheme allow information
-    allow_per_scheme: BTreeMap<gix_url::Scheme, Allow>,
+    allow_per_scheme: BTreeMap<String, Allow>,
 }
 
 /// Init
@@ -68,20 +68,18 @@ impl SchemePermission {
             Some(it) => {
                 let mut map = BTreeMap::default();
                 for (section, scheme) in it.filter_map(|section| {
-                    section.header().subsection_name().and_then(|scheme| {
-                        scheme
-                            .to_str()
-                            .ok()
-                            .map(|scheme| (section, gix_url::Scheme::from(scheme)))
-                    })
+                    section
+                        .header()
+                        .subsection_name()
+                        .and_then(|scheme| scheme.to_str().ok().map(|scheme| (section, scheme)))
                 }) {
                     if let Some(value) = section
                         .value("allow")
-                        .map(|value| Protocol::ALLOW.try_into_allow(value, Some(scheme.as_str())))
+                        .map(|value| Protocol::ALLOW.try_into_allow(value, Some(scheme)))
                         .transpose()?
                     {
                         saw_user |= value == Allow::User;
-                        map.insert(scheme, value);
+                        map.insert(scheme.to_owned(), value);
                     }
                 }
                 map
@@ -105,16 +103,36 @@ impl SchemePermission {
 /// Access
 impl SchemePermission {
     pub fn allow(&self, scheme: &gix_url::Scheme) -> bool {
-        self.allow_per_scheme.get(scheme).or(self.allow.as_ref()).map_or_else(
-            || {
-                use gix_url::Scheme::*;
-                match scheme {
-                    File | Git | Ssh | Http | Https => true,
-                    Ext(_) => false,
-                    // TODO: figure out what 'ext' really entails, and what 'other' protocols are which aren't representable for us yet
-                }
-            },
-            |allow| allow.to_bool(self.user_allowed),
-        )
+        self.allow_per_scheme
+            .get(scheme.as_str())
+            .or(self.allow.as_ref())
+            .map_or_else(
+                || {
+                    use gix_url::Scheme::*;
+                    match scheme {
+                        File | Git | Ssh | Http | Https => true,
+                        Ext | Helper(_) | HelperUrl(_) => false,
+                    }
+                },
+                |allow| allow.to_bool(self.user_allowed),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Allow, SchemePermission};
+
+    #[test]
+    fn helper_forms_use_the_transport_name_for_permissions() {
+        let permissions = SchemePermission {
+            user_allowed: None,
+            allow: None,
+            allow_per_scheme: [("foo".into(), Allow::Always), ("ext".into(), Allow::Always)].into(),
+        };
+
+        assert!(permissions.allow(&gix_url::Scheme::Helper("foo".into())));
+        assert!(permissions.allow(&gix_url::Scheme::HelperUrl("foo".into())));
+        assert!(permissions.allow(&gix_url::Scheme::Ext));
     }
 }
