@@ -1,0 +1,16 @@
+---
+source: gix-tix/src/animation.rs
+expression: "distinct_frames(Emphasis::new(source,\ntarget).expect(\"a new top commit is emphasized\"))"
+---
+--- frame 0 ---
+444 new commit
+style: bbbbbbbbbbbbbbbbbbbbbbbb
+111 first
+222 second
+333 third
+
+--- frame 1 ---
+444 new commit
+111 first
+222 second
+333 third
