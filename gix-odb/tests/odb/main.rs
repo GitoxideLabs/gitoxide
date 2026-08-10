@@ -32,11 +32,27 @@ pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix
 }
 
 fn db() -> gix_odb::Handle {
-    gix_odb::at(fixture_path("objects")).expect("valid object path")
+    gix_odb::at_opts(
+        fixture_path("objects"),
+        None,
+        gix_odb::store::init::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )
+    .expect("valid object path")
 }
 
 fn db_small_packs() -> gix_odb::Handle {
-    gix_odb::at(fixture_path("repos/small-packs.git/objects")).unwrap()
+    gix_odb::at_opts(
+        fixture_path("repos/small-packs.git/objects"),
+        None,
+        gix_odb::store::init::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 pub mod alternate;

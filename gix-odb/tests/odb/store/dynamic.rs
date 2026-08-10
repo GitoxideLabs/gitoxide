@@ -5,7 +5,7 @@ use gix_object::{Exists, FindExt, Write};
 use gix_odb::{Header, store, store::iter::Ordering};
 use gix_testtools::fixture_path;
 
-use crate::{db, hex_to_id, hex_to_id_for_hash};
+use crate::{db, hex_to_id, hex_to_id_for_hash, odb_at};
 
 /// A syntactically valid object id matching the handle's own hash length, all bytes `0xaa`.
 fn missing_id(handle: &gix_odb::Handle) -> ObjectId {
@@ -69,7 +69,17 @@ fn db_with_all_object_sources() -> crate::Result<(gix_odb::Handle, gix_testtools
             object_hash: gix_hash::Kind::Sha1,
         },
     )?;
-    Ok((gix_odb::at(objects_dir.path())?, objects_dir))
+    Ok((
+        gix_odb::at_opts(
+            objects_dir.path(),
+            None,
+            gix_odb::store::init::Options {
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            },
+        )?,
+        objects_dir,
+    ))
 }
 
 #[test]
@@ -301,7 +311,14 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
         )?;
     }
 
-    let stale_handle = gix_odb::at(tmp.path().join("objects"))?;
+    let stale_handle = gix_odb::at_opts(
+        tmp.path().join("objects"),
+        None,
+        gix_odb::store::init::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )?;
     let id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
     assert!(
         stale_handle.exists(&id),
@@ -335,12 +352,18 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
 #[test]
 fn write() -> crate::Result {
     let dir = gix_testtools::tempfile::tempdir()?;
-    let mut handle = gix_odb::at(dir.path())?;
+    let mut handle = odb_at(dir.path())?;
     // It should refresh once even if the refresh mode is never, just to initialize the index
     handle.refresh_never();
 
     let written_id = handle.write_buf(gix_object::Kind::Blob, b"hello world")?;
-    assert_eq!(written_id, hex_to_id("95d09f2b10159347eece71399a7e2e907ea3df4f"));
+    assert_eq!(
+        written_id,
+        hex_to_id_for_hash(
+            "95d09f2b10159347eece71399a7e2e907ea3df4f",
+            "fee53a18d32820613c0527aa79be5cb30173c823a9b448fa4817767cc84c6f03"
+        )
+    );
     Ok(())
 }
 
@@ -957,7 +980,14 @@ fn auto_refresh_with_and_without_id_stability() -> crate::Result {
     hide_pack("pack-11fdfa9e156ab73caae3b6da867192221f2089c2");
     hide_pack("pack-a2bf8e71d8c18879e499335762dd95119d93d9f1");
 
-    let handle = gix_odb::at(tmp.path().join("objects"))?;
+    let handle = gix_odb::at_opts(
+        tmp.path().join("objects"),
+        None,
+        gix_odb::store::init::Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Default::default()
+        },
+    )?;
     let mut buf = Vec::new();
     assert!(
         handle

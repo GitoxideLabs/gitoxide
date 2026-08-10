@@ -192,8 +192,3 @@ pub fn at_opts(
     .to_handle();
     Ok(Cache::from(handle))
 }
-
-/// Create a new cached handle to the object store.
-pub fn at(objects_dir: impl Into<PathBuf>) -> std::io::Result<Handle> {
-    at_opts(objects_dir, Vec::new(), Default::default())
-}
