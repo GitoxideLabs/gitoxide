@@ -669,6 +669,9 @@ pub(crate) fn draw_with_worktree(
         }
         footer_spans.push(Span::raw(" · q quit"));
     }
+    if let Some(notice) = &app.notice {
+        footer_spans = vec![Span::raw(notice)];
+    }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
 }
 
@@ -1853,7 +1856,16 @@ mod tests {
             "completed work cannot be cancelled"
         );
 
+        app.notice = Some("worktree removed; using common repository".into());
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+        assert_eq!(
+            rendered_line(&terminal, 1).trim(),
+            "worktree removed; using common repository",
+            "recovery information replaces the status until the next action"
+        );
+
         app.update(Action::ToggleMailmap);
+        assert!(app.notice.is_none(), "the next action restores the normal status");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),

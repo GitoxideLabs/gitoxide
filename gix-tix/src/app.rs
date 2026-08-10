@@ -326,6 +326,7 @@ pub(crate) struct App {
     pub align_metadata: bool,
     pub show_commit: bool,
     pub changes_mode: Option<ChangesMode>,
+    worktree_changes_available: bool,
     pub(crate) changes_suppressed: bool,
     pub(crate) changes_focus: Option<ChangePane>,
     pub(crate) changes_layout: ChangesLayout,
@@ -345,6 +346,7 @@ pub(crate) struct App {
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
+    pub(crate) notice: Option<String>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -387,6 +389,7 @@ impl App {
             align_metadata: true,
             show_commit: false,
             changes_mode: Some(ChangesMode::Both),
+            worktree_changes_available: true,
             changes_suppressed: false,
             changes_focus: None,
             changes_layout: ChangesLayout::SideBySide,
@@ -406,6 +409,7 @@ impl App {
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
+            notice: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -568,6 +572,7 @@ impl App {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
+        self.notice = None;
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
@@ -677,7 +682,8 @@ impl App {
                 self.changes_mode = match self.changes_mode {
                     Some(ChangesMode::Both) => Some(ChangesMode::Tree),
                     Some(ChangesMode::Tree) => None,
-                    None => Some(ChangesMode::Both),
+                    None if self.worktree_changes_available => Some(ChangesMode::Both),
+                    None => Some(ChangesMode::Tree),
                 };
                 self.reset_changes_view();
                 self.changes_parent = 0;
@@ -985,6 +991,18 @@ impl App {
     pub(crate) fn focus_history(&mut self) {
         self.changes_focus = None;
         self.focus_feedback = None;
+    }
+
+    pub(crate) fn set_worktree_changes_available(&mut self, available: bool) {
+        self.worktree_changes_available = available;
+        if !available {
+            if self.changes_mode == Some(ChangesMode::Both) {
+                self.changes_mode = Some(ChangesMode::Tree);
+            }
+            if self.changes_focus == Some(ChangePane::Worktree) {
+                self.focus_history();
+            }
+        }
     }
 
     pub(crate) fn changes_visible(&self) -> bool {
@@ -2182,6 +2200,21 @@ mod tests {
 
         app.update(Action::ToggleChanges);
         assert_eq!(app.changes_mode, Some(ChangesMode::Both));
+    }
+
+    #[test]
+    fn bare_repositories_cycle_only_tree_and_hidden_changes() {
+        let mut app = App::new(1);
+        app.changes_focus = Some(ChangePane::Worktree);
+
+        app.set_worktree_changes_available(false);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
+        assert_eq!(app.changes_focus, None, "a hidden worktree pane cannot retain focus");
+
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, None);
+        app.update(Action::ToggleChanges);
+        assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
     }
 
     #[test]
