@@ -69,6 +69,16 @@ impl SchemePermission {
         config: &gix_config::File,
         mut filter: fn(&gix_config::file::Metadata) -> bool,
     ) -> Result<Self, Error> {
+        if let Some(allow_protocol) = config.string_filter(gitoxide::Allow::PROTOCOL, &mut filter) {
+            return Ok(SchemePermission {
+                user_allowed: None,
+                allow: Some(Allow::Never),
+                allow_per_scheme: allow_protocol
+                    .split(|b| *b == b':')
+                    .filter_map(|name| name.to_str().ok().map(|name| (name.to_owned(), Allow::Always)))
+                    .collect(),
+            });
+        }
         let allow: Option<Allow> = config
             .string_filter("protocol.allow", &mut filter)
             .map(|value| Protocol::ALLOW.try_into_allow(value, None))
@@ -188,6 +198,40 @@ mod tests {
         assert!(
             !no_user.allow(&gix_url::Scheme::Helper("file".into())),
             "file::address invokes git-remote-file, which has the default user policy and is denied when GIT_PROTOCOL_FROM_USER is false"
+        );
+    }
+
+    #[test]
+    fn allow_protocol_overrides_all_other_policy() {
+        let config = gix_config::File::from_bytes_no_includes(
+            br#"[gitoxide "allow"]
+protocol = foo
+[protocol]
+allow = always
+[protocol "ext"]
+allow = always
+"#,
+            gix_config::file::Metadata::default(),
+            Default::default(),
+        )
+        .expect("valid test configuration");
+        let permissions = SchemePermission::from_config(&config, |_| true).expect("valid permissions");
+
+        assert!(
+            permissions.allow(&gix_url::Scheme::Helper("foo".into())),
+            "listed helpers are allowed"
+        );
+        assert!(
+            !permissions.allow(&gix_url::Scheme::Helper("Foo".into())),
+            "protocol names are case-sensitive"
+        );
+        assert!(
+            !permissions.allow(&gix_url::Scheme::Ext),
+            "the allowlist overrides protocol.ext.allow=always"
+        );
+        assert!(
+            !permissions.allow(&gix_url::Scheme::Https),
+            "the allowlist overrides known-safe defaults"
         );
     }
 }

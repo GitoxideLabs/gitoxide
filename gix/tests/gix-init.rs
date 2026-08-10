@@ -140,6 +140,7 @@ mod with_overrides {
             .set("ALL_PROXY", "all-proxy")
             .set("no_proxy", "no-proxy-lower")
             .set("NO_PROXY", "no-proxy")
+            .set("GIT_ALLOW_PROTOCOL", "file:ssh")
             .set("GIT_PROTOCOL_FROM_USER", "false")
             .set("GIT_REPLACE_REF_BASE", "refs/replace-mine")
             .set("GIT_NO_REPLACE_OBJECTS", "no-replace")
@@ -309,6 +310,7 @@ mod with_overrides {
         for (key, expected) in [
             ("gitoxide.http.sslNoVerify", "true"),
             ("gitoxide.http.verbose", "true"),
+            ("gitoxide.allow.protocol", "file:ssh"),
             ("gitoxide.allow.protocolFromUser", "false"),
             ("core.useReplaceRefs", "no-replace"),
             #[cfg(feature = "blob-diff")]

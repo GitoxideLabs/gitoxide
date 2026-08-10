@@ -287,6 +287,9 @@ mod subsections {
     pub type ProtocolFromUser = keys::Boolean;
 
     impl Allow {
+        /// The `gitoxide.allow.protocol` key, mapped from `GIT_ALLOW_PROTOCOL`.
+        pub const PROTOCOL: keys::Any =
+            keys::Any::new("protocol", &Gitoxide::ALLOW).with_environment_override("GIT_ALLOW_PROTOCOL");
         /// The `gitoxide.allow.protocolFromUser` key.
         pub const PROTOCOL_FROM_USER: ProtocolFromUser =
             ProtocolFromUser::new_boolean("protocolFromUser", &Gitoxide::ALLOW)
@@ -299,7 +302,7 @@ mod subsections {
         }
 
         fn keys(&self) -> &[&dyn Key] {
-            &[&Self::PROTOCOL_FROM_USER]
+            &[&Self::PROTOCOL, &Self::PROTOCOL_FROM_USER]
         }
 
         fn parent(&self) -> Option<&dyn Section> {

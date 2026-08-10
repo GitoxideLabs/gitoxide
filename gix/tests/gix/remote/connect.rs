@@ -7,6 +7,7 @@ mod blocking_io {
         use crate::remote;
 
         #[test]
+        #[serial]
         fn deny() {
             for name in ["protocol_denied", "protocol_file_denied"] {
                 let repo = remote::repo(name);

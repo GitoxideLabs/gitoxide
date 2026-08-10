@@ -586,7 +586,16 @@ fn apply_environment_overrides(
             "gitoxide",
             Some("allow"),
             git_prefix,
-            &[("GIT_PROTOCOL_FROM_USER", "protocolFromUser")],
+            &[
+                {
+                    let key = &gitoxide::Allow::PROTOCOL;
+                    (env(key), key.name)
+                },
+                {
+                    let key = &gitoxide::Allow::PROTOCOL_FROM_USER;
+                    (env(key), key.name)
+                },
+            ],
         ),
         (
             "gitoxide",
