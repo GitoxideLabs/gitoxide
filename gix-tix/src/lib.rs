@@ -622,8 +622,19 @@ enum FileDiff {
     BuiltIn(BuiltInDiff),
 }
 
+enum PreparedFileDiff {
+    External(gix::diff::blob::platform::prepare_diff_command::Command, LineCounts),
+    BuiltIn(BuiltInDiff, LineCounts),
+}
+
+struct CommitDiff {
+    external: Vec<gix::diff::blob::platform::prepare_diff_command::Command>,
+    internal: FileDiff,
+}
+
 pub(crate) struct BuiltInDiff {
     title: BString,
+    summary: Option<Vec<Line<'static>>>,
     lines: Vec<BString>,
     max_width: usize,
 }
@@ -637,12 +648,36 @@ impl BuiltInDiff {
             .unwrap_or_default();
         BuiltInDiff {
             title,
+            summary: None,
             lines,
             max_width,
         }
     }
 
+    fn with_summary(mut self, summary: Vec<Line<'static>>) -> Self {
+        self.max_width = self
+            .max_width
+            .max(summary.iter().map(Line::width).max().unwrap_or_default());
+        self.summary = Some(summary);
+        self
+    }
+
+    fn display_line_count(&self) -> usize {
+        self.lines.len() + self.summary.as_ref().map_or(0, |summary| summary.len() + 1)
+    }
+
     fn write_to(&self, mut out: impl Write) -> io::Result<()> {
+        if let Some(summary) = &self.summary {
+            out.write_all(&self.title)?;
+            out.write_all(b"\n")?;
+            for line in summary {
+                for span in &line.spans {
+                    out.write_all(span.content.as_bytes())?;
+                }
+                out.write_all(b"\n")?;
+            }
+            out.write_all(b"\n")?;
+        }
         for line in &self.lines {
             out.write_all(line)?;
             out.write_all(b"\n")?;
@@ -1480,18 +1515,30 @@ fn event_loop(
                         .and_then(|(change, path)| {
                             prepare_file_diff(&repository_path, repository_is_bare, change, path)
                         })
-                        .and_then(|diff| match diff {
-                            FileDiff::External(command) => {
-                                run_external_diff(terminal, command, enhanced_keyboard).map(|()| false)
-                            }
-                            FileDiff::Pager { command, diff } => {
-                                run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false)
-                            }
-                            FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff),
-                        });
+                        .and_then(|diff| show_file_diff(terminal, diff, enhanced_keyboard));
                     match result {
                         Ok(true) => app.focus_history(),
                         Err(err) => app.changes_mut(pane).error = Some(format!("{err:#}")),
+                        Ok(false) => {}
+                    }
+                }
+                Effect::OpenCommitDiff(id) => {
+                    let title = app
+                        .rows
+                        .iter()
+                        .find(|row| row.id == id)
+                        .map(|row| {
+                            ui::commit_diff_title(row, app.title(row), &mailmap, app.use_mailmap, app.show_emails)
+                        })
+                        .context("selected commit is no longer available")?;
+                    let cached = tree_changes.as_ref().filter(|(cached_id, _, _)| *cached_id == id);
+                    let parent = cached.map_or(0, |(_, parent, _)| *parent);
+                    let cached = cached.map(|(_, _, changes)| changes);
+                    let result = prepare_commit_diff(&repository_path, repository_is_bare, id, parent, cached, title)
+                        .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
+                    match result {
+                        Ok(true) => app.focus_history(),
+                        Err(err) => app.notice = Some(format!("diff: {err:#}")),
                         Ok(false) => {}
                     }
                 }
@@ -2101,11 +2148,78 @@ fn prepare_file_diff(repository_path: &Path, bare: bool, change: &FileChange, pa
     prepare_file_diff_with_repository(&repository, change, path)
 }
 
+fn prepare_commit_diff(
+    repository_path: &Path,
+    bare: bool,
+    id: gix::ObjectId,
+    requested_parent: usize,
+    cached: Option<&Changes>,
+    title: BString,
+) -> Result<CommitDiff> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository for commit diff")?;
+    repository.object_cache_size(OBJECT_CACHE_SIZE);
+    prepare_commit_diff_with_repository(&repository, id, requested_parent, cached, title)
+}
+
+fn prepare_commit_diff_with_repository(
+    repository: &gix::Repository,
+    id: gix::ObjectId,
+    requested_parent: usize,
+    cached: Option<&Changes>,
+    title: BString,
+) -> Result<CommitDiff> {
+    let loaded = cached
+        .is_none()
+        .then(|| load_changes_without_lines(repository, id, requested_parent))
+        .transpose()?;
+    let changes = cached
+        .or(loaded.as_ref())
+        .context("commit diff changes were neither cached nor loaded")?;
+    let mut external = Vec::new();
+    let mut lines = Vec::new();
+    let mut lines_added = 0u64;
+    let mut lines_removed = 0u64;
+    let mut line_counts = Vec::with_capacity(changes.paths.len());
+    for (change, path) in changes.diffs.iter().zip(&changes.paths) {
+        let counts = match prepare_file_diff_content(repository, change, path, true)? {
+            PreparedFileDiff::External(command, counts) => {
+                external.push(command);
+                counts
+            }
+            PreparedFileDiff::BuiltIn(diff, counts) => {
+                lines.extend(diff.lines);
+                counts
+            }
+        };
+        if let Some((added, removed)) = counts {
+            lines_added += u64::from(added);
+            lines_removed += u64::from(removed);
+        }
+        line_counts.push(counts);
+    }
+    let summary = ui::commit_diff_summary(changes, &line_counts, lines_added, lines_removed);
+    let internal = prepare_pager(repository, BuiltInDiff::new(title, lines).with_summary(summary))?;
+    Ok(CommitDiff { external, internal })
+}
+
 fn prepare_file_diff_with_repository(
     repository: &gix::Repository,
     change: &FileChange,
     path: &PathChange,
 ) -> Result<FileDiff> {
+    match prepare_file_diff_content(repository, change, path, false)? {
+        PreparedFileDiff::External(command, _) => Ok(FileDiff::External(command)),
+        PreparedFileDiff::BuiltIn(diff, _) => prepare_pager(repository, diff),
+    }
+}
+
+fn prepare_file_diff_content(
+    repository: &gix::Repository,
+    change: &FileChange,
+    path: &PathChange,
+    count_lines: bool,
+) -> Result<PreparedFileDiff> {
     if let FileChange::Unavailable(message) = change {
         anyhow::bail!("{message}");
     }
@@ -2145,15 +2259,33 @@ fn prepare_file_diff_with_repository(
     let prepared = resources.prepare_diff().context("could not prepare selected diff")?;
     match prepared.operation {
         gix::diff::blob::platform::prepare_diff::Operation::ExternalCommand { command } => {
+            let counts = count_lines
+                .then(|| {
+                    let input = prepared.interned_input();
+                    let diff = gix::diff::blob::diff_with_slider_heuristics(
+                        repository.diff_algorithm().context("could not obtain diff algorithm")?,
+                        &input,
+                    );
+                    Ok::<_, anyhow::Error>((diff.count_additions(), diff.count_removals()))
+                })
+                .transpose()?;
             let command = command.to_owned();
             prepare_external_diff(repository, &resources, command)
+                .map(|command| PreparedFileDiff::External(command, counts))
         }
         gix::diff::blob::platform::prepare_diff::Operation::InternalDiff { algorithm } => {
             if let Some(command) = global_command {
-                return prepare_external_diff(repository, &resources, command);
+                let counts = count_lines.then(|| {
+                    let input = prepared.interned_input();
+                    let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
+                    (diff.count_additions(), diff.count_removals())
+                });
+                return prepare_external_diff(repository, &resources, command)
+                    .map(|command| PreparedFileDiff::External(command, counts));
             }
             let input = prepared.interned_input();
             let diff = gix::diff::blob::diff_with_slider_heuristics(algorithm, &input);
+            let counts = Some((diff.count_additions(), diff.count_removals()));
             let rendered = gix::diff::blob::UnifiedDiff::new(
                 &diff,
                 &input,
@@ -2162,10 +2294,13 @@ fn prepare_file_diff_with_repository(
             )
             .consume()
             .context("could not render selected diff")?;
-            prepare_pager(repository, built_in_diff(path, change, Some(rendered), false))
+            Ok(PreparedFileDiff::BuiltIn(
+                built_in_diff(path, change, Some(rendered), false),
+                counts,
+            ))
         }
         gix::diff::blob::platform::prepare_diff::Operation::SourceOrDestinationIsBinary => {
-            prepare_pager(repository, built_in_diff(path, change, None, true))
+            Ok(PreparedFileDiff::BuiltIn(built_in_diff(path, change, None, true), None))
         }
     }
 }
@@ -2196,19 +2331,17 @@ fn prepare_external_diff(
     repository: &gix::Repository,
     resources: &gix::diff::blob::Platform,
     command: BString,
-) -> Result<FileDiff> {
-    Ok(FileDiff::External(
-        resources
-            .prepare_diff_command(
-                command,
-                repository
-                    .command_context()
-                    .context("could not prepare external diff environment")?,
-                0,
-                1,
-            )
-            .context("could not prepare external diff command")?,
-    ))
+) -> Result<gix::diff::blob::platform::prepare_diff_command::Command> {
+    resources
+        .prepare_diff_command(
+            command,
+            repository
+                .command_context()
+                .context("could not prepare external diff environment")?,
+            0,
+            1,
+        )
+        .context("could not prepare external diff command")
 }
 
 fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BString>, binary: bool) -> BuiltInDiff {
@@ -2274,6 +2407,28 @@ fn built_in_diff(path: &PathChange, change: &FileChange, rendered: Option<BStrin
         format!("{} {}", path.kind.letter(), path.path.to_str_lossy()).into(),
         lines,
     )
+}
+
+fn show_file_diff(terminal: &mut ratatui::DefaultTerminal, diff: FileDiff, enhanced_keyboard: bool) -> Result<bool> {
+    match diff {
+        FileDiff::External(command) => run_external_diff(terminal, command, enhanced_keyboard).map(|()| false),
+        FileDiff::Pager { command, diff } => run_pager(terminal, command, &diff, enhanced_keyboard).map(|()| false),
+        FileDiff::BuiltIn(diff) => show_builtin_diff(terminal, &diff),
+    }
+}
+
+fn show_commit_diff(
+    terminal: &mut ratatui::DefaultTerminal,
+    diff: CommitDiff,
+    enhanced_keyboard: bool,
+) -> Result<bool> {
+    if show_file_diff(terminal, diff.internal, enhanced_keyboard)? {
+        return Ok(true);
+    }
+    for command in diff.external {
+        run_external_diff(terminal, command, enhanced_keyboard)?;
+    }
+    Ok(false)
 }
 
 fn run_external_diff(
@@ -2392,7 +2547,7 @@ fn show_builtin_diff(terminal: &mut ratatui::DefaultTerminal, diff: &BuiltInDiff
     loop {
         let size = terminal.size().context("could not determine diff viewport")?;
         let page = usize::from(size.height.saturating_sub(2)).max(1);
-        let max = diff.lines.len().saturating_sub(page);
+        let max = diff.display_line_count().saturating_sub(page);
         let horizontal_page = usize::from(size.width).max(1);
         let horizontal_max = diff.max_width.saturating_sub(horizontal_page);
         offset = offset.min(max);
@@ -2445,6 +2600,24 @@ fn load_changes(
     requested_parent: usize,
     line_diff_pool: &mut LineDiffPool,
 ) -> Result<Changes> {
+    let mut out = load_changes_without_lines(repository, id, requested_parent)?;
+    let diffs = std::mem::take(&mut out.diffs);
+    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
+        path.lines = lines;
+        if let Some((insertions, removals)) = lines {
+            out.lines_added += u64::from(insertions);
+            out.lines_removed += u64::from(removals);
+        }
+        out.diffs.push(change);
+    }
+    Ok(out)
+}
+
+fn load_changes_without_lines(
+    repository: &gix::Repository,
+    id: gix::ObjectId,
+    requested_parent: usize,
+) -> Result<Changes> {
     let commit = repository.find_commit(id).context("could not load changed paths")?;
     let parents: Vec<_> = commit.parent_ids().collect();
     let parent_index = requested_parent.checked_rem(parents.len()).unwrap_or_default();
@@ -2473,7 +2646,6 @@ fn load_changes(
         }),
         ..Changes::default()
     };
-    let mut diffs = Vec::new();
     for change in changes {
         use gix::object::tree::diff::ChangeDetached;
         let (kind, source, path, is_tree) = match &change {
@@ -2522,15 +2694,7 @@ fn load_changes(
             path,
             lines: None,
         });
-        diffs.push(FileChange::Tree(change));
-    }
-    for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
-        path.lines = lines;
-        if let Some((insertions, removals)) = lines {
-            out.lines_added += u64::from(insertions);
-            out.lines_removed += u64::from(removals);
-        }
-        out.diffs.push(change);
+        out.diffs.push(FileChange::Tree(change));
     }
     Ok(out)
 }
@@ -3341,12 +3505,8 @@ mod tests {
             );
         }
 
-        let topic = load_changes(
-            &repository,
-            repository.rev_parse_single("topic")?.detach(),
-            0,
-            line_diff_pool,
-        )?;
+        let topic_id = repository.rev_parse_single("topic")?.detach();
+        let topic = load_changes(&repository, topic_id, 0, line_diff_pool)?;
         assert_eq!(
             topic.paths,
             [
@@ -3368,6 +3528,85 @@ mod tests {
             "parallel line diffs retain tree-diff order and status"
         );
         assert_eq!((topic.lines_added, topic.lines_removed), (2, 0));
+        let title: BString = format!("{} author topic", topic_id.to_hex_with_len(7)).into();
+        let commit_diff = prepare_commit_diff_with_repository(&repository, topic_id, 0, None, title.clone())?;
+        assert!(commit_diff.external.is_empty());
+        let FileDiff::BuiltIn(diff) = commit_diff.internal else {
+            unreachable!("an isolated repository uses the built-in commit viewer")
+        };
+        assert_eq!(diff.title, title);
+        let summary = diff
+            .summary
+            .as_ref()
+            .expect("whole-commit diffs have a summary")
+            .last()
+            .expect("the aggregate follows path statistics")
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(
+            summary.contains("A 2 · +2"),
+            "the existing diff pass supplies aggregate counts"
+        );
+        let topic_position = diff
+            .lines
+            .iter()
+            .position(|line| line == "+++ b/topic")
+            .expect("the first path is present");
+        let extra_position = diff
+            .lines
+            .iter()
+            .position(|line| line == "+++ b/topic-extra")
+            .expect("the second path is present");
+        assert!(
+            topic_position < extra_position,
+            "whole-commit patches retain tree-diff order"
+        );
+        let empty =
+            prepare_commit_diff_with_repository(&repository, topic_id, 0, Some(&Changes::default()), title.clone())?;
+        let FileDiff::BuiltIn(empty) = empty.internal else {
+            unreachable!("empty commits retain the built-in viewer")
+        };
+        assert!(empty.lines.is_empty(), "an empty commit opens an empty patch");
+        assert!(
+            empty
+                .summary
+                .expect("empty commits have a summary")
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content.contains("No changes")),
+            "empty commits explain the absent patch"
+        );
+
+        let pager_diff =
+            prepare_commit_diff_with_repository(&pager_repository, topic_id, 0, Some(&topic), title.clone())?;
+        assert!(pager_diff.external.is_empty());
+        let FileDiff::Pager { diff, .. } = pager_diff.internal else {
+            unreachable!("one configured pager receives the aggregate commit patch")
+        };
+        let mut streamed = Vec::new();
+        diff.write_to(&mut streamed)?;
+        assert!(
+            streamed.starts_with(
+                format!("{title}\n topic       | 1 +\n topic-extra | 1 +\nroot · A 2 · +2 \n\n").as_bytes()
+            ),
+            "the pager receives path statistics and the aggregate before the patch"
+        );
+        let external_diff =
+            prepare_commit_diff_with_repository(&external_repository, topic_id, 0, Some(&topic), title.clone())?;
+        assert_eq!(
+            external_diff.external.len(),
+            2,
+            "external diff commands remain per-path"
+        );
+        let FileDiff::BuiltIn(summary) = external_diff.internal else {
+            unreachable!("an all-external commit still shows its summary")
+        };
+        assert!(
+            summary.lines.is_empty(),
+            "external patches aren't duplicated internally"
+        );
 
         let merge = repository.rev_parse_single("main")?.detach();
         let first_parent = load_changes(&repository, merge, 0, line_diff_pool)?;
@@ -3410,6 +3649,19 @@ mod tests {
                 lines: Some((1, 0)),
             }],
             "later parents can be selected independently"
+        );
+        let second_parent_diff =
+            prepare_commit_diff_with_repository(&repository, merge, 1, Some(&second_parent), "merge title".into())?;
+        let FileDiff::BuiltIn(diff) = second_parent_diff.internal else {
+            unreachable!("an isolated repository uses the built-in commit viewer")
+        };
+        assert!(
+            diff.summary
+                .expect("merge diff has a summary")
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| span.content.contains("vs parent 2/2")),
+            "the commit viewer identifies the selected merge parent"
         );
         assert_eq!(
             load_changes(&repository, merge, 2, line_diff_pool)?.parent,
