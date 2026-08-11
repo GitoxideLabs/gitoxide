@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use gix_hash::{ObjectId, oid};
 use gix_revwalk::{PriorityQueue, graph::IdMap};
 
@@ -14,6 +16,7 @@ pub struct Builder<Find, Predicate> {
     sorting: Sorting,
     parents: Parents,
     tips: Vec<ObjectId>,
+    tips_seen: HashSet<ObjectId>,
     ends: Vec<ObjectId>,
 }
 
@@ -41,6 +44,7 @@ where
             sorting: Default::default(),
             parents: Default::default(),
             tips: Default::default(),
+            tips_seen: Default::default(),
             ends: Default::default(),
             predicate: |_| true,
         }
@@ -60,6 +64,7 @@ where
             sorting: self.sorting,
             parents: self.parents,
             tips: self.tips,
+            tips_seen: self.tips_seen,
             ends: self.ends,
             predicate,
         }
@@ -75,7 +80,11 @@ where
     ///
     /// The behavior is similar to specifying additional `ends` in `git rev-list --topo-order ^ends tips`.
     pub fn with_tips(mut self, tips: impl IntoIterator<Item = impl Into<ObjectId>>) -> Self {
-        self.tips.extend(tips.into_iter().map(Into::into));
+        for tip in tips.into_iter().map(Into::into) {
+            if self.tips_seen.insert(tip) {
+                self.tips.push(tip);
+            }
+        }
         self
     }
 

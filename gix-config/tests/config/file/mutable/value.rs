@@ -125,6 +125,47 @@ mod set_string {
     }
 
     #[test]
+    fn unquoted_comments_end_continued_values_and_survive_replacement() -> crate::Result {
+        for newline in ["\n", "\r\n"] {
+            for comment in ["# comment", "; comment"] {
+                let mut config: gix_config::File =
+                    format!("[a]{newline}k=one\\{newline}{comment}{newline}next=value").parse()?;
+                let mut value = config.raw_value_mut_by("a", None, "k")?;
+                assert_eq!(value.get()?, "one", "an unquoted comment ends the continued value");
+                value.set_string("replacement")?;
+                assert_eq!(
+                    config.to_string(),
+                    format!("[a]{newline}k=replacement{newline}{comment}{newline}next=value{newline}"),
+                    "replacing the value keeps the standalone comment on its own line"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn quoted_comment_markers_in_continued_values_are_value_content() -> crate::Result {
+        let mut config: gix_config::File = r#"[a]
+k="one\
+#not;comments"
+next=value"#
+            .parse()?;
+        let mut value = config.raw_value_mut_by("a", None, "k")?;
+        let normalized = value.get()?;
+        assert_eq!(
+            normalized, "one#not;comments",
+            "quoted comment markers remain part of the continued value"
+        );
+        value.set(normalized)?;
+        assert_eq!(
+            config.to_string(),
+            "[a]\nk=\"one#not;comments\"\nnext=value\n",
+            "replacing the value preserves quoted comment markers as value content"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn simple_value_and_empty_string() -> crate::Result {
         let mut config = init_config();
 

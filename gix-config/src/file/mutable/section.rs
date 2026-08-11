@@ -426,6 +426,34 @@ impl<'a> SectionMut<'a> {
         self.section.body.0.drain(start.0..end.0);
     }
 
+    pub(crate) fn delete_replaced_value(&mut self, start: Index, end: Index) {
+        let events = &mut self.section.body.0;
+        let newline = matches!(
+            events.get(end.0.saturating_sub(1)),
+            Some(Event::ValueDone(value)) if value.as_slice_in(self.backing).is_empty()
+        )
+        .then(|| {
+            events[start.0..end.0]
+                .iter()
+                .rev()
+                .find(|event| matches!(event, Event::Newline(_)))
+                .cloned()
+        })
+        .flatten()
+        .filter(|_| {
+            matches!(
+                events[end.0..]
+                    .iter()
+                    .find(|event| !matches!(event, Event::Whitespace(_))),
+                Some(Event::Comment(_))
+            )
+        });
+        events.drain(start.0..end.0);
+        if let Some(newline) = newline {
+            events.insert(start.0, newline);
+        }
+    }
+
     pub(crate) fn set_internal(
         &mut self,
         index: Index,
