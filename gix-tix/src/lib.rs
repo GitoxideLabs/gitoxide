@@ -165,7 +165,18 @@ fn worktree_watch_set_may_change(event: &notify::Event, index: &Path, directorie
 }
 
 fn notification_is_actionable(event: &notify::Event) -> bool {
-    event.need_rescan() || !matches!(event.kind, notify::EventKind::Access(_))
+    event.need_rescan()
+        || (!matches!(event.kind, notify::EventKind::Access(_))
+            && (event.paths.is_empty()
+                || matches!(
+                    event.kind,
+                    notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                )
+                || event.paths.iter().any(|path| {
+                    !path
+                        .file_name()
+                        .is_some_and(|name| name.as_encoded_bytes().ends_with(b".lock"))
+                })))
 }
 
 fn worktree_watcher_needed(repository_is_bare: bool, mode: Option<ChangesMode>) -> bool {
@@ -3014,19 +3025,22 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut paths = Vec::new();
+        let watched = repository.git_dir().join("refs/heads/watched");
         while Instant::now() < deadline {
             let event = watcher
                 .events
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))??;
-            assert!(notification_is_actionable(&event), "the reference update is actionable");
+            if !notification_is_actionable(&event) {
+                continue;
+            }
             paths.extend(event.paths);
-            if paths.iter().any(|path| path.ends_with("refs/heads/watched")) {
+            if watched.is_file() {
                 break;
             }
         }
         assert!(
-            paths.iter().any(|path| path.ends_with("refs/heads/watched")),
-            "the final loose reference is reported after its lock file: {paths:?}"
+            watched.is_file(),
+            "the completed loose-reference transaction is actionable: {paths:?}"
         );
         Ok(())
     }
@@ -3871,7 +3885,7 @@ mod tests {
 
     #[test]
     fn filters_worktree_watch_events_and_invalidates_cached_status() {
-        use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RemoveKind};
+        use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RemoveKind, RenameMode};
 
         let workdir = Path::new("/repo");
         let dot_git = workdir.join(".git");
@@ -3906,6 +3920,13 @@ mod tests {
             &access, workdir, &dot_git, &git_dir, &index
         ));
         assert!(!notification_is_actionable(&access));
+        let lock_only = modified(&git_dir.join("index.lock"));
+        assert!(!notification_is_actionable(&lock_only));
+        let completed_lock_rename = notify::Event::new(notify::EventKind::Modify(ModifyKind::Name(RenameMode::Any)))
+            .add_path(git_dir.join("index.lock"));
+        assert!(notification_is_actionable(&completed_lock_rename));
+        let completed_lock_update = lock_only.add_path(index.clone());
+        assert!(notification_is_actionable(&completed_lock_update));
         let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
         assert!(worktree_event_is_relevant(&rescan, workdir, &dot_git, &git_dir, &index));
         assert!(notification_is_actionable(&rescan));
