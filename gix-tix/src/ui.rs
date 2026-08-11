@@ -914,6 +914,11 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
                 .map_or_else(|| "-------".into(), |row| row.id.to_hex_with_len(7).to_string());
             vec![Span::raw(format!("─ Tree {id} ── "))]
         }
+        ChangePane::Worktree if changes.paths.is_empty() => vec![
+            Span::raw("─ Worktree "),
+            Span::styled("clean", color(Color::Green)),
+            Span::raw(" ── "),
+        ],
         ChangePane::Worktree => vec![Span::raw("─ Worktree ── ")],
     };
     let counts: Vec<_> = match pane {
@@ -2976,10 +2981,12 @@ mod tests {
                 Some(&Changes::default()),
             );
         })?;
-        assert!(
-            (0..8).any(|y| rendered_line(&terminal, y).contains("Worktree ──")),
-            "an enabled clean worktree remains visible as an empty block"
-        );
+        let (clean_y, clean_header) = (0..8)
+            .map(|y| (y, rendered_line(&terminal, y)))
+            .find(|(_, line)| line.contains("Worktree clean"))
+            .expect("an enabled clean worktree remains visible as an empty block");
+        let clean_x = clean_header.find("clean").expect("clean label") as u16;
+        assert_eq!(terminal.backend().buffer()[(clean_x, clean_y)].fg, Color::Green);
         assert!(
             !(0..8).any(|y| rendered_line(&terminal, y).contains("+0") || rendered_line(&terminal, y).contains("-0")),
             "a clean worktree omits empty diff counts"
