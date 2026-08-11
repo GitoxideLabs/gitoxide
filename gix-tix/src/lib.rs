@@ -9,7 +9,7 @@ mod logging;
 mod ui;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -68,6 +68,7 @@ struct FillRepository {
 struct WorktreeWatcher {
     _watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<notify::Event>>,
+    directories: HashSet<PathBuf>,
     workdir: PathBuf,
     dot_git: PathBuf,
     git_dir: PathBuf,
@@ -83,6 +84,45 @@ impl WorktreeWatcher {
     fn event_is_relevant(&self, event: &notify::Event) -> bool {
         worktree_event_is_relevant(event, &self.workdir, &self.dot_git, &self.git_dir, &self.index)
     }
+
+    fn watch_set_may_change(&self, event: &notify::Event) -> bool {
+        worktree_watch_set_may_change(event, &self.index, &self.directories)
+    }
+}
+
+#[derive(Default)]
+struct WorktreeDirectories {
+    root: PathBuf,
+    paths: HashSet<PathBuf>,
+}
+
+impl gix::dir::walk::Delegate for WorktreeDirectories {
+    fn emit(
+        &mut self,
+        _entry: gix::dir::EntryRef<'_>,
+        _collapsed_directory_status: Option<gix::dir::entry::Status>,
+    ) -> gix::dir::walk::Action {
+        std::ops::ControlFlow::Continue(())
+    }
+
+    fn can_recurse(
+        &mut self,
+        entry: gix::dir::EntryRef<'_>,
+        for_deletion: Option<gix::dir::walk::ForDeletionMode>,
+        worktree_root_is_repository: bool,
+    ) -> bool {
+        let recurse = entry.status.can_recurse(
+            entry.disk_kind,
+            entry.pathspec_match,
+            for_deletion,
+            worktree_root_is_repository,
+        );
+        if recurse {
+            self.paths
+                .insert(self.root.join(gix::path::from_bstr(entry.rela_path.as_ref())));
+        }
+        recurse
+    }
 }
 
 fn worktree_event_is_relevant(
@@ -97,6 +137,31 @@ fn worktree_event_is_relevant(
             && event.paths.iter().any(|path| {
                 path == index || (path.starts_with(workdir) && !path.starts_with(dot_git) && !path.starts_with(git_dir))
             }))
+}
+
+fn worktree_watch_set_may_change(event: &notify::Event, index: &Path, directories: &HashSet<PathBuf>) -> bool {
+    if event.need_rescan()
+        || event
+            .paths
+            .iter()
+            .any(|path| path == index || path.file_name().is_some_and(|name| name == ".gitignore"))
+    {
+        return true;
+    }
+    match event.kind {
+        notify::EventKind::Create(notify::event::CreateKind::Folder)
+        | notify::EventKind::Remove(notify::event::RemoveKind::Folder)
+        | notify::EventKind::Modify(notify::event::ModifyKind::Name(_)) => true,
+        notify::EventKind::Create(notify::event::CreateKind::Any | notify::event::CreateKind::Other)
+        | notify::EventKind::Any => event
+            .paths
+            .iter()
+            .any(|path| path.is_dir() || directories.contains(path)),
+        notify::EventKind::Remove(notify::event::RemoveKind::Any | notify::event::RemoveKind::Other) => {
+            event.paths.iter().any(|path| directories.contains(path))
+        }
+        _ => false,
+    }
 }
 
 fn notification_is_actionable(event: &notify::Event) -> bool {
@@ -696,6 +761,7 @@ fn event_loop(
     let mut worktree_changes = None;
     let mut worktree_watcher: Option<WorktreeWatcher> = None;
     let mut worktree_refresh_deadline: Option<Instant> = None;
+    let mut worktree_watch_set_changed = false;
     let mut selection_relation = None;
     let mut history_graph = None;
     let line_diff_parallelism = std::thread::available_parallelism().map_or(1, Into::into);
@@ -765,6 +831,7 @@ fn event_loop(
                         rescans += usize::from(event.need_rescan());
                         if watcher.event_is_relevant(&event) {
                             relevant += 1;
+                            worktree_watch_set_changed |= watcher.watch_set_may_change(&event);
                             filesystem_responses.observe_worktree(&event, &watcher.workdir, &watcher.index);
                             schedule_once(&mut worktree_refresh_deadline, Instant::now(), WORKTREE_EVENT_IDLE);
                         }
@@ -789,11 +856,23 @@ fn event_loop(
             app.worktree_changes.error = Some(format!("worktree watch: {err}"));
             worktree_watcher = None;
             worktree_refresh_deadline = None;
+            worktree_watch_set_changed = false;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
             dirty = true;
             urgent = true;
         }
         if take_due(&mut worktree_refresh_deadline, Instant::now()) {
+            if std::mem::take(&mut worktree_watch_set_changed) {
+                match start_worktree_watcher(&repository_path, repository_is_bare) {
+                    Ok(watcher) => worktree_watcher = Some(watcher),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "worktree watcher rebuild failed");
+                        app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                        worktree_watcher = None;
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    }
+                }
+            }
             let invalidated = invalidate_worktree_changes(&mut worktree_changes);
             filesystem_responses.worktree_due(invalidated);
             tracing::debug!(invalidated, "worktree event deadline elapsed");
@@ -1004,6 +1083,7 @@ fn event_loop(
                     app.set_worktree_changes_available(false);
                     worktree_watcher = None;
                     worktree_refresh_deadline = None;
+                    worktree_watch_set_changed = false;
                     filesystem_responses.cancel_pending_worktree("worktree-unavailable");
                     worktree_changes = None;
                     line_diff_pool = None;
@@ -1314,6 +1394,16 @@ fn event_loop(
         let effects = app.update(action);
         if refreshes_worktree {
             invalidate_worktree_changes(&mut worktree_changes);
+            worktree_watch_set_changed = false;
+            match start_worktree_watcher(&repository_path, repository_is_bare) {
+                Ok(watcher) => worktree_watcher = Some(watcher),
+                Err(err) => {
+                    tracing::warn!(error = %err, "worktree watcher refresh failed");
+                    app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                    worktree_watcher = None;
+                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                }
+            }
         }
         if toggles_changes {
             sync_line_diff_pool(
@@ -1325,6 +1415,7 @@ fn event_loop(
             )?;
             if app.changes_mode == Some(ChangesMode::Both) {
                 invalidate_worktree_changes(&mut worktree_changes);
+                worktree_watch_set_changed = false;
                 match start_worktree_watcher(&repository_path, repository_is_bare) {
                     Ok(watcher) => {
                         worktree_watcher = Some(watcher);
@@ -1346,6 +1437,7 @@ fn event_loop(
             } else if previous_changes_mode == Some(ChangesMode::Both) {
                 worktree_watcher = None;
                 worktree_refresh_deadline = None;
+                worktree_watch_set_changed = false;
                 filesystem_responses.cancel_pending_worktree("watcher-disabled");
             }
         }
@@ -1530,6 +1622,7 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
 }
 
 fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<WorktreeWatcher> {
+    let started = Instant::now();
     let repository = open_repository(repository_path, bare, false)
         .context("could not open repository for worktree watcher setup")?;
     let workdir = repository
@@ -1539,29 +1632,69 @@ fn start_worktree_watcher(repository_path: &Path, bare: bool) -> Result<Worktree
     let index = repository.index_path();
     let git_dir = repository.git_dir().to_owned();
     let dot_git = workdir.join(gix::discover::DOT_GIT_DIR);
+    let dirwalk_started = Instant::now();
+    let directories = worktree_watch_directories(&repository)?;
+    let dirwalk_ms = dirwalk_started.elapsed().as_millis();
+    let registration_started = Instant::now();
     let (sender, events) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = sender.send(event);
     })
     .context("could not initialize worktree watcher")?;
-    watcher
-        .watch(&workdir, RecursiveMode::Recursive)
-        .with_context(|| format!("could not watch worktree at {}", workdir.display()))?;
     let index_parent = index.parent().context("index path has no parent")?;
-    if !index_parent.starts_with(&workdir) {
-        watcher
-            .watch(index_parent, RecursiveMode::NonRecursive)
-            .with_context(|| format!("could not watch index at {}", index_parent.display()))?;
+    {
+        let mut paths = watcher.paths_mut();
+        for directory in &directories {
+            paths
+                .add(directory, RecursiveMode::NonRecursive)
+                .with_context(|| format!("could not watch worktree directory at {}", directory.display()))?;
+        }
+        if !directories.contains(index_parent) {
+            paths
+                .add(index_parent, RecursiveMode::NonRecursive)
+                .with_context(|| format!("could not watch index at {}", index_parent.display()))?;
+        }
+        paths.commit().context("could not apply worktree watches")?;
     }
-    tracing::info!(workdir = %workdir.display(), index = %index.display(), "watching worktree changes");
+    tracing::info!(
+        workdir = %workdir.display(),
+        index = %index.display(),
+        directories = directories.len(),
+        dirwalk_ms,
+        registration_ms = registration_started.elapsed().as_millis(),
+        setup_ms = started.elapsed().as_millis(),
+        "watching worktree changes"
+    );
     Ok(WorktreeWatcher {
         _watcher: watcher,
         events,
+        directories,
         workdir,
         dot_git,
         git_dir,
         index,
     })
+}
+
+fn worktree_watch_directories(repository: &gix::Repository) -> Result<HashSet<PathBuf>> {
+    let root = repository
+        .workdir()
+        .context("cannot walk a bare repository")?
+        .to_owned();
+    let index = repository
+        .index_or_empty()
+        .context("could not open index for worktree watcher")?;
+    let options = repository
+        .dirwalk_options()
+        .context("could not configure worktree directory walk")?;
+    let mut directories = WorktreeDirectories {
+        root: root.clone(),
+        paths: HashSet::from([root]),
+    };
+    repository
+        .dirwalk(&index, None::<&str>, &AtomicBool::default(), options, &mut directories)
+        .context("could not enumerate worktree directories")?;
+    Ok(directories.paths)
 }
 
 fn invalidate_worktree_changes(changes: &mut Option<(usize, Changes)>) -> bool {
@@ -3734,7 +3867,7 @@ mod tests {
 
     #[test]
     fn filters_worktree_watch_events_and_invalidates_cached_status() {
-        use notify::event::{AccessKind, Flag, ModifyKind};
+        use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RemoveKind};
 
         let workdir = Path::new("/repo");
         let dot_git = workdir.join(".git");
@@ -3773,10 +3906,66 @@ mod tests {
         assert!(worktree_event_is_relevant(&rescan, workdir, &dot_git, &git_dir, &index));
         assert!(notification_is_actionable(&rescan));
 
+        let directories = HashSet::from([workdir.join("src")]);
+        assert!(!worktree_watch_set_may_change(
+            &modified(&workdir.join("src/lib.rs")),
+            &index,
+            &directories
+        ));
+        assert!(worktree_watch_set_may_change(&modified(&index), &index, &directories));
+        assert!(worktree_watch_set_may_change(
+            &modified(&workdir.join(".gitignore")),
+            &index,
+            &directories
+        ));
+        let create_directory =
+            notify::Event::new(notify::EventKind::Create(CreateKind::Folder)).add_path(workdir.join("new"));
+        assert!(worktree_watch_set_may_change(&create_directory, &index, &directories));
+        let remove_directory =
+            notify::Event::new(notify::EventKind::Remove(RemoveKind::Folder)).add_path(workdir.join("src"));
+        assert!(worktree_watch_set_may_change(&remove_directory, &index, &directories));
+        assert!(worktree_watch_set_may_change(&rescan, &index, &directories));
+
         let mut changes = Some((0, Changes::default()));
         assert!(invalidate_worktree_changes(&mut changes));
         assert_eq!(changes.as_ref().map(|(marker, _)| *marker), Some(usize::MAX));
         assert!(!invalidate_worktree_changes(&mut changes));
+    }
+
+    #[test]
+    fn worktree_watch_directories_follow_git_ignores() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let root = fixture.path();
+        std::fs::create_dir_all(root.join("visible/nested"))?;
+        std::fs::create_dir_all(root.join("visible/ignored/nested"))?;
+        std::fs::create_dir_all(root.join("target/nested"))?;
+        std::fs::write(root.join(".gitignore"), "target/\nvisible/ignored/\n")?;
+
+        let repository = open_test_repository(root)?;
+        let directories = worktree_watch_directories(&repository)?;
+        let root = repository.workdir().expect("the fixture has a worktree");
+        assert!(directories.contains(root), "the worktree root is always watched");
+        assert!(
+            directories.contains(&root.join("visible")),
+            "visible directories are watched"
+        );
+        assert!(
+            directories.contains(&root.join("visible/nested")),
+            "visible descendants are watched"
+        );
+        assert!(
+            !directories.contains(&root.join("target")),
+            "ignored directories aren't watched"
+        );
+        assert!(
+            !directories.contains(&root.join("target/nested")),
+            "ignored descendants aren't traversed"
+        );
+        assert!(
+            !directories.contains(&root.join("visible/ignored")),
+            "nested ignore rules are honored"
+        );
+        Ok(())
     }
 
     #[test]
