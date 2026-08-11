@@ -131,6 +131,19 @@ mod basic {
     }
 
     #[test]
+    fn duplicate_tips_are_ignored() -> crate::Result {
+        let odb = odb()?;
+        let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
+
+        for sorting in [topo::Sorting::TopoOrder, topo::Sorting::DateOrder] {
+            let expected = traverse_both([tip], [], &odb, sorting, Parents::All)?;
+            let actual = traverse_both([tip, tip], [], &odb, sorting, Parents::All)?;
+            assert_eq!(actual, expected, "duplicate tips must not affect the traversal");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn one_end() -> crate::Result {
         let odb = odb()?;
         let tip = hex_to_id("62ed296d9986f50477e9f7b7e81cd0258939a43d");
