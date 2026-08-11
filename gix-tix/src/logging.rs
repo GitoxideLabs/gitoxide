@@ -198,6 +198,10 @@ impl FilesystemResponses {
         }
     }
 
+    pub(crate) fn has_queued_frame(&self) -> bool {
+        !self.frame_causes.is_empty()
+    }
+
     pub(crate) fn keep_after_frame(&mut self, ids: &[u64]) {
         self.finish_after_frame.retain(|(id, _)| !ids.contains(id));
     }
@@ -511,8 +515,10 @@ mod tests {
         let common = Path::new("/repo/.git");
         let workdir = Path::new("/repo");
         let mut responses = FilesystemResponses::default();
+        assert!(!responses.has_queued_frame());
         let worktree = responses.observe_worktree(&modified(workdir.join("file")), workdir, &common.join("index"));
         responses.worktree_due(true);
+        assert!(responses.has_queued_frame());
 
         let references = responses.observe_references(&modified(common.join("HEAD")), common, common);
         responses.references_due();
@@ -529,6 +535,7 @@ mod tests {
             "one frame retains both filesystem causes"
         );
         responses.frame_presented();
+        assert!(!responses.has_queued_frame());
         assert!(
             responses.responses.is_empty(),
             "both responses finish after the shared frame"

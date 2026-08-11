@@ -18,6 +18,7 @@ use crate::{
 
 const COMPARED_PARENT_COLOR: Color = Color::Cyan;
 const COMMIT_PANE_WIDTH: u16 = 84;
+const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
 
@@ -687,6 +688,9 @@ pub(crate) fn draw_with_worktree(
     if let Some(notice) = &app.notice {
         footer_spans = vec![Span::raw(notice)];
     }
+    if app.unseen_filesystem_redraw {
+        footer_spans = notification_discs(footer_spans);
+    }
     frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
     FrameLayout {
         history: body,
@@ -1264,6 +1268,22 @@ fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
             Style::default().add_modifier(Modifier::DIM)
         },
     )
+}
+
+fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
+    let mut out = Vec::with_capacity(spans.len());
+    for span in spans {
+        let style = span.style;
+        for (index, text) in span.content.split('·').enumerate() {
+            if index > 0 {
+                out.push(Span::styled("●", style.fg(FILESYSTEM_NOTIFICATION_COLOR)));
+            }
+            if !text.is_empty() {
+                out.push(Span::styled(text.to_owned(), style));
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy)]
@@ -2122,6 +2142,31 @@ mod tests {
             !rendered_line(&terminal, 1).contains("Esc cancel"),
             "completed work cannot be cancelled"
         );
+
+        app.unseen_filesystem_redraw = true;
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+        for (x, _) in footer_text
+            .chars()
+            .enumerate()
+            .filter(|(_, character)| *character == '·')
+        {
+            assert_eq!(
+                terminal.backend().buffer()[(x as u16, 1)].symbol(),
+                "●",
+                "status separators become prominent notification discs"
+            );
+            assert_eq!(
+                terminal.backend().buffer()[(x as u16, 1)].fg,
+                FILESYSTEM_NOTIFICATION_COLOR,
+                "every status separator marks an unseen filesystem redraw"
+            );
+        }
+        assert_eq!(
+            terminal.backend().buffer()[(0, 1)].fg,
+            Color::Reset,
+            "notification coloring does not affect status text"
+        );
+        app.unseen_filesystem_redraw = false;
 
         app.notice = Some("worktree removed; using common repository".into());
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
