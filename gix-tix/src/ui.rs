@@ -143,7 +143,7 @@ pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: 
         Paragraph::new(diff.title.to_str_lossy()).style(Style::default().add_modifier(Modifier::BOLD)),
         header,
     );
-    let lines = diff
+    let mut lines = diff
         .lines
         .iter()
         .map(|line| {
@@ -161,6 +161,9 @@ pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: 
             Line::styled(line.to_str_lossy(), style)
         })
         .collect::<Vec<_>>();
+    if let Some(summary) = &diff.summary {
+        lines.splice(0..0, summary.iter().cloned().chain(std::iter::once(Line::default())));
+    }
     frame.render_widget(
         Paragraph::new(Text::from(lines)).scroll((
             u16::try_from(offset).unwrap_or(u16::MAX),
@@ -602,6 +605,9 @@ pub(crate) fn draw_with_worktree(
         "{}{status} · ↑↓/jk move · h/l pan",
         history_position(app)
     ))];
+    if app.changes_focus.is_none() {
+        footer_spans.push(Span::raw(" · Enter diff"));
+    }
     if app.tree_changes_visible || app.worktree_changes_visible {
         footer_spans.push(match app.focus_feedback.take() {
             Some(destination) => Span::raw(format!(" · Tab → {destination}")),
@@ -905,6 +911,111 @@ fn path_change_color(change: &crate::app::PathChange) -> Color {
     }
 }
 
+pub(crate) fn commit_diff_title(
+    row: &CommitRow,
+    title: &BStr,
+    mailmap: &gix::mailmap::Snapshot,
+    use_mailmap: bool,
+    show_emails: bool,
+) -> BString {
+    let author = author_label(row.author, mailmap, use_mailmap, show_emails && !row.author.is_bot());
+    let author = if row.author.is_bot() {
+        format!("[{author}]")
+    } else {
+        author
+    };
+    let mut out: BString = format!("{} {author} ", row.id.to_hex_with_len(7)).into();
+    out.extend_from_slice(title);
+    out
+}
+
+pub(crate) fn commit_diff_summary(
+    changes: &Changes,
+    line_counts: &[Option<(u32, u32)>],
+    lines_added: u64,
+    lines_removed: u64,
+) -> Vec<Line<'static>> {
+    let paths = changes
+        .paths
+        .iter()
+        .map(|change| match &change.source {
+            Some(source) => format!("{} -> {}", source.to_str_lossy(), change.path.to_str_lossy()),
+            None => change.path.to_str_lossy().into_owned(),
+        })
+        .collect::<Vec<_>>();
+    let path_width = paths
+        .iter()
+        .map(|path| Line::from(path.as_str()).width())
+        .max()
+        .unwrap_or_default();
+    let count_width = line_counts
+        .iter()
+        .map(|counts| {
+            counts.map_or(3, |(added, removed)| {
+                (u64::from(added) + u64::from(removed)).to_string().len()
+            })
+        })
+        .max()
+        .unwrap_or_default();
+    let max_changes = line_counts
+        .iter()
+        .flatten()
+        .map(|(added, removed)| u64::from(*added) + u64::from(*removed))
+        .max()
+        .unwrap_or_default();
+    let graph_width = max_changes.min(40);
+    let mut lines = paths
+        .into_iter()
+        .zip(line_counts)
+        .map(|(path, counts)| {
+            let padding = " ".repeat(path_width.saturating_sub(Line::from(path.as_str()).width()));
+            let mut spans = vec![Span::raw(format!(" {path}{padding} | "))];
+            match counts {
+                Some((added, removed)) => {
+                    let total = u64::from(*added) + u64::from(*removed);
+                    spans.push(Span::raw(format!("{total:>count_width$} ")));
+                    let scaled = |count: u32| {
+                        (u64::from(count) * graph_width / max_changes.max(1)).max(u64::from(count > 0)) as usize
+                    };
+                    spans.push(Span::styled("+".repeat(scaled(*added)), color(Color::Green)));
+                    spans.push(Span::styled("-".repeat(scaled(*removed)), color(Color::LightRed)));
+                }
+                None => spans.push(Span::raw(format!("{:>count_width$}", "Bin"))),
+            }
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
+    let mut spans = match changes.parent {
+        Some(parent) if parent.total > 1 => vec![Span::styled(
+            format!(
+                "vs parent {}/{} {} · ",
+                parent.index + 1,
+                parent.total,
+                parent.id.to_hex_with_len(7)
+            ),
+            color(COMPARED_PARENT_COLOR),
+        )],
+        Some(parent) => vec![Span::styled(
+            format!("vs parent {} · ", parent.id.to_hex_with_len(7)),
+            color(COMPARED_PARENT_COLOR),
+        )],
+        None => vec![Span::styled("root · ", color(COMPARED_PARENT_COLOR))],
+    };
+    if changes.paths.is_empty() {
+        spans.push(Span::styled("No changes", Style::default().add_modifier(Modifier::DIM)));
+    } else {
+        append_change_aggregate(
+            &mut spans,
+            tree_change_counts(changes),
+            changes.paths.len(),
+            lines_added,
+            lines_removed,
+        );
+    }
+    lines.push(Line::from(spans));
+    lines
+}
+
 fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'static> {
     let mut spans = match pane {
         ChangePane::Tree => {
@@ -922,24 +1033,7 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
         ChangePane::Worktree => vec![Span::raw("─ Worktree ── ")],
     };
     let counts: Vec<_> = match pane {
-        ChangePane::Tree => {
-            let mut counts = Vec::new();
-            for kind in [
-                ChangeKind::Added,
-                ChangeKind::Modified,
-                ChangeKind::Deleted,
-                ChangeKind::Renamed,
-                ChangeKind::Copied,
-                ChangeKind::TypeChanged,
-            ] {
-                let count = changes.paths.iter().filter(|change| change.kind == kind).count();
-                if count == 0 {
-                    continue;
-                }
-                counts.push((kind.letter().to_string(), count, change_color(kind)));
-            }
-            counts
-        }
+        ChangePane::Tree => tree_change_counts(changes),
         ChangePane::Worktree => {
             let staged = changes
                 .paths
@@ -956,8 +1050,42 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
             .collect()
         }
     };
+    append_change_aggregate(
+        &mut spans,
+        counts,
+        changes.paths.len(),
+        changes.lines_added,
+        changes.lines_removed,
+    );
+    Line::from(spans)
+}
+
+fn tree_change_counts(changes: &Changes) -> Vec<(String, usize, Color)> {
+    [
+        ChangeKind::Added,
+        ChangeKind::Modified,
+        ChangeKind::Deleted,
+        ChangeKind::Renamed,
+        ChangeKind::Copied,
+        ChangeKind::TypeChanged,
+    ]
+    .into_iter()
+    .filter_map(|kind| {
+        let count = changes.paths.iter().filter(|change| change.kind == kind).count();
+        (count > 0).then(|| (kind.letter().to_string(), count, change_color(kind)))
+    })
+    .collect()
+}
+
+fn append_change_aggregate(
+    spans: &mut Vec<Span<'static>>,
+    counts: Vec<(String, usize, Color)>,
+    total: usize,
+    lines_added: u64,
+    lines_removed: u64,
+) {
     let has_counts = !counts.is_empty();
-    let show_total = has_counts && (counts.len() != 1 || counts[0].1 != changes.paths.len());
+    let show_total = has_counts && (counts.len() != 1 || counts[0].1 != total);
     for (index, (label, count, count_color)) in counts.into_iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw(" + "));
@@ -965,29 +1093,21 @@ fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'stat
         spans.push(Span::styled(format!("{label} {count}"), color(count_color)));
     }
     if show_total {
-        spans.push(Span::raw(format!(
-            "{}= {}",
-            if has_counts { " " } else { "" },
-            changes.paths.len()
-        )));
+        spans.push(Span::raw(format!("{}= {}", if has_counts { " " } else { "" }, total)));
     }
-    if changes.lines_added > 0 || changes.lines_removed > 0 {
+    if lines_added > 0 || lines_removed > 0 {
         spans.push(Span::raw(" · "));
-        if changes.lines_added > 0 {
-            spans.push(Span::styled(format!("+{}", changes.lines_added), color(Color::Green)));
+        if lines_added > 0 {
+            spans.push(Span::styled(format!("+{lines_added}"), color(Color::Green)));
         }
-        if changes.lines_removed > 0 {
-            if changes.lines_added > 0 {
+        if lines_removed > 0 {
+            if lines_added > 0 {
                 spans.push(Span::raw(" "));
             }
-            spans.push(Span::styled(
-                format!("-{}", changes.lines_removed),
-                color(Color::LightRed),
-            ));
+            spans.push(Span::styled(format!("-{lines_removed}"), color(Color::LightRed)));
         }
         spans.push(Span::raw(" "));
     }
-    Line::from(spans)
 }
 
 fn render_commit_message(frame: &mut Frame<'_>, area: Rect, message: &BStr, notes: &[BString], offset: usize) -> usize {
@@ -1650,6 +1770,83 @@ mod tests {
     }
 
     #[test]
+    fn renders_and_streams_compact_commit_diff_summaries() -> Result<(), Box<dyn std::error::Error>> {
+        let row = Commit {
+            id: gix::ObjectId::Sha1([1; 20]),
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: 0..0,
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mailmap =
+            gix::mailmap::Snapshot::from_bytes(b"mapped author <mapped@example.com> author <author@example.com>\n");
+        let title = commit_diff_title(&row, b"subject".as_bstr(), &mailmap, true, false);
+        assert_eq!(title, "0101010 mapped author subject");
+        assert_eq!(
+            commit_diff_title(&row, b"subject".as_bstr(), &mailmap, true, true),
+            "0101010 mapped author <mapped@example.com> subject"
+        );
+        let changes = Changes {
+            paths: vec![
+                crate::app::PathChange {
+                    kind: ChangeKind::Added,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "new".into(),
+                    lines: None,
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "old".into(),
+                    lines: None,
+                },
+            ],
+            ..Changes::default()
+        };
+        let diff = BuiltInDiff::new(
+            title.clone(),
+            ["--- a/old", "+++ b/old"].into_iter().map(Into::into).collect(),
+        )
+        .with_summary(commit_diff_summary(&changes, &[Some((2, 0)), Some((1, 1))], 3, 1));
+        let mut terminal = Terminal::new(TestBackend::new(64, 9))?;
+
+        terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
+
+        assert_eq!(rendered_line(&terminal, 0).trim(), title);
+        assert_eq!(rendered_line(&terminal, 1).trim(), "new | 2 ++");
+        assert_eq!(rendered_line(&terminal, 2).trim(), "old | 2 +-");
+        let summary = "root · A 1 + M 1 = 2 · +3 -1";
+        assert_eq!(rendered_line(&terminal, 3).trim(), summary);
+        let buffer = terminal.backend().buffer();
+        let summary_x = |needle| {
+            summary[..summary.find(needle).expect("summary term is present")]
+                .chars()
+                .count() as u16
+        };
+        assert_eq!(buffer[(0, 3)].fg, COMPARED_PARENT_COLOR);
+        assert_eq!(buffer[(summary_x("A 1"), 3)].fg, Color::Green);
+        assert_eq!(buffer[(summary_x("-1"), 3)].fg, Color::LightRed);
+        assert_eq!(buffer[(9, 1)].fg, Color::Green);
+        assert_eq!(buffer[(10, 2)].fg, Color::LightRed);
+        assert_eq!(rendered_line(&terminal, 4).trim(), "");
+        assert_eq!(rendered_line(&terminal, 5).trim(), "--- a/old");
+
+        let mut streamed = Vec::new();
+        diff.write_to(&mut streamed)?;
+        assert_eq!(
+            streamed,
+            b"0101010 mapped author subject\n new | 2 ++\n old | 2 +-\nroot \xc2\xb7 A 1 + M 1 = 2 \xc2\xb7 +3 -1 \n\n--- a/old\n+++ b/old\n"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
         app.extend_commits(LoadedCommits {
@@ -1875,7 +2072,8 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · ↑↓/jk move · h/l pan · [ align · o commit · c changes · v view · y copy · q quit";
+        let footer_text =
+            "#1 · ↑↓/jk move · h/l pan · Enter diff · [ align · o commit · c changes · v view · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {

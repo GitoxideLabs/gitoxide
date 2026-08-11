@@ -300,6 +300,7 @@ pub(crate) enum Effect {
     CopyAuthor(&'static Author),
     Reload(bool),
     OpenDiff(ChangePane, usize),
+    OpenCommitDiff(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -745,6 +746,11 @@ impl App {
                 let changes = self.focused_changes_mut();
                 changes.error = None;
                 return vec![Effect::OpenDiff(pane, changes.selected)];
+            }
+            Action::OpenDiff => {
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    return vec![Effect::OpenCommitDiff(id)];
+                }
             }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
@@ -2211,7 +2217,7 @@ mod tests {
         app.update(Action::ToggleChanges);
         app.update(Action::ToggleChanges);
         assert_eq!(app.changes_focus, None, "closing the panel returns focus to history");
-        assert!(app.update(Action::OpenDiff).is_empty());
+        assert_eq!(app.update(Action::OpenDiff), vec![Effect::OpenCommitDiff(id(1))]);
         assert_eq!(app.tree_changes.selected, 0);
         assert_eq!(app.tree_changes.offset, 0);
         assert_eq!(app.tree_changes.horizontal_offset, 0);
