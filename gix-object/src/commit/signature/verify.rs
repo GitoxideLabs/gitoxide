@@ -12,7 +12,7 @@ use crate::commit::SignedData;
 
 use super::Format;
 
-/// Fully resolved options for verifying a commit signature.
+/// Options for verifying a commit signature.
 #[derive(Clone, Debug)]
 pub enum Options {
     /// Verify an OpenPGP signature.

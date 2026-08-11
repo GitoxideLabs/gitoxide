@@ -1,6 +1,8 @@
 //! Sign and verify commits with Git-compatible external programs.
 
-/// Commit signature verification with fully resolved options.
+/// Commit signing with fully detailed options.
+pub mod sign;
+/// Commit signature verification with detailed options.
 pub mod verify;
 
 /// The format of the signature to create.
