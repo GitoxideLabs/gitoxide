@@ -39,7 +39,7 @@ impl<'borrow> ValueMut<'borrow> {
             .set_internal(self.index, self.key.to_owned(), input.as_bstr())?;
         if self.size.0 > 0 {
             self.section
-                .delete(self.index + new_size, self.index + new_size + self.size);
+                .delete_replaced_value(self.index + new_size, self.index + new_size + self.size);
         }
         self.size = new_size;
         Ok(())
