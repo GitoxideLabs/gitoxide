@@ -29,6 +29,7 @@ directories = "6.0.0"
 gix = { version = "^0.86.0", path = "../gix", default-features = false, features = ["blob-diff", "mailmap", "notes", "parallel", "revision", "command", "status"] }
 notify = "8.2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+terminal-colorsaurus = "1.0.3"
 tracing = "0.1.37"
 tracing-appender = "0.2.4"
 tracing-subscriber = "0.3.17"
