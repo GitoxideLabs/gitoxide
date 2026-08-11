@@ -568,7 +568,11 @@ pub(crate) fn draw_with_worktree(
     }
     if let Some((outer, area)) = commit_pane {
         frame.render_widget(Clear, outer);
-        frame.render_widget(Block::new().borders(Borders::LEFT), outer);
+        if let Some((red, green, blue)) = app.commit_pane_background {
+            frame
+                .buffer_mut()
+                .set_style(outer, Style::default().bg(Color::Rgb(red, green, blue)));
+        }
         let max_offset = if let Some(message) = commit_message {
             let notes = app
                 .selected
@@ -2440,6 +2444,7 @@ mod tests {
     #[test]
     fn toggles_the_full_commit_message_in_a_padded_half_width_pane() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(3);
+        app.commit_pane_background = Some((15, 16, 17));
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
@@ -2474,8 +2479,23 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(60, 0)].symbol(),
-            "│",
-            "the pane has a left border"
+            " ",
+            "the pane starts with padding instead of a border"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(60, 0)].bg,
+            Color::Rgb(15, 16, 17),
+            "the commit pane has the derived terminal-background shade"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(62, 0)].bg,
+            Color::Rgb(15, 16, 17),
+            "the shade extends behind the commit message"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(59, 0)].bg,
+            Color::Reset,
+            "the history background is unchanged"
         );
         assert_eq!(
             terminal.backend().buffer()[(62, 2)].symbol(),
@@ -2493,6 +2513,11 @@ mod tests {
             terminal.backend().buffer()[(62, 3)].symbol(),
             " ",
             "closing the pane removes the commit body"
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(62, 3)].bg,
+            Color::Reset,
+            "closing the pane removes its background shade"
         );
 
         app.update(Action::ToggleCommit);
@@ -2536,6 +2561,7 @@ mod tests {
     fn pages_overflowing_commit_messages_and_hides_the_status_when_they_fit() -> Result<(), Box<dyn std::error::Error>>
     {
         let mut app = App::new(4);
+        app.commit_pane_background = Some((15, 16, 17));
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
@@ -2695,6 +2721,7 @@ mod tests {
     #[test]
     fn shows_changed_paths_in_a_bottom_pane_below_the_summary() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(6);
+        app.commit_pane_background = Some((15, 16, 17));
         app.extend_commits(vec![
             Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
@@ -3105,7 +3132,12 @@ mod tests {
                 .collect::<String>()
                 .contains("Tree")
         );
-        assert_eq!(terminal.backend().buffer()[(60, 7)].symbol(), "│");
+        assert_eq!(terminal.backend().buffer()[(60, 7)].symbol(), " ");
+        assert_eq!(
+            terminal.backend().buffer()[(60, 7)].bg,
+            Color::Rgb(15, 16, 17),
+            "the shaded commit pane separates the overlays without a border"
+        );
         assert_eq!(
             app.viewport_rows, 7,
             "history remains bounded above the highest overlay"
@@ -3129,7 +3161,8 @@ mod tests {
             ChangesLayout::SideBySide,
             "sufficient remaining width still permits side-by-side changes"
         );
-        assert_eq!(wide_terminal.backend().buffer()[(156, 7)].symbol(), "│");
+        assert_eq!(wide_terminal.backend().buffer()[(156, 7)].symbol(), " ");
+        assert_eq!(wide_terminal.backend().buffer()[(156, 7)].bg, Color::Rgb(15, 16, 17));
         Ok(())
     }
 
