@@ -41,14 +41,7 @@ pub fn store_options() -> gix_ref::store::init::Options {
 }
 
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {
-    gix_odb::at_opts(
-        objects_dir,
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: crate::fixture_hash_kind(),
-            ..Default::default()
-        },
-    )
+    gix_odb::at(objects_dir, crate::fixture_hash_kind())
 }
 
 struct EmptyCommit;

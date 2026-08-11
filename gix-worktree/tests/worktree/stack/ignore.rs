@@ -118,14 +118,7 @@ fn check_against_baseline() -> crate::Result {
         false,
         Default::default(),
     )?;
-    let odb = gix_odb::at_opts(
-        git_dir.join("objects"),
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: gix_testtools::object_hash(),
-            ..Default::default()
-        },
-    )?;
+    let odb = gix_odb::at(git_dir.join("objects"), gix_testtools::object_hash())?;
     let parse_ignore = gix_ignore::search::Ignore::default();
     let state = gix_worktree::stack::State::for_add(
         Default::default(),

@@ -90,12 +90,5 @@ fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
 }
 
 fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> Result<gix_odb::Handle> {
-    Ok(gix_odb::at_opts(
-        objects_dir,
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: gix_testtools::object_hash(),
-            ..Default::default()
-        },
-    )?)
+    Ok(gix_odb::at(objects_dir, gix_testtools::object_hash())?)
 }

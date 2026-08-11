@@ -69,17 +69,7 @@ fn db_with_all_object_sources() -> crate::Result<(gix_odb::Handle, gix_testtools
             object_hash: gix_hash::Kind::Sha1,
         },
     )?;
-    Ok((
-        gix_odb::at_opts(
-            objects_dir.path(),
-            None,
-            gix_odb::store::init::Options {
-                object_hash: gix_hash::Kind::Sha1,
-                ..Default::default()
-            },
-        )?,
-        objects_dir,
-    ))
+    Ok((gix_odb::at(objects_dir.path(), gix_hash::Kind::Sha1)?, objects_dir))
 }
 
 #[test]
@@ -311,14 +301,7 @@ fn an_object_in_a_pack_moved_by_an_external_process_can_be_found_from_a_stale_ha
         )?;
     }
 
-    let stale_handle = gix_odb::at_opts(
-        tmp.path().join("objects"),
-        None,
-        gix_odb::store::init::Options {
-            object_hash: gix_hash::Kind::Sha1,
-            ..Default::default()
-        },
-    )?;
+    let stale_handle = gix_odb::at(tmp.path().join("objects"), gix_hash::Kind::Sha1)?;
     let id = hex_to_id("dd25c539efbb0ab018caa4cda2d133285634e9b5");
     assert!(
         stale_handle.exists(&id),
@@ -980,14 +963,7 @@ fn auto_refresh_with_and_without_id_stability() -> crate::Result {
     hide_pack("pack-11fdfa9e156ab73caae3b6da867192221f2089c2");
     hide_pack("pack-a2bf8e71d8c18879e499335762dd95119d93d9f1");
 
-    let handle = gix_odb::at_opts(
-        tmp.path().join("objects"),
-        None,
-        gix_odb::store::init::Options {
-            object_hash: gix_hash::Kind::Sha1,
-            ..Default::default()
-        },
-    )?;
+    let handle = gix_odb::at(tmp.path().join("objects"), gix_hash::Kind::Sha1)?;
     let mut buf = Vec::new();
     assert!(
         handle

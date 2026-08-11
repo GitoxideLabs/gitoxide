@@ -24,14 +24,7 @@ fn run() -> crate::Result {
             let obj_buf = RefCell::new(Vec::new());
             let buf = std::fs::read(base.join(format!("baseline.{algo_name}")))?;
             let object_hash = gix_testtools::object_hash();
-            let store = gix_odb::at_opts(
-                base.join("client").join(".git/objects"),
-                Vec::new(),
-                gix_odb::store::init::Options {
-                    object_hash,
-                    ..Default::default()
-                },
-            )?;
+            let store = gix_odb::at(base.join("client").join(".git/objects"), object_hash)?;
             let refs = gix_ref::file::Store::at(
                 base.join("client").join(".git"),
                 gix_ref::store::init::Options {

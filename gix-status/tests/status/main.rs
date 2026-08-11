@@ -26,17 +26,10 @@ pub fn fixture_path_rw_slow(name: &str) -> gix_testtools::tempfile::TempDir {
 }
 
 fn odb_at(git_dir: &std::path::Path, object_hash: gix_hash::Kind) -> gix_odb::HandleArc {
-    gix_odb::at_opts(
-        git_dir.join("objects"),
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash,
-            ..Default::default()
-        },
-    )
-    .unwrap()
-    .into_arc()
-    .unwrap()
+    gix_odb::at(git_dir.join("objects"), object_hash)
+        .unwrap()
+        .into_arc()
+        .unwrap()
 }
 
 static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<HashMap<&str, &str>> = std::sync::LazyLock::new(|| {

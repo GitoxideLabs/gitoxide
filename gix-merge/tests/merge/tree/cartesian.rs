@@ -61,14 +61,7 @@ fn records_status_quo_sha1() -> crate::Result {
         "the fixture must contain the unordered Cartesian product; each case is merged both ways"
     );
 
-    let odb = gix_odb::at_opts(
-        repo.join(".git/objects"),
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: gix_hash::Kind::Sha1,
-            ..Default::default()
-        },
-    )?;
+    let odb = gix_odb::at(repo.join(".git/objects"), gix_hash::Kind::Sha1)?;
     let objects = gix_odb::memory::Proxy::new(odb, gix_hash::Kind::Sha1);
     let base_tree_id =
         gix_hash::ObjectId::from_hex(std::fs::read_to_string(repo.join(".git/base.tree"))?.trim().as_bytes())?;
@@ -890,14 +883,7 @@ fn records_submodule_status_quo_sha1() -> crate::Result {
         "the submodule fixture must contain the full unordered Cartesian product"
     );
 
-    let odb = gix_odb::at_opts(
-        repo.join(".git/objects"),
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: gix_hash::Kind::Sha1,
-            ..Default::default()
-        },
-    )?;
+    let odb = gix_odb::at(repo.join(".git/objects"), gix_hash::Kind::Sha1)?;
     let objects = gix_odb::memory::Proxy::new(odb, gix_hash::Kind::Sha1);
     let mut graph = gix_revwalk::Graph::new(&objects, None);
     let mut diff_resource_cache = new_diff_resource_cache(&repo);

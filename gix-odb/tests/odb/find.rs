@@ -1,15 +1,7 @@
 use gix_testtools::fixture_path;
 
 fn db() -> gix_odb::Handle {
-    gix_odb::at_opts(
-        fixture_path("objects"),
-        None,
-        gix_odb::store::init::Options {
-            object_hash: gix_hash::Kind::Sha1,
-            ..Default::default()
-        },
-    )
-    .expect("valid object path")
+    gix_odb::at(fixture_path("objects"), gix_hash::Kind::Sha1).expect("valid object path")
 }
 
 use crate::hex_to_id;
