@@ -169,15 +169,7 @@ impl Iterator for Expectations<'_> {
             unknown => unreachable!("Unknown conflict style: '{unknown}'"),
         };
         let object_hash = gix_testtools::object_hash();
-        let odb = gix_odb::at_opts(
-            subdir_path.join(".git/objects"),
-            Vec::new(),
-            gix_odb::store::init::Options {
-                object_hash,
-                ..Default::default()
-            },
-        )
-        .expect("object dir exists");
+        let odb = gix_odb::at(subdir_path.join(".git/objects"), object_hash).expect("object dir exists");
         let objects = gix_odb::memory::Proxy::new(odb, object_hash);
         let our_commit_id = gix_hash::ObjectId::from_hex(our_commit_id.as_bytes()).unwrap();
         let their_commit_id = gix_hash::ObjectId::from_hex(their_commit_id.as_bytes()).unwrap();

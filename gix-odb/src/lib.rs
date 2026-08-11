@@ -193,7 +193,15 @@ pub fn at_opts(
     Ok(Cache::from(handle))
 }
 
-/// Create a new cached handle to the object store.
-pub fn at(objects_dir: impl Into<PathBuf>) -> std::io::Result<Handle> {
-    at_opts(objects_dir, Vec::new(), Default::default())
+/// Create a new cached handle to the object store with `.git/objects` provided in `objects_dir`,
+/// with `object_hash` as the hash of contained objects to write.
+pub fn at(objects_dir: impl Into<PathBuf>, object_hash: gix_hash::Kind) -> std::io::Result<Handle> {
+    at_opts(
+        objects_dir,
+        None,
+        store::init::Options {
+            object_hash,
+            ..Default::default()
+        },
+    )
 }

@@ -168,14 +168,7 @@ impl Fixture {
                 ..Default::default()
             },
         );
-        let odb = gix_odb::at_opts(
-            worktree_path.join(".git/objects"),
-            Vec::new(),
-            gix_odb::store::init::Options {
-                object_hash,
-                ..Default::default()
-            },
-        )?;
+        let odb = gix_odb::at(worktree_path.join(".git/objects"), object_hash)?;
 
         let mut reference = gix_ref::file::Store::find(&store, "HEAD")?;
 

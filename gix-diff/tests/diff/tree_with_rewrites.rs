@@ -1909,14 +1909,7 @@ mod util {
         rhs: impl Into<Option<&'static str>>,
     ) -> gix_testtools::Result<(Vec<u8>, Vec<u8>, gix_diff::blob::Platform, gix_odb::Handle)> {
         let root = repo_workdir()?;
-        let odb = gix_odb::at_opts(
-            root.join(".git/objects"),
-            Vec::new(),
-            gix_odb::store::init::Options {
-                object_hash: fixture_hash_kind(),
-                ..Default::default()
-            },
-        )?;
+        let odb = gix_odb::at(root.join(".git/objects"), fixture_hash_kind())?;
         let lhs = read_tree(&odb, &root, lhs.into())?;
         let rhs = read_tree(&odb, &root, rhs.into())?;
 

@@ -147,14 +147,7 @@ mod lookup_entry {
 
         pub(super) fn tree_odb() -> gix_testtools::Result<gix_odb::Handle> {
             let root = gix_testtools::scripted_fixture_read_only("make_trees.sh")?;
-            Ok(gix_odb::at_opts(
-                root.join(".git/objects"),
-                Vec::new(),
-                gix_odb::store::init::Options {
-                    object_hash: crate::fixture_hash_kind(),
-                    ..Default::default()
-                },
-            )?)
+            Ok(gix_odb::at(root.join(".git/objects"), crate::fixture_hash_kind())?)
         }
 
         pub(super) fn lookup_entry_by_path(path: &str) -> gix_testtools::Result<Option<gix_object::tree::Entry>> {

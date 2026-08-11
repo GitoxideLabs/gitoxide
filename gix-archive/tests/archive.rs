@@ -341,14 +341,7 @@ mod from_tree {
             let hex = std::fs::read(dir.join("head.hex"))?;
             gix_hash::ObjectId::from_hex(hex.trim())?
         };
-        let odb = gix_odb::at_opts(
-            dir.join(".git").join("objects"),
-            Vec::new(),
-            gix_odb::store::init::Options {
-                object_hash: gix_testtools::object_hash(),
-                ..Default::default()
-            },
-        )?;
+        let odb = gix_odb::at(dir.join(".git").join("objects"), gix_testtools::object_hash())?;
 
         let mut collection = Default::default();
         let mut buf = Default::default();

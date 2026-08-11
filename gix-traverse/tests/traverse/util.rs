@@ -247,14 +247,7 @@ pub fn fixture(script_name: &str) -> Result<PathBuf> {
 
 /// Get an object database handle for `objects_dir`, respecting the hash kind configured for tests.
 pub fn odb_at(objects_dir: impl Into<PathBuf>) -> Result<gix_odb::Handle> {
-    Ok(gix_odb::at_opts(
-        objects_dir,
-        Vec::new(),
-        gix_odb::store::init::Options {
-            object_hash: gix_testtools::object_hash(),
-            ..Default::default()
-        },
-    )?)
+    Ok(gix_odb::at(objects_dir, gix_testtools::object_hash())?)
 }
 
 /// Get an object database handle from a fixture script that creates a single repository.

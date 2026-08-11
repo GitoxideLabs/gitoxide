@@ -28,15 +28,15 @@ pub fn fixture_options() -> gix_odb::store::init::Options {
 /// Open an object store at `objects_dir`.
 /// The static SHA-1 fixtures keep using [`db()`]/[`db_small_packs()`] instead.
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {
-    gix_odb::at_opts(objects_dir, Vec::new(), fixture_options())
+    gix_odb::at(objects_dir, gix_testtools::object_hash())
 }
 
 fn db() -> gix_odb::Handle {
-    gix_odb::at(fixture_path("objects")).expect("valid object path")
+    gix_odb::at(fixture_path("objects"), gix_hash::Kind::Sha1).expect("valid object path")
 }
 
 fn db_small_packs() -> gix_odb::Handle {
-    gix_odb::at(fixture_path("repos/small-packs.git/objects")).unwrap()
+    gix_odb::at(fixture_path("repos/small-packs.git/objects"), gix_hash::Kind::Sha1).unwrap()
 }
 
 pub mod alternate;
