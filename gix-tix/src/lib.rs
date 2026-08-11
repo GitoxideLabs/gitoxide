@@ -57,6 +57,7 @@ const REF_EVENT_IDLE: Duration = Duration::from_millis(100);
 const IMMEDIATE_PAGER_EXIT: Duration = Duration::from_millis(250);
 const REF_EVENT_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const THEME_QUERY_TIMEOUT: Duration = Duration::from_millis(100);
 
 struct FillRepository {
     path: PathBuf,
@@ -699,6 +700,34 @@ pub struct Options {
     pub hide: Vec<OsString>,
 }
 
+fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
+    let mut options = terminal_colorsaurus::QueryOptions::default();
+    options.timeout = THEME_QUERY_TIMEOUT;
+    match terminal_colorsaurus::background_color(options) {
+        Ok(background) => {
+            let color = background.scale_to_8bit();
+            let shaded = shade_terminal_background(color, background.perceived_lightness() <= 0.5);
+            tracing::debug!(?color, ?shaded, "detected terminal background");
+            Some(shaded)
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "terminal background detection unavailable");
+            None
+        }
+    }
+}
+
+fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u8, u8, u8) {
+    let shade = |channel: u8| {
+        if dark {
+            channel + (u8::MAX - channel) / 16
+        } else {
+            channel - channel / 16
+        }
+    };
+    (shade(red), shade(green), shade(blue))
+}
+
 /// Run the interactive commit graph for `repository`.
 pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
     let _log_guard = match logging::init() {
@@ -713,12 +742,22 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
         hidden_revision_count = options.hide.len(),
         "starting tix"
     );
+    let commit_pane_background = detect_commit_pane_background();
     let mut terminal = ratatui::try_init().context("could not initialize terminal")?;
     let enhanced_keyboard = terminal::supports_keyboard_enhancement().unwrap_or(false);
     let keyboard_setup = enable_input(terminal.backend_mut(), enhanced_keyboard);
     let result = keyboard_setup
         .context("could not enable enhanced keyboard events")
-        .and_then(|()| event_loop(&mut terminal, repository, revisions, options, enhanced_keyboard));
+        .and_then(|()| {
+            event_loop(
+                &mut terminal,
+                repository,
+                revisions,
+                options,
+                enhanced_keyboard,
+                commit_pane_background,
+            )
+        });
     let keyboard_restore = disable_input(terminal.backend_mut(), enhanced_keyboard);
     let restore = ratatui::try_restore().context("could not restore terminal");
     let lane_time = result?;
@@ -758,6 +797,7 @@ fn event_loop(
     revisions: Vec<OsString>,
     options: Options,
     enhanced_keyboard: bool,
+    commit_pane_background: Option<(u8, u8, u8)>,
 ) -> Result<Option<Duration>> {
     let Options { quit_on_finish, hide } = options;
     let mut repository_path = repository.git_dir().to_owned();
@@ -794,6 +834,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.notice = Some("worktree removed; using the common repository without worktree changes".into());
     }
@@ -3191,6 +3232,14 @@ fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shades_terminal_background_by_one_sixteenth() {
+        assert_eq!(shade_terminal_background((0, 0, 0), true), (15, 15, 15));
+        assert_eq!(shade_terminal_background((255, 255, 255), false), (240, 240, 240));
+        assert_eq!(shade_terminal_background((32, 64, 128), true), (45, 75, 135));
+        assert_eq!(shade_terminal_background((32, 64, 128), false), (30, 60, 120));
+    }
 
     #[test]
     fn retains_unseen_filesystem_redraws_until_focus_returns() {
