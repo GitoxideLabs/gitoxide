@@ -179,6 +179,10 @@ fn notification_is_actionable(event: &notify::Event) -> bool {
                 })))
 }
 
+fn unseen_filesystem_redraw(current: bool, focused: bool, filesystem_frame: bool) -> bool {
+    !focused && (current || filesystem_frame)
+}
+
 fn worktree_watcher_needed(repository_is_bare: bool, mode: Option<ChangesMode>) -> bool {
     !repository_is_bare && mode == Some(ChangesMode::Both)
 }
@@ -840,6 +844,7 @@ fn event_loop(
     let mut decorations = Decorations::new();
     let mut motion = MotionState::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
+    let mut focused = true;
     draw(
         terminal,
         &mut app,
@@ -854,13 +859,13 @@ fn event_loop(
         &mut selection_relation,
         &mut line_diff_pool,
         &mut motion,
+        focused,
         &mut filesystem_responses,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
     let mut urgent = false;
     let mut history_finished = false;
-    let mut focused = true;
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
@@ -1225,6 +1230,7 @@ fn event_loop(
                 &mut selection_relation,
                 &mut line_diff_pool,
                 &mut motion,
+                focused,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1286,6 +1292,7 @@ fn event_loop(
                 &mut selection_relation,
                 &mut line_diff_pool,
                 &mut motion,
+                focused,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1372,6 +1379,10 @@ fn event_loop(
             }
             TerminalEvent::FocusGained => {
                 focused = true;
+                if app.unseen_filesystem_redraw {
+                    dirty = true;
+                    urgent = true;
+                }
                 continue;
             }
             TerminalEvent::Resize(_, _) => {
@@ -1800,12 +1811,18 @@ fn draw(
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
     motion: &mut MotionState,
+    focused: bool,
     filesystem_responses: &mut logging::FilesystemResponses,
 ) -> Result<()> {
     let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
         return Ok(());
     }
+    app.unseen_filesystem_redraw = unseen_filesystem_redraw(
+        app.unseen_filesystem_redraw,
+        focused,
+        filesystem_responses.has_queued_frame(),
+    );
     app.viewport_rows = app.viewport_rows.min(render_rows.max(1));
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
@@ -3174,6 +3191,14 @@ fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retains_unseen_filesystem_redraws_until_focus_returns() {
+        assert!(!unseen_filesystem_redraw(false, false, false));
+        assert!(unseen_filesystem_redraw(false, false, true));
+        assert!(unseen_filesystem_redraw(true, false, false));
+        assert!(!unseen_filesystem_redraw(true, true, true));
+    }
 
     #[test]
     fn reference_watcher_observes_new_loose_refs() -> gix_testtools::Result {
