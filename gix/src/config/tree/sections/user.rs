@@ -9,6 +9,8 @@ impl User {
     /// The `user.email` key
     pub const EMAIL: keys::Any =
         keys::Any::new("email", &config::Tree::USER).with_fallback(&gitoxide::User::EMAIL_FALLBACK);
+    /// The `user.signingKey` key.
+    pub const SIGNING_KEY: keys::Any = keys::Any::new("signingKey", &config::Tree::USER);
 }
 
 impl Section for User {
@@ -17,6 +19,6 @@ impl Section for User {
     }
 
     fn keys(&self) -> &[&dyn Key] {
-        &[&Self::NAME, &Self::EMAIL]
+        &[&Self::NAME, &Self::EMAIL, &Self::SIGNING_KEY]
     }
 }

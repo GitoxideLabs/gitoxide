@@ -47,6 +47,27 @@ impl crate::Repository {
         (!terminal_is_dumb).then(|| "vi".into())
     }
 
+    /// Resolve all Git configuration needed to sign a commit with [`gix_object::Commit::sign()`].
+    ///
+    /// The returned plumbing options may be adjusted before use, for example to disable GPG pinentry by adding
+    /// `--pinentry-mode=error` to `program_arguments`.
+    #[cfg(feature = "command")]
+    pub fn commit_signing_options(
+        &self,
+    ) -> Result<gix_object::commit::signature::sign::Options, crate::commit::sign::options::Error> {
+        crate::commit::sign::signing_options(self)
+    }
+
+    /// Resolve all Git configuration needed to sign a commit if `commit.gpgSign` enables signing.
+    ///
+    /// If signing is disabled, signer-specific configuration isn't resolved or validated.
+    #[cfg(feature = "command")]
+    pub fn commit_signing_options_if_enabled(
+        &self,
+    ) -> Result<Option<gix_object::commit::signature::sign::Options>, crate::commit::sign::options::Error> {
+        crate::commit::sign::signing_options_if_enabled(self)
+    }
+
     /// Return a mutable snapshot of the configuration as seen upon opening the repository, starting a transaction.
     /// When the returned instance is dropped, it is applied in full, even if the reason for the drop is an error.
     ///

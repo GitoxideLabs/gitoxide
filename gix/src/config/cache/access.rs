@@ -219,6 +219,19 @@ impl Cache {
             .unwrap_or(DEFAULT))
     }
 
+    #[cfg(feature = "command")]
+    pub(crate) fn may_sign_commits(&self) -> Result<bool, config::boolean::Error> {
+        use crate::config::tree::Commit;
+
+        let default = gix_config::Boolean::try_from(Commit::GPG_SIGN.default_value_or_panic())
+            .expect("commit.gpgSign default is a valid boolean")
+            .0;
+        Ok(Commit::GPG_SIGN
+            .enrich_error(self.resolved.boolean(Commit::GPG_SIGN))
+            .with_lenient_default_value(self.lenient_config, Some(default))?
+            .unwrap_or(default))
+    }
+
     /// Returns (file-timeout, pack-refs timeout)
     pub(crate) fn lock_timeout(
         &self,

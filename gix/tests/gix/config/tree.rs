@@ -1,6 +1,6 @@
 mod keys {
     use gix::config::tree::{Key, Section};
-    use gix_object::bstr::ByteSlice;
+    use gix_object::bstr::{BStr, ByteSlice};
 
     #[test]
     fn string() -> crate::Result {
@@ -42,6 +42,32 @@ mod keys {
                 .unwrap(),
             "author.name=user"
         );
+    }
+
+    #[test]
+    fn default_values() {
+        for (key, expected) in [
+            (
+                &gix::config::tree::Clone::DEFAULT_REMOTE_NAME as &dyn Key,
+                BStr::new(b"origin"),
+            ),
+            (&gix::config::tree::Diff::ALGORITHM, BStr::new(b"myers")),
+            (&gix::config::tree::Gpg::FORMAT, BStr::new(b"openpgp")),
+            (&gix::config::tree::Gpg::PROGRAM, BStr::new(b"gpg")),
+            (&gix::config::tree::gpg::OpenPgp::PROGRAM, BStr::new(b"gpg")),
+            (&gix::config::tree::gpg::X509::PROGRAM, BStr::new(b"gpgsm")),
+            (&gix::config::tree::gpg::Ssh::PROGRAM, BStr::new(b"ssh-keygen")),
+            (&gix::config::tree::Commit::GPG_SIGN, BStr::new(b"false")),
+            (&gix::config::tree::gitoxide::Core::SHALLOW_FILE, BStr::new(b"shallow")),
+            (
+                &gix::config::tree::gitoxide::Objects::REPLACE_REF_BASE,
+                BStr::new(b"refs/replace/"),
+            ),
+        ] {
+            assert_eq!(key.default_value(), Some(expected), "default for {key:?}");
+            assert_eq!(key.default_value_or_panic(), expected, "default for {key:?}");
+        }
+        assert_eq!(gix::config::tree::Author::NAME.default_value(), None);
     }
 
     #[test]

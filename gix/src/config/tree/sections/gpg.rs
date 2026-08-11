@@ -5,7 +5,7 @@ use crate::config::{
 
 impl super::Gpg {
     /// The `gpg.format` key.
-    pub const FORMAT: keys::Any = keys::Any::new("format", &config::Tree::GPG);
+    pub const FORMAT: keys::Any = keys::Any::new("format", &config::Tree::GPG).with_default(b"openpgp");
     /// The legacy `gpg.program` key used as an OpenPGP program fallback.
     pub const PROGRAM: keys::Program = keys::Program::new_program("program", &config::Tree::GPG).with_default(b"gpg");
     /// The `gpg.minTrustLevel` key.

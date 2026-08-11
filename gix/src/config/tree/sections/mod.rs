@@ -26,6 +26,11 @@ mod clone;
 pub struct Committer;
 mod committer;
 
+/// The `commit` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Commit;
+pub mod commit;
+
 /// The `core` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Core;

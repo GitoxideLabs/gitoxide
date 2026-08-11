@@ -3,31 +3,12 @@
 
 use std::convert::Infallible;
 
-/// Commit signature verification using Git-compatible external programs and configuration.
+/// Commit signing errors.
 #[cfg(feature = "command")]
-pub mod signature;
-
-/// Errors returned when verifying commit signatures.
+pub mod sign;
+/// Commit signature verification errors.
 #[cfg(feature = "command")]
-pub mod verify {
-    /// The error returned by [`crate::Commit::verify_signature()`].
-    #[derive(Debug, thiserror::Error)]
-    #[expect(missing_docs)]
-    pub enum Error {
-        #[error(transparent)]
-        Decode(#[from] gix_object::decode::Error),
-        #[error(transparent)]
-        Commit(#[from] crate::object::commit::Error),
-        #[error(transparent)]
-        InvalidTrustLevel(#[from] crate::config::key::GenericErrorWithValue),
-        #[error("Could not interpolate a configured signature-verification path")]
-        ConfiguredPath(#[from] gix_config::path::interpolate::Error),
-        #[error("gpg.ssh.allowedSignersFile must be configured for SSH signature verification")]
-        MissingAllowedSigners,
-        #[error(transparent)]
-        Verify(#[from] gix_object::commit::signature::verify::Error),
-    }
-}
+pub mod verify;
 
 /// An empty array of a type usable with the `gix::easy` API to help declaring no parents should be used
 pub const NO_PARENT_IDS: [gix_hash::ObjectId; 0] = [];
