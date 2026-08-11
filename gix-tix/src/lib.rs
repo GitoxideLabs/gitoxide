@@ -727,6 +727,7 @@ fn event_loop(
     }
     let mut decorations = Decorations::new();
     let mut motion = MotionState::default();
+    let mut filesystem_responses = logging::FilesystemResponses::default();
     draw(
         terminal,
         &mut app,
@@ -741,6 +742,7 @@ fn event_loop(
         &mut selection_relation,
         &mut line_diff_pool,
         &mut motion,
+        &mut filesystem_responses,
     )?;
     let mut last_draw = Instant::now();
     let mut dirty = false;
@@ -763,6 +765,7 @@ fn event_loop(
                         rescans += usize::from(event.need_rescan());
                         if watcher.event_is_relevant(&event) {
                             relevant += 1;
+                            filesystem_responses.observe_worktree(&event, &watcher.workdir, &watcher.index);
                             schedule_once(&mut worktree_refresh_deadline, Instant::now(), WORKTREE_EVENT_IDLE);
                         }
                     }
@@ -774,11 +777,15 @@ fn event_loop(
                 }
             }
             if received > 0 {
+                if relevant > 0 {
+                    filesystem_responses.note_worktree_batch();
+                }
                 tracing::debug!(received, relevant, rescans, "processed worktree event batch");
             }
         }
         if let Some(err) = worktree_watch_error {
             tracing::warn!(error = %err, "worktree watcher failed");
+            filesystem_responses.fail_pending_worktree();
             app.worktree_changes.error = Some(format!("worktree watch: {err}"));
             worktree_watcher = None;
             worktree_refresh_deadline = None;
@@ -788,6 +795,7 @@ fn event_loop(
         }
         if take_due(&mut worktree_refresh_deadline, Instant::now()) {
             let invalidated = invalidate_worktree_changes(&mut worktree_changes);
+            filesystem_responses.worktree_due(invalidated);
             tracing::debug!(invalidated, "worktree event deadline elapsed");
             dirty = true;
             urgent = true;
@@ -804,6 +812,7 @@ fn event_loop(
                         rescans += usize::from(event.need_rescan());
                         if notification_is_actionable(&event) {
                             actionable += 1;
+                            filesystem_responses.observe_references(&event, &repository_path, &common_dir);
                             ref_refresh_deadline = Some(Instant::now() + REF_EVENT_IDLE);
                         }
                     }
@@ -815,20 +824,28 @@ fn event_loop(
                 }
             }
             if received > 0 {
+                if actionable > 0 {
+                    filesystem_responses.note_reference_batch();
+                }
                 tracing::debug!(received, actionable, rescans, "processed reference event batch");
             }
         }
         if let Some(err) = ref_watch_error {
             tracing::warn!(error = %err, "reference watcher failed");
+            filesystem_responses.fail_pending_references();
             ref_watcher = None;
             ref_refresh_deadline = None;
             app.manual_refresh = true;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
+            let response_ids = filesystem_responses.references_due();
             refresh_pending = true;
             refresh_from_filesystem = true;
-            if invalidate_worktree_changes(&mut worktree_changes) {
+            let invalidated = invalidate_worktree_changes(&mut worktree_changes);
+            filesystem_responses.phase(&response_ids, "reference-worktree-cache-invalidation");
+            if invalidated {
+                filesystem_responses.queue_frame(&response_ids, "reference-worktree-cache-invalidation");
                 dirty = true;
                 urgent = true;
             }
@@ -878,6 +895,8 @@ fn event_loop(
         }
         if take_due(&mut history_status_deadline, Instant::now()) {
             app.deferred_history_state = None;
+            let response_ids = filesystem_responses.active_reference_ids().to_vec();
+            filesystem_responses.queue_frame(&response_ids, "delayed-history-status");
             dirty = true;
             urgent = true;
         }
@@ -909,6 +928,10 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
+                    let response_ids = filesystem_responses.active_reference_ids().to_vec();
+                    filesystem_responses.phase(&response_ids, "lane-computation-completed");
+                    filesystem_responses.queue_frame(&response_ids, "lane-computation-completed");
+                    filesystem_responses.finish_after_frame(&response_ids, "completed");
                     history_status_deadline = None;
                     app.deferred_history_state = None;
                     selection_relation = None;
@@ -931,6 +954,9 @@ fn event_loop(
                     history_graph = Some(graph);
                     let result = result?;
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
+                    let response_ids = filesystem_responses.active_reference_ids().to_vec();
+                    filesystem_responses.phase(&response_ids, "history-refresh-completed");
+                    filesystem_responses.queue_frame(&response_ids, "history-refresh-completed");
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -961,6 +987,7 @@ fn event_loop(
             && matches!(app.state, State::Complete | State::Cancelled)
         {
             let refresh_started = Instant::now();
+            let response_ids = filesystem_responses.begin_reference_refresh();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
                 Ok(repository) => repository,
                 Err(_err) if worktree_repository_is_gone(&repository_path) => {
@@ -977,6 +1004,7 @@ fn event_loop(
                     app.set_worktree_changes_available(false);
                     worktree_watcher = None;
                     worktree_refresh_deadline = None;
+                    filesystem_responses.cancel_pending_worktree("worktree-unavailable");
                     worktree_changes = None;
                     line_diff_pool = None;
                     sync_line_diff_pool(
@@ -1010,7 +1038,12 @@ fn event_loop(
             } else {
                 motion.cancel_pending();
             }
-            tracing::debug!(tips_changed, hidden_changed, "compared reference snapshot");
+            tracing::debug!(
+                ?response_ids,
+                tips_changed,
+                hidden_changed,
+                "compared reference snapshot"
+            );
             let select_top = from_filesystem && tips_changed;
             ref_snapshot = next;
             refresh_pending = false;
@@ -1036,13 +1069,19 @@ fn event_loop(
             app.deferred_history_state = Some(app.state);
             history_status_deadline = Some(refresh_started + HISTORY_STATUS_DELAY);
             app.state = State::Loading;
-            tracing::info!(select_top, "started history refresh");
+            filesystem_responses.phase(&response_ids, "history-refresh-started");
+            tracing::info!(?response_ids, select_top, "started history refresh");
         }
         let now = Instant::now();
         if motion.timeout(now) == Some(Duration::ZERO)
             && let Some(frame) = motion.advance(now)
         {
-            present_buffer(terminal, &frame)?;
+            if present_buffer(terminal, &frame)? {
+                filesystem_responses.emphasis_finished("history-emphasis-settled", "completed");
+                filesystem_responses.frame_presented();
+            } else {
+                filesystem_responses.emphasis_aborted("terminal-area-changed");
+            }
             last_draw = now;
         }
         if urgent {
@@ -1060,6 +1099,7 @@ fn event_loop(
                 &mut selection_relation,
                 &mut line_diff_pool,
                 &mut motion,
+                &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1120,6 +1160,7 @@ fn event_loop(
                 &mut selection_relation,
                 &mut line_diff_pool,
                 &mut motion,
+                &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
             dirty = false;
@@ -1187,7 +1228,12 @@ fn event_loop(
             }
             TerminalEvent::FocusLost => {
                 if let Some(frame) = motion.finish() {
-                    present_buffer(terminal, &frame)?;
+                    if present_buffer(terminal, &frame)? {
+                        filesystem_responses.emphasis_finished("emphasis-interrupted-by-focus", "interrupted-by-focus");
+                        filesystem_responses.frame_presented();
+                    } else {
+                        filesystem_responses.emphasis_aborted("terminal-area-changed");
+                    }
                 }
                 motion.cancel_pending();
                 focused = false;
@@ -1204,7 +1250,13 @@ fn event_loop(
             }
             TerminalEvent::Resize(_, _) => {
                 if let Some(frame) = motion.finish() {
-                    present_buffer(terminal, &frame)?;
+                    if present_buffer(terminal, &frame)? {
+                        filesystem_responses
+                            .emphasis_finished("emphasis-interrupted-by-resize", "interrupted-by-resize");
+                        filesystem_responses.frame_presented();
+                    } else {
+                        filesystem_responses.emphasis_aborted("terminal-area-changed");
+                    }
                 }
                 motion.cancel_pending();
                 dirty = true;
@@ -1215,7 +1267,12 @@ fn event_loop(
         };
         if action.as_ref().is_some_and(|action| action != &Action::ForceQuit) {
             if let Some(frame) = motion.finish() {
-                present_buffer(terminal, &frame)?;
+                if present_buffer(terminal, &frame)? {
+                    filesystem_responses.emphasis_finished("emphasis-interrupted-by-input", "interrupted-by-input");
+                    filesystem_responses.frame_presented();
+                } else {
+                    filesystem_responses.emphasis_aborted("terminal-area-changed");
+                }
                 last_draw = Instant::now();
             }
             motion.cancel_pending();
@@ -1289,6 +1346,7 @@ fn event_loop(
             } else if previous_changes_mode == Some(ChangesMode::Both) {
                 worktree_watcher = None;
                 worktree_refresh_deadline = None;
+                filesystem_responses.cancel_pending_worktree("watcher-disabled");
             }
         }
         for effect in effects {
@@ -1551,6 +1609,7 @@ fn draw(
     selection_cache: &mut Option<SelectionRelationCache>,
     line_diff_pool: &mut Option<LineDiffPool>,
     motion: &mut MotionState,
+    filesystem_responses: &mut logging::FilesystemResponses,
 ) -> Result<()> {
     let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
@@ -1759,16 +1818,25 @@ fn draw(
     let presented = if motion.has_pending() && ready {
         let ids = motion.transition_ids(&target);
         let trees = load_transition_trees(&fill_repository.path, fill_repository.bare, &ids);
-        motion
-            .begin(target.clone(), &trees, Instant::now())
-            .unwrap_or_else(|| target.buffer.clone())
+        let started = motion.begin(target.clone(), &trees, Instant::now());
+        if started.is_some() {
+            filesystem_responses.emphasis_started();
+        }
+        started.unwrap_or_else(|| target.buffer.clone())
     } else {
-        motion.show(target)
+        filesystem_responses.emphasis_finished("history-emphasis-superseded", "superseded");
+        let frame = motion.show(target);
+        if ready {
+            let response_ids = filesystem_responses.active_reference_ids().to_vec();
+            filesystem_responses.finish_after_frame(&response_ids, "completed");
+        }
+        frame
     };
     terminal.current_buffer_mut().clone_from(&presented);
     terminal
         .apply_buffer_with_cursor(None)
         .context("could not draw terminal frame")?;
+    filesystem_responses.frame_presented();
     Ok(())
 }
 
@@ -1814,15 +1882,15 @@ fn load_transition_trees(
     }
 }
 
-fn present_buffer(terminal: &mut ratatui::DefaultTerminal, buffer: &ratatui::buffer::Buffer) -> Result<()> {
+fn present_buffer(terminal: &mut ratatui::DefaultTerminal, buffer: &ratatui::buffer::Buffer) -> Result<bool> {
     if terminal.get_frame().area() != buffer.area {
-        return Ok(());
+        return Ok(false);
     }
     terminal.current_buffer_mut().clone_from(buffer);
     terminal
         .apply_buffer_with_cursor(None)
         .context("could not draw animation frame")?;
-    Ok(())
+    Ok(true)
 }
 
 fn open_repository(repository_path: &Path, bare: bool, isolated: bool) -> Result<gix::Repository> {
