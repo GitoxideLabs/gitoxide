@@ -190,6 +190,10 @@ impl HistoryGraph {
         false
     }
 
+    pub(crate) fn commits_with_descendants(&self) -> HashSet<ObjectId> {
+        self.parents.iter().map(|parent| self.id(*parent)).collect()
+    }
+
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
         self.parents(index).iter().map(|parent| self.id(*parent)).collect()
     }

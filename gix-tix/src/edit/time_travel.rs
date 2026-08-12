@@ -194,14 +194,14 @@ fn checkout_pin(workdir: &Path, pin: &history::Pin) -> Result<()> {
     }
 }
 
-fn checkout_detached(workdir: &Path, id: ObjectId) -> Result<()> {
+pub(super) fn checkout_detached(workdir: &Path, id: ObjectId) -> Result<()> {
     checkout(
         workdir,
         [OsString::from("--detach"), OsString::from(id.to_hex().to_string())],
     )
 }
 
-fn checkout(workdir: &Path, args: impl IntoIterator<Item = OsString>) -> Result<()> {
+pub(super) fn checkout(workdir: &Path, args: impl IntoIterator<Item = OsString>) -> Result<()> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workdir)
