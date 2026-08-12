@@ -76,6 +76,7 @@ mod write {
                 dir.path(),
                 loose::Options {
                     compression: level,
+                    object_hash: gix_testtools::object_hash(),
                     ..Default::default()
                 },
             );
@@ -181,7 +182,13 @@ mod write {
         let dir = gix_testtools::tempfile::tempdir()?;
 
         fn write_empty_trees(dir: &std::path::Path) {
-            let db = loose::Store::at(dir, loose::Options::default());
+            let db = loose::Store::at(
+                dir,
+                loose::Options {
+                    object_hash: gix_testtools::object_hash(),
+                    ..Default::default()
+                },
+            );
             let empty_tree = gix_object::Tree::empty();
             for _ in 0..2 {
                 let id = db.write(&empty_tree).expect("works");
@@ -309,7 +316,7 @@ mod find {
     use gix_odb::loose;
 
     use crate::{
-        hex_to_id,
+        hex_to_id, hex_to_id_for_hash,
         store::loose::{ldb, limited_ldb, locate_oid},
     };
 
@@ -322,11 +329,27 @@ mod find {
         let tmp = gix_testtools::tempfile::tempdir()?;
         let base = tmp.path().join("aa");
         std::fs::create_dir(&base)?;
-        std::fs::write(base.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [])?;
-        let db = loose::Store::at(tmp.path(), loose::Options::default());
+        std::fs::write(
+            base.join(match gix_testtools::object_hash() {
+                gix_hash::Kind::Sha1 => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                gix_hash::Kind::Sha256 => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                _ => unimplemented!(),
+            }),
+            [],
+        )?;
+        let db = loose::Store::at(
+            tmp.path(),
+            loose::Options {
+                object_hash: gix_testtools::object_hash(),
+                ..Default::default()
+            },
+        );
 
         let mut buf = Vec::new();
-        let id = hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let id = hex_to_id_for_hash(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
 
