@@ -171,6 +171,25 @@ pub fn statistics(
         }
     }
 
+    #[derive(Default)]
+    struct MissingObjects(bool);
+
+    impl gix::parallel::Reduce for MissingObjects {
+        type Input = Result<bool, anyhow::Error>;
+        type FeedProduce = ();
+        type Output = bool;
+        type Error = anyhow::Error;
+
+        fn feed(&mut self, missing: Self::Input) -> Result<Self::FeedProduce, Self::Error> {
+            self.0 |= missing?;
+            Ok(())
+        }
+
+        fn finalize(self) -> Result<Self::Output, Self::Error> {
+            Ok(self.0)
+        }
+    }
+
     let cancelled = || anyhow::anyhow!("Cancelled by user");
     let object_ids = repo.objects.iter()?.filter_map(Result::ok);
     let chunk_size = 1_000;
@@ -205,16 +224,19 @@ pub fn statistics(
             },
         )?
     } else {
-        if extra_header_lookup {
-            bail!("extra-header-lookup is only meaningful in threaded mode");
-        }
-        let mut stats = Statistics::default();
+        let mut stats = Statistics {
+            ids: extra_header_lookup.then(Vec::new),
+            ..Default::default()
+        };
 
         for (count, id) in object_ids.enumerate() {
             if count % chunk_size == 0 && gix::interrupt::is_triggered() {
                 return Err(cancelled());
             }
             stats.consume(repo.objects.header(id)?);
+            if let Some(ids) = stats.ids.as_mut() {
+                ids.push(id);
+            }
             progress.inc();
         }
         stats
@@ -222,7 +244,7 @@ pub fn statistics(
 
     progress.show_throughput(start);
 
-    if let Some(mut ids) = stats.ids.take() {
+    if let Some(ids) = stats.ids.take() {
         // Critical to re-open the repo to assure we don't have any ODB state and start fresh.
         let start = std::time::Instant::now();
         let repo = gix::open_opts(repo.git_dir(), repo.open_options().to_owned())?;
@@ -230,27 +252,32 @@ pub fn statistics(
         progress.init(Some(ids.len()), gix::progress::count("objects"));
         let counter = progress.counter();
         counter.store(0, Ordering::Relaxed);
-        let errors = gix::parallel::in_parallel_with_slice(
-            &mut ids,
+        let has_errors = gix::parallel::in_parallel(
+            gix::features::iter::Chunks {
+                inner: ids.into_iter(),
+                size: chunk_size,
+            },
             thread_limit,
             {
                 let objects = repo.objects.clone();
-                move |_| (objects.clone().into_inner(), counter, false)
+                move |_| (objects.clone().into_inner(), counter)
             },
-            |id, (odb, counter, has_error), _threads_left, _stop_everything| -> anyhow::Result<()> {
-                counter.fetch_add(1, Ordering::Relaxed);
-                if let Err(_err) = odb.header(id) {
-                    *has_error = true;
-                    gix::trace::error!(err = ?_err, "Object that is known to be present wasn't found");
+            |ids, (odb, counter)| -> anyhow::Result<bool> {
+                counter.fetch_add(ids.len(), Ordering::Relaxed);
+                let mut has_error = false;
+                for id in ids {
+                    if let Err(_err) = odb.header(id) {
+                        has_error = true;
+                        gix::trace::error!(err = ?_err, "Object that is known to be present wasn't found");
+                    }
                 }
-                Ok(())
+                Ok(has_error)
             },
-            || Some(std::time::Duration::from_millis(100)),
-            |(_, _, has_error)| has_error,
+            MissingObjects::default(),
         )?;
 
         progress.show_throughput(start);
-        if errors.contains(&true) {
+        if has_errors {
             bail!("At least one object couldn't be looked up even though it must exist");
         }
     }
@@ -274,4 +301,31 @@ pub fn entries(repo: gix::Repository, format: OutputFormat, mut out: impl io::Wr
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extra_header_lookup_works_with_one_or_multiple_threads() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let repo = gix::init_bare(dir.path())?;
+        repo.write_blob(b"an object to look up twice")?;
+
+        for threads in [1, 2] {
+            statistics(
+                repo.clone(),
+                gix::progress::Discard,
+                Vec::new(),
+                Vec::new(),
+                statistics::Options {
+                    format: OutputFormat::Human,
+                    thread_limit: Some(threads),
+                    extra_header_lookup: true,
+                },
+            )?;
+        }
+        Ok(())
+    }
 }
