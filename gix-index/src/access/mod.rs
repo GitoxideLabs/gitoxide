@@ -630,6 +630,10 @@ impl State {
     pub fn tree(&self) -> Option<&extension::Tree> {
         self.tree.as_ref()
     }
+    /// Mutably access the `tree` extension.
+    pub fn tree_mut(&mut self) -> Option<&mut extension::Tree> {
+        self.tree.as_mut()
+    }
     /// Remove the `tree` extension.
     pub fn remove_tree(&mut self) -> Option<extension::Tree> {
         self.tree.take()
