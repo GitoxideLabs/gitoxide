@@ -276,6 +276,7 @@ pub(crate) enum Action {
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
+    ToggleEdit,
     ToggleAlign,
     ToggleCommit,
     ToggleChanges,
@@ -362,6 +363,7 @@ pub(crate) struct App {
     pub(crate) notice: Option<String>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
+    pub(crate) edit_expanded: bool,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -429,6 +431,7 @@ impl App {
             notice: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
+            edit_expanded: false,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -608,6 +611,9 @@ impl App {
         ) {
             self.history_display_expanded = false;
         }
+        if !matches!(&action, Action::ToggleEdit | Action::Reword | Action::TimeTravel) {
+            self.edit_expanded = false;
+        }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
@@ -697,6 +703,7 @@ impl App {
             Action::ToggleTrailers => self.show_trailers = !self.show_trailers,
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
+            Action::ToggleEdit => self.edit_expanded = !self.edit_expanded,
             Action::ToggleRefs => {
                 self.ref_mode = match self.ref_mode {
                     RefMode::All => RefMode::Default,
@@ -2351,6 +2358,33 @@ mod tests {
         app.update(Action::ToggleHistoryDisplay);
         app.update(Action::ToggleHistoryDisplay);
         assert!(!app.history_display_expanded, "the prefix key toggles the group");
+    }
+
+    #[test]
+    fn edit_group_stays_open_only_for_grouped_actions() {
+        let mut app = App::new(1);
+
+        app.update(Action::ToggleEdit);
+        assert!(app.edit_expanded);
+        app.update(Action::Reword);
+        assert!(app.edit_expanded, "grouped edit commands keep the group open");
+
+        app.update(Action::MoveDown);
+        assert!(!app.edit_expanded, "navigation collapses the group");
+
+        app.update(Action::ToggleEdit);
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(!app.edit_expanded, "opening the view group closes the edit group");
+        assert!(app.history_display_expanded);
+
+        app.update(Action::ToggleEdit);
+        assert!(app.edit_expanded);
+        assert!(
+            !app.history_display_expanded,
+            "opening the edit group closes the view group"
+        );
+        app.update(Action::ToggleEdit);
+        assert!(!app.edit_expanded, "the prefix key toggles the group");
     }
 
     #[test]
