@@ -242,14 +242,24 @@ fn bad_escapes_can_cause_brace_mismatch() {
 }
 
 #[test]
-fn empty_top_revision_regex_are_skipped_as_they_match_everything() {
+fn empty_regex_is_passed_to_the_delegate() {
     let rec = parse("@^{/}");
 
     assert!(rec.kind.is_none());
     assert_eq!(rec.get_ref(0), "HEAD");
-    assert!(
-        rec.patterns.is_empty(),
-        "The delegate won't be called with empty regexes"
+    assert_eq!(
+        rec.patterns,
+        vec![("".into(), false)],
+        "empty regexes match everything, so Git finds the anchor itself, peeled to a commit"
     );
-    assert_eq!(rec.calls, 1);
+    assert_eq!(rec.calls, 2);
+
+    let rec = parse("@^{/!-}");
+
+    assert_eq!(
+        rec.patterns,
+        vec![("".into(), true)],
+        "negated empty regexes match nothing, causing the lookup to fail like in Git"
+    );
+    assert_eq!(rec.calls, 2);
 }

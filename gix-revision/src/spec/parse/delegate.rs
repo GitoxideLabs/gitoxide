@@ -60,8 +60,9 @@ pub trait Navigate {
     /// Peel the current object until it reached `kind` or `None` if the chain does not contain such object.
     fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn>;
 
-    /// Find the first revision/commit whose message matches the given `regex` (which is never empty).
-    /// to see how it should be matched.
+    /// Find the first revision/commit whose message matches the given `regex`.
+    /// An empty `regex` matches every message, which mirrors how Git resolves `<rev>^{/}`
+    /// to the first commit reachable from `<rev>`, i.e. `<rev>` peeled to a commit.
     /// If `negated` is `true`, the first non-match will be a match.
     ///
     /// If no revision is known yet, find the _youngest_ matching commit from _any_ reference, including `HEAD`.

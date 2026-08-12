@@ -379,6 +379,8 @@ EOF
   baseline ":/!-mes.age" # negated above
   baseline ":/not there" # definitely not in graph
   baseline "@^{/!-B}"    # negation from branch
+  baseline "@^{/}"       # empty pattern matches everything, yielding the anchor peeled to a commit
+  baseline "@^{/!-}"     # negated empty pattern matches nothing and must fail
   baseline ":file"      # index lookup, default stage 0
   baseline ":1:file"    # stage 1
   baseline ":5:file"    # invalid stage
@@ -418,6 +420,7 @@ EOF
   baseline "b-tag~0"
   baseline "b-lightweight-tag~0"
   baseline "b-tag^{/G}"
+  baseline "b-tag^{/}" # empty pattern still peels the tag to a commit
 
   # invalid
   baseline "^^"

@@ -68,6 +68,35 @@ mod with_known_revision {
     }
 }
 
+mod empty_pattern {
+    use super::*;
+    use crate::revision::spec::from_bytes::{parse_spec, repo};
+
+    #[test]
+    fn matches_everything_and_peels_to_a_commit() -> crate::Result {
+        let repo = repo("complex_graph")?;
+
+        assert_eq!(
+            parse_spec("@^{/}", &repo)?,
+            parse_spec_no_baseline("@^{commit}", &repo)?,
+            "an empty pattern matches the first commit reachable from the anchor, i.e. the anchor peeled to a commit"
+        );
+        assert_eq!(
+            parse_spec("b-tag^{/}", &repo)?,
+            parse_spec("b", &repo)?,
+            "the annotated tag is peeled to its commit first, just like Git"
+        );
+
+        let err = parse_spec("@^{/!-}", &repo).unwrap_err();
+        let cause = err.probable_cause().to_string();
+        assert!(
+            cause.starts_with("None of") && cause.contains("matched"),
+            "a negated empty pattern matches nothing and fails like Git: {cause}"
+        );
+        Ok(())
+    }
+}
+
 mod find_youngest_matching_commit {
     use gix::revision::Spec;
 
