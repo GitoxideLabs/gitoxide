@@ -1,5 +1,11 @@
 # gix-tix invariants
 
+## Behavioral specification
+
+- Keep `spec.md` synchronized with every user-visible, lifecycle, performance,
+  or resource-ownership change to tix. Update the specification and its
+  regression coverage in the same semantic patch as the implementation.
+
 ## Commit authorship
 
 - A commit created or materially rewritten by an AI agent must use that agent's own name and email as its author. Do not silently inherit the repository owner's configured identity.
