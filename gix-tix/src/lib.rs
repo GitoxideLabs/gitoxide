@@ -7,6 +7,7 @@ mod app;
 mod history;
 mod logging;
 mod reword;
+mod time_travel;
 mod ui;
 
 use std::{
@@ -1609,6 +1610,26 @@ fn event_loop(
                         }
                         Ok(None) => {}
                         Err(err) => app.notice = Some(format!("reword: {err:#}")),
+                    }
+                }
+                Effect::TimeTravel(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = history_graph
+                        .as_ref()
+                        .context("time-travel requires a completed history graph")
+                        .and_then(|graph| {
+                            time_travel::perform(&repository_path, repository_is_bare, id, graph, &revisions)
+                        });
+                    match result {
+                        Ok(Some(notice)) => {
+                            tracing::info!(selected = %id, %notice, "completed time-travel action");
+                            app.notice = Some(notice);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Ok(None) => {}
+                        Err(err) => app.notice = Some(format!("time-travel: {err:#}")),
                     }
                 }
                 Effect::VerifySignatures(ids) => {
@@ -3230,6 +3251,7 @@ fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) ->
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
         KeyCode::Char('r') => Some(Action::Reword),
+        KeyCode::Char('t') => Some(Action::TimeTravel),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
@@ -3545,7 +3567,7 @@ mod tests {
             },
         )?;
         let mut graph = graph.expect("history traversal returns its graph");
-        let refs = graph.selection_refs(topic, &history::decorations(&repository)?);
+        let refs = graph.selection_refs(topic, &history::decorations(&repository, &[])?);
         assert_eq!(refs[0].upstream, Some(Some(main)));
         assert_eq!(
             graph.selection_relation(topic, &refs, &[]),
@@ -4055,11 +4077,14 @@ mod tests {
         assert_eq!(action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::Reword)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::TimeTravel)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
