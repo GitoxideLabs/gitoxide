@@ -274,7 +274,7 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Reword
 
-- `r` is available only after history completion and only on the newest
+- `e`, then `r`, is available only after history completion and only on the newest
   selectable row, where tix assumes the commit has no displayed descendants.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
@@ -293,6 +293,16 @@ space first; changes blocks adapt within the remaining history width.
   remote-tracking refs remain unchanged; a detached `HEAD` is retargeted.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
   the main status line and do not leave a repository retained by the UI.
+
+### Editing shortcuts
+
+- `e` toggles the edit shortcut group. `e r` rewords the newest commit and
+  `e t` enters or returns from time travel when that action is available.
+- Edit shortcuts keep the group open. Navigation or another recognized command
+  closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
+  mutate the repository.
+- While the `v` group is open, `e`, `r`, and `t` retain their display meanings
+  for emails, references, and trailers.
 
 ## Refresh, focus, and diagnostics
 
