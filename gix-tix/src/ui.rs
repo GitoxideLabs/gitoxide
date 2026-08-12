@@ -239,6 +239,10 @@ pub(crate) fn draw_with_worktree(
             )
         }),
     );
+    let worktree_dirty = worktree_changes.is_some_and(|changes| !changes.paths.is_empty())
+        && changes_panes
+            .iter()
+            .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
     if app.changes_visible() {
         app.set_changes_layout(
             changes_layout,
@@ -362,6 +366,11 @@ pub(crate) fn draw_with_worktree(
         let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
+        let head = decorations.get(&visible_rows[index].id).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Head)
+        });
         let metadata_width = metadata.width();
         let signature_color = signature_color(visible_rows[index].signature);
         let highlight = if selected && app.show_selection_tail {
@@ -375,7 +384,14 @@ pub(crate) fn draw_with_worktree(
             color(highlight).add_modifier(Modifier::REVERSED)
         });
         frame.render_widget(
-            Paragraph::new(if selected { "> " } else { "  " }).style(style),
+            Paragraph::new(if head && worktree_dirty {
+                "D "
+            } else if selected {
+                "> "
+            } else {
+                "  "
+            })
+            .style(if selected { style } else { Style::default() }),
             Rect::new(body.x, y, body.width.min(2), 1),
         );
 
@@ -392,6 +408,7 @@ pub(crate) fn draw_with_worktree(
                 graph_offset,
                 highlight,
                 visible_rows[index].signature,
+                head,
             );
             let aligned = Rect::new(
                 content.x.saturating_add(align_width as u16),
@@ -416,6 +433,7 @@ pub(crate) fn draw_with_worktree(
                 horizontal_offset,
                 highlight,
                 visible_rows[index].signature,
+                head,
             );
         }
         let lane_offset = if align_metadata {
@@ -1512,6 +1530,7 @@ fn color_graph(
     offset: usize,
     highlight: Option<Color>,
     signature: SignatureState,
+    head: bool,
 ) {
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
@@ -1524,7 +1543,11 @@ fn color_graph(
         } else {
             graph_style(offset.saturating_add(x) / 2)
         };
-        frame.buffer_mut()[(area.x + x as u16, area.y)].set_style(style);
+        let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
+        if head && symbol == '●' {
+            cell.set_symbol("@");
+        }
+        cell.set_style(style);
     }
 }
 
@@ -2100,7 +2123,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
         let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · r reword · [ align · o commit · c changes · v view · y copy · q quit";
-        let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
+        let selected_line = "> @ 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -2221,6 +2244,10 @@ mod tests {
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
+        assert!(
+            rendered_row(&terminal).starts_with("> @"),
+            "HEAD keeps its graph marker"
+        );
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
             "no refs hides special refs"
@@ -2367,34 +2394,136 @@ mod tests {
     }
 
     #[test]
-    fn colors_commit_disks_by_signature_state() -> Result<(), Box<dyn std::error::Error>> {
+    fn colors_commit_markers_by_signature_state() -> Result<(), Box<dyn std::error::Error>> {
         let states = [
             (SignatureState::Unsigned, Color::Blue),
             (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
             (SignatureState::Verified, Color::Green),
             (SignatureState::Failed, Color::LightRed),
         ];
-        let mut terminal = Terminal::new(TestBackend::new(2, states.len() as u16))?;
+        let mut terminal = Terminal::new(TestBackend::new(4, states.len() as u16))?;
         terminal.draw(|frame| {
             for (y, (state, _)) in states.iter().enumerate() {
-                color_graph(
-                    frame,
-                    Rect::new(0, y as u16, 2, 1),
-                    "●─",
-                    0,
-                    Some(signature_color(*state)),
-                    *state,
-                );
+                for (x, head) in [(0, false), (2, true)] {
+                    frame.render_widget(Paragraph::new("●─"), Rect::new(x, y as u16, 2, 1));
+                    color_graph(
+                        frame,
+                        Rect::new(x, y as u16, 2, 1),
+                        "●─",
+                        0,
+                        Some(signature_color(*state)),
+                        *state,
+                        head,
+                    );
+                }
             }
         })?;
 
         for (y, (_, expected)) in states.iter().enumerate() {
-            for x in 0..2 {
+            assert_eq!(terminal.backend().buffer()[(0, y as u16)].symbol(), "●");
+            assert_eq!(terminal.backend().buffer()[(2, y as u16)].symbol(), "@");
+            for x in 0..4 {
                 let cell = &terminal.backend().buffer()[(x, y as u16)];
                 assert_eq!(cell.fg, *expected);
                 assert!(cell.modifier.contains(Modifier::REVERSED));
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn marks_dirty_head_independently_of_history_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let head = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(5);
+        app.extend_commits(
+            [head, gix::ObjectId::Sha1([2; 20])]
+                .into_iter()
+                .map(|id| Commit {
+                    id,
+                    parent_ids: Default::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"author", b"author@example.com"),
+                    attributions: 0..0,
+                    title: "subject".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    signature: SignatureState::Unsigned,
+                })
+                .collect::<Vec<_>>(),
+        );
+        complete(&mut app);
+        let decorations = Decorations::from([(
+            head,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let dirty = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group: ChangeGroup::Unstaged,
+                source: None,
+                path: "dirty".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
+
+        app.selected = Some(1);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&dirty),
+            );
+        })?;
+        assert!(rendered_line(&terminal, 0).starts_with("D @"));
+        assert!(rendered_line(&terminal, 1).starts_with("> ●"));
+        assert_eq!(terminal.backend().buffer()[(0, 0)].modifier, Modifier::empty());
+        assert!(
+            terminal.backend().buffer()[(0, 1)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+
+        app.selected = Some(0);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&dirty),
+            );
+        })?;
+        assert!(rendered_line(&terminal, 0).starts_with("D @"));
+        assert!(
+            terminal.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::REVERSED)
+        );
+
+        app.changes_mode = Some(ChangesMode::Tree);
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&dirty),
+            );
+        })?;
+        assert!(rendered_line(&terminal, 0).starts_with("> @"));
         Ok(())
     }
 
