@@ -6,6 +6,7 @@ mod animation;
 mod app;
 mod history;
 mod logging;
+mod reword;
 mod ui;
 
 use std::{
@@ -845,6 +846,7 @@ fn event_loop(
     let mut refresh_from_filesystem = false;
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_select_top = false;
+    let mut refresh_select_top_requested = false;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
@@ -1216,7 +1218,7 @@ fn event_loop(
                 hidden_changed,
                 "compared reference snapshot"
             );
-            let select_top = from_filesystem && tips_changed;
+            let select_top = std::mem::take(&mut refresh_select_top_requested) || from_filesystem && tips_changed;
             ref_snapshot = next;
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
@@ -1592,6 +1594,21 @@ fn event_loop(
                         Ok(true) => app.focus_history(),
                         Err(err) => app.notice = Some(format!("diff: {err:#}")),
                         Ok(false) => {}
+                    }
+                }
+                Effect::Reword(id) => {
+                    match reword_commit(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
+                        Ok(Some(new_id)) => {
+                            app.notice = Some(format!(
+                                "reworded {} as {}",
+                                id.to_hex_with_len(7),
+                                new_id.to_hex_with_len(7)
+                            ));
+                            refresh_select_top_requested = true;
+                            refresh_pending = true;
+                        }
+                        Ok(None) => {}
+                        Err(err) => app.notice = Some(format!("reword: {err:#}")),
                     }
                 }
                 Effect::VerifySignatures(ids) => {
@@ -2493,6 +2510,58 @@ fn show_commit_diff(
     Ok(false)
 }
 
+fn reword_commit(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    id: gix::ObjectId,
+    enhanced_keyboard: bool,
+) -> Result<Option<gix::ObjectId>> {
+    let (editor, document) = {
+        let mut repository =
+            open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
+        repository.object_cache_size(None);
+        reword::document(&repository, id)?
+    };
+    let mut tempfile = gix::tempfile::new(
+        std::env::temp_dir(),
+        gix::tempfile::ContainingDirectory::Exists,
+        gix::tempfile::AutoRemove::Tempfile,
+    )
+    .context("could not create commit message file")?
+    .take()
+    .context("commit message file disappeared")?;
+    tempfile
+        .write_all(&document)
+        .context("could not write commit message file")?;
+    tempfile.flush().context("could not flush commit message file")?;
+
+    if editor != ":" {
+        with_suspended_terminal(terminal, enhanced_keyboard, || {
+            let status = Command::from(
+                gix::command::prepare(&editor)
+                    .arg(tempfile.path())
+                    .command_may_be_shell_script_allow_manual_argument_splitting(),
+            )
+            .status()
+            .with_context(|| format!("could not launch Git editor {}", editor.to_string_lossy()))?;
+            if !status.success() {
+                anyhow::bail!("Git editor {} exited with {status}", editor.to_string_lossy());
+            }
+            Ok(())
+        })?;
+    }
+    let edited = std::fs::read(tempfile.path()).context("could not read edited commit message")?;
+    if edited == document {
+        return Ok(None);
+    }
+
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
+    repository.object_cache_size(None);
+    reword::apply(&repository, id, &edited)
+}
+
 fn run_external_diff(
     terminal: &mut ratatui::DefaultTerminal,
     mut command: gix::diff::blob::platform::prepare_diff_command::Command,
@@ -3164,6 +3233,7 @@ fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) ->
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
+        KeyCode::Char('r') => Some(Action::Reword),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
@@ -3991,7 +4061,10 @@ mod tests {
         assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)), None);
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            Some(Action::Reword)
+        );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
