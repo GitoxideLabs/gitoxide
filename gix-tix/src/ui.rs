@@ -630,6 +630,30 @@ pub(crate) fn draw_with_worktree(
     ))];
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · Enter diff"));
+        if app.time_travel_shortcut_visible()
+            && decorations
+                .values()
+                .flatten()
+                .any(|decoration| decoration.kind == DecorationKind::Head)
+            && let Some(selected) = app.selected.and_then(|index| app.rows.get(index))
+        {
+            let selected_refs = decorations.get(&selected.id).map(Vec::as_slice).unwrap_or_default();
+            if !selected_refs
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Head)
+            {
+                footer_spans.push(Span::raw(
+                    if selected_refs
+                        .iter()
+                        .any(|decoration| decoration.kind == DecorationKind::Pin)
+                    {
+                        " · t return"
+                    } else {
+                        " · t travel"
+                    },
+                ));
+            }
+        }
         if app.reword_shortcut_visible() {
             footer_spans.push(Span::raw(" · r reword"));
         }
@@ -1511,6 +1535,7 @@ fn author_label(
 fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        DecorationKind::Pin => Style::default().fg(Color::Blue),
         DecorationKind::Local => Style::default().fg(Color::Cyan),
         DecorationKind::Remote => Style::default().fg(Color::Yellow),
         DecorationKind::Tag => Style::default().fg(Color::Magenta),
@@ -2314,6 +2339,50 @@ mod tests {
             !rendered_line(&terminal, 1).contains("r refs"),
             "the shifted refresh shortcut replaces the reference toggle"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn advertises_travel_and_return_for_non_head_rows() -> Result<(), Box<dyn std::error::Error>> {
+        let selected = gix::ObjectId::Sha1([1; 20]);
+        let head = gix::ObjectId::Sha1([2; 20]);
+        let mut app = App::new(2);
+        app.extend_commits(vec![Commit {
+            id: selected,
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        let mut decorations = Decorations::from([
+            (
+                selected,
+                vec![Decoration {
+                    name: "pin:01010101".into(),
+                    kind: DecorationKind::Pin,
+                }],
+            ),
+            (
+                head,
+                vec![Decoration {
+                    name: "HEAD".into(),
+                    kind: DecorationKind::Head,
+                }],
+            ),
+        ]);
+        let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(rendered_row(&terminal).contains("pin:01010101"));
+        assert!(rendered_line(&terminal, 1).contains("t return"));
+
+        decorations.remove(&selected);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(rendered_line(&terminal, 1).contains("t travel"));
         Ok(())
     }
 
