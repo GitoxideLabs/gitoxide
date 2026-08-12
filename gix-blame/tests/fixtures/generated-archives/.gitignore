@@ -5,3 +5,7 @@
 # variants share this constraint.
 make_blame_repo.tar
 make_blame_repo_sha256.tar
+
+# Uses `ln -s`.
+make_blame_symlinks_repo.tar
+make_blame_symlinks_repo_sha256.tar

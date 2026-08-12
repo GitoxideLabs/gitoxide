@@ -748,6 +748,59 @@ mod untracked_changes {
     }
 }
 
+mod symlinks {
+    use gix_blame::BlameRanges;
+
+    use crate::{Baseline, Fixture};
+
+    fn run_test(source_file_name: &str, baseline_name: &str) -> gix_testtools::Result {
+        let worktree_path = gix_testtools::scripted_fixture_read_only("make_blame_symlinks_repo.sh")?;
+        let mut fixture = Fixture::for_worktree_path(worktree_path.to_path_buf())?;
+
+        let lines_blamed = fixture
+            .blame_file(
+                source_file_name.into(),
+                gix_blame::Options {
+                    diff_algorithm: gix_diff::blob::Algorithm::Histogram,
+                    ranges: BlameRanges::default(),
+                    since: None,
+                    rewrites: Some(gix_diff::Rewrites::default()),
+                    debug_track_path: false,
+                },
+            )?
+            .entries;
+
+        assert_eq!(lines_blamed.len(), 1);
+
+        let git_dir = worktree_path.join(".git");
+        let baseline = Baseline::collect(git_dir.join(baseline_name), source_file_name.into())?;
+
+        pretty_assertions::assert_eq!(lines_blamed, baseline);
+
+        Ok(())
+    }
+
+    #[test]
+    fn lines_added_to_file_targeted_by_symlink() -> gix_testtools::Result {
+        run_test("symlink", "symlink.baseline")
+    }
+
+    #[test]
+    fn symlink_changing_target() -> gix_testtools::Result {
+        run_test("symlink-changing-target", "symlink-changing-target.baseline")
+    }
+
+    #[test]
+    fn symlink_renamed() -> gix_testtools::Result {
+        run_test("symlink-after-rename", "symlink-renamed.baseline")
+    }
+
+    #[test]
+    fn file_becomes_symlink() -> gix_testtools::Result {
+        run_test("file-then-symlink", "file-becomes-symlink.baseline")
+    }
+}
+
 fn fixture_path() -> gix_testtools::Result<PathBuf> {
     gix_testtools::scripted_fixture_read_only("make_blame_repo.sh")
 }
