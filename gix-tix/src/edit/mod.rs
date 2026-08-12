@@ -2,6 +2,8 @@ use std::{ffi::OsStr, io::Write, process::Command};
 
 use anyhow::{Context, Result};
 
+pub(crate) mod create;
+pub(crate) mod refs;
 pub(crate) mod reword;
 pub(crate) mod time_travel;
 

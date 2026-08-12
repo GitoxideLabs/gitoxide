@@ -1,27 +1,23 @@
 use anyhow::{Context, Result};
-use gix::{
-    bstr::{BString, ByteSlice},
-    refs::{
-        Category, Target,
-        transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
-    },
-};
+use gix::bstr::{BString, ByteSlice};
+
+use super::refs::MutableRefs;
 
 const AUTHOR: &[u8] = b"Author: ";
 const AUTHOR_DATE: &[u8] = b"AuthorDate: ";
 const COMMITTER: &[u8] = b"Committer: ";
 const COMMITTER_DATE: &[u8] = b"CommitterDate: ";
 const COMMENT_CHAR: &[u8] = b"CommentChar: ";
-const DEFAULT_COMMENT_CHAR: &[u8] = b";";
-const ASSISTED_BY: &[u8] = b"Assisted-by: GPT 5.6";
-const CO_AUTHORED_BY: &[u8] = b"Co-authored-by: GPT 5.6 <codex@openai.com>";
+pub(super) const DEFAULT_COMMENT_CHAR: &[u8] = b";";
+pub(super) const ASSISTED_BY: &[u8] = b"Assisted-by: GPT 5.6";
+pub(super) const CO_AUTHORED_BY: &[u8] = b"Co-authored-by: GPT 5.6 <codex@openai.com>";
 
-struct Edit<'a> {
-    author: &'a [u8],
-    author_time: gix::date::Time,
-    committer: &'a [u8],
-    committer_time: gix::date::Time,
-    message: BString,
+pub(super) struct Edit<'a> {
+    pub author: &'a [u8],
+    pub author_time: gix::date::Time,
+    pub committer: &'a [u8],
+    pub committer_time: gix::date::Time,
+    pub message: BString,
 }
 
 pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std::ffi::OsString, Vec<u8>)> {
@@ -36,13 +32,7 @@ pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std
     commit.committer.time = gix::date::Time::now_local_or_utc();
 
     let mut out = Vec::new();
-    write_actor(&mut out, AUTHOR, &commit.author);
-    write_date(&mut out, AUTHOR_DATE, commit.author.time)?;
-    write_actor(&mut out, COMMITTER, &commit.committer);
-    write_date(&mut out, COMMITTER_DATE, commit.committer.time)?;
-    out.extend_from_slice(COMMENT_CHAR);
-    out.extend_from_slice(DEFAULT_COMMENT_CHAR);
-    out.push(b'\n');
+    write_headers(&mut out, &commit.author, &commit.committer)?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
@@ -62,7 +52,7 @@ pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std
     Ok((editor, out))
 }
 
-fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 2] {
+pub(super) fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 2] {
     let mut has_assisted_by = false;
     let mut has_co_authored_by = false;
     if let Some(body) = gix::objs::commit::MessageRef::from_bytes(message).body() {
@@ -83,10 +73,11 @@ pub(crate) fn apply(repo: &gix::Repository, old_id: gix::ObjectId, edited: &[u8]
         anyhow::bail!("the edited commit message is empty");
     }
 
-    let refs = matching_references(repo, old_id)?;
+    let refs = MutableRefs::pointing_to(repo, old_id)?;
     if refs.is_empty() {
         anyhow::bail!("no mutable reference points to the commit anymore");
     }
+    refs.ensure_not_checked_out_elsewhere(repo)?;
 
     let mut commit = repo
         .find_commit(old_id)
@@ -117,23 +108,30 @@ pub(crate) fn apply(repo: &gix::Repository, old_id: gix::ObjectId, edited: &[u8]
     }
 
     let log_message = gix::reference::log::message("commit", commit.message.as_bstr(), commit.parents.len());
-    let edits = refs.into_iter().map(|name| RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: log_message.clone(),
-            },
-            expected: PreviousValue::MustExistAndMatch(Target::Object(old_id)),
-            new: Target::Object(new_id),
-        },
-        name,
-        deref: false,
-    });
     let mut time_buf = gix::date::parse::TimeBuf::default();
-    repo.edit_references_as(edits, Some(commit.committer.to_ref(&mut time_buf)))
-        .context("could not update references to the reworded commit")?;
+    refs.update(
+        repo,
+        new_id,
+        log_message.as_ref(),
+        Some(commit.committer.to_ref(&mut time_buf)),
+    )
+    .context("could not update references to the reworded commit")?;
     Ok(Some(new_id))
+}
+
+pub(super) fn write_headers(
+    out: &mut Vec<u8>,
+    author: &gix::actor::Signature,
+    committer: &gix::actor::Signature,
+) -> Result<()> {
+    write_actor(out, AUTHOR, author);
+    write_date(out, AUTHOR_DATE, author.time)?;
+    write_actor(out, COMMITTER, committer);
+    write_date(out, COMMITTER_DATE, committer.time)?;
+    out.extend_from_slice(COMMENT_CHAR);
+    out.extend_from_slice(DEFAULT_COMMENT_CHAR);
+    out.push(b'\n');
+    Ok(())
 }
 
 fn write_actor(out: &mut Vec<u8>, label: &[u8], actor: &gix::actor::Signature) {
@@ -155,7 +153,7 @@ fn write_date(out: &mut Vec<u8>, label: &[u8], time: gix::date::Time) -> Result<
     Ok(())
 }
 
-fn parse(input: &[u8]) -> Result<Edit<'_>> {
+pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     let mut parts = input.splitn(7, |byte| *byte == b'\n');
     let author = header(parts.next(), AUTHOR)?;
     let author_time = date(header(parts.next(), AUTHOR_DATE)?, "author")?;
@@ -222,7 +220,7 @@ fn date(value: &[u8], field: &str) -> Result<gix::date::Time> {
         .with_context(|| format!("could not parse {field} date"))
 }
 
-fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor::Signature> {
+pub(super) fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor::Signature> {
     let parsed = gix::actor::SignatureRef::from_bytes(value)
         .with_context(|| format!("could not parse {field} identity"))?
         .trim();
@@ -234,43 +232,6 @@ fn actor(value: &[u8], time: gix::date::Time, field: &str) -> Result<gix::actor:
         email: parsed.email.into(),
         time,
     })
-}
-
-fn matching_references(repo: &gix::Repository, id: gix::ObjectId) -> Result<Vec<gix::refs::FullName>> {
-    let mut out = Vec::new();
-    for reference in repo.references()?.all()? {
-        let reference = match reference {
-            Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
-            Err(err) => anyhow::bail!("could not inspect references pointing to commit: {err}"),
-        };
-        if !matches!(
-            reference.name().category(),
-            Some(Category::Tag | Category::RemoteBranch)
-        ) && reference.try_id().is_some_and(|target| target.as_ref() == id)
-        {
-            out.push(reference.name().to_owned());
-        }
-    }
-    if let Some(head) = repo.try_find_reference("HEAD")?
-        && head.try_id().is_some_and(|target| target.as_ref() == id)
-    {
-        out.push(head.name().to_owned());
-    }
-    Ok(out)
-}
-
-fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
-    loop {
-        if err
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound)
-        {
-            return true;
-        }
-        let Some(source) = err.source() else { return false };
-        err = source;
-    }
 }
 
 #[cfg(test)]

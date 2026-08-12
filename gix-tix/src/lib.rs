@@ -854,11 +854,12 @@ fn event_loop(
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
     view_repository.object_cache_size(None);
-    let (mut repository_is_bare, mut mailmap, mut ref_snapshot) = {
+    let (mut repository_is_bare, mut mailmap, mut ref_snapshot, mut worktree_head_unborn) = {
         let bare = view_repository.workdir().is_none();
         let mailmap = view_repository.open_mailmap();
         let refs = history::snapshot(&view_repository, &revisions, &hide, worktrees)?;
-        (bare, mailmap, refs)
+        let unborn = !bare && view_repository.head()?.is_unborn();
+        (bare, mailmap, refs, unborn)
     };
     if recovered_at_startup {
         repository = view_repository.into_sync();
@@ -886,6 +887,7 @@ fn event_loop(
     );
 
     let mut app = App::new(1);
+    app.set_worktree_head_unborn(worktree_head_unborn);
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
         app.notice = Some("worktree removed; using the common repository without worktree changes".into());
@@ -1191,6 +1193,7 @@ fn event_loop(
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((graph, result)) => {
+                    app.set_known_descendants(graph.commits_with_descendants());
                     history_graph = Some(graph);
                     let result = result?;
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1203,6 +1206,11 @@ fn event_loop(
                             .flatten(),
                         false,
                     );
+                    worktree_head_unborn = !repository_is_bare
+                        && open_repository(&repository_path, false, false)
+                            .and_then(|repo| Ok(repo.head()?.is_unborn()))
+                            .unwrap_or(false);
+                    app.set_worktree_head_unborn(worktree_head_unborn);
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1386,6 +1394,7 @@ fn event_loop(
                 }
                 Event::Complete(graph) => {
                     history_finished = true;
+                    app.set_known_descendants(graph.commits_with_descendants());
                     history_graph = Some(graph);
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1688,6 +1697,23 @@ fn event_loop(
                         }
                         Ok(None) => {}
                         Err(err) => app.notice = Some(format!("reword: {err:#}")),
+                    }
+                }
+                Effect::NewCommit(parent) => {
+                    match create_commit(
+                        terminal,
+                        &repository_path,
+                        repository_is_bare,
+                        parent,
+                        enhanced_keyboard,
+                    ) {
+                        Ok(Some(new_id)) => {
+                            app.notice = Some(format!("created {}", new_id.to_hex_with_len(7)));
+                            refresh_select_top_requested = true;
+                            refresh_pending = true;
+                        }
+                        Ok(None) => {}
+                        Err(err) => app.notice = Some(format!("new commit: {err:#}")),
                     }
                 }
                 Effect::TimeTravel(id) => {
@@ -2675,6 +2701,33 @@ fn reword_commit(
     edit::reword::apply(&repository, id, &edited)
 }
 
+fn create_commit(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    parent: Option<gix::ObjectId>,
+    enhanced_keyboard: bool,
+) -> Result<Option<gix::ObjectId>> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
+    repository.object_cache_size(None);
+    let prepared = edit::create::prepare(repository, parent)?;
+    let Some(edited) = edit::edit_document(
+        terminal,
+        &prepared.editor,
+        &prepared.document,
+        &format!("tix-commit-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
+    repository.object_cache_size(None);
+    edit::create::apply(repository, prepared, &edited).map(Some)
+}
+
 fn run_external_diff(
     terminal: &mut ratatui::DefaultTerminal,
     mut command: gix::diff::blob::platform::prepare_diff_command::Command,
@@ -2879,15 +2932,29 @@ fn load_changes_without_lines(
         ),
         None => None,
     };
-    let changes = repository
-        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
-        .context("could not diff commit trees")?;
-    let mut out = Changes {
-        parent: (parents.len() > 1).then(|| ComparedParent {
+    load_tree_changes_without_lines(
+        repository,
+        old_tree.as_ref(),
+        &new_tree,
+        (parents.len() > 1).then(|| ComparedParent {
             index: parent_index,
             total: parents.len(),
             id: parent.expect("a merge has parents").detach(),
         }),
+    )
+}
+
+fn load_tree_changes_without_lines(
+    repository: &gix::Repository,
+    old_tree: Option<&gix::Tree<'_>>,
+    new_tree: &gix::Tree<'_>,
+    parent: Option<ComparedParent>,
+) -> Result<Changes> {
+    let changes = repository
+        .diff_tree_to_tree(old_tree, Some(new_tree), None)
+        .context("could not diff commit trees")?;
+    let mut out = Changes {
+        parent,
         ..Changes::default()
     };
     for change in changes {
@@ -2941,6 +3008,24 @@ fn load_changes_without_lines(
         out.diffs.push(FileChange::Tree(change));
     }
     Ok(out)
+}
+
+fn add_line_counts(repository: &gix::Repository, changes: &mut Changes) -> Result<Vec<LineCounts>> {
+    let mut cache = repository
+        .diff_resource_cache_for_tree_diff()
+        .context("could not initialize commit diff summary")?;
+    let mut counts = Vec::with_capacity(changes.diffs.len());
+    for (path, change) in changes.paths.iter_mut().zip(&changes.diffs) {
+        let lines = line_counts_for_change(repository, change, &mut cache, None)?;
+        path.lines = lines;
+        if let Some((added, removed)) = lines {
+            changes.lines_added += u64::from(added);
+            changes.lines_removed += u64::from(removed);
+        }
+        counts.push(lines);
+        cache.clear_resource_cache_keep_allocation();
+    }
+    Ok(counts)
 }
 
 fn entry_mode(mode: gix::index::entry::Mode) -> Result<gix::objs::tree::EntryMode> {
@@ -3217,7 +3302,7 @@ fn unstaged_change(
     )))
 }
 
-fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
+fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<Changes> {
     let mut status = repository
         .status(gix::progress::Discard)
         .context("could not initialize worktree status")?
@@ -3245,10 +3330,16 @@ fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut Line
     staged.extend(unstaged);
 
     let (paths, diffs): (Vec<_>, Vec<_>) = staged.into_iter().unzip();
-    let mut out = Changes {
+    Ok(Changes {
         paths,
+        diffs,
         ..Changes::default()
-    };
+    })
+}
+
+fn load_worktree_changes(repository: &gix::Repository, line_diff_pool: &mut LineDiffPool) -> Result<Changes> {
+    let mut out = load_worktree_changes_without_lines(repository)?;
+    let diffs = std::mem::take(&mut out.diffs);
     for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
         path.lines = lines;
         if let Some((insertions, removals)) = lines {
@@ -3347,6 +3438,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
         KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
+        KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
@@ -4216,7 +4308,11 @@ mod tests {
             Some(Action::ToggleHistoryDisplay),
             "v closes the view shortcut group"
         );
-        for (key, expected) in [('r', Action::Reword), ('t', Action::TimeTravel)] {
+        for (key, expected) in [
+            ('r', Action::Reword),
+            ('n', Action::NewCommit),
+            ('t', Action::TimeTravel),
+        ] {
             assert_eq!(
                 action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), false, true),
                 Some(expected),
