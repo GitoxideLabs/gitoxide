@@ -375,7 +375,7 @@ mod tests {
         }
         let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let old_id = gix::open(fixture.path())?.head_id()?.detach();
+        let old_id = crate::open_test_repository(fixture.path())?.head_id()?.detach();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
             Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
         };

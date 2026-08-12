@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn travels_with_symbolic_and_direct_pins_and_returns() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let root = repository.rev_parse_single("main~2")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
@@ -285,7 +285,7 @@ mod tests {
 
         let notice = perform(&repository_path, false, root, &graph, &[], false)?.context("time-travel changed HEAD")?;
         assert!(notice.contains("saved pin:"), "{notice}");
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
         assert_eq!(repository.head_id()?.detach(), root);
         let pins = history::all_pins(&repository)?;
@@ -309,7 +309,7 @@ mod tests {
         drop(repository);
 
         perform(&repository_path, false, topic, &graph, &[], false)?;
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
             Some(b"refs/heads/main".into()),
@@ -323,14 +323,14 @@ mod tests {
             .args(["checkout", "--detach", &main.to_hex().to_string()])
             .status()?;
         assert!(detach.success());
-        let graph = loaded_graph(&gix::open(fixture.path())?, &[])?;
+        let graph = loaded_graph(&crate::open_test_repository(fixture.path())?, &[])?;
         perform(&repository_path, false, root, &graph, &[], false)?;
-        let pin = history::all_pins(&gix::open(fixture.path())?)?
+        let pin = history::all_pins(&crate::open_test_repository(fixture.path())?)?
             .pop()
             .context("direct pin is present")?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
         perform(&repository_path, false, main, &graph, &[], false)?;
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         assert!(
             repository.head()?.is_detached(),
             "a direct pin returns to detached HEAD"
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn explicit_tips_avoid_redundant_pins_and_failed_checkouts_clean_up() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let root = repository.rev_parse_single("main~2")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
@@ -353,7 +353,7 @@ mod tests {
 
         perform(&repository_path, false, root, &graph, &revisions, false)?;
         assert!(
-            history::all_pins(&gix::open(fixture.path())?)?.is_empty(),
+            history::all_pins(&crate::open_test_repository(fixture.path())?)?.is_empty(),
             "an explicit tip already retains the former HEAD"
         );
 
@@ -367,7 +367,7 @@ mod tests {
         let err =
             perform(&repository_path, false, root, &graph, &[], false).expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
-        let repository = gix::open(fixture.path())?;
+        let repository = crate::open_test_repository(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
         assert!(
             history::all_pins(&repository)?.is_empty(),
