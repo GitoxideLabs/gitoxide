@@ -264,7 +264,7 @@ space first; changes blocks adapt within the remaining history width.
   Broken-pipe writes are accepted. If a pager exits within 250 ms, its already
   displayed output is retained until a keypress so short output remains readable.
 
-## Signature verification and rewording
+## Signature verification and editing
 
 ### Signatures
 
@@ -278,8 +278,8 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Reword
 
-- `e`, then `r`, is available only after history completion and only on the newest
-  selectable row, where tix assumes the commit has no displayed descendants.
+- `e`, then `r`, is available only after history completion and only when the
+  selected commit has no descendants in tix's complete cached graph.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
@@ -298,10 +298,36 @@ space first; changes blocks adapt within the remaining history width.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
   the main status line and do not leave a repository retained by the UI.
 
+### New commits
+
+- `e`, then `n`, creates a child of the selected commit, or a root commit for an
+  unborn `HEAD`. It is available only with a live worktree, after history
+  completion, and when the selected parent has no known descendants.
+- Before launching the editor, tix resolves identities, signing configuration,
+  every mutable direct ref, linked-worktree safety, index conflicts, filters,
+  candidate tree, per-path diffstat, and a provisional commit entirely through an
+  in-memory object database. Cancellation and preflight failure write no object,
+  reference, index, or worktree state.
+- A changed index supplies the complete commit tree and wins over unstaged
+  changes. Otherwise, when the worktree `HEAD` is the selected parent, worktree
+  changes are filtered into a tree. With no applicable changes—or when the
+  selected parent is not the worktree base—the parent tree is reused; an unborn
+  repository starts from the empty tree.
+- The Markdown editor buffer contains editable identities and dates, a `what`
+  title, a `why` body, optional attribution trailers, and a commented Git-style
+  per-path diffstat. Commit hooks are not run.
+- After editing, tix revalidates the destination, applies configured signing,
+  persists the already-prepared objects, and atomically advances every mutable
+  direct ref pointing at the parent. This includes local branches, custom refs,
+  direct tix pins, and a detached `HEAD`, while excluding tags and remote-tracking
+  refs. An attached `HEAD` remains attached; an unrelated worktree `HEAD` is left
+  untouched. A ref changed by another process or a branch checked out in another
+  worktree aborts safely.
+
 ### Editing shortcuts
 
-- `e` toggles the edit shortcut group. `e r` rewords the newest commit and
-  `e t` enters or returns from time travel when that action is available.
+- `e` toggles the edit shortcut group. `e r` rewords, `e n` creates a commit,
+  and `e t` enters or returns from time travel when each action is available.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.

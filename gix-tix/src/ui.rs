@@ -676,6 +676,9 @@ pub(crate) fn draw_with_worktree(
             if app.reword_shortcut_visible() {
                 footer_spans.push(Span::raw(" · r reword"));
             }
+            if app.can_create_commit() {
+                footer_spans.push(Span::raw(" · n new"));
+            }
         } else if !app.history_display_expanded {
             footer_spans.push(Span::raw(" · e edit"));
         }

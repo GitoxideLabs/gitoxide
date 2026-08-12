@@ -284,6 +284,7 @@ pub(crate) enum Action {
     CycleChangesParent,
     OpenDiff,
     Reword,
+    NewCommit,
     TimeTravel,
     VerifySignatures,
     Cancel,
@@ -305,6 +306,7 @@ pub(crate) enum Effect {
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(ObjectId),
     Reword(ObjectId),
+    NewCommit(Option<ObjectId>),
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
@@ -373,6 +375,8 @@ pub(crate) struct App {
     pending_initial_selection: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
     worktree_head_has_descendants: bool,
+    worktree_head_unborn: bool,
+    known_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
@@ -444,6 +448,8 @@ impl App {
             pending_initial_selection: None,
             worktree_head: None,
             worktree_head_has_descendants: false,
+            worktree_head_unborn: false,
+            known_descendants: HashSet::new(),
             select_top_after_refresh: false,
             signature_failures: 0,
             signature_verification_running: false,
@@ -462,6 +468,15 @@ impl App {
     pub(crate) fn set_worktree_head(&mut self, head: Option<ObjectId>, select_on_load: bool) {
         self.worktree_head = head;
         self.pending_initial_selection = select_on_load.then_some(head).flatten();
+        self.update_worktree_head_descendants();
+    }
+
+    pub(crate) fn set_worktree_head_unborn(&mut self, unborn: bool) {
+        self.worktree_head_unborn = unborn;
+    }
+
+    pub(crate) fn set_known_descendants(&mut self, ids: HashSet<ObjectId>) {
+        self.known_descendants = ids;
         self.update_worktree_head_descendants();
     }
 
@@ -642,7 +657,10 @@ impl App {
         ) {
             self.history_display_expanded = false;
         }
-        if !matches!(&action, Action::ToggleEdit | Action::Reword | Action::TimeTravel) {
+        if !matches!(
+            &action,
+            Action::ToggleEdit | Action::Reword | Action::NewCommit | Action::TimeTravel
+        ) {
             self.edit_expanded = false;
         }
         match action {
@@ -802,6 +820,11 @@ impl App {
             Action::Reword if self.can_reword() => {
                 return vec![Effect::Reword(
                     self.rows[self.selected.expect("reword requires a selection")].id,
+                )];
+            }
+            Action::NewCommit if self.can_create_commit() => {
+                return vec![Effect::NewCommit(
+                    self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
                 )];
             }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
@@ -1258,11 +1281,11 @@ impl App {
     }
 
     fn update_worktree_head_descendants(&mut self) {
-        self.worktree_head_has_descendants = self.worktree_head.is_some_and(|head| {
-            self.rows
-                .iter()
-                .any(|row| row.id != head && row.parent_ids.contains(&head))
-        });
+        self.worktree_head_has_descendants = self.worktree_head.is_some_and(|head| self.has_known_descendant(head));
+    }
+
+    fn has_known_descendant(&self, id: ObjectId) -> bool {
+        self.known_descendants.contains(&id) || self.rows.iter().any(|row| row.parent_ids.contains(&id))
     }
 
     pub(crate) fn can_reword(&self) -> bool {
@@ -1272,8 +1295,21 @@ impl App {
     pub(crate) fn reword_shortcut_visible(&self) -> bool {
         self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.is_some()
-            && self.selected == self.first_selectable()
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.has_known_descendant(row.id))
+    }
+
+    pub(crate) fn can_create_commit(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && match self.selected.and_then(|index| self.rows.get(index)) {
+                Some(row) => !self.has_known_descendant(row.id),
+                None => self.worktree_head_unborn,
+            }
     }
 
     pub(crate) fn time_travel_shortcut_visible(&self) -> bool {
@@ -1931,7 +1967,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_newest_completed_history_row_can_be_reworded() {
+    fn only_a_completed_history_row_without_descendants_can_be_reworded() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         assert!(!app.can_reword(), "loading history cannot be reworded");
@@ -1944,6 +1980,31 @@ mod tests {
             "a commit with a visible descendant cannot be reworded"
         );
         assert!(app.update(Action::Reword).is_empty());
+    }
+
+    #[test]
+    fn editing_requires_no_known_descendants_and_new_commits_support_unborn_head() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row(2)]);
+        complete(&mut app);
+        app.set_known_descendants(HashSet::from([id(2)]));
+        assert!(
+            !app.can_reword(),
+            "a descendant outside the visible projection still prevents rewording"
+        );
+        assert!(
+            !app.can_create_commit(),
+            "a descendant outside the visible projection still prevents a child"
+        );
+
+        let mut unborn = App::new(10);
+        unborn.set_worktree_head_unborn(true);
+        complete(&mut unborn);
+        assert!(
+            unborn.can_create_commit(),
+            "an unborn worktree can create its root commit"
+        );
+        assert_eq!(unborn.update(Action::NewCommit), vec![Effect::NewCommit(None)]);
     }
 
     #[test]
@@ -2454,6 +2515,7 @@ mod tests {
         app.update(Action::ToggleEdit);
         assert!(app.edit_expanded);
         app.update(Action::Reword);
+        app.update(Action::NewCommit);
         assert!(app.edit_expanded, "grouped edit commands keep the group open");
 
         app.update(Action::MoveDown);
