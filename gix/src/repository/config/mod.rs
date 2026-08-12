@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, ffi::OsString};
 
-use crate::{bstr::ByteSlice, config};
+use crate::{bstr::ByteSlice, config, config::tree::Core};
 
 /// General Configuration
 impl crate::Repository {
@@ -23,6 +23,28 @@ impl crate::Repository {
     /// Use [`reload()`](Self::reload()) to refresh it from disk.
     pub fn config_snapshot(&self) -> config::Snapshot<'_> {
         config::Snapshot { repo: self }
+    }
+
+    /// Return the editor program selected by Git's precedence rules.
+    ///
+    /// `GIT_EDITOR` takes precedence over `core.editor`. If the terminal isn't dumb, `VISUAL` is considered next,
+    /// followed by `EDITOR`. If none are set, `vi` is returned unless `TERM` is unset or `dumb`, in which case there
+    /// is no usable editor.
+    pub fn editor(&self) -> Option<OsString> {
+        if let Some(editor) = self.config_snapshot().trusted_program(Core::EDITOR) {
+            return Some(editor);
+        }
+
+        let terminal_is_dumb = std::env::var_os("TERM").is_none_or(|terminal| terminal == "dumb");
+        if !terminal_is_dumb {
+            if let Some(editor) = std::env::var_os("VISUAL") {
+                return Some(editor);
+            }
+        }
+        if let Some(editor) = std::env::var_os("EDITOR") {
+            return Some(editor);
+        }
+        (!terminal_is_dumb).then(|| "vi".into())
     }
 
     /// Return a mutable snapshot of the configuration as seen upon opening the repository, starting a transaction.
