@@ -371,6 +371,9 @@ pub(crate) fn draw_with_worktree(
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::Head)
         });
+        let head_has_descendants = app.worktree_head_has_descendants(visible_rows[index].id);
+        let underline = head_has_descendants && !selected;
+        let head_state = head.then_some(head_has_descendants);
         let metadata_width = metadata.width();
         let signature_color = signature_color(visible_rows[index].signature);
         let highlight = if selected && app.show_selection_tail {
@@ -408,7 +411,7 @@ pub(crate) fn draw_with_worktree(
                 graph_offset,
                 highlight,
                 visible_rows[index].signature,
-                head,
+                head_state,
             );
             let aligned = Rect::new(
                 content.x.saturating_add(align_width as u16),
@@ -433,7 +436,7 @@ pub(crate) fn draw_with_worktree(
                 horizontal_offset,
                 highlight,
                 visible_rows[index].signature,
-                head,
+                head_state,
             );
         }
         let lane_offset = if align_metadata {
@@ -494,6 +497,14 @@ pub(crate) fn draw_with_worktree(
                 buffer[(marker_x - 1, y)].set_symbol(" ");
             }
             buffer[(marker_x, y)].set_symbol(" ").set_style(style);
+        }
+        if underline {
+            for x in body.x..body.right() {
+                let cell = &mut frame.buffer_mut()[(x, y)];
+                if !cell.symbol().chars().all(char::is_whitespace) {
+                    cell.modifier.insert(Modifier::UNDERLINED);
+                }
+            }
         }
         if !app.is_row_reachable(start + index) {
             for x in body.x..body.right() {
@@ -1581,21 +1592,24 @@ fn color_graph(
     offset: usize,
     highlight: Option<Color>,
     signature: SignatureState,
-    head: bool,
+    head: Option<bool>,
 ) {
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
             continue;
         }
-        let style = if let Some(highlight) = highlight {
+        let mut style = if let Some(highlight) = highlight {
             color(highlight).add_modifier(Modifier::REVERSED)
         } else if symbol == '●' {
             color(signature_color(signature))
         } else {
             graph_style(offset.saturating_add(x) / 2)
         };
+        if head == Some(true) && symbol == '●' {
+            style = style.add_modifier(Modifier::BOLD);
+        }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
-        if head && symbol == '●' {
+        if head.is_some() && symbol == '●' {
             cell.set_symbol("@");
         }
         cell.set_style(style);
@@ -2581,7 +2595,7 @@ mod tests {
                         0,
                         Some(signature_color(*state)),
                         *state,
-                        head,
+                        head.then_some(false),
                     );
                 }
             }
@@ -2596,6 +2610,92 @@ mod tests {
                 assert!(cell.modifier.contains(Modifier::REVERSED));
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn underlines_an_unselected_non_tip_head_and_bolds_its_marker() -> Result<(), Box<dyn std::error::Error>> {
+        let head = gix::ObjectId::Sha1([1; 20]);
+        let child = gix::ObjectId::Sha1([2; 20]);
+        let commit = |id: gix::ObjectId, parent: Option<gix::ObjectId>| Commit {
+            id,
+            parent_ids: parent.into_iter().collect(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(2);
+        app.set_worktree_head(Some(head), false);
+        app.extend_commits(vec![commit(child, Some(head)), commit(head, None)]);
+        complete(&mut app);
+        app.selected = Some(0);
+        let decorations = Decorations::from([(
+            head,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let head_row = 1;
+        for x in [2, 5, 20] {
+            assert!(
+                terminal.backend().buffer()[(x, head_row)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "each non-whitespace part of the unselected HEAD line is underlined"
+            );
+        }
+        for x in [0, 1, 3, 11, 79] {
+            assert!(
+                !terminal.backend().buffer()[(x, head_row)]
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "whitespace on the HEAD line is not underlined"
+            );
+        }
+        assert!(
+            terminal.backend().buffer()[(2, head_row)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "the non-tip @ is bold"
+        );
+
+        app.selected = Some(1);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !terminal.backend().buffer()[(20, head_row)]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "selection removes the warning underline"
+        );
+        assert!(
+            terminal.backend().buffer()[(2, head_row)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "the selected non-tip @ remains bold"
+        );
+
+        app.set_worktree_head(Some(child), false);
+        let decorations = Decorations::from([(
+            child,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        app.selected = Some(1);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !terminal.backend().buffer()[(2, 0)].modifier.contains(Modifier::BOLD),
+            "a tip @ keeps its normal weight"
+        );
         Ok(())
     }
 
