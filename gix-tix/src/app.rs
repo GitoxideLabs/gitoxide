@@ -283,6 +283,7 @@ pub(crate) enum Action {
     CycleChangesParent,
     OpenDiff,
     Reword,
+    TimeTravel,
     VerifySignatures,
     Cancel,
     Copy,
@@ -303,6 +304,7 @@ pub(crate) enum Effect {
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(ObjectId),
     Reword(ObjectId),
+    TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -763,6 +765,11 @@ impl App {
                     self.rows[self.selected.expect("reword requires a selection")].id,
                 )];
             }
+            Action::TimeTravel if self.time_travel_shortcut_visible() => {
+                return vec![Effect::TimeTravel(
+                    self.rows[self.selected.expect("time-travel requires a selection")].id,
+                )];
+            }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
@@ -1213,6 +1220,13 @@ impl App {
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.is_some()
             && self.selected == self.first_selectable()
+    }
+
+    pub(crate) fn time_travel_shortcut_visible(&self) -> bool {
+        self.worktree_changes_available
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.is_some()
     }
 
     fn last_selectable(&self) -> Option<usize> {
@@ -1876,6 +1890,17 @@ mod tests {
             "a commit with a visible descendant cannot be reworded"
         );
         assert!(app.update(Action::Reword).is_empty());
+    }
+
+    #[test]
+    fn time_travel_requires_completed_history_and_a_worktree() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row(1)]);
+        assert!(app.update(Action::TimeTravel).is_empty());
+        complete(&mut app);
+        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
+        app.set_worktree_changes_available(false);
+        assert!(app.update(Action::TimeTravel).is_empty());
     }
 
     #[test]

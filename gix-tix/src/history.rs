@@ -29,6 +29,7 @@ pub(crate) struct Decoration {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DecorationKind {
     Head,
+    Pin,
     Local,
     Remote,
     Tag,
@@ -37,6 +38,15 @@ pub(crate) enum DecorationKind {
 }
 
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
+
+pub(crate) const PIN_PREFIX: &[u8] = b"refs/tix/pins/";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Pin {
+    pub name: gix::refs::FullName,
+    pub target: gix::refs::Target,
+    pub id: ObjectId,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SelectionRef {
@@ -150,6 +160,24 @@ impl HistoryGraph {
     fn parents(&self, index: CommitIndex) -> &[CommitIndex] {
         let range = self.commits[index.as_usize()].parents.clone();
         &self.parents[range.start as usize..range.end as usize]
+    }
+
+    pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
+        let (Some(ancestor), Some(descendant)) = (self.index(ancestor), self.index(descendant)) else {
+            return false;
+        };
+        let mut seen = vec![false; self.commits.len()];
+        let mut pending = vec![descendant];
+        while let Some(index) = pending.pop() {
+            if index == ancestor {
+                return true;
+            }
+            if std::mem::replace(&mut seen[index.as_usize()], true) {
+                continue;
+            }
+            pending.extend_from_slice(self.parents(index));
+        }
+        false
     }
 
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
@@ -546,9 +574,10 @@ impl HistoryGraph {
             }
         }
         self.tracking = tracking;
+        let decorations = decorations(repo, &refs.pins)?;
         Ok(Refresh {
             refs,
-            decorations: decorations(repo)?,
+            decorations,
             commits: LoadedCommits { rows, attributions },
         })
     }
@@ -560,6 +589,7 @@ pub(crate) struct RefSnapshot {
     pub hidden: HashMap<BString, gix::refs::Target>,
     pub view_tips: Vec<ObjectId>,
     pub hidden_tips: Vec<ObjectId>,
+    pub pins: Vec<Pin>,
 }
 
 #[derive(Debug)]
@@ -732,15 +762,17 @@ pub(crate) fn load(
     cancelled: &AtomicBool,
     mut emit: impl FnMut(Event) -> bool,
 ) -> Result<()> {
-    let Some(tips) = resolve_tips(repo, revisions)? else {
-        emit(Event::Decorations(decorations(repo)?));
+    let refs = snapshot(repo, revisions, hidden_revisions)?;
+    let tips = refs.view_tips;
+    if tips.is_empty() {
+        emit(Event::Decorations(decorations(repo, &refs.pins)?));
         emit(Event::VisibleComplete);
         emit(Event::Complete(HistoryGraph::default()));
         return Ok(());
-    };
-    let hidden_tips = resolve_revisions(repo, hidden_revisions, "hidden ")?;
+    }
+    let hidden_tips = refs.hidden_tips;
 
-    if !emit(Event::Decorations(decorations(repo)?)) {
+    if !emit(Event::Decorations(decorations(repo, &refs.pins)?)) {
         return Ok(());
     }
     let shallow: HashSet<_> = repo
@@ -954,12 +986,99 @@ pub(crate) fn load(
 }
 
 pub(crate) fn snapshot(repo: &gix::Repository, revisions: &[OsString], hidden: &[OsString]) -> Result<RefSnapshot> {
+    snapshot_ignoring_pin(repo, revisions, hidden, None)
+}
+
+pub(crate) fn snapshot_ignoring_pin(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+    hidden: &[OsString],
+    ignored_pin: Option<&BStr>,
+) -> Result<RefSnapshot> {
+    let pins = applicable_pins(repo)?
+        .into_iter()
+        .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
+        .collect::<Vec<_>>();
+    let mut view = referenced_refs(repo, revisions)?;
+    for pin in &pins {
+        insert_ref_chain(repo, pin.name.as_bstr(), &mut view)?;
+    }
+    let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
+    view_tips.extend(pins.iter().map(|pin| pin.id));
+    let mut seen = HashSet::new();
+    view_tips.retain(|id| seen.insert(*id));
     Ok(RefSnapshot {
-        view: referenced_refs(repo, revisions)?,
+        view,
         hidden: referenced_refs(repo, hidden)?,
-        view_tips: resolve_tips(repo, revisions)?.unwrap_or_default(),
+        view_tips,
         hidden_tips: resolve_revisions(repo, hidden, "hidden ")?,
+        pins,
     })
+}
+
+pub(crate) fn all_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    let mut out = Vec::new();
+    let references = repo.references().context("could not open references")?;
+    for reference in references
+        .prefixed(PIN_PREFIX.as_bstr())
+        .context("could not iterate tix pins")?
+    {
+        let mut reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) => return Err(anyhow::anyhow!("could not read tix pin: {err}")),
+        };
+        let suffix = reference.name().as_bstr().strip_prefix(PIN_PREFIX).unwrap_or_default();
+        if suffix.len() < 4 || !suffix.iter().all(u8::is_ascii_alphanumeric) {
+            tracing::warn!(name = %reference.name(), "ignoring malformed tix pin");
+            continue;
+        }
+        let name = reference.name().to_owned();
+        let target = reference.target().into_owned();
+        let id = match reference.peel_to_id() {
+            Ok(id) => id.detach(),
+            Err(err) => {
+                tracing::warn!(name = %name, error = %err, "ignoring unresolved tix pin");
+                continue;
+            }
+        };
+        match repo.find_header(id) {
+            Ok(header) if header.kind() == gix::object::Kind::Commit => {}
+            Ok(_) => {
+                tracing::warn!(name = %name, "ignoring tix pin that does not resolve to a commit");
+                continue;
+            }
+            Err(err) => {
+                tracing::warn!(name = %name, error = %err, "ignoring unreadable tix pin target");
+                continue;
+            }
+        }
+        out.push(Pin { name, target, id });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    let head = repo.head().context("could not read HEAD while resolving tix pins")?;
+    if !head.is_detached() {
+        return Ok(Vec::new());
+    }
+    let Some(head) = head.id().map(gix::Id::detach) else {
+        return Ok(Vec::new());
+    };
+    all_pins(repo)?
+        .into_iter()
+        .filter_map(|pin| match repo.merge_base(head, pin.id) {
+            Ok(base) => Some(Ok((base.as_ref() == head).then_some(pin))),
+            Err(gix::repository::merge_base::Error::NotFound { .. }) => None,
+            Err(err) => Some(Err(err).context("could not determine tix pin reachability")),
+        })
+        .filter_map(|result| match result {
+            Ok(pin) => pin.map(Ok),
+            Err(err) => Some(Err(err)),
+        })
+        .collect()
 }
 
 fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
@@ -1155,8 +1274,9 @@ impl Authors {
     }
 }
 
-pub(crate) fn decorations(repo: &gix::Repository) -> Result<Decorations> {
+pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin]) -> Result<Decorations> {
     let mut out = Decorations::new();
+    let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
     for reference in repo
         .references()
         .context("could not open references")?
@@ -1168,6 +1288,10 @@ pub(crate) fn decorations(repo: &gix::Repository) -> Result<Decorations> {
             Err(err) if is_missing_ref(&*err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
+        let pin_suffix = reference.name().as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
+        if pin_suffix.is_some() && !pins.contains(reference.name().as_bstr()) {
+            continue;
+        }
         let mut kind = decoration_kind(reference.name().as_bstr());
         if kind == DecorationKind::Tag {
             let annotated = match reference.try_id() {
@@ -1182,7 +1306,10 @@ pub(crate) fn decorations(repo: &gix::Repository) -> Result<Decorations> {
             continue;
         };
         let id = id.detach();
-        let mut name = reference.name().shorten().to_owned();
+        let mut name = pin_suffix.map_or_else(
+            || reference.name().shorten().to_owned(),
+            |suffix| format!("pin:{}", suffix.to_str_lossy()).into(),
+        );
         if matches!(kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
             name.insert_str(0, "tag: ");
         }
@@ -1216,7 +1343,9 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 fn decoration_kind(name: &[u8]) -> DecorationKind {
-    if name.starts_with(b"refs/heads/") {
+    if name.starts_with(PIN_PREFIX) {
+        DecorationKind::Pin
+    } else if name.starts_with(b"refs/heads/") {
         DecorationKind::Local
     } else if name.starts_with(b"refs/tags/") {
         DecorationKind::Tag
@@ -1739,11 +1868,35 @@ mod tests {
 
     #[test]
     fn classifies_reference_kinds() {
+        assert_eq!(decoration_kind(b"refs/tix/pins/abcd"), DecorationKind::Pin);
         assert_eq!(decoration_kind(b"refs/heads/main"), DecorationKind::Local);
         assert_eq!(decoration_kind(b"refs/tags/v1"), DecorationKind::Tag);
         assert_eq!(decoration_kind(b"refs/remotes/origin/main"), DecorationKind::Remote);
         assert_eq!(decoration_kind(b"refs/patches/main/patch"), DecorationKind::Special);
         assert_eq!(decoration_kind(b"refs/stash"), DecorationKind::Special);
+    }
+
+    #[test]
+    fn ignores_malformed_and_non_commit_pins() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::open_test_repository(fixture.path())?;
+        let head = repo.head_id()?.detach();
+        let blob = repo.write_blob(b"not a commit")?.detach();
+        repo.reference(
+            "refs/tix/pins/a",
+            head,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test malformed pin",
+        )?;
+        repo.reference(
+            "refs/tix/pins/abcd",
+            blob,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test non-commit pin",
+        )?;
+
+        assert!(all_pins(&repo)?.is_empty(), "invalid pins never enter history");
+        Ok(())
     }
 
     #[test]

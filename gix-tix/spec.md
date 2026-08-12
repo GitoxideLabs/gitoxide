@@ -136,10 +136,33 @@ without trading responsiveness for metadata that is not visible.
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
+| `t` | Time-travel to the selected commit, or return through its tix pin. |
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. `[` and overlay controls remain direct
 shortcuts.
+
+### Time-travel
+
+- On a completed, focused history in a worktree repository, `t` on a non-`HEAD`
+  row runs `git checkout --detach <commit>` without forcing local changes.
+- If the selected commit is known to be an ancestor of the previous `HEAD`, tix
+  retains descendants that would otherwise leave the view with a
+  `refs/tix/pins/<suffix>` ref. Pins use at least four alphanumeric characters;
+  generated pins start with eight hexadecimal characters from the saved commit.
+- A pin is symbolic when the previous `HEAD` named a local branch, so later branch
+  advances move the pinned tip. An already detached `HEAD` receives a direct pin.
+- While `HEAD` is detached, applicable pins augment implicit and explicit revision
+  tips when their ancestry contains `HEAD`. Unrelated, dangling, malformed, and
+  non-commit pins do not enter the view or its decorations. Normal hidden-revision
+  exclusions still apply.
+- Applicable pins are shown as blue `pin:<suffix>` decorations. `t` on a pinned
+  tip checks out its underlying branch, or its direct commit in detached mode,
+  then removes that one pin. Multiple matching pins prefer symbolic targets and
+  then lexical ref-name order.
+- Checkout failures retain the original `HEAD` and remove any newly created
+  provisional pin. Successful travel preserves the selected row, refreshes
+  history directly, and invalidates worktree status.
 
 ### Held Shift ancestry mode
 
