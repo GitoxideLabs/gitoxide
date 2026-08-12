@@ -1448,7 +1448,7 @@ fn event_loop(
         };
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
-                let action = action_with_history_display(key, app.history_display_expanded);
+                let action = action_with_shortcut_groups(key, app.history_display_expanded, app.edit_expanded);
                 let repeats_history = retains_fill_repository(key.kind, action.as_ref(), app.changes_focus.is_some());
                 (action, repeats_history, key.kind == KeyEventKind::Repeat, false)
             }
@@ -3299,10 +3299,10 @@ fn poll_timeout(
 }
 
 fn action(key: KeyEvent) -> Option<Action> {
-    action_with_history_display(key, false)
+    action_with_shortcut_groups(key, false, false)
 }
 
-fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) -> Option<Action> {
+fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, edit_expanded: bool) -> Option<Action> {
     if key.kind == KeyEventKind::Release
         && !matches!(
             key.code,
@@ -3344,10 +3344,11 @@ fn action_with_history_display(key: KeyEvent, history_display_expanded: bool) ->
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
-        KeyCode::Char('r') => Some(Action::Reword),
-        KeyCode::Char('t') => Some(Action::TimeTravel),
+        KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
+        KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
+        KeyCode::Char('e') => Some(Action::ToggleEdit),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
@@ -4171,17 +4172,14 @@ mod tests {
             "terminals that report shifted letters in lowercase still map Shift-G to the first commit"
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)), None);
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            Some(Action::ToggleEdit)
+        );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
         assert_eq!(action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)), None);
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
-            Some(Action::Reword)
-        );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::TimeTravel)
-        );
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)), None);
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
@@ -4206,15 +4204,27 @@ mod tests {
             ('h', Action::ToggleHidden),
         ] {
             assert_eq!(
-                action_with_history_display(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), true),
+                action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), true, false),
                 Some(expected),
                 "{key} is available after the view prefix"
             );
         }
         assert_eq!(
-            action_with_history_display(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), true),
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE), true, false),
             Some(Action::ToggleHistoryDisplay),
             "v closes the view shortcut group"
+        );
+        for (key, expected) in [('r', Action::Reword), ('t', Action::TimeTravel)] {
+            assert_eq!(
+                action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), false, true),
+                Some(expected),
+                "{key} is available after the edit prefix"
+            );
+        }
+        assert_eq!(
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE), false, true),
+            Some(Action::ToggleEdit),
+            "e closes the edit shortcut group"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),

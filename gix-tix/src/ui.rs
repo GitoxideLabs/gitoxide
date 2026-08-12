@@ -630,7 +630,7 @@ pub(crate) fn draw_with_worktree(
     ))];
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · Enter diff"));
-        if app.time_travel_shortcut_visible()
+        let time_travel = if app.time_travel_shortcut_visible()
             && decorations
                 .values()
                 .flatten()
@@ -642,7 +642,7 @@ pub(crate) fn draw_with_worktree(
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::Head)
             {
-                footer_spans.push(Span::raw(
+                Some(
                     if selected_refs
                         .iter()
                         .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -651,11 +651,22 @@ pub(crate) fn draw_with_worktree(
                     } else {
                         " · t travel"
                     },
-                ));
+                )
+            } else {
+                None
             }
-        }
-        if app.reword_shortcut_visible() {
-            footer_spans.push(Span::raw(" · r reword"));
+        } else {
+            None
+        };
+        if app.edit_expanded {
+            if let Some(label) = time_travel {
+                footer_spans.push(Span::raw(label));
+            }
+            if app.reword_shortcut_visible() {
+                footer_spans.push(Span::raw(" · r reword"));
+            }
+        } else if !app.history_display_expanded {
+            footer_spans.push(Span::raw(" · e edit"));
         }
     }
     if app.tree_changes_visible || app.worktree_changes_visible {
@@ -1994,6 +2005,11 @@ mod tests {
             gix::mailmap::Snapshot::from_bytes(b"Mapped Human <mapped@example.com> Human <human@example.com>\n");
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
 
+        assert!(
+            !rendered_line(&terminal, 1).contains("e edit"),
+            "the view group keeps e reserved for toggling emails"
+        );
+
         let row = rendered_row(&terminal);
         assert!(
             row.contains("[Codex] Co, A: [Claude], * Re: Mapped Human Ack: Acknowledger Te: Tester So: Signer subject"),
@@ -2162,7 +2178,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · r reword · [ align · o commit · c changes · v view · y copy · q quit";
+        let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · e edit · [ align · o commit · c changes · v view · y copy · q quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2397,9 +2413,11 @@ mod tests {
             ),
         ]);
         let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
+        app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
         assert!(rendered_line(&terminal, 1).contains("t return"));
+        assert!(!rendered_line(&terminal, 1).contains("e edit"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
