@@ -46,11 +46,26 @@ pub use io::_impl::{bytes, bytes_of_file, bytes_with_hasher};
 mod object_id;
 pub use object_id::{ObjectId, decode};
 
-///
+/// JJ-compatible change identifiers and their reverse-hex formatting.
+pub mod change_id;
+
+/// Object ID prefixes and their parsing and comparison.
 pub mod prefix;
 
-///
+/// Object ID verification.
 pub mod verify;
+
+/// An object hash used as stable identifier for a change.
+///
+/// Its bytes are identical to the wrapped [`ObjectId`], but its textual form uses
+/// Jujutsu's reverse-hex alphabet `z` through `k` instead of `0` through `f`.
+#[derive(PartialEq, Eq, Hash, Ord, PartialOrd, Clone, Copy, Debug)]
+#[repr(transparent)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize), serde(transparent))]
+pub struct ChangeId(
+    /// The object hash whose bytes represent this change identifier.
+    ObjectId,
+);
 
 /// A partial, owned hash possibly identifying an object uniquely, whose non-prefix bytes are zeroed.
 ///
