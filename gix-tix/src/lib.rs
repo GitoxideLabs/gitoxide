@@ -4,10 +4,9 @@
 
 mod animation;
 mod app;
+mod edit;
 mod history;
 mod logging;
-mod reword;
-mod time_travel;
 mod ui;
 
 use std::{
@@ -1698,7 +1697,14 @@ fn event_loop(
                         .as_ref()
                         .context("time-travel requires a completed history graph")
                         .and_then(|graph| {
-                            time_travel::perform(&repository_path, repository_is_bare, id, graph, &revisions, worktrees)
+                            edit::time_travel::perform(
+                                &repository_path,
+                                repository_is_bare,
+                                id,
+                                graph,
+                                &revisions,
+                                worktrees,
+                            )
                         });
                     match result {
                         Ok(Some(notice)) => {
@@ -2654,45 +2660,23 @@ fn reword_commit(
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before editing commit")?;
         repository.object_cache_size(None);
-        reword::document(&repository, id)?
+        edit::reword::document(&repository, id)?
     };
-    let mut tempfile = gix::tempfile::writable_at(
-        std::env::temp_dir().join(format!("tix-reword-{}.md", std::process::id())),
-        gix::tempfile::ContainingDirectory::Exists,
-        gix::tempfile::AutoRemove::Tempfile,
-    )
-    .context("could not create commit message file")?
-    .take()
-    .context("commit message file disappeared")?;
-    tempfile
-        .write_all(&document)
-        .context("could not write commit message file")?;
-    tempfile.flush().context("could not flush commit message file")?;
-
-    if editor != ":" {
-        with_suspended_terminal(terminal, enhanced_keyboard, || {
-            let status = Command::from(
-                gix::command::prepare(&editor)
-                    .arg(tempfile.path())
-                    .command_may_be_shell_script_allow_manual_argument_splitting(),
-            )
-            .status()
-            .with_context(|| format!("could not launch Git editor {}", editor.to_string_lossy()))?;
-            if !status.success() {
-                anyhow::bail!("Git editor {} exited with {status}", editor.to_string_lossy());
-            }
-            Ok(())
-        })?;
-    }
-    let edited = std::fs::read(tempfile.path()).context("could not read edited commit message")?;
-    if edited == document {
+    let Some(edited) = edit::edit_document(
+        terminal,
+        &editor,
+        &document,
+        &format!("tix-reword-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?
+    else {
         return Ok(None);
-    }
+    };
 
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    reword::apply(&repository, id, &edited)
+    edit::reword::apply(&repository, id, &edited)
 }
 
 fn run_external_diff(
