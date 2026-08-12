@@ -8,7 +8,7 @@ fn main() -> Result<()> {
     let (revisions, options, help) = arguments(gix::env::args_os().skip(1))?;
     if help {
         println!(
-            "Usage: tix [--quit-on-finish] [-h|--hide REVSPEC] [REVISION]...\n\nBrowse commits reachable from HEAD or the given revisions.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n      --help          Print help"
+            "Usage: tix [--quit-on-finish] [-w|--worktrees] [-h|--hide REVSPEC] [REVISION]...\n\nBrowse commits reachable from HEAD or the given revisions.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n  -w, --worktrees     Add all worktree HEADs as visible tips\n      --help          Print help"
         );
         return Ok(());
     }
@@ -29,13 +29,20 @@ fn arguments(mut args: impl Iterator<Item = OsString>) -> Result<(Vec<OsString>,
             break;
         } else if arg == "--quit-on-finish" {
             options.quit_on_finish = true;
+        } else if arg == "-w" || arg == "--worktrees" {
+            options.worktrees = true;
         } else if arg == "-h" || arg == "--hide" {
             let revision = args.next().context("-h/--hide requires a revision to hide")?;
             if revision == "--help" {
                 help = true;
                 break;
             }
-            if revision == "-h" || revision == "--hide" || revision == "--quit-on-finish" {
+            if revision == "-h"
+                || revision == "--hide"
+                || revision == "-w"
+                || revision == "--worktrees"
+                || revision == "--quit-on-finish"
+            {
                 anyhow::bail!("-h/--hide requires a revision to hide");
             }
             options.hide.push(revision);
@@ -55,12 +62,22 @@ mod tests {
     #[test]
     fn separates_options_from_revisions() -> Result<()> {
         let (revisions, options, help) = arguments(
-            ["--quit-on-finish", "-h", "main", "--hide", "tag", "topic", "--help"]
-                .into_iter()
-                .map(OsString::from),
+            [
+                "--quit-on-finish",
+                "-w",
+                "-h",
+                "main",
+                "--hide",
+                "tag",
+                "topic",
+                "--help",
+            ]
+            .into_iter()
+            .map(OsString::from),
         )?;
 
         assert!(options.quit_on_finish);
+        assert!(options.worktrees);
         assert_eq!(options.hide, ["main", "tag"], "both hide options are retained");
         assert_eq!(revisions, ["topic"], "only positional revisions remain");
         assert!(help, "--help remains available without claiming -h");
@@ -74,6 +91,10 @@ mod tests {
                 "--help wins regardless of its position"
             );
         }
+        assert!(
+            arguments(["--hide", "--worktrees"].into_iter().map(OsString::from)).is_err(),
+            "worktree options cannot be consumed as hidden revisions"
+        );
         Ok(())
     }
 }

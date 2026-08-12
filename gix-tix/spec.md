@@ -15,6 +15,9 @@ without trading responsiveness for metadata that is not visible.
   from `HEAD` when none are supplied.
 - `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
+- `-w/--worktrees` adds every successfully resolved main and linked worktree
+  `HEAD` to the visible traversal tips, in addition to implicit or explicit
+  revisions. Hidden revisions still exclude matching ancestry.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
 - Revisions must resolve and peel to commits. Invalid or non-commit revisions are
@@ -68,7 +71,15 @@ without trading responsiveness for metadata that is not visible.
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit uses `@` instead of the normal commit disc and keeps
   the same signature and selection coloring. It remains visible when textual
-  reference labels are hidden.
+  reference labels are hidden, and textual `HEAD` is never rendered alongside it.
+- Local branches checked out in other worktrees are displayed as `short-name@`
+  in light blue instead of their plain branch decoration. Other detached
+  worktrees use their checkout directory basename. The current worktree is
+  represented by the commit's `@` marker and ordinary local reference; identical
+  labels are deduplicated.
+- When reference labels are hidden, worktree labels are visible only on the
+  selected row. Stale, malformed, unborn, and otherwise unreadable worktree
+  entries are skipped without failing history loading.
 - The selected row uses `>` at the left. If the displayed worktree block is dirty,
   `D` is shown at the `HEAD` row instead; a separately selected row retains `>`.
 - Selection inversion covers the left marker, graph, commit marker, and hash.
@@ -285,9 +296,11 @@ space first; changes blocks adapt within the remaining history width.
 
 ## Refresh, focus, and diagnostics
 
-- Native reference watchers observe `HEAD`, loose and packed refs, and the direct
-  or symbolic refs used by view and hide revspecs. Missing refs during an atomic
-  update are transient; malformed or inaccessible refs remain errors.
+- Native reference watchers observe `HEAD`, loose and packed refs, linked-worktree
+  HEAD and membership changes, and the direct or symbolic refs used by view and
+  hide revspecs. Linked indexes, logs, locks, and unrelated metadata do not
+  trigger history refreshes. Missing refs during an atomic update are transient;
+  malformed or inaccessible ordinary refs remain errors.
 - Ref changes that affect view or hidden tips trigger an incremental history
   refresh. Decoration-only changes avoid traversal. Filesystem-driven traversal
   changes select the newest selectable row; manual refresh and display toggles

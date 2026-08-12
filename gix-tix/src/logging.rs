@@ -328,12 +328,23 @@ fn event_kind(kind: &notify::EventKind) -> &'static str {
 fn classify_reference_path(path: &Path, git_dir: &Path, common_dir: &Path) -> Trigger {
     let head = git_dir.join("HEAD");
     let common_head = common_dir.join("HEAD");
+    let linked_head = path
+        .strip_prefix(common_dir.join("worktrees"))
+        .ok()
+        .is_some_and(|relative| {
+            let mut components = relative.components();
+            let name = components
+                .nth(1)
+                .map(|component| component.as_os_str().as_encoded_bytes());
+            matches!(name, Some(b"HEAD" | b"HEAD.lock")) && components.next().is_none()
+        });
     let index = git_dir.join("index");
     let packed_refs = common_dir.join("packed-refs");
     if path == head
         || path == head.with_extension("lock")
         || path == common_head
         || path == common_head.with_extension("lock")
+        || linked_head
     {
         Trigger::Head
     } else if path == index || path == index.with_extension("lock") {
@@ -449,6 +460,11 @@ mod tests {
             classify_reference_path(&linked.join("HEAD.lock"), &linked, common),
             Trigger::Head,
             "transaction lock files retain their semantic trigger"
+        );
+        assert_eq!(
+            classify_reference_path(&common.join("worktrees/other/HEAD"), &linked, common),
+            Trigger::Head,
+            "other linked worktree HEADs retain their semantic trigger"
         );
         assert_eq!(
             classify_reference_path(&linked.join("index"), &linked, common),

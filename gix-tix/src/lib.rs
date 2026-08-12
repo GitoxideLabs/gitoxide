@@ -81,6 +81,8 @@ struct WorktreeWatcher {
 struct RefWatcher {
     _watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<notify::Event>>,
+    git_dir: PathBuf,
+    worktrees_dir: PathBuf,
 }
 
 impl WorktreeWatcher {
@@ -90,6 +92,16 @@ impl WorktreeWatcher {
 
     fn watch_set_may_change(&self, event: &notify::Event) -> bool {
         worktree_watch_set_may_change(event, &self.index, &self.directories)
+    }
+}
+
+impl RefWatcher {
+    fn event_is_relevant(&self, event: &notify::Event) -> bool {
+        reference_event_is_relevant(event, &self.git_dir, &self.worktrees_dir)
+    }
+
+    fn watch_set_may_change(&self, event: &notify::Event) -> bool {
+        reference_watch_set_may_change(event, &self.worktrees_dir)
     }
 }
 
@@ -180,6 +192,36 @@ fn notification_is_actionable(event: &notify::Event) -> bool {
                         .file_name()
                         .is_some_and(|name| name.as_encoded_bytes().ends_with(b".lock"))
                 })))
+}
+
+fn reference_event_is_relevant(event: &notify::Event, git_dir: &Path, worktrees_dir: &Path) -> bool {
+    notification_is_actionable(event)
+        && (event.need_rescan()
+            || event.paths.is_empty()
+            || event.paths.iter().any(|path| {
+                if let Ok(relative) = path.strip_prefix(git_dir)
+                    && (relative.components().count() <= 1 || relative.starts_with("refs"))
+                {
+                    return true;
+                }
+                let Ok(relative) = path.strip_prefix(worktrees_dir) else {
+                    return true;
+                };
+                let mut components = relative.components();
+                let Some(_) = components.next() else { return true };
+                match components.next() {
+                    None => true,
+                    Some(name) => matches!(name.as_os_str().as_encoded_bytes(), b"HEAD" | b"gitdir"),
+                }
+            }))
+}
+
+fn reference_watch_set_may_change(event: &notify::Event, worktrees_dir: &Path) -> bool {
+    event.need_rescan()
+        || event.paths.iter().any(|path| {
+            path.strip_prefix(worktrees_dir)
+                .is_ok_and(|relative| relative.components().count() <= 1)
+        })
 }
 
 fn unseen_filesystem_redraw(current: bool, focused: bool, filesystem_frame: bool) -> bool {
@@ -700,6 +742,8 @@ pub struct Options {
     pub quit_on_finish: bool,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
+    /// Add every successfully resolved worktree HEAD as a visible traversal tip.
+    pub worktrees: bool,
 }
 
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
@@ -742,6 +786,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
     tracing::info!(
         revision_count = revisions.len(),
         hidden_revision_count = options.hide.len(),
+        include_worktrees = options.worktrees,
         "starting tix"
     );
     let commit_pane_background = detect_commit_pane_background();
@@ -801,7 +846,11 @@ fn event_loop(
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
 ) -> Result<Option<Duration>> {
-    let Options { quit_on_finish, hide } = options;
+    let Options {
+        quit_on_finish,
+        hide,
+        worktrees,
+    } = options;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -809,7 +858,7 @@ fn event_loop(
     let (mut repository_is_bare, mut mailmap, mut ref_snapshot) = {
         let bare = view_repository.workdir().is_none();
         let mailmap = view_repository.open_mailmap();
-        let refs = history::snapshot(&view_repository, &revisions, &hide)?;
+        let refs = history::snapshot(&view_repository, &revisions, &hide, worktrees)?;
         (bare, mailmap, refs)
     };
     if recovered_at_startup {
@@ -828,10 +877,12 @@ fn event_loop(
             None
         }
     };
+    let mut ref_watch_set_changed = false;
     let (cancelled, receiver) = start_history(
         repository,
         &revisions,
         &hide,
+        worktrees,
         gix::features::threading::OwnShared::clone(&authors),
     );
 
@@ -984,8 +1035,9 @@ fn event_loop(
                     Ok(Ok(event)) => {
                         received += 1;
                         rescans += usize::from(event.need_rescan());
-                        if notification_is_actionable(&event) {
+                        if watcher.event_is_relevant(&event) {
                             actionable += 1;
+                            ref_watch_set_changed |= watcher.watch_set_may_change(&event);
                             filesystem_responses.observe_references(&event, &repository_path, &common_dir);
                             ref_refresh_deadline = Some(Instant::now() + REF_EVENT_IDLE);
                         }
@@ -1009,10 +1061,25 @@ fn event_loop(
             filesystem_responses.fail_pending_references();
             ref_watcher = None;
             ref_refresh_deadline = None;
+            ref_watch_set_changed = false;
             app.manual_refresh = true;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
+            if std::mem::take(&mut ref_watch_set_changed) {
+                match start_ref_watcher(&repository_path, &common_dir) {
+                    Ok(watcher) => {
+                        ref_watcher = Some(watcher);
+                        app.manual_refresh = false;
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "reference watcher rebuild failed");
+                        ref_watcher = None;
+                        app.manual_refresh = true;
+                        schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    }
+                }
+            }
             let response_ids = filesystem_responses.references_due();
             refresh_pending = true;
             refresh_from_filesystem = true;
@@ -1198,15 +1265,17 @@ fn event_loop(
                             None
                         }
                     };
+                    ref_watch_set_changed = false;
                     app.manual_refresh = ref_watcher.is_none();
                     app.notice = Some("worktree removed; using the common repository without worktree changes".into());
                     recovered
                 }
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
-            let next = history::snapshot(&repository, &revisions, &hide)?;
+            let next = history::snapshot(&repository, &revisions, &hide, worktrees)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
-            let tips_changed = next.view != ref_snapshot.view || hidden_changed;
+            let worktree_tips_changed = worktrees && next.worktrees != ref_snapshot.worktrees;
+            let tips_changed = next.view != ref_snapshot.view || hidden_changed || worktree_tips_changed;
             let from_filesystem = std::mem::take(&mut refresh_from_filesystem);
             if tips_changed && from_filesystem {
                 motion.capture();
@@ -1233,6 +1302,7 @@ fn event_loop(
                 repository_is_bare,
                 revisions.clone(),
                 hidden,
+                worktrees,
                 expand,
                 gix::features::threading::OwnShared::clone(&authors),
                 history_graph
@@ -1619,7 +1689,7 @@ fn event_loop(
                         .as_ref()
                         .context("time-travel requires a completed history graph")
                         .and_then(|graph| {
-                            time_travel::perform(&repository_path, repository_is_bare, id, graph, &revisions)
+                            time_travel::perform(&repository_path, repository_is_bare, id, graph, &revisions, worktrees)
                         });
                     match result {
                         Ok(Some(notice)) => {
@@ -1695,6 +1765,7 @@ fn start_history(
     repository: gix::ThreadSafeRepository,
     revisions: &[OsString],
     hidden_revisions: &[OsString],
+    include_worktrees: bool,
     authors: SharedAuthors,
 ) -> (Arc<AtomicBool>, mpsc::Receiver<Result<Event>>) {
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -1709,6 +1780,7 @@ fn start_history(
             &repository,
             &revisions,
             &hidden_revisions,
+            include_worktrees,
             &authors,
             &worker_cancelled,
             |event| sender.send(Ok(event)).is_ok(),
@@ -1720,11 +1792,16 @@ fn start_history(
     (cancelled, receiver)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the worker owns each independent refresh input"
+)]
 fn start_history_refresh(
     repository_path: PathBuf,
     bare: bool,
     revisions: Vec<OsString>,
     hidden_revisions: Vec<OsString>,
+    include_worktrees: bool,
     expand: std::collections::HashSet<gix::ObjectId>,
     authors: SharedAuthors,
     mut graph: HistoryGraph,
@@ -1735,7 +1812,14 @@ fn start_history_refresh(
             .context("could not reopen repository for history refresh")
             .and_then(|mut repository| {
                 repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
-                graph.refresh(&repository, &revisions, &hidden_revisions, &expand, &authors)
+                graph.refresh(
+                    &repository,
+                    &revisions,
+                    &hidden_revisions,
+                    include_worktrees,
+                    &expand,
+                    &authors,
+                )
             });
         let _ = sender.send((graph, result));
     });
@@ -1748,14 +1832,22 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
         let _ = sender.send(event);
     })
     .context("could not initialize reference watcher")?;
+    let worktrees_dir = common_dir.join("worktrees");
+    let linked_git_dir_is_covered = worktrees_dir.is_dir() && git_dir.starts_with(&worktrees_dir);
     let mut roots = vec![(common_dir.to_owned(), RecursiveMode::NonRecursive)];
-    if git_dir != common_dir {
+    if git_dir != common_dir && !linked_git_dir_is_covered {
         roots.push((git_dir.to_owned(), RecursiveMode::NonRecursive));
     }
     for root in [common_dir.join("refs"), git_dir.join("refs")] {
-        if root.is_dir() && !roots.iter().any(|(path, _)| path == &root) {
+        if root.is_dir()
+            && !(linked_git_dir_is_covered && root.starts_with(&worktrees_dir))
+            && !roots.iter().any(|(path, _)| path == &root)
+        {
             roots.push((root, RecursiveMode::Recursive));
         }
+    }
+    if worktrees_dir.is_dir() {
+        roots.push((worktrees_dir.clone(), RecursiveMode::Recursive));
     }
     for (path, mode) in &roots {
         watcher
@@ -1766,6 +1858,8 @@ fn start_ref_watcher(git_dir: &Path, common_dir: &Path) -> Result<RefWatcher> {
     Ok(RefWatcher {
         _watcher: watcher,
         events,
+        git_dir: git_dir.to_owned(),
+        worktrees_dir,
     })
 }
 
@@ -3484,6 +3578,7 @@ mod tests {
             &repository,
             &[OsString::from("topic"), OsString::from("main")],
             &[],
+            false,
             &authors,
             &AtomicBool::new(false),
             |event| {
@@ -3561,6 +3656,7 @@ mod tests {
             &repository,
             &[OsString::from("topic")],
             &[],
+            false,
             &authors,
             &AtomicBool::new(false),
             |event| {
@@ -3571,7 +3667,7 @@ mod tests {
             },
         )?;
         let mut graph = graph.expect("history traversal returns its graph");
-        let refs = graph.selection_refs(topic, &history::decorations(&repository, &[])?);
+        let refs = graph.selection_refs(topic, &history::decorations(&repository, &[], &[])?);
         assert_eq!(refs[0].upstream, Some(Some(main)));
         assert_eq!(
             graph.selection_relation(topic, &refs, &[]),
@@ -4354,6 +4450,43 @@ mod tests {
         let rescan = notify::Event::new(notify::EventKind::Other).set_flag(Flag::Rescan);
         assert!(worktree_event_is_relevant(&rescan, workdir, &dot_git, &git_dir, &index));
         assert!(notification_is_actionable(&rescan));
+
+        let worktrees = git_dir.join("worktrees");
+        let linked = worktrees.join("linked");
+        assert!(reference_event_is_relevant(
+            &modified(&linked.join("HEAD")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(reference_event_is_relevant(
+            &modified(&linked.join("gitdir")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(!reference_event_is_relevant(
+            &modified(&linked.join("index")),
+            &git_dir,
+            &worktrees
+        ));
+        assert!(!reference_event_is_relevant(
+            &modified(&linked.join("logs/HEAD")),
+            &git_dir,
+            &worktrees
+        ));
+        let current_linked = worktrees.join("current");
+        assert!(reference_event_is_relevant(
+            &modified(&current_linked.join("index")),
+            &current_linked,
+            &worktrees
+        ));
+        assert!(reference_watch_set_may_change(
+            &modified(&worktrees.join("new-linked")),
+            &worktrees
+        ));
+        assert!(!reference_watch_set_may_change(
+            &modified(&linked.join("HEAD")),
+            &worktrees
+        ));
 
         let directories = HashSet::from([workdir.join("src")]);
         assert!(!worktree_watch_set_may_change(
