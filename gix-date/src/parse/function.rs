@@ -81,6 +81,11 @@ use gix_error::{Exn, ResultExt};
 /// any byte that is neither a digit nor a letter separates the parts, so `1.hour.ago` is the same
 /// as `1 hour ago`. The trailing `ago` is optional.
 ///
+/// Pairs are applied in input order, the way Git applies them: `second` through `week` each
+/// subtract a fixed number of seconds, while `month` and `year` step down the calendar fields and
+/// leave the day-of-month alone. A day beyond the end of the shorter target month rolls over into
+/// the following month, like `mktime(3)`: one month before May 31st is May 1st, not April 30th.
+///
 /// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
 /// now` is an hour in the past to it, and to this function.
 pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Exn<Error>> {
