@@ -1384,14 +1384,20 @@ fn metadata_line<'a>(
             id_style
         },
     )];
-    let mut labels = decorations
-        .get(&row.id)
-        .into_iter()
-        .flatten()
+    let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
+    let mut labels = row_decorations
+        .iter()
         .filter(|decoration| match ref_mode {
+            _ if decoration.kind == DecorationKind::Head => false,
             RefMode::All => true,
             RefMode::Default => decoration.kind != DecorationKind::Special,
-            RefMode::None => false,
+            RefMode::None => {
+                selected
+                    && matches!(
+                        decoration.kind,
+                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                    )
+            }
         })
         .peekable();
     if labels.peek().is_some() {
@@ -1400,8 +1406,16 @@ fn metadata_line<'a>(
             if index != 0 {
                 spans.push(Span::raw(", "));
             }
+            let name = decoration.name.to_str_lossy();
             spans.push(Span::styled(
-                decoration.name.to_str_lossy(),
+                if matches!(
+                    decoration.kind,
+                    DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                ) {
+                    format!("{name}@").into()
+                } else {
+                    name
+                },
                 decoration_style(decoration.kind),
             ));
         }
@@ -1536,6 +1550,7 @@ fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => Style::default().fg(Color::LightBlue),
         DecorationKind::Local => Style::default().fg(Color::Cyan),
         DecorationKind::Remote => Style::default().fg(Color::Yellow),
         DecorationKind::Tag => Style::default().fg(Color::Magenta),
@@ -2148,7 +2163,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
         let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · r reword · [ align · o commit · c changes · v view · y copy · q quit";
-        let selected_line = "> @ 0101010 (HEAD) 1970-01-01 mapped author subject";
+        let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
             expected[(x, 0)].set_style(Style::default().add_modifier(Modifier::REVERSED));
@@ -2163,13 +2178,10 @@ mod tests {
                     .add_modifier(Modifier::REVERSED | Modifier::BOLD),
             );
         }
-        for x in 13..17 {
-            expected[(x, 0)].set_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
-        }
-        for x in 19..30 {
+        for x in 12..23 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Blue));
         }
-        for x in 30..44 {
+        for x in 23..37 {
             expected[(x, 0)].set_style(Style::default().fg(Color::Green));
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
@@ -2191,7 +2203,10 @@ mod tests {
             !row[(11, 0)].modifier.contains(Modifier::REVERSED),
             "selection ends immediately after the hash"
         );
-        assert_eq!(row[(13, 0)].fg, Color::Cyan, "reference colors remain visible");
+        assert!(
+            !rendered_row(&terminal).contains("HEAD"),
+            "the graph marker makes textual HEAD redundant"
+        );
         assert!(
             !rendered_line(&terminal, 1).contains("Esc cancel"),
             "completed work cannot be cancelled"
@@ -2281,7 +2296,10 @@ mod tests {
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
-        assert!(rendered_row(&terminal).contains("HEAD"), "all refs shows regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("HEAD"),
+            "all refs still omits redundant HEAD"
+        );
         assert!(
             rendered_row(&terminal).contains("refs/patches"),
             "all refs shows special refs"
@@ -2290,7 +2308,10 @@ mod tests {
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
-        assert!(rendered_row(&terminal).contains("HEAD"), "refs shows regular refs");
+        assert!(
+            !rendered_row(&terminal).contains("HEAD"),
+            "refs still omits redundant HEAD"
+        );
         assert!(
             !rendered_row(&terminal).contains("refs/patches"),
             "refs hides special refs"
@@ -2383,6 +2404,66 @@ mod tests {
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 1).contains("t travel"));
+        Ok(())
+    }
+
+    #[test]
+    fn renders_worktree_labels_and_keeps_them_selected_when_refs_are_hidden() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let checked_out = gix::ObjectId::Sha1([1; 20]);
+        let other = gix::ObjectId::Sha1([2; 20]);
+        let commit = |id| Commit {
+            id,
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        };
+        let mut app = App::new(2);
+        app.extend_commits(vec![commit(checked_out), commit(other)]);
+        complete(&mut app);
+        let decorations = Decorations::from([(
+            checked_out,
+            vec![
+                Decoration {
+                    name: "main".into(),
+                    kind: DecorationKind::WorktreeBranch,
+                },
+                Decoration {
+                    name: "detached".into(),
+                    kind: DecorationKind::WorktreeDetached,
+                },
+                Decoration {
+                    name: "HEAD".into(),
+                    kind: DecorationKind::Head,
+                },
+            ],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(140, 3))?;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        assert!(row.contains("main@"));
+        assert!(row.contains("detached@"));
+        assert!(!row.contains("HEAD"), "a worktree label replaces textual HEAD");
+        let x = row.find("main@").expect("the worktree label is visible") as u16;
+        assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::LightBlue);
+
+        app.update(Action::ToggleRefs);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("main@"),
+            "the selected row retains worktrees"
+        );
+        app.update(Action::MoveDown);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            !rendered_row(&terminal).contains("main@"),
+            "hidden refs omit worktrees from unselected rows"
+        );
         Ok(())
     }
 
@@ -3978,9 +4059,9 @@ mod tests {
         );
         assert_eq!(style("1970-01-01 "), Style::default().fg(Color::Blue));
         assert_eq!(style("author "), Style::default().fg(Color::Green));
-        assert_eq!(
-            style("HEAD"),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        assert!(
+            line.spans.iter().all(|span| span.content != "HEAD"),
+            "the graph marker makes textual HEAD redundant"
         );
         assert_eq!(style("main"), Style::default().fg(Color::Cyan));
         assert_eq!(style("origin/main"), Style::default().fg(Color::Yellow));

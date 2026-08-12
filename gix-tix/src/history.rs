@@ -30,6 +30,8 @@ pub(crate) struct Decoration {
 pub(crate) enum DecorationKind {
     Head,
     Pin,
+    WorktreeBranch,
+    WorktreeDetached,
     Local,
     Remote,
     Tag,
@@ -46,6 +48,14 @@ pub(crate) struct Pin {
     pub name: gix::refs::FullName,
     pub target: gix::refs::Target,
     pub id: ObjectId,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorktreeCheckout {
+    pub id: ObjectId,
+    pub name: BString,
+    pub reference: Option<gix::refs::FullName>,
+    pub is_current: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -285,7 +295,7 @@ impl HistoryGraph {
             .into_iter()
             .flatten()
             .map(|decoration| {
-                let upstream = if decoration.kind == DecorationKind::Local {
+                let upstream = if matches!(decoration.kind, DecorationKind::Local | DecorationKind::WorktreeBranch) {
                     tracked
                         .into_iter()
                         .flatten()
@@ -393,10 +403,11 @@ impl HistoryGraph {
         repo: &gix::Repository,
         revisions: &[OsString],
         hidden_revisions: &[OsString],
+        include_worktrees: bool,
         expand: &HashSet<ObjectId>,
         authors: &SharedAuthors,
     ) -> Result<Refresh> {
-        let refs = snapshot(repo, revisions, hidden_revisions)?;
+        let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
         let shallow: HashSet<_> = repo
             .shallow_commits()
             .context("could not read shallow commits")?
@@ -574,7 +585,7 @@ impl HistoryGraph {
             }
         }
         self.tracking = tracking;
-        let decorations = decorations(repo, &refs.pins)?;
+        let decorations = decorations(repo, &refs.pins, &refs.worktrees)?;
         Ok(Refresh {
             refs,
             decorations,
@@ -590,6 +601,7 @@ pub(crate) struct RefSnapshot {
     pub view_tips: Vec<ObjectId>,
     pub hidden_tips: Vec<ObjectId>,
     pub pins: Vec<Pin>,
+    pub worktrees: Vec<WorktreeCheckout>,
 }
 
 #[derive(Debug)]
@@ -758,21 +770,22 @@ pub(crate) fn load(
     repo: &gix::Repository,
     revisions: &[OsString],
     hidden_revisions: &[OsString],
+    include_worktrees: bool,
     authors: &SharedAuthors,
     cancelled: &AtomicBool,
     mut emit: impl FnMut(Event) -> bool,
 ) -> Result<()> {
-    let refs = snapshot(repo, revisions, hidden_revisions)?;
+    let refs = snapshot(repo, revisions, hidden_revisions, include_worktrees)?;
     let tips = refs.view_tips;
     if tips.is_empty() {
-        emit(Event::Decorations(decorations(repo, &refs.pins)?));
+        emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?));
         emit(Event::VisibleComplete);
         emit(Event::Complete(HistoryGraph::default()));
         return Ok(());
     }
     let hidden_tips = refs.hidden_tips;
 
-    if !emit(Event::Decorations(decorations(repo, &refs.pins)?)) {
+    if !emit(Event::Decorations(decorations(repo, &refs.pins, &refs.worktrees)?)) {
         return Ok(());
     }
     let shallow: HashSet<_> = repo
@@ -985,26 +998,36 @@ pub(crate) fn load(
     Ok(())
 }
 
-pub(crate) fn snapshot(repo: &gix::Repository, revisions: &[OsString], hidden: &[OsString]) -> Result<RefSnapshot> {
-    snapshot_ignoring_pin(repo, revisions, hidden, None)
+pub(crate) fn snapshot(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+    hidden: &[OsString],
+    include_worktrees: bool,
+) -> Result<RefSnapshot> {
+    snapshot_ignoring_pin(repo, revisions, hidden, include_worktrees, None)
 }
 
 pub(crate) fn snapshot_ignoring_pin(
     repo: &gix::Repository,
     revisions: &[OsString],
     hidden: &[OsString],
+    include_worktrees: bool,
     ignored_pin: Option<&BStr>,
 ) -> Result<RefSnapshot> {
     let pins = applicable_pins(repo)?
         .into_iter()
         .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
         .collect::<Vec<_>>();
+    let worktrees = worktree_checkouts(repo);
     let mut view = referenced_refs(repo, revisions)?;
     for pin in &pins {
         insert_ref_chain(repo, pin.name.as_bstr(), &mut view)?;
     }
     let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
     view_tips.extend(pins.iter().map(|pin| pin.id));
+    if include_worktrees {
+        view_tips.extend(worktrees.iter().map(|worktree| worktree.id));
+    }
     let mut seen = HashSet::new();
     view_tips.retain(|id| seen.insert(*id));
     Ok(RefSnapshot {
@@ -1013,7 +1036,96 @@ pub(crate) fn snapshot_ignoring_pin(
         view_tips,
         hidden_tips: resolve_revisions(repo, hidden, "hidden ")?,
         pins,
+        worktrees,
     })
+}
+
+pub(crate) fn worktree_checkouts(repo: &gix::Repository) -> Vec<WorktreeCheckout> {
+    let mut out = Vec::new();
+    let current_worktree = repo.worktree().map(|worktree| worktree.id().map(ToOwned::to_owned));
+    match repo.main_repo() {
+        Ok(main) if !main.is_bare() => {
+            let name = main.workdir().and_then(worktree_basename);
+            add_worktree_checkout(&main, name, b"main".as_bstr(), current_worktree == Some(None), &mut out);
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!(error = %err, "ignoring inaccessible main worktree"),
+    }
+    match repo.worktrees() {
+        Ok(worktrees) => {
+            for proxy in worktrees {
+                let worktree = proxy.id().to_owned();
+                let name = proxy.base().ok().as_deref().and_then(worktree_basename);
+                let is_current = current_worktree
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|current| current == &worktree);
+                match proxy.into_repo_with_possibly_inaccessible_worktree() {
+                    Ok(repository) => {
+                        add_worktree_checkout(&repository, name, worktree.as_bstr(), is_current, &mut out);
+                    }
+                    Err(err) => {
+                        tracing::warn!(worktree = %worktree, error = %err, "ignoring inaccessible linked worktree");
+                    }
+                }
+            }
+        }
+        Err(err) => tracing::warn!(error = %err, "ignoring unreadable linked worktree list"),
+    }
+    out.sort_by(|a, b| {
+        a.id.cmp(&b.id)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.reference.cmp(&b.reference))
+    });
+    out.dedup();
+    out
+}
+
+fn add_worktree_checkout(
+    repo: &gix::Repository,
+    detached_name: Option<BString>,
+    worktree: &BStr,
+    is_current: bool,
+    out: &mut Vec<WorktreeCheckout>,
+) {
+    let mut head = match repo.head() {
+        Ok(head) => head,
+        Err(err) => {
+            tracing::warn!(%worktree, error = %err, "ignoring worktree with unreadable HEAD");
+            return;
+        }
+    };
+    let reference = head.referent_name().map(ToOwned::to_owned);
+    let id = match head.try_peel_to_id() {
+        Ok(Some(id)) => id.detach(),
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(%worktree, error = %err, "ignoring worktree with unresolved HEAD");
+            return;
+        }
+    };
+    let name = match &reference {
+        Some(reference) => reference.shorten().to_owned(),
+        None => match detached_name {
+            Some(name) => name,
+            None => {
+                tracing::warn!(%worktree, "ignoring detached worktree without a directory basename");
+                return;
+            }
+        },
+    };
+    out.push(WorktreeCheckout {
+        id,
+        name,
+        reference,
+        is_current,
+    });
+}
+
+fn worktree_basename(path: &std::path::Path) -> Option<BString> {
+    path.file_name()
+        .and_then(|name| gix::path::os_str_into_bstr(name).ok())
+        .map(ToOwned::to_owned)
 }
 
 pub(crate) fn all_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
@@ -1274,7 +1386,7 @@ impl Authors {
     }
 }
 
-pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin]) -> Result<Decorations> {
+pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[WorktreeCheckout]) -> Result<Decorations> {
     let mut out = Decorations::new();
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
     for reference in repo
@@ -1288,11 +1400,12 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin]) -> Result<Decora
             Err(err) if is_missing_ref(&*err) => continue,
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
-        let pin_suffix = reference.name().as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
-        if pin_suffix.is_some() && !pins.contains(reference.name().as_bstr()) {
+        let full_name = reference.name().to_owned();
+        let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
+        if pin_suffix.is_some() && !pins.contains(full_name.as_bstr()) {
             continue;
         }
-        let mut kind = decoration_kind(reference.name().as_bstr());
+        let mut kind = decoration_kind(full_name.as_bstr());
         if kind == DecorationKind::Tag {
             let annotated = match reference.try_id() {
                 Some(id) => id.header().context("could not inspect tag")?.kind() == gix::objs::Kind::Tag,
@@ -1306,14 +1419,36 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin]) -> Result<Decora
             continue;
         };
         let id = id.detach();
+        if worktrees.iter().any(|worktree| {
+            !worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name)
+        }) {
+            kind = DecorationKind::WorktreeBranch;
+        }
         let mut name = pin_suffix.map_or_else(
-            || reference.name().shorten().to_owned(),
+            || full_name.shorten().to_owned(),
             |suffix| format!("pin:{}", suffix.to_str_lossy()).into(),
         );
         if matches!(kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
             name.insert_str(0, "tag: ");
         }
         out.entry(id).or_default().push(Decoration { name, kind });
+    }
+    for worktree in worktrees.iter().filter(|worktree| !worktree.is_current) {
+        let kind = if worktree.reference.is_some() {
+            DecorationKind::WorktreeBranch
+        } else {
+            DecorationKind::WorktreeDetached
+        };
+        let decorations = out.entry(worktree.id).or_default();
+        if !decorations
+            .iter()
+            .any(|decoration| decoration.kind == kind && decoration.name == worktree.name)
+        {
+            decorations.push(Decoration {
+                name: worktree.name.clone(),
+                kind,
+            });
+        }
     }
     if let Some(id) = repo
         .head()
@@ -1400,6 +1535,7 @@ mod tests {
             &repo,
             &revisions.iter().map(OsString::from).collect::<Vec<_>>(),
             &hidden_revisions.iter().map(OsString::from).collect::<Vec<_>>(),
+            false,
             &authors,
             &AtomicBool::new(false),
             |event| {
@@ -1527,8 +1663,8 @@ mod tests {
     #[test]
     fn snapshots_references_and_symbolic_targets_from_revisions() -> gix_testtools::Result {
         let fixture = fixture()?;
-        let repo = gix::open(fixture)?;
-        let implicit = snapshot(&repo, &[], &[])?;
+        let repo = crate::open_test_repository(fixture)?;
+        let implicit = snapshot(&repo, &[], &[], false)?;
         assert!(
             implicit.view.contains_key(b"HEAD".as_bstr()),
             "an implicit revision watches HEAD"
@@ -1538,9 +1674,134 @@ mod tests {
             "the symbolic target of HEAD is watched as well"
         );
 
-        let explicit = snapshot(&repo, &[OsString::from("main")], &[OsString::from("topic")])?;
+        let explicit = snapshot(&repo, &[OsString::from("main")], &[OsString::from("topic")], false)?;
         assert!(explicit.view.contains_key(b"refs/heads/main".as_bstr()));
         assert!(explicit.hidden.contains_key(b"refs/heads/topic".as_bstr()));
+        Ok(())
+    }
+
+    #[test]
+    fn discovers_worktree_decorations_and_optionally_adds_their_tips() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        for args in [
+            ["worktree", "add", "-q", "topic-wt", "topic"].as_slice(),
+            ["worktree", "add", "-q", "--detach", "detached-wt", "main~2"].as_slice(),
+            ["worktree", "add", "-q", "--detach", "broken-wt", "main~2"].as_slice(),
+        ] {
+            let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
+            assert!(status.success(), "git creates the worktree fixture");
+        }
+        std::fs::remove_dir_all(fixture.path().join("detached-wt"))?;
+        std::fs::write(
+            fixture.path().join(".git/worktrees/broken-wt/HEAD"),
+            "not a ref or object id\n",
+        )?;
+
+        let repo = crate::open_test_repository(fixture.path())?;
+        let main = repo.rev_parse_single("main")?.detach();
+        let topic = repo.rev_parse_single("topic")?.detach();
+        let root = repo.rev_parse_single("main~2")?.detach();
+        let worktrees = worktree_checkouts(&repo);
+        assert!(worktrees.iter().any(|worktree| {
+            worktree.id == main
+                && worktree.name == "main"
+                && worktree.is_current
+                && worktree
+                    .reference
+                    .as_ref()
+                    .is_some_and(|name| name.as_bstr() == b"refs/heads/main")
+        }));
+        assert!(worktrees.iter().any(|worktree| {
+            worktree.id == topic
+                && worktree.name == "topic"
+                && !worktree.is_current
+                && worktree
+                    .reference
+                    .as_ref()
+                    .is_some_and(|name| name.as_bstr() == b"refs/heads/topic")
+        }));
+        assert!(worktrees.iter().any(|worktree| {
+            worktree.id == root
+                && worktree.name == "detached-wt"
+                && worktree.reference.is_none()
+                && !worktree.is_current
+        }));
+        assert_eq!(worktrees.len(), 3, "the malformed worktree is ignored");
+
+        let main_repo_decorations = decorations(&repo, &[], &worktrees)?;
+        let main_decorations = main_repo_decorations.get(&main).expect("main is decorated");
+        assert!(
+            main_decorations
+                .iter()
+                .any(|decoration| { decoration.kind == DecorationKind::Local && decoration.name == "main" })
+        );
+        assert!(
+            !main_decorations
+                .iter()
+                .any(|decoration| { decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "main" })
+        );
+        assert!(main_repo_decorations.get(&topic).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "topic")
+        }));
+        assert!(main_repo_decorations.get(&root).is_some_and(|decorations| {
+            decorations.iter().any(|decoration| {
+                decoration.kind == DecorationKind::WorktreeDetached && decoration.name == "detached-wt"
+            })
+        }));
+
+        let explicit = [OsString::from("main")];
+        let without = snapshot(&repo, &explicit, &[], false)?;
+        assert_eq!(without.view_tips, [main], "explicit revisions are unchanged by default");
+        let with = snapshot(&repo, &explicit, &[], true)?;
+        assert!(with.view_tips.contains(&main));
+        assert!(with.view_tips.contains(&topic));
+        assert!(with.view_tips.contains(&root));
+
+        let linked_path = fixture.path().join("topic-wt");
+        let linked_repo = crate::open_test_repository(&linked_path)?;
+        let linked_worktrees = worktree_checkouts(&linked_repo);
+        assert!(
+            linked_worktrees
+                .iter()
+                .any(|worktree| worktree.id == topic && worktree.is_current)
+        );
+        let linked_decorations = decorations(&linked_repo, &[], &linked_worktrees)?;
+        assert!(linked_decorations.get(&topic).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Local && decoration.name == "topic")
+                && !decorations
+                    .iter()
+                    .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "topic")
+        }));
+        assert!(linked_decorations.get(&main).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "main")
+        }));
+
+        let status = Command::new("git")
+            .current_dir(&linked_path)
+            .args(["checkout", "-q", "--detach", "main~1"])
+            .status()?;
+        assert!(status.success(), "git detaches the current linked worktree");
+        let detached_repo = crate::open_test_repository(&linked_path)?;
+        let detached_worktrees = worktree_checkouts(&detached_repo);
+        let current = detached_worktrees
+            .iter()
+            .find(|worktree| worktree.is_current)
+            .expect("the current detached worktree is discovered");
+        assert!(current.reference.is_none());
+        let detached_decorations = decorations(&detached_repo, &[], &detached_worktrees)?;
+        assert!(
+            !detached_decorations
+                .get(&current.id)
+                .is_some_and(|decorations| decorations.iter().any(|decoration| {
+                    decoration.kind == DecorationKind::WorktreeDetached && decoration.name == current.name
+                }))
+        );
         Ok(())
     }
 
@@ -1619,9 +1880,9 @@ mod tests {
         let repo = crate::open_test_repository(fixture.path())?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let first = graph.refresh(&repo, &["main".into()], &[], &HashSet::new(), &authors)?;
+        let first = graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
         assert_eq!(first.commits.rows.len(), 1, "only the new descendant is loaded");
-        let second = graph.refresh(&repo, &["main".into()], &[], &HashSet::new(), &authors)?;
+        let second = graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
         assert!(
             second.commits.rows.is_empty(),
             "an unchanged tip stops immediately at complete cached ancestry"
@@ -1667,7 +1928,7 @@ mod tests {
 
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let refresh = graph.refresh(&repo, &["topic".into()], &[], &HashSet::new(), &authors)?;
+        let refresh = graph.refresh(&repo, &["topic".into()], &[], false, &HashSet::new(), &authors)?;
         assert!(
             refresh.commits.rows.is_empty(),
             "an unchanged tracking tip stops before revisiting its cached parents"
@@ -1769,7 +2030,7 @@ mod tests {
         let repo = crate::open_test_repository(path)?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let refresh = graph.refresh(&repo, &["local".into()], &[], &boundary, &authors)?;
+        let refresh = graph.refresh(&repo, &["local".into()], &[], false, &boundary, &authors)?;
         visible.extend(refresh.commits.rows.into_iter().map(|row| row.id));
         let expected: HashSet<_> = repo
             .rev_walk([local])
@@ -1854,8 +2115,8 @@ mod tests {
         let mut cancelled = Vec::new();
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let repo = gix::open(&fixture)?;
-        load(&repo, &[], &[], &authors, &AtomicBool::new(true), |event| {
+        let repo = crate::open_test_repository(&fixture)?;
+        load(&repo, &[], &[], false, &authors, &AtomicBool::new(true), |event| {
             cancelled.push(event);
             true
         })?;

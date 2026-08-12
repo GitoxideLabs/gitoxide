@@ -166,7 +166,11 @@ pub fn main() -> Result<()> {
         } => gix_tix::run(
             repository(Mode::Lenient)?.into_sync(),
             revisions,
-            gix_tix::Options { quit_on_finish, hide },
+            gix_tix::Options {
+                quit_on_finish,
+                hide,
+                ..Default::default()
+            },
         ),
         Subcommands::Env => prepare_and_run(
             "env",
