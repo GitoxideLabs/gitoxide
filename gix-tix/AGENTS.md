@@ -1,5 +1,12 @@
 # gix-tix invariants
 
+## Commit authorship
+
+- A commit created or materially rewritten by an AI agent must use that agent's own name and email as its author. Do not silently inherit the repository owner's configured identity.
+- Preserve the author of an existing commit when the agent is not responsible for its contents.
+- Use another author's identity only when the user explicitly requests it for that particular commit.
+- Keep this provenance in commit metadata so reviewers can distinguish agent-authored changes without relying on commit-message trailers.
+
 ## Repository lifetime
 
 - Do not retain a `gix::Repository`, or a platform/object that owns one, in application or event-loop state while tix is idle.
