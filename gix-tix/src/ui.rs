@@ -612,6 +612,9 @@ pub(crate) fn draw_with_worktree(
     ))];
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · Enter diff"));
+        if app.reword_shortcut_visible() {
+            footer_spans.push(Span::raw(" · r reword"));
+        }
     }
     if app.tree_changes_visible || app.worktree_changes_visible {
         footer_spans.push(match app.focus_feedback.take() {
@@ -2096,8 +2099,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text =
-            "#1 · ↑↓/jk move · h/l pan · Enter diff · [ align · o commit · c changes · v view · y copy · q quit";
+        let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · r reword · [ align · o commit · c changes · v view · y copy · q quit";
         let selected_line = "> ● 0101010 (HEAD) 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {

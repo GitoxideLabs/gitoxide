@@ -282,6 +282,7 @@ pub(crate) enum Action {
     ToggleChangesFocus,
     CycleChangesParent,
     OpenDiff,
+    Reword,
     VerifySignatures,
     Cancel,
     Copy,
@@ -301,6 +302,7 @@ pub(crate) enum Effect {
     Reload(bool),
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(ObjectId),
+    Reword(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -756,6 +758,11 @@ impl App {
                     return vec![Effect::OpenCommitDiff(id)];
                 }
             }
+            Action::Reword if self.can_reword() => {
+                return vec![Effect::Reword(
+                    self.rows[self.selected.expect("reword requires a selection")].id,
+                )];
+            }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
                 let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
@@ -1195,6 +1202,17 @@ impl App {
 
     fn first_selectable(&self) -> Option<usize> {
         (0..self.rows.len()).find(|index| !self.is_row_hidden(*index))
+    }
+
+    pub(crate) fn can_reword(&self) -> bool {
+        self.state == State::Complete && self.reword_shortcut_visible()
+    }
+
+    pub(crate) fn reword_shortcut_visible(&self) -> bool {
+        self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.is_some()
+            && self.selected == self.first_selectable()
     }
 
     fn last_selectable(&self) -> Option<usize> {
@@ -1842,6 +1860,22 @@ mod tests {
 
         assert_eq!(app.selected, app.first_selectable());
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+    }
+
+    #[test]
+    fn only_the_newest_completed_history_row_can_be_reworded() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        assert!(!app.can_reword(), "loading history cannot be reworded");
+        complete(&mut app);
+        assert_eq!(app.update(Action::Reword), vec![Effect::Reword(id(2))]);
+
+        app.update(Action::MoveDown);
+        assert!(
+            !app.can_reword(),
+            "a commit with a visible descendant cannot be reworded"
+        );
+        assert!(app.update(Action::Reword).is_empty());
     }
 
     #[test]
