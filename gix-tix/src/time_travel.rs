@@ -18,6 +18,7 @@ pub(crate) fn perform(
     selected: ObjectId,
     graph: &history::HistoryGraph,
     revisions: &[OsString],
+    include_worktrees: bool,
 ) -> Result<Option<String>> {
     let repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
@@ -71,7 +72,8 @@ pub(crate) fn perform(
     if let Some((pin, true)) = provisional {
         let repository =
             open_repository(repository_path, bare, false).context("could not reopen repository after time-travel")?;
-        let snapshot = history::snapshot_ignoring_pin(&repository, revisions, &[], Some(pin.name.as_bstr()))?;
+        let snapshot =
+            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()))?;
         if snapshot
             .view_tips
             .iter()
@@ -246,12 +248,20 @@ mod tests {
             history::Authors::default(),
         ));
         let mut graph = None;
-        history::load(repository, revisions, &[], &authors, &AtomicBool::new(false), |event| {
-            if let history::Event::Complete(value) = event {
-                graph = Some(value);
-            }
-            true
-        })?;
+        history::load(
+            repository,
+            revisions,
+            &[],
+            false,
+            &authors,
+            &AtomicBool::new(false),
+            |event| {
+                if let history::Event::Complete(value) = event {
+                    graph = Some(value);
+                }
+                true
+            },
+        )?;
         graph.context("history traversal did not produce a graph")
     }
 
@@ -273,7 +283,7 @@ mod tests {
         assert!(!contains(&repository, main, root));
         drop(repository);
 
-        let notice = perform(&repository_path, false, root, &graph, &[])?.context("time-travel changed HEAD")?;
+        let notice = perform(&repository_path, false, root, &graph, &[], false)?.context("time-travel changed HEAD")?;
         assert!(notice.contains("saved pin:"), "{notice}");
         let repository = gix::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
@@ -285,16 +295,20 @@ mod tests {
             Some(b"refs/heads/main".as_bstr())
         );
         assert_eq!(pins[0].id, main);
-        assert!(history::snapshot(&repository, &[], &[])?.view_tips.contains(&main));
+        assert!(
+            history::snapshot(&repository, &[], &[], false)?
+                .view_tips
+                .contains(&main)
+        );
 
         repository
             .find_reference("refs/heads/main")?
             .set_target_id(topic, "advance pinned branch")?;
-        let advanced = history::snapshot(&repository, &[], &[])?;
+        let advanced = history::snapshot(&repository, &[], &[], false)?;
         assert!(advanced.view_tips.contains(&topic), "a symbolic pin follows its branch");
         drop(repository);
 
-        perform(&repository_path, false, topic, &graph, &[])?;
+        perform(&repository_path, false, topic, &graph, &[], false)?;
         let repository = gix::open(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
@@ -310,12 +324,12 @@ mod tests {
             .status()?;
         assert!(detach.success());
         let graph = loaded_graph(&gix::open(fixture.path())?, &[])?;
-        perform(&repository_path, false, root, &graph, &[])?;
+        perform(&repository_path, false, root, &graph, &[], false)?;
         let pin = history::all_pins(&gix::open(fixture.path())?)?
             .pop()
             .context("direct pin is present")?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
-        perform(&repository_path, false, main, &graph, &[])?;
+        perform(&repository_path, false, main, &graph, &[], false)?;
         let repository = gix::open(fixture.path())?;
         assert!(
             repository.head()?.is_detached(),
@@ -337,7 +351,7 @@ mod tests {
         let graph = loaded_graph(&repository, &revisions)?;
         drop(repository);
 
-        perform(&repository_path, false, root, &graph, &revisions)?;
+        perform(&repository_path, false, root, &graph, &revisions, false)?;
         assert!(
             history::all_pins(&gix::open(fixture.path())?)?.is_empty(),
             "an explicit tip already retains the former HEAD"
@@ -350,7 +364,8 @@ mod tests {
             .status()?;
         assert!(checkout.success());
         std::fs::write(fixture.path().join("main"), "dirty\n")?;
-        let err = perform(&repository_path, false, root, &graph, &[]).expect_err("Git rejects a conflicting checkout");
+        let err =
+            perform(&repository_path, false, root, &graph, &[], false).expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
         let repository = gix::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
