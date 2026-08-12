@@ -244,7 +244,8 @@ space first; changes blocks adapt within the remaining history width.
   selectable row, where tix assumes the commit has no displayed descendants.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
-  message. Author identity and time are retained; committer time defaults to now.
+  message in a temporary `.md` file for syntax highlighting. Author identity and
+  time are retained; committer time defaults to now.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.

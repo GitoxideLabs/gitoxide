@@ -2519,8 +2519,8 @@ fn reword_commit(
         repository.object_cache_size(None);
         reword::document(&repository, id)?
     };
-    let mut tempfile = gix::tempfile::new(
-        std::env::temp_dir(),
+    let mut tempfile = gix::tempfile::writable_at(
+        std::env::temp_dir().join(format!("tix-reword-{}.md", std::process::id())),
         gix::tempfile::ContainingDirectory::Exists,
         gix::tempfile::AutoRemove::Tempfile,
     )
