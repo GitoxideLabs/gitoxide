@@ -8,7 +8,13 @@ use pretty_assertions::assert_eq;
 use crate::hex_to_id;
 
 fn ldb() -> Store {
-    Store::at(fixture_path("objects"), Options::default())
+    Store::at(
+        fixture_path("objects"),
+        Options {
+            object_hash: gix_hash::Kind::Sha1,
+            ..Options::default()
+        },
+    )
 }
 
 fn limited_ldb(limit: usize) -> Store {
@@ -16,6 +22,7 @@ fn limited_ldb(limit: usize) -> Store {
         fixture_path("objects"),
         Options {
             alloc_limit_bytes: Some(limit),
+            object_hash: gix_hash::Kind::Sha1,
             ..Default::default()
         },
     )
@@ -92,7 +99,13 @@ mod write {
     #[test]
     fn read_and_write() -> crate::Result {
         let dir = gix_testtools::tempfile::tempdir()?;
-        let db = loose::Store::at(dir.path(), loose::Options::default());
+        let db = loose::Store::at(
+            dir.path(),
+            loose::Options {
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            },
+        );
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
 
@@ -239,7 +252,13 @@ mod lookup_prefix {
             b"fake",
         )
         .unwrap();
-        let store = gix_odb::loose::Store::at(objects_dir.path(), gix_odb::loose::Options::default());
+        let store = gix_odb::loose::Store::at(
+            objects_dir.path(),
+            gix_odb::loose::Options {
+                object_hash: gix_hash::Kind::Sha1,
+                ..Default::default()
+            },
+        );
         let input_id = hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980");
         let prefix = gix_hash::Prefix::new(&input_id, 4).unwrap();
         assert_eq!(
