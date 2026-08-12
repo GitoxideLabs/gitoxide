@@ -1198,6 +1198,12 @@ fn event_loop(
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "history-refresh-completed");
                     filesystem_responses.queue_frame(&response_ids, "history-refresh-completed");
+                    app.set_worktree_head(
+                        (!repository_is_bare)
+                            .then(|| decoration_head(&result.decorations))
+                            .flatten(),
+                        false,
+                    );
                     decorations = result.decorations;
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1368,7 +1374,10 @@ fn event_loop(
             events += 1;
             dirty = true;
             match message? {
-                Event::Decorations(value) => decorations = value,
+                Event::Decorations(value) => {
+                    app.set_worktree_head((!repository_is_bare).then(|| decoration_head(&value)).flatten(), true);
+                    decorations = value;
+                }
                 Event::Commits(rows) => app.extend_commits(rows),
                 Event::HiddenCommits(rows) => app.extend_hidden_commits(rows),
                 Event::VisibleComplete => {
@@ -1956,6 +1965,15 @@ fn remembered_change_selection(view: &app::ChangesView, changes: Option<&Changes
             .paths
             .get(view.selected)
             .map(|change| (change.path.clone(), view.selected.saturating_sub(view.offset)))
+    })
+}
+
+fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
+    decorations.iter().find_map(|(id, decorations)| {
+        decorations
+            .iter()
+            .any(|decoration| decoration.kind == history::DecorationKind::Head)
+            .then_some(*id)
     })
 }
 

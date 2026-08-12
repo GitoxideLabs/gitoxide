@@ -370,6 +370,9 @@ pub(crate) struct App {
     horizontal_max: usize,
     follow_tail: bool,
     reload_selection: Option<ObjectId>,
+    pending_initial_selection: Option<ObjectId>,
+    worktree_head: Option<ObjectId>,
+    worktree_head_has_descendants: bool,
     select_top_after_refresh: bool,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
@@ -438,6 +441,9 @@ impl App {
             horizontal_max: 0,
             follow_tail: false,
             reload_selection: None,
+            pending_initial_selection: None,
+            worktree_head: None,
+            worktree_head_has_descendants: false,
             select_top_after_refresh: false,
             signature_failures: 0,
             signature_verification_running: false,
@@ -451,6 +457,16 @@ impl App {
         if present {
             self.ref_mode = RefMode::None;
         }
+    }
+
+    pub(crate) fn set_worktree_head(&mut self, head: Option<ObjectId>, select_on_load: bool) {
+        self.worktree_head = head;
+        self.pending_initial_selection = select_on_load.then_some(head).flatten();
+        self.update_worktree_head_descendants();
+    }
+
+    pub(crate) fn worktree_head_has_descendants(&self, id: ObjectId) -> bool {
+        self.worktree_head == Some(id) && self.worktree_head_has_descendants
     }
 
     pub(crate) fn extend_commits(&mut self, commits: impl Into<LoadedCommits>) {
@@ -482,6 +498,16 @@ impl App {
             self.reload_selection = None;
             self.ensure_visible();
         }
+        if let Some(index) = self
+            .pending_initial_selection
+            .and_then(|id| self.rows.iter().position(|row| row.id == id))
+        {
+            if !self.is_row_hidden(index) {
+                self.selected = Some(index);
+            }
+            self.pending_initial_selection = None;
+            self.ensure_visible();
+        }
         if self.reachability_anchor.is_some() {
             self.compute_reachable_rows();
         }
@@ -489,6 +515,11 @@ impl App {
 
     fn store_commits(&mut self, commits: LoadedCommits) -> Vec<SharedCommitRow> {
         let LoadedCommits { rows, attributions } = commits;
+        if !self.worktree_head_has_descendants
+            && let Some(head) = self.worktree_head
+        {
+            self.worktree_head_has_descendants = rows.iter().any(|row| row.parent_ids.contains(&head));
+        }
         self.titles.reserve(rows.iter().map(|row| row.title.len()).sum());
         let attribution_base = self.attributions.len();
         self.attributions.extend(attributions);
@@ -677,6 +708,7 @@ impl App {
                 self.ensure_changes_visible();
             }
             Action::Last if self.last_selectable().is_some() => {
+                self.pending_initial_selection = None;
                 let previous = self.selected;
                 self.selected = self.last_selectable();
                 if self.selected != previous {
@@ -849,6 +881,7 @@ impl App {
                 self.state = State::Computing;
                 self.follow_tail = false;
                 self.reload_selection = None;
+                self.pending_initial_selection = None;
                 Some(self.rows.clone())
             }
             State::Cancelling => {
@@ -959,6 +992,7 @@ impl App {
         }
         self.graph = Some(graph);
         self.lane_time = Some(lane_time);
+        self.update_worktree_head_descendants();
         self.selected = selected
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
             .or_else(|| self.first_selectable());
@@ -996,6 +1030,8 @@ impl App {
         self.reset_commit_view();
         self.reset_changes_view();
         self.follow_tail = false;
+        self.pending_initial_selection = None;
+        self.update_worktree_head_descendants();
         self.clear_preview_author_copy();
         self.signature_failures = 0;
         self.signature_verification_running = false;
@@ -1084,6 +1120,7 @@ impl App {
     }
 
     fn move_selection(&mut self, distance: usize, down: bool) {
+        self.pending_initial_selection = None;
         let Some(selected) = self.selected else { return };
         let target = if down {
             selected.saturating_add(distance).min(self.rows.len() - 1)
@@ -1099,6 +1136,7 @@ impl App {
     }
 
     fn move_reachable(&mut self, distance: usize, down: bool) {
+        self.pending_initial_selection = None;
         let (Some(selected), Some(reachable)) = (self.selected, self.reachable_rows.as_ref()) else {
             self.move_selection(distance, down);
             return;
@@ -1203,6 +1241,7 @@ impl App {
     }
 
     fn select(&mut self, selected: usize) {
+        self.pending_initial_selection = None;
         if !self.rows.is_empty() && !self.is_row_hidden(selected) {
             let previous = self.selected;
             self.selected = Some(selected.min(self.rows.len() - 1));
@@ -1216,6 +1255,14 @@ impl App {
 
     fn first_selectable(&self) -> Option<usize> {
         (0..self.rows.len()).find(|index| !self.is_row_hidden(*index))
+    }
+
+    fn update_worktree_head_descendants(&mut self) {
+        self.worktree_head_has_descendants = self.worktree_head.is_some_and(|head| {
+            self.rows
+                .iter()
+                .any(|row| row.id != head && row.parent_ids.contains(&head))
+        });
     }
 
     pub(crate) fn can_reword(&self) -> bool {
@@ -2139,6 +2186,46 @@ mod tests {
         app.update(Action::MoveUp);
         app.extend_commits(vec![row(5)]);
         assert_eq!(app.selected, Some(2), "manual navigation stops following the tail");
+    }
+
+    #[test]
+    fn startup_selection_follows_the_worktree_head_until_the_user_moves() {
+        let mut app = App::new(2);
+        app.set_worktree_head(Some(id(2)), true);
+        app.extend_commits(vec![row_with_parents(3, &[2])]);
+        assert_eq!(app.selected, Some(0), "the newest row is selected provisionally");
+        assert!(
+            app.worktree_head_has_descendants(id(2)),
+            "a streamed child marks HEAD as having visible descendants"
+        );
+
+        app.extend_commits(vec![row(2)]);
+        assert_eq!(app.selected, Some(1), "selection moves to HEAD when its row arrives");
+        complete(&mut app);
+        assert_eq!(app.selected, Some(1), "lane computation retains the HEAD selection");
+
+        let mut moved = App::new(2);
+        moved.set_worktree_head(Some(id(2)), true);
+        moved.extend_commits(vec![row_with_parents(3, &[2])]);
+        moved.update(Action::MoveDown);
+        moved.extend_commits(vec![row(2)]);
+        assert_eq!(moved.selected, Some(0), "navigation cancels the pending jump to HEAD");
+    }
+
+    #[test]
+    fn startup_head_selection_falls_back_when_head_is_unavailable() {
+        let mut absent = App::new(2);
+        absent.set_worktree_head(Some(id(9)), true);
+        absent.extend_commits(vec![row(3), row(2)]);
+        complete(&mut absent);
+        assert_eq!(absent.selected, Some(0), "an absent HEAD retains the newest selection");
+
+        let mut hidden = App::new(2);
+        hidden.set_worktree_head(Some(id(2)), true);
+        hidden.extend_commits(vec![row(3)]);
+        hidden.extend_hidden_commits(vec![row(2)]);
+        complete(&mut hidden);
+        assert_eq!(hidden.selected, Some(0), "a hidden HEAD cannot become selected");
     }
 
     #[test]
