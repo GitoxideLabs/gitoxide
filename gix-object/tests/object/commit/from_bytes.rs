@@ -35,7 +35,7 @@ parent 2222222222222222222222222222222222222222222222222222222222222222
 author Ada Lovelace <ada@example.com> 1710000000 +0000
 committer Grace Hopper <grace@example.com> 1710003600 -0230
 encoding ISO-8859-1
-gpgsig -----BEGIN SSH SIGNATURE-----
+gpgsig-sha256 -----BEGIN SSH SIGNATURE-----
  U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZXhhbXBsZS1zaGEyNTY=
  -----END SSH SIGNATURE-----
 mergetag object 3333333333333333333333333333333333333333333333333333333333333333
@@ -63,13 +63,18 @@ sha256 body
     assert_eq!(commit.committer()?.email, b"grace@example.com".as_bstr());
     assert_eq!(
         commit.extra_headers().pgp_signature(),
-        Some(
-            b"-----BEGIN SSH SIGNATURE-----
+        if cfg!(feature = "sha256") {
+            Some(
+                b"-----BEGIN SSH SIGNATURE-----
 U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZXhhbXBsZS1zaGEyNTY=
 -----END SSH SIGNATURE-----
 "
-            .as_bstr()
-        )
+                .as_bstr(),
+            )
+        } else {
+            None
+        },
+        "`gpgsig-sha256` is recognized exactly when SHA-256 support is enabled"
     );
     assert_eq!(commit.extra_headers().mergetags().count(), 1);
     assert_eq!(commit.message, b"sha256 subject\n\nsha256 body\n".as_bstr());
@@ -447,6 +452,7 @@ fn newline_right_after_signature_multiline_header_sha1() -> crate::Result {
 }
 
 #[test]
+#[cfg(feature = "sha256")]
 fn sha256_commits_use_their_own_signature_header() -> crate::Result {
     let data = b"tree 0000000000000000000000000000000000000000000000000000000000000000\n\
 author A <a@example.com> 0 +0000\n\

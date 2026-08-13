@@ -26,6 +26,8 @@ path = "./benches/edit_tree.rs"
 
 
 [features]
+## Enable commit signing and signature verification with external programs.
+signature = ["dep:gix-command", "dep:gix-tempfile"]
 ## Enable support for the SHA-1 hash by enabling the respective feature in the `gix-hash` crate.
 sha1 = ["gix-hash/sha1"]
 ## Enable support for the SHA-256 hash by enabling the respective feature in the `gix-hash` crate.
@@ -48,6 +50,8 @@ gix-validate = { version = "^0.11.3", path = "../gix-validate" }
 gix-actor = { version = "^0.41.2", path = "../gix-actor" }
 gix-date = { version = "^0.15.6", path = "../gix-date" }
 gix-utils = { version = "^0.3.5", path = "../gix-utils" }
+gix-command = { version = "^0.9.2", path = "../gix-command", optional = true }
+gix-tempfile = { version = "^24.0.0", path = "../gix-tempfile", optional = true }
 
 itoa = "1.0.17"
 thiserror = "2.0.18"
@@ -63,6 +67,7 @@ serde = { version = "1.0.114", optional = true, default-features = false, featur
 document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
+gix-object = { path = ".", features = ["signature"] }
 criterion = "0.8.2"
 pretty_assertions = "1.0.0"
 insta = "1.46.3"

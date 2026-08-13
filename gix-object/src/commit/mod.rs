@@ -23,6 +23,8 @@ pub fn signature_field_name(hash_kind: gix_hash::Kind) -> &'static str {
 mod decode;
 ///
 pub mod message;
+#[cfg(feature = "signature")]
+pub mod signature;
 
 /// A parsed commit message that assumes a title separated from the body by two consecutive newlines.
 ///

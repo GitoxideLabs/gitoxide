@@ -106,7 +106,7 @@ sha256 = [
 #! Providers of libraries should only activate the components they need.
 
 ## Provide a top-level `command` module that helps with spawning commands similarly to `git`.
-command = ["dep:gix-command"]
+command = ["dep:gix-command", "gix-object/signature"]
 
 ## Obtain information similar to `git status`.
 status = ["gix-status", "dirwalk", "index", "blob-diff", "gix-diff/index"]
