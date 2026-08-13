@@ -3,72 +3,41 @@ use std::{io::Write, path::Path, process::Command};
 use anyhow::{Context, Result};
 use gix::{ObjectId, bstr::ByteSlice};
 
-use super::refs::MutableRefs;
+use super::rebase;
 
-pub(crate) fn perform(repo: &gix::Repository, id: ObjectId) -> Result<Option<ObjectId>> {
+pub(crate) fn perform(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    id: ObjectId,
+) -> Result<Option<ObjectId>> {
     let commit = repo.find_commit(id).context("could not find the commit to forget")?;
-    let parents: Vec<_> = commit.parent_ids().map(gix::Id::detach).collect();
-    if parents.len() > 1 {
-        anyhow::bail!("merge commits cannot be forgotten");
-    }
-    let parent = parents.first().copied();
-    let old_tree = commit
-        .tree_id()
-        .context("could not read the forgotten commit tree")?
-        .detach();
-    let refs = MutableRefs::pointing_to(repo, id)?;
-    if refs.is_empty() {
-        anyhow::bail!("no mutable reference points to the commit anymore");
-    }
-    refs.ensure_not_checked_out_elsewhere(repo)?;
-    let head = repo.head().context("could not inspect HEAD before forgetting")?;
-    let head_is_selected = head.id().is_some_and(|head| head.as_ref() == id);
-    if head_is_selected && parent.is_none() && head.referent_name().is_none() {
-        anyhow::bail!("a detached root commit cannot leave an unborn HEAD");
-    }
-    let transition = match (repo.workdir(), head_is_selected) {
-        (Some(workdir), true) => {
-            let new_tree = match parent {
-                Some(parent) => repo
-                    .find_commit(parent)
-                    .context("could not find the parent commit")?
-                    .tree_id()
-                    .context("could not read the parent tree")?
-                    .detach(),
-                None => repo
-                    .write_object(&gix::objs::Tree { entries: Vec::new() })
-                    .context("could not prepare the empty root tree")?
-                    .detach(),
-            };
-            preflight_tree_transition(repo, workdir, old_tree, new_tree)?;
-            Some((workdir.to_owned(), new_tree))
-        }
-        _ => None,
+    let parent = commit.parent_ids().next().map(gix::Id::detach);
+    let tree = commit.tree_id()?.detach();
+    let parent_tree = match parent {
+        Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
+        None => repo.empty_tree().id,
     };
-    drop(head);
     drop(commit);
-
-    let committer = repo.committer().transpose()?;
-    match parent {
-        Some(parent) => refs.update(repo, parent, b"forget commit".as_bstr(), committer)?,
-        None => refs.delete(repo, b"forget root commit".as_bstr(), committer)?,
-    }
-    if let Some((workdir, new_tree)) = transition
-        && let Err(err) = apply_tree_transition(&workdir, old_tree, new_tree)
-    {
-        let rollback = match parent {
-            Some(parent) => refs.rollback(repo, parent),
-            None => refs.rollback_deleted(repo),
-        };
-        return match rollback {
-            Ok(()) => Err(err),
-            Err(rollback) => Err(err.context(format!("references could not be rolled back: {rollback:#}"))),
-        };
-    }
-    Ok(parent)
+    Ok(rebase::perform(
+        repo,
+        graph,
+        rebase::Edit::Remove { target: id },
+        rebase::Signature::RedoIfNeeded,
+        if tree == parent_tree {
+            rebase::Tree::LeaveAsIs
+        } else {
+            rebase::Tree::CherryPick
+        },
+    )?
+    .selected)
 }
 
-fn preflight_tree_transition(repo: &gix::Repository, workdir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
+pub(super) fn preflight_tree_transition(
+    repo: &gix::Repository,
+    workdir: &Path,
+    old: ObjectId,
+    new: ObjectId,
+) -> Result<()> {
     let mut index = gix::tempfile::writable_at(
         std::env::temp_dir().join(format!(
             "tix-forget-index-{}-{old}-{:?}",
@@ -98,7 +67,7 @@ fn preflight_tree_transition(repo: &gix::Repository, workdir: &Path, old: Object
         .context("local changes conflict with forgetting this commit")
 }
 
-fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
+pub(super) fn apply_tree_transition(workdir: &Path, old: ObjectId, new: ObjectId) -> Result<()> {
     let refresh = Command::new("git")
         .arg("-C")
         .arg(workdir)
@@ -159,7 +128,8 @@ mod tests {
             .expect("top has a parent")
             .detach();
 
-        assert_eq!(perform(&repository, top)?, Some(parent));
+        let graph = super::super::loaded_graph(&repository)?;
+        assert_eq!(perform(repository.clone(), &graph, top)?, Some(parent));
         let state = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             state.head,
@@ -213,7 +183,7 @@ mod tests {
         let repository = open(fixture.path())?;
         let top = repository.head_id()?.detach();
         assert!(
-            perform(&repository, top).is_err(),
+            perform(repository.clone(), &super::super::loaded_graph(&repository)?, top).is_err(),
             "overlapping local changes are rejected"
         );
         assert_eq!(
@@ -240,7 +210,8 @@ mod tests {
         let repository = open(fixture.path())?;
         let root = repository.head_id()?.detach();
 
-        assert_eq!(perform(&repository, root)?, None);
+        let graph = super::super::loaded_graph(&repository)?;
+        assert_eq!(perform(repository.clone(), &graph, root)?, None);
         let state = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             state.head,
@@ -277,7 +248,8 @@ mod tests {
             .next()
             .expect("top has a parent")
             .detach();
-        assert_eq!(perform(&repository, top)?, Some(parent));
+        let graph = super::super::loaded_graph(&repository)?;
+        assert_eq!(perform(repository.clone(), &graph, top)?, Some(parent));
         assert_eq!(
             repository.head_id()?.detach(),
             parent,
@@ -313,7 +285,7 @@ mod tests {
         let repository = open(fixture.path())?;
         let root = repository.head_id()?.detach();
         assert!(
-            perform(&repository, root).is_err(),
+            perform(repository.clone(), &super::super::loaded_graph(&repository)?, root).is_err(),
             "detached HEAD cannot become unborn"
         );
         assert_eq!(gix_testtools::repository::snapshot(fixture.path())?, before);

@@ -194,6 +194,68 @@ impl HistoryGraph {
         self.parents.iter().map(|parent| self.id(*parent)).collect()
     }
 
+    pub(crate) fn parents_of(&self, id: ObjectId) -> Option<Vec<ObjectId>> {
+        let index = self.index(id)?;
+        Some(self.parents(index).iter().map(|parent| self.id(*parent)).collect())
+    }
+
+    pub(crate) fn commits_with_merge_descendants(&self) -> HashSet<ObjectId> {
+        let mut pending: Vec<_> = self
+            .commits
+            .iter()
+            .filter(|commit| commit.parents.len() > 1)
+            .flat_map(|commit| {
+                let range = commit.parents.clone();
+                self.parents[range.start as usize..range.end as usize].iter().copied()
+            })
+            .collect();
+        let mut ancestors = HashSet::new();
+        while let Some(index) = pending.pop() {
+            if ancestors.insert(index) {
+                pending.extend_from_slice(self.parents(index));
+            }
+        }
+        ancestors.into_iter().map(|index| self.id(index)).collect()
+    }
+
+    pub(crate) fn descendants_in_parent_order(&self, root: ObjectId) -> Option<Vec<ObjectId>> {
+        let root = self.index(root)?;
+        let mut included = HashSet::from([root]);
+        loop {
+            let mut changed = false;
+            for index in 0..self.commits.len() {
+                let index = CommitIndex::new(index).expect("an existing graph index fits into u32");
+                if included.contains(&index) || !self.parents(index).iter().any(|parent| included.contains(parent)) {
+                    continue;
+                }
+                included.insert(index);
+                changed = true;
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut out = Vec::with_capacity(included.len());
+        while out.len() < included.len() {
+            let before = out.len();
+            for index in &included {
+                if out.contains(index)
+                    || self
+                        .parents(*index)
+                        .iter()
+                        .any(|parent| included.contains(parent) && !out.contains(parent))
+                {
+                    continue;
+                }
+                out.push(*index);
+            }
+            if out.len() == before {
+                return None;
+            }
+        }
+        Some(out.into_iter().map(|index| self.id(index)).collect())
+    }
+
     fn parent_ids(&self, index: CommitIndex) -> gix::traverse::commit::ParentIds {
         self.parents(index).iter().map(|parent| self.id(*parent)).collect()
     }
