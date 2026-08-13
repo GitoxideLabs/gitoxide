@@ -82,11 +82,12 @@ impl super::Store {
         let catalog = self.catalog.load_full();
         let index = &catalog.index;
         if !index.is_initialized() {
-            return self.consolidate_with_disk_state(
+            let snapshot = self.consolidate_with_disk_state(
                 true,  /* needs_init */
                 false, /* load one new index */
                 loose_compression,
-            );
+            )?;
+            return Ok(snapshot.or_else(|| self.collect_snapshot_if_marker_changed(marker)));
         }
 
         if marker.generation != index.generation || marker.state_id != index.state_id() {
@@ -98,10 +99,8 @@ impl super::Store {
             if self.load_next_index(Arc::clone(&catalog))? {
                 Ok(Some(self.collect_snapshot()))
             } else {
-                let current_catalog = self.catalog.load();
-                let current_index = &current_catalog.index;
-                if marker.generation != current_index.generation || marker.state_id != current_index.state_id() {
-                    return Ok(Some(self.collect_snapshot()));
+                if let Some(snapshot) = self.collect_snapshot_if_marker_changed(marker) {
+                    return Ok(Some(snapshot));
                 }
                 // …and if that didn't yield anything new consider refreshing our disk state.
                 match refresh_mode {
@@ -120,15 +119,17 @@ impl super::Store {
                         if snapshot.is_some() {
                             return Ok(snapshot);
                         }
-                        let current_catalog = self.catalog.load();
-                        let current_index = &current_catalog.index;
-                        Ok((marker.generation != current_index.generation
-                            || marker.state_id != current_index.state_id())
-                        .then(|| self.collect_snapshot()))
+                        Ok(self.collect_snapshot_if_marker_changed(marker))
                     }
                 }
             }
         }
+    }
+
+    fn collect_snapshot_if_marker_changed(&self, marker: types::SlotIndexMarker) -> Option<Snapshot> {
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        (marker.generation != index.generation || marker.state_id != index.state_id()).then(|| self.collect_snapshot())
     }
 
     fn last_refresh_is_younger_than(&self, max_age: std::time::Duration) -> bool {
