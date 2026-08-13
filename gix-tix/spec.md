@@ -155,10 +155,14 @@ without trading responsiveness for metadata that is not visible.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. `[` and overlay controls remain direct
-shortcuts. While active, the footer renders a bold `v active (` marker, every
-applicable display option, and a closing `)` so direct shortcuts remain visibly
+shortcuts. The footer underlines the `v` in `view`; while active, `view (` contains
+every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
-`v` prefix and the `e` prefix when it is addressable, before navigation shortcuts.
+`v` prefix and the `e` prefix when it is addressable. Remaining history-level
+actions follow before movement, panning, and diff navigation shortcuts.
+All status lines embed and underline a shortcut character in its action label when
+possible; keys that cannot be expressed naturally in the label remain explicit.
+The Enter key is written as `<enter>` throughout.
 
 ### Time-travel
 
@@ -209,6 +213,8 @@ space first; changes blocks adapt within the remaining history width.
 
 - `o` or `]` toggles the commit view on the right. It uses at most half the
   terminal and reserves 80 content columns when space permits.
+- Its history-status action says `open message` or `close message`, avoiding
+  confusion with the edit group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
   background, with the default background as fallback.
 - The title begins on the first content row and is bold. Body text follows, then
@@ -355,7 +361,7 @@ space first; changes blocks adapt within the remaining history width.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.
-- While active, the footer renders a bold `e active (` marker and only the edit
+- The footer underlines the `e` in `edit`; while active, `edit (` contains only the
   actions available for the current selection, followed by `)`. An empty group
   says `no actions`.
 - While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
