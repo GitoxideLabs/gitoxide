@@ -1780,6 +1780,30 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("new commit: {err:#}")),
                     }
                 }
+                Effect::Split(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = history_graph
+                        .as_ref()
+                        .context("splitting HEAD requires a completed history graph")
+                        .and_then(|graph| {
+                            split_commit(terminal, &repository_path, repository_is_bare, graph, enhanced_keyboard)
+                        });
+                    match result {
+                        Ok(Some(new_id)) => {
+                            app.leave_message(format!(
+                                "split {} as {}",
+                                id.to_hex_with_len(7),
+                                new_id.to_hex_with_len(7)
+                            ));
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_select_top_requested = true;
+                            refresh_pending = true;
+                        }
+                        Ok(None) => app.leave_message("no split performed: no input was provided"),
+                        Err(err) => app.leave_message(format!("split: {err:#}")),
+                    }
+                }
                 edit @ (Effect::Amend(id) | Effect::Spill(id)) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -2899,6 +2923,34 @@ fn create_commit(
     edit::create::apply(repository, graph, prepared, &edited).map(Some)
 }
 
+#[tracing::instrument(skip_all)]
+fn split_commit(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    graph: &HistoryGraph,
+    enhanced_keyboard: bool,
+) -> Result<Option<gix::ObjectId>> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository before splitting HEAD")?;
+    repository.object_cache_size(None);
+    let prepared = edit::split::prepare(repository)?;
+    let Some(edited) = edit::edit_document(
+        terminal,
+        &prepared.editor,
+        &prepared.document,
+        &format!("tix-split-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing split")?;
+    repository.object_cache_size(None);
+    edit::split::apply(repository, graph, prepared, &edited).map(Some)
+}
+
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn forget_commit(
     repository_path: &Path,
@@ -3596,6 +3648,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('c') => Some(Action::ToggleChanges),
+        KeyCode::Char('p') if edit_expanded => Some(Action::Split),
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -4512,6 +4565,7 @@ mod tests {
             ('n', Action::NewCommit),
             ('a', Action::Amend),
             ('s', Action::Spill),
+            ('p', Action::Split),
             ('d', Action::Forget),
             ('t', Action::TimeTravel),
         ] {

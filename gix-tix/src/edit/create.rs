@@ -13,9 +13,9 @@ use super::{rebase, reword};
 pub(crate) struct Prepared {
     pub editor: OsString,
     pub document: Vec<u8>,
-    parent: Option<ObjectId>,
-    tree: ObjectId,
-    objects: gix::odb::memory::Storage,
+    pub(super) parent: Option<ObjectId>,
+    pub(super) tree: ObjectId,
+    pub(super) objects: gix::odb::memory::Storage,
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
@@ -140,6 +140,14 @@ pub(super) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Re
 
 pub(super) fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
     let changes = load_worktree_changes_without_lines(repo)?;
+    worktree_tree_with_changes(repo, baseline, &changes)
+}
+
+pub(super) fn worktree_tree_with_changes(
+    repo: &gix::Repository,
+    baseline: &gix::Tree<'_>,
+    changes: &crate::Changes,
+) -> Result<ObjectId> {
     if changes.paths.is_empty() {
         return Ok(baseline.id);
     }
@@ -189,20 +197,8 @@ pub(crate) fn apply(
     mut prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
-    let edit = reword::parse(edited)?;
-    if edit.message.is_empty() {
-        anyhow::bail!("the edited commit message is empty");
-    }
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let commit = gix::objs::Commit {
-        message: edit.message,
-        tree: prepared.tree,
-        author: reword::actor(edit.author, edit.author_time, "author")?,
-        committer: reword::actor(edit.committer, edit.committer_time, "committer")?,
-        encoding: None,
-        parents: prepared.parent.into_iter().collect(),
-        extra_headers: Vec::new(),
-    };
+    let commit = commit_from_edit(&prepared, edited)?;
     let base_tree = match prepared.parent {
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
         None => repo.empty_tree().id,
@@ -224,6 +220,22 @@ pub(crate) fn apply(
     )?
     .selected
     .context("inserting a commit did not produce a selection")
+}
+
+pub(super) fn commit_from_edit(prepared: &Prepared, edited: &[u8]) -> Result<gix::objs::Commit> {
+    let edit = reword::parse(edited)?;
+    if edit.message.is_empty() {
+        anyhow::bail!("the edited commit message is empty");
+    }
+    Ok(gix::objs::Commit {
+        message: edit.message,
+        tree: prepared.tree,
+        author: reword::actor(edit.author, edit.author_time, "author")?,
+        committer: reword::actor(edit.committer, edit.committer_time, "committer")?,
+        encoding: None,
+        parents: prepared.parent.into_iter().collect(),
+        extra_headers: Vec::new(),
+    })
 }
 
 #[cfg(test)]

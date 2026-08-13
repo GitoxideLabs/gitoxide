@@ -339,7 +339,7 @@ space first; changes blocks adapt within the remaining history width.
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
 
-### Amend and spill
+### Amend, spill, and split
 
 - `e a` amends the current worktree's `@` commit with the changed index, or
   worktree changes when the index already matches `HEAD`. `e s` spills that
@@ -349,7 +349,16 @@ space first; changes blocks adapt within the remaining history width.
 - With a path selected in the focused tree-changes block, the main `e` prefix
   offers `spill` and `e s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
-- Both operations leave worktree files untouched, reset the affected worktree's
+- `e p` is offered at `@` only when both staged and unstaged changes exist. It
+  amends the unstaged changes into the source commit, then creates a new upper
+  commit from the staged delta using the standard Markdown editor buffer. Both
+  deltas are three-way applied in memory before the editor opens, so overlapping
+  changes abort without writing objects or changing refs, the index, or files.
+- A successful split leaves the worktree bytes untouched and resets the index to
+  the new upper commit. The rewritten source retains its message and ancestry;
+  the upper commit receives the edited message. Both commits are marked for the
+  same lazy signature-aware rebase used by amend and spill.
+- All three operations leave worktree files untouched, reset the affected worktree's
   index to the rewritten commit, and cheaply rewrite linear descendants with
   their trees unchanged. Rewritten commits carry `tix-rebase: pending`, invalidate
   existing signatures, retain the original parent needed for later replay, and
@@ -402,8 +411,9 @@ space first; changes blocks adapt within the remaining history width.
 ### Editing shortcuts
 
 - `e` toggles the edit shortcut group. `e r` rewords, `e n` creates a commit,
-  `e a` amends `@`, `e s` spills `@`, `e d d` confirms forgetting a top commit,
-  and `e t` enters or returns from time travel when each action is available.
+  `e a` amends `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
+  `e d d` confirms forgetting a top commit, and `e t` enters or returns from
+  time travel when each action is available.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.
