@@ -441,8 +441,11 @@ space first; changes blocks adapt within the remaining history width.
   malformed or inaccessible ordinary refs remain errors.
 - Ref changes that affect view or hidden tips trigger an incremental history
   refresh. Decoration-only changes avoid traversal. Filesystem-driven traversal
-  changes, manual refresh, and display toggles preserve selection by commit ID
-  when possible and otherwise select the first selectable row.
+  changes, manual refresh, and display toggles preserve selection by commit ID.
+  Edits retain the selection on the successor ID returned by the rewrite. A
+  selected worktree HEAD or other moving reference follows its changed target,
+  covering external branch and StGit patch rewrites. If none remains visible,
+  selection falls back to the first selectable row.
 - The worktree watcher exists only while the combined worktree block is enabled.
   It observes the index and ignore-aware directories that Git status would walk,
   using non-recursive registrations so ignored build trees do not generate work.

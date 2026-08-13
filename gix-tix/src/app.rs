@@ -385,6 +385,7 @@ pub(crate) struct App {
     follow_tail: bool,
     reload_selection: Option<ObjectId>,
     pending_initial_selection: Option<ObjectId>,
+    selection_after_refresh: Option<ObjectId>,
     worktree_head: Option<ObjectId>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
@@ -465,6 +466,7 @@ impl App {
             follow_tail: false,
             reload_selection: None,
             pending_initial_selection: None,
+            selection_after_refresh: None,
             worktree_head: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
@@ -495,6 +497,12 @@ impl App {
     }
 
     pub(crate) fn set_worktree_head(&mut self, head: Option<ObjectId>, select_on_load: bool) {
+        if !select_on_load
+            && self.worktree_head != head
+            && self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) == self.worktree_head
+        {
+            self.selection_after_refresh = head;
+        }
         self.worktree_head = head;
         self.pending_initial_selection = select_on_load.then_some(head).flatten();
         self.update_worktree_head_descendants();
@@ -1055,9 +1063,14 @@ impl App {
         if self.state != State::Computing {
             return;
         }
-        let selected = (!std::mem::take(&mut self.select_top_after_refresh))
-            .then(|| self.selected.map(|index| self.rows[index].id))
-            .flatten();
+        let selected = if std::mem::take(&mut self.select_top_after_refresh) {
+            self.selection_after_refresh = None;
+            None
+        } else {
+            self.selection_after_refresh
+                .take()
+                .or_else(|| self.selected.map(|index| self.rows[index].id))
+        };
         let metadata: HashMap<_, _> = if rows.iter().any(|row| !row.metadata_loaded) {
             self.rows
                 .iter()
@@ -1137,6 +1150,7 @@ impl App {
         self.reset_changes_view();
         self.follow_tail = false;
         self.pending_initial_selection = None;
+        self.selection_after_refresh = None;
         self.update_worktree_head_descendants();
         self.clear_preview_author_copy();
         self.signature_failures = 0;
@@ -1442,6 +1456,10 @@ impl App {
         if let Some(index) = self.rows.iter().position(|row| row.id == id) {
             self.select(index);
         }
+    }
+
+    pub(crate) fn select_commit_after_refresh(&mut self, id: ObjectId) {
+        self.selection_after_refresh = Some(id);
     }
 
     pub(crate) fn time_travel_shortcut_visible(&self) -> bool {
@@ -2112,6 +2130,58 @@ mod tests {
             app.selected.map(|index| app.rows[index].id),
             Some(id(3)),
             "a removed selection falls back to the first selectable row"
+        );
+    }
+
+    #[test]
+    fn refresh_selects_the_rewritten_successor() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        app.select_commit_after_refresh(id(4));
+
+        let rows = app
+            .start_refresh(
+                vec![row_with_parents(5, &[4]), row_with_parents(4, &[1])].into(),
+                &[id(5)],
+                &[],
+                false,
+            )
+            .expect("a rewritten stack computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(4)),
+            "selection follows the successor supplied by the edit"
+        );
+    }
+
+    #[test]
+    fn selected_head_follows_an_external_rewrite() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        app.set_worktree_head(Some(id(3)), false);
+        complete(&mut app);
+        app.set_worktree_head(Some(id(5)), false);
+
+        let rows = app
+            .start_refresh(
+                vec![row_with_parents(5, &[4]), row_with_parents(4, &[1])].into(),
+                &[id(5)],
+                &[],
+                false,
+            )
+            .expect("an externally rewritten stack computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "the selected HEAD follows its new target"
         );
     }
 
