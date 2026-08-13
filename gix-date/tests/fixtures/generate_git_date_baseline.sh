@@ -19,28 +19,30 @@ function baseline() {
       else
         echo '-1'
       fi
+      echo ''
     } >> baseline.git
 }
 
-# Relative dates use a fixed "now" timestamp for reproducibility
-# GIT_TEST_DATE_NOW sets Git's internal "now" to a specific Unix timestamp
-# We use 1000000000 (Sun Sep 9 01:46:40 UTC 2001) as our reference point
+# Relative dates use a fixed "now" timestamp for reproducibility. The optional third argument can
+# override the default 1000000000 (Sun Sep 9 01:46:40 UTC 2001) for calendar edge cases.
 function baseline_relative() {
     local test_date="$1" # first argument is the relative date to test
     local test_name="$2" # second argument is the format name (usually empty for relative dates)
+    local now="${3:-1000000000}" # case-specific reference time, recorded as the fifth field
 
     local status=0
-    GIT_TEST_DATE_NOW=1000000000 git -c section.key="$test_date" config --type=expiry-date section.key || status="$?"
+    GIT_TEST_DATE_NOW="$now" git -c section.key="$test_date" config --type=expiry-date section.key || status="$?"
 
     {
       echo "$test_date"
       echo "$test_name"
       echo "$status"
       if [ "$status" = 0 ]; then
-        GIT_TEST_DATE_NOW=1000000000 git -c section.key="$test_date" config --type=expiry-date section.key
+        GIT_TEST_DATE_NOW="$now" git -c section.key="$test_date" config --type=expiry-date section.key
       else
         echo '-1'
       fi
+      echo "$now"
     } >> baseline.git
 }
 
@@ -194,6 +196,28 @@ baseline_relative '5 months ago' ''
 baseline_relative '3 months ago' ''
 baseline_relative '12 months ago' ''
 baseline_relative '24 months ago' ''
+
+# Month-end normalization, leap years, and pair ordering. Each expected value comes directly from
+# Git using the case-specific "now" in the third argument.
+baseline_relative '1 month ago' '' 1774958400              # Mar 31 -> invalid Feb 31 -> Mar 3, not Feb 28
+baseline_relative '1 month ago' '' 1780228800              # May 31 -> invalid Apr 31 -> May 1, not Apr 30
+baseline_relative '6 months ago' '' 1788177600             # Multi-month subtraction still preserves day 31 into February
+baseline_relative '1 month ago' '' 1774872000              # Mar 30 -> invalid Feb 30 -> Mar 2 in a common year
+baseline_relative '1 month ago' '' 1711800000              # Mar 30 -> Mar 1 because leap February has 29 days
+baseline_relative '1 month ago' '' 1711886400              # Mar 31 -> Mar 2 because leap February has 29 days
+baseline_relative '1 year ago' '' 1709208000               # Leap day -> invalid Feb 29 in a common year -> Mar 1
+baseline_relative '12 months ago' '' 1709208000             # Month arithmetic must match the preceding year case
+baseline_relative '2 months ago' '' 1774958400             # Control: target January has day 31, so no rollover
+baseline_relative '1 year ago' '' 1774958400               # Control: target March has day 31, so no rollover
+baseline_relative '1 day 1 month ago' '' 1775044800         # Day first creates Mar 31, which rolls over through February
+baseline_relative '1 month 1 day ago' '' 1775044800         # Month first lands on Mar 1, proving input-order evaluation
+baseline_relative '1 month 1 year ago' '' 1711886400        # Month then year normalizes leap February before subtracting a year
+baseline_relative '1 year 1 month ago' '' 1711886400        # Year then month reaches common February and differs from prior case
+baseline_relative '1 month 1 month ago' '' 1774958400       # First rollover is normalized before the second month is subtracted
+baseline_relative '23 months ago' '' 1769860800            # Multi-year month subtraction targets leap February
+baseline_relative '1 month 1 day 1 month ago' '' 1780228800 # A day between month pairs changes the second pair's starting day
+baseline_relative '1 month 1 month 1 day ago' '' 1780228800 # Moving that day last produces a different result
+baseline_relative '1 day 1 day ago' '' 1774958400           # Repeated fixed units accumulate instead of replacing each other
 
 # Years - from git t0006 check_relative 630000000 = 20 years
 baseline_relative '1 year ago' ''

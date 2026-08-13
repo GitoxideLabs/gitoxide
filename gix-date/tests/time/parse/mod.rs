@@ -1,12 +1,10 @@
-use std::time::SystemTime;
-
 use gix_date::Time;
 use gix_error::Exn;
 
 #[test]
 fn time_without_offset_defaults_to_utc() {
     // Git parses datetime without offset and defaults to UTC (+0000)
-    let result = gix_date::parse("1979-02-26 18:30:00", Some(SystemTime::now()));
+    let result = gix_date::parse("1979-02-26 18:30:00", Some(gix_date::Zoned::now()));
     assert!(result.is_ok(), "Git parses datetime without offset, defaulting to UTC");
     let time = result.unwrap();
     assert_eq!(time.offset, 0, "Offset should default to UTC (+0000)");
@@ -27,7 +25,7 @@ fn parse_header_is_not_too_lenient() {
 #[test]
 fn short() {
     assert_eq!(
-        gix_date::parse("1979-02-26", Some(SystemTime::now())).unwrap(),
+        gix_date::parse("1979-02-26", Some(gix_date::Zoned::now())).unwrap(),
         Time {
             seconds: 288835200,
             offset: 0,
@@ -260,7 +258,11 @@ mod fuzz {
     #[test]
     fn invalid_but_does_not_cause_panic() {
         for input in ["-9999-1-1", "7	-𬞋", "5 ڜ-09", "-4 week ago Z", "8960609 day ago"] {
-            gix_date::parse(input, Some(std::time::UNIX_EPOCH)).ok();
+            gix_date::parse(
+                input,
+                Some(jiff::Timestamp::UNIX_EPOCH.to_zoned(jiff::tz::TimeZone::UTC)),
+            )
+            .ok();
         }
     }
 }
