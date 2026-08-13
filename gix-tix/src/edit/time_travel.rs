@@ -1,4 +1,8 @@
-use std::{ffi::OsString, path::Path, process::Command};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result};
 use gix::{
@@ -12,6 +16,74 @@ use gix::{
 
 use crate::{history, open_repository};
 
+pub(crate) enum Perform {
+    Complete(Option<String>),
+    Conflict(Conflict),
+}
+
+impl Perform {
+    #[cfg(test)]
+    fn complete(self) -> Result<Option<String>> {
+        match self {
+            Perform::Complete(notice) => Ok(notice),
+            Perform::Conflict(_) => anyhow::bail!("time-travel unexpectedly suspended on a conflict"),
+        }
+    }
+}
+
+pub(crate) struct Conflict {
+    rebase: super::rebase::Conflict,
+    repository_path: PathBuf,
+    bare: bool,
+    workdir: PathBuf,
+    saved_target: Target,
+    head: ObjectId,
+}
+
+impl Conflict {
+    pub(crate) fn original(&self) -> ObjectId {
+        self.rebase.original()
+    }
+
+    #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
+    pub(crate) fn accept(self) -> Result<(String, ObjectId)> {
+        let mut conflict = self.rebase.persist()?;
+        let head = conflict
+            .outcome
+            .map(self.head)
+            .context("HEAD disappeared while preparing conflict resolution")?;
+        let repository = open_repository(&self.repository_path, self.bare, false)
+            .context("could not reopen repository before conflict checkout")?;
+        let provisional = contains(&repository, conflict.commit, head)
+            .then(|| create_or_reuse_pin(&repository, self.saved_target, head))
+            .transpose()?;
+        drop(repository);
+        if let Err(checkout) = checkout_detached(&self.workdir, conflict.commit) {
+            if let Some((pin, true)) = &provisional {
+                let cleanup = open_repository(&self.repository_path, self.bare, false)
+                    .context("could not reopen repository to remove a provisional pin")
+                    .and_then(|repository| delete_pin(&repository, pin));
+                if let Err(cleanup) = cleanup {
+                    return Err(checkout.context(format!(
+                        "checkout failed and {} could not be removed: {cleanup:#}",
+                        pin_label(pin)
+                    )));
+                }
+            }
+            return Err(checkout);
+        }
+        conflict.write_index()?;
+        let mut notice = format!(
+            "checked out conflicting {} for resolution",
+            conflict.commit.to_hex_with_len(7)
+        );
+        if let Some((pin, true)) = provisional {
+            notice = format!("{notice}; saved {}", pin_label(&pin));
+        }
+        Ok((notice, conflict.commit))
+    }
+}
+
 #[tracing::instrument(skip_all, fields(commit_id = %selected))]
 pub(crate) fn perform(
     repository_path: &Path,
@@ -20,7 +92,7 @@ pub(crate) fn perform(
     graph: &history::HistoryGraph,
     revisions: &[OsString],
     include_worktrees: bool,
-) -> Result<Option<String>> {
+) -> Result<Perform> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
     let workdir = repository
@@ -33,15 +105,37 @@ pub(crate) fn perform(
     };
     let head_referent = head.referent_name().map(ToOwned::to_owned);
     drop(head);
+    if repository
+        .index_or_empty()
+        .context("could not inspect the index before time-travel")?
+        .entries()
+        .iter()
+        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+    {
+        anyhow::bail!("cannot time-travel with unresolved index conflicts");
+    }
     let mut completed_graph = None;
     while let Some(base) = pending_base(&repository, head_id, selected)? {
         let outcome = super::rebase::perform(
-            repository,
+            &repository,
             completed_graph.as_ref().unwrap_or(graph),
             super::rebase::Edit::Repeat { base },
             super::rebase::Signature::RedoIfNeeded,
             super::rebase::Tree::CherryPick,
         )?;
+        let outcome = match outcome {
+            super::rebase::Perform::Complete(outcome) => outcome,
+            super::rebase::Perform::Conflict(rebase) => {
+                return Ok(Perform::Conflict(Conflict {
+                    rebase,
+                    repository_path: repository_path.to_owned(),
+                    bare,
+                    workdir,
+                    saved_target: head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id)),
+                    head: head_id,
+                }));
+            }
+        };
         selected = outcome
             .map(selected)
             .context("the time-travel destination disappeared while completing its rebase")?;
@@ -54,17 +148,17 @@ pub(crate) fn perform(
     }
     let graph = completed_graph.as_ref().unwrap_or(graph);
     if selected == head_id {
-        return Ok(None);
+        return Ok(Perform::Complete(None));
     }
     if let Some(pin) = selected_pin(&repository, selected)? {
         drop(repository);
         checkout_pin(&workdir, &pin)?;
         let repository = open_repository(repository_path, bare, false)
             .context("could not reopen repository after returning from time-travel")?;
-        return Ok(Some(match delete_pin(&repository, &pin) {
+        return Ok(Perform::Complete(Some(match delete_pin(&repository, &pin) {
             Ok(()) => format!("returned from {}", pin_label(&pin)),
             Err(err) => format!("returned from {}; pin remains: {err:#}", pin_label(&pin)),
-        }));
+        })));
     }
     let saved_target = head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id));
     let provisional = graph
@@ -107,7 +201,7 @@ pub(crate) fn perform(
             notice = format!("{notice}; saved {}", pin_label(&pin));
         }
     }
-    Ok(Some(notice))
+    Ok(Perform::Complete(Some(notice)))
 }
 
 fn pending_base(repository: &gix::Repository, head: ObjectId, selected: ObjectId) -> Result<Option<ObjectId>> {
@@ -329,7 +423,9 @@ mod tests {
         assert!(!contains(&repository, main, root));
         drop(repository);
 
-        let notice = perform(&repository_path, false, root, &graph, &[], false)?.context("time-travel changed HEAD")?;
+        let notice = perform(&repository_path, false, root, &graph, &[], false)?
+            .complete()?
+            .context("time-travel changed HEAD")?;
         assert!(notice.contains("saved pin:"), "{notice}");
         let repository = crate::open_test_repository(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
@@ -354,7 +450,7 @@ mod tests {
         assert!(advanced.view_tips.contains(&topic), "a symbolic pin follows its branch");
         drop(repository);
 
-        perform(&repository_path, false, topic, &graph, &[], false)?;
+        perform(&repository_path, false, topic, &graph, &[], false)?.complete()?;
         let repository = crate::open_test_repository(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
@@ -370,12 +466,12 @@ mod tests {
             .status()?;
         assert!(detach.success());
         let graph = loaded_graph(&crate::open_test_repository(fixture.path())?, &[])?;
-        perform(&repository_path, false, root, &graph, &[], false)?;
+        perform(&repository_path, false, root, &graph, &[], false)?.complete()?;
         let pin = history::all_pins(&crate::open_test_repository(fixture.path())?)?
             .pop()
             .context("direct pin is present")?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
-        perform(&repository_path, false, main, &graph, &[], false)?;
+        perform(&repository_path, false, main, &graph, &[], false)?.complete()?;
         let repository = crate::open_test_repository(fixture.path())?;
         assert!(
             repository.head()?.is_detached(),
@@ -397,7 +493,7 @@ mod tests {
         let graph = loaded_graph(&repository, &revisions)?;
         drop(repository);
 
-        perform(&repository_path, false, root, &graph, &revisions, false)?;
+        perform(&repository_path, false, root, &graph, &revisions, false)?.complete()?;
         assert!(
             history::all_pins(&crate::open_test_repository(fixture.path())?)?.is_empty(),
             "an explicit tip already retains the former HEAD"
@@ -410,8 +506,9 @@ mod tests {
             .status()?;
         assert!(checkout.success());
         std::fs::write(fixture.path().join("main"), "dirty\n")?;
-        let err =
-            perform(&repository_path, false, root, &graph, &[], false).expect_err("Git rejects a conflicting checkout");
+        let err = perform(&repository_path, false, root, &graph, &[], false)
+            .and_then(Perform::complete)
+            .expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
         let repository = crate::open_test_repository(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
@@ -419,6 +516,105 @@ mod tests {
             history::all_pins(&repository)?.is_empty(),
             "the provisional pin is removed"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn conflicting_pending_rebases_are_unobservable_until_accepted() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000",])
+                .status()?
+                .success()
+        );
+        let repository = crate::open_test_repository(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        std::fs::write(fixture.path().join("after"), "after\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "after"])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "-q", "-m", "after"])
+                .env("GIT_AUTHOR_DATE", "2000-01-04T00:00:00 +0000")
+                .env("GIT_COMMITTER_DATE", "2000-01-04T00:00:00 +0000")
+                .status()?
+                .success()
+        );
+        let graph = super::super::loaded_graph(&repository)?;
+        super::super::rebase::perform(
+            &repository,
+            &graph,
+            super::super::rebase::Edit::Remove { target: middle },
+            super::super::rebase::Signature::RedoIfNeeded,
+            super::super::rebase::Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let graph = super::super::loaded_graph(&repository)?;
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+
+        let Perform::Conflict(conflict) = perform(&repository_path, false, root, &graph, &[], false)? else {
+            return Err("the pending rebase should suspend at its conflicting cherry-pick".into());
+        };
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "preparing the exact merge result changes no repository state"
+        );
+
+        let (_notice, conflict_id) = conflict.accept()?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        assert_eq!(
+            repository.head_id()?.detach(),
+            conflict_id,
+            "the conflicting commit is checked out"
+        );
+        assert!(repository.head()?.is_detached(), "conflict resolution detaches HEAD");
+        let branch = repository.find_reference("refs/heads/main")?.id().detach();
+        assert_ne!(
+            branch, conflict_id,
+            "the remaining descendant stays on the saved branch"
+        );
+        assert!(
+            super::super::rebase::has_marker(&repository.find_commit(branch)?.decode()?.into_owned()?),
+            "remaining descendants stay as lazy rewrites"
+        );
+        let index = repository.index_or_empty()?;
+        assert!(
+            index
+                .entries()
+                .iter()
+                .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted),
+            "the retained merge outcome supplies unresolved index stages"
+        );
+        assert!(
+            std::fs::read(fixture.path().join("file"))?
+                .as_bstr()
+                .contains_str("<<<<<<<"),
+            "the checked-out merge tree contains conflict markers"
+        );
+        insta::assert_snapshot!(
+            "accepted-pending-rebase-conflict",
+            gix_testtools::repository::snapshot(fixture.path())?
+                .to_string()
+                .replace("\n  \n", "\n\n")
+        );
+        let err = perform(&repository_path, false, root, &graph, &[], false)
+            .and_then(Perform::complete)
+            .expect_err("time-travel is disabled until the index conflict is resolved");
+        assert!(format!("{err:#}").contains("unresolved index conflicts"));
         Ok(())
     }
 
@@ -432,14 +628,14 @@ mod tests {
         let graph = loaded_graph(&repository, &[])?;
         let commit = repository.find_commit(middle)?.decode()?.into_owned()?;
         super::super::rebase::perform(
-            repository.clone(),
+            &repository,
             &graph,
             super::super::rebase::Edit::Replace { target: middle, commit },
             super::super::rebase::Signature::InvalidateExisting,
             super::super::rebase::Tree::LeaveAsIsAndMark,
         )?;
         let graph = loaded_graph(&repository, &[])?;
-        perform(&repository_path, false, root, &graph, &[], false)?;
+        perform(&repository_path, false, root, &graph, &[], false)?.complete()?;
 
         let repository = crate::open_test_repository(fixture.path())?;
         let mut current = Some(repository.find_reference("refs/heads/main")?.id().detach());

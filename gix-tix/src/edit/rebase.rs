@@ -29,6 +29,7 @@ pub(crate) enum Signature {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tree {
+    #[cfg_attr(not(test), allow(dead_code))]
     LeaveAsIs,
     LeaveAsIsAndMark,
     CherryPick,
@@ -67,14 +68,94 @@ impl Outcome {
     }
 }
 
+pub(crate) enum Perform {
+    Complete(Outcome),
+    Conflict(Conflict),
+}
+
+impl Perform {
+    pub(crate) fn complete(self) -> Result<Outcome> {
+        match self {
+            Perform::Complete(outcome) => Ok(outcome),
+            Perform::Conflict(_) => anyhow::bail!("an edit unexpectedly produced a merge conflict"),
+        }
+    }
+}
+
+pub(crate) struct Conflict {
+    prepared: Prepared,
+    conflicts: Vec<gix::merge::tree::Conflict>,
+    tree: ObjectId,
+    commit: ObjectId,
+    original: ObjectId,
+}
+
+impl Conflict {
+    pub(crate) fn original(&self) -> ObjectId {
+        self.original
+    }
+
+    pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
+        let outcome = self.prepared.finish()?;
+        Ok(PersistedConflict {
+            repo: self.prepared.repo,
+            outcome,
+            conflicts: self.conflicts,
+            tree: self.tree,
+            commit: self.commit,
+        })
+    }
+}
+
+pub(crate) struct PersistedConflict {
+    repo: gix::Repository,
+    pub(crate) outcome: Outcome,
+    conflicts: Vec<gix::merge::tree::Conflict>,
+    tree: ObjectId,
+    pub(crate) commit: ObjectId,
+}
+
+impl PersistedConflict {
+    pub(crate) fn write_index(&mut self) -> Result<()> {
+        let mut index = self
+            .repo
+            .index_from_tree(&self.tree)
+            .context("could not prepare the conflicting index")?;
+        if !gix::merge::tree::apply_index_entries(
+            &self.conflicts,
+            gix::merge::tree::TreatAsUnresolved::git(),
+            &mut index,
+            gix::merge::tree::apply_index_entries::RemovalMode::Prune,
+        ) {
+            anyhow::bail!("could not apply conflict stages to the prepared index");
+        }
+        index.remove_tree();
+        index
+            .write(gix::index::write::Options::default())
+            .context("could not write the conflicting index")
+    }
+}
+
+struct Prepared {
+    repo: gix::Repository,
+    root: Option<ObjectId>,
+    inserted: bool,
+    marked: bool,
+    skip_worktree_transitions: bool,
+    selected: Option<ObjectId>,
+    rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    committer: gix::actor::Signature,
+}
+
 #[tracing::instrument(skip_all, fields(signature = ?signature, tree = ?tree_mode))]
 pub(crate) fn perform(
-    mut repo: gix::Repository,
+    repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     mut tree_mode: Tree,
-) -> Result<Outcome> {
+) -> Result<Perform> {
+    let mut repo = repo.clone();
     let (root, replacement, inserted, removed, repeat, mut split_upper) = match edit {
         Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, None),
         Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false, None),
@@ -107,6 +188,7 @@ pub(crate) fn perform(
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut selected = None;
+    let mut conflict = None;
     if inserted {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
@@ -163,7 +245,7 @@ pub(crate) fn perform(
         }
         let original_parent = repeat.then(|| marked_parent(&commit)).transpose()?.flatten();
         let original_parents = original_parent.into_iter().collect::<Vec<_>>();
-        commit.tree = rewritten_tree(
+        let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
             if original_parents.is_empty() {
@@ -172,16 +254,42 @@ pub(crate) fn perform(
                 &original_parents
             },
             &new_parents,
-            tree_mode,
+            if conflict.is_some() {
+                Tree::LeaveAsIsAndMark
+            } else {
+                tree_mode
+            },
         )?;
+        let mut new_conflict = None;
+        commit.tree = match rewritten_tree {
+            TreeRewrite::Complete(tree) => tree,
+            TreeRewrite::Conflict { tree, conflicts } => {
+                new_conflict = Some((tree, conflicts));
+                tree
+            }
+        };
         commit.parents = new_parents.into_iter().collect();
+        let pending = tree_mode == Tree::LeaveAsIsAndMark || conflict.is_some();
         marker(
             &mut commit,
-            tree_mode == Tree::LeaveAsIsAndMark,
-            old_parents.first().copied(),
+            pending,
+            original_parent.or_else(|| old_parents.first().copied()),
         );
-        let new_id = write_commit(&repo, commit, signature, signing.clone())?;
+        let is_conflicting_commit = new_conflict.is_some();
+        let new_id = write_commit(
+            &repo,
+            commit,
+            if conflict.is_some() || is_conflicting_commit {
+                Signature::InvalidateExisting
+            } else {
+                signature
+            },
+            signing.clone(),
+        )?;
         rewritten.insert(old_id, Some(new_id));
+        if let Some((tree, conflicts)) = new_conflict {
+            conflict = Some((old_id, tree, conflicts, new_id));
+        }
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
                 upper.parents = [new_id].into_iter().collect();
@@ -195,50 +303,89 @@ pub(crate) fn perform(
         }
     }
 
-    let objects = repo
-        .objects
-        .take_object_memory()
-        .context("candidate object memory was unavailable")?;
-    for (id, (kind, data)) in objects.iter() {
-        repo.write_buf_with_known_id(*kind, data, *id)
-            .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
-    }
-
-    let transitions = worktree_transitions(&repo, &rewritten, inserted || tree_mode == Tree::LeaveAsIsAndMark)?;
-    let index_reset_from = if inserted || tree_mode == Tree::LeaveAsIsAndMark {
-        root
-    } else {
-        None
+    let mut prepared = Prepared {
+        repo,
+        root,
+        inserted,
+        marked: tree_mode == Tree::LeaveAsIsAndMark || conflict.is_some(),
+        skip_worktree_transitions: inserted || (tree_mode == Tree::LeaveAsIsAndMark && !removed),
+        selected,
+        rewritten,
+        committer,
     };
-    let index_resets = index_reset_from
-        .map(|old| index_resets(&repo, &rewritten, old))
-        .transpose()?;
-    for transition in &transitions {
-        super::forget::preflight_tree_transition(
-            &transition.repo,
-            &transition.workdir,
-            transition.old,
-            transition.new,
+    match conflict {
+        Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+            prepared,
+            conflicts,
+            tree,
+            commit,
+            original,
+        })),
+        None => Ok(Perform::Complete(prepared.finish()?)),
+    }
+}
+
+impl Prepared {
+    fn finish(&mut self) -> Result<Outcome> {
+        let objects = self
+            .repo
+            .objects
+            .take_object_memory()
+            .context("candidate object memory was unavailable")?;
+        for (id, (kind, data)) in objects.iter() {
+            self.repo
+                .write_buf_with_known_id(*kind, data, *id)
+                .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
+        }
+
+        let transitions = worktree_transitions(&self.repo, &self.rewritten, self.skip_worktree_transitions)?;
+        let index_reset_from = if self.inserted || self.marked { self.root } else { None };
+        let index_resets = index_reset_from
+            .map(|old| index_resets(&self.repo, &self.rewritten, old))
+            .transpose()?;
+        for transition in &transitions {
+            super::forget::preflight_tree_transition(
+                &transition.repo,
+                &transition.workdir,
+                transition.old,
+                transition.new,
+            )?;
+        }
+        let rollback_refs = update_refs(
+            &self.repo,
+            &self.rewritten,
+            self.root.is_none(),
+            self.selected,
+            &self.committer,
         )?;
-    }
-    let rollback_refs = update_refs(&repo, &rewritten, root.is_none(), selected, &committer)?;
-    for (transitioned, transition) in transitions.iter().enumerate() {
-        if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new) {
-            return rollback(&repo, &committer, &transitions[..transitioned], &rollback_refs, err);
-        }
-    }
-    let index_resets = index_resets.unwrap_or_default();
-    for (index, reset) in index_resets.iter().enumerate() {
-        if let Err(mut err) = reset_index(&reset.workdir, reset.new) {
-            for applied in index_resets[..=index].iter().rev() {
-                if let Err(restore) = std::fs::write(&applied.index, &applied.before) {
-                    err = err.context(format!("index rollback failed: {restore}"));
-                }
+        for (transitioned, transition) in transitions.iter().enumerate() {
+            if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
+            {
+                return rollback(
+                    &self.repo,
+                    &self.committer,
+                    &transitions[..transitioned],
+                    &rollback_refs,
+                    err,
+                );
             }
-            return rollback(&repo, &committer, &transitions, &rollback_refs, err);
         }
+        let index_resets = index_resets.unwrap_or_default();
+        for (index, reset) in index_resets.iter().enumerate() {
+            if let Err(mut err) = reset_index(&reset.workdir, reset.new) {
+                for applied in index_resets[..=index].iter().rev() {
+                    if let Err(restore) = std::fs::write(&applied.index, &applied.before) {
+                        err = err.context(format!("index rollback failed: {restore}"));
+                    }
+                }
+                return rollback(&self.repo, &self.committer, &transitions, &rollback_refs, err);
+            }
+        }
+        Ok(Outcome {
+            selected: self.selected,
+            rewritten: std::mem::take(&mut self.rewritten),
+        })
     }
-    Ok(Outcome { selected, rewritten })
 }
 
 fn rollback<T>(
@@ -363,25 +510,33 @@ fn validate(
     Ok(())
 }
 
+enum TreeRewrite {
+    Complete(ObjectId),
+    Conflict {
+        tree: ObjectId,
+        conflicts: Vec<gix::merge::tree::Conflict>,
+    },
+}
+
 fn rewritten_tree(
     repo: &gix::Repository,
     commit: &gix::objs::Commit,
     old_parents: &[ObjectId],
     new_parents: &[ObjectId],
     mode: Tree,
-) -> Result<ObjectId> {
+) -> Result<TreeRewrite> {
     if mode != Tree::CherryPick || old_parents == new_parents {
-        return Ok(commit.tree);
+        return Ok(TreeRewrite::Complete(commit.tree));
     }
     let old_base = parent_tree(repo, old_parents.first().copied())?;
     let new_base = parent_tree(repo, new_parents.first().copied())?;
     if commit.tree == old_base {
-        return Ok(new_base);
+        return Ok(TreeRewrite::Complete(new_base));
     }
     if old_base == new_base {
-        return Ok(commit.tree);
+        return Ok(TreeRewrite::Complete(commit.tree));
     }
-    cherry_pick_tree(repo, old_base, new_base, commit.tree)
+    cherry_pick_tree_outcome(repo, old_base, new_base, commit.tree)
 }
 
 pub(super) fn cherry_pick_tree(
@@ -390,11 +545,23 @@ pub(super) fn cherry_pick_tree(
     new_base: ObjectId,
     tree: ObjectId,
 ) -> Result<ObjectId> {
+    match cherry_pick_tree_outcome(repo, old_base, new_base, tree)? {
+        TreeRewrite::Complete(tree) => Ok(tree),
+        TreeRewrite::Conflict { .. } => anyhow::bail!("rebasing would cause a merge conflict"),
+    }
+}
+
+fn cherry_pick_tree_outcome(
+    repo: &gix::Repository,
+    old_base: ObjectId,
+    new_base: ObjectId,
+    tree: ObjectId,
+) -> Result<TreeRewrite> {
     if tree == old_base {
-        return Ok(new_base);
+        return Ok(TreeRewrite::Complete(new_base));
     }
     if old_base == new_base {
-        return Ok(tree);
+        return Ok(TreeRewrite::Complete(tree));
     }
     let labels = gix::merge::blob::builtin_driver::text::Labels {
         ancestor: Some(BStr::new(b"parent")),
@@ -404,14 +571,20 @@ pub(super) fn cherry_pick_tree(
     let mut outcome = repo
         .merge_trees(old_base, new_base, tree, labels, repo.tree_merge_options()?)
         .context("could not cherry-pick a descendant tree")?;
-    if outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git()) {
-        anyhow::bail!("rebasing would cause a merge conflict");
-    }
-    Ok(outcome
+    let unresolved = outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git());
+    let tree = outcome
         .tree
         .write()
         .context("could not prepare a rebased tree")?
-        .detach())
+        .detach();
+    if unresolved {
+        Ok(TreeRewrite::Conflict {
+            tree,
+            conflicts: outcome.conflicts,
+        })
+    } else {
+        Ok(TreeRewrite::Complete(tree))
+    }
 }
 
 fn parent_tree(repo: &gix::Repository, parent: Option<ObjectId>) -> Result<ObjectId> {
@@ -707,12 +880,13 @@ mod tests {
         commit.message = "rewritten middle".into();
 
         let outcome = perform(
-            repo.clone(),
+            &repo,
             &graph,
             Edit::Replace { target: middle, commit },
             Signature::RedoIfNeeded,
             Tree::LeaveAsIs,
-        )?;
+        )?
+        .complete()?;
         let new_middle = outcome.selected.expect("replacement selects the rewritten commit");
         let new_tip = repo.head_id()?.detach();
         assert_ne!(new_tip, old_tip, "the descendant is rewritten");
@@ -743,12 +917,13 @@ mod tests {
         let old_tip_tree = repo.find_commit(repo.head_id()?)?.tree_id()?.detach();
 
         let outcome = perform(
-            repo.clone(),
+            &repo,
             &graph,
             Edit::Remove { target: middle },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
-        )?;
+        )?
+        .complete()?;
         assert_eq!(outcome.selected, Some(base), "removal selects its parent");
         let tip = repo.head_id()?.detach();
         assert_eq!(
@@ -773,23 +948,25 @@ mod tests {
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~2")?)?.tree_id()?.detach();
         let marked = perform(
-            repo.clone(),
+            &repo,
             &graph,
             Edit::Replace { target: middle, commit },
             Signature::InvalidateExisting,
             Tree::LeaveAsIsAndMark,
         )?
+        .complete()?
         .selected
         .expect("marking rewrites the selected commit");
 
         let graph = super::super::loaded_graph(&repo)?;
         perform(
-            repo.clone(),
+            &repo,
             &graph,
             Edit::Repeat { base: marked },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
-        )?;
+        )?
+        .complete()?;
         let mut id = Some(repo.head_id()?.detach());
         while let Some(current) = id {
             let commit = repo.find_commit(current)?.decode()?.into_owned()?;
@@ -848,12 +1025,13 @@ mod tests {
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.message = "fork point".into();
         let rewritten_middle = perform(
-            repo.clone(),
+            &repo,
             &graph,
             Edit::Replace { target: middle, commit },
             Signature::RedoIfNeeded,
             Tree::LeaveAsIs,
         )?
+        .complete()?
         .selected
         .expect("the fork point is rewritten");
 
@@ -884,17 +1062,17 @@ mod tests {
             .output()?
             .stdout;
 
-        assert!(
-            perform(
-                repo,
-                &graph,
-                Edit::Remove { target: middle },
-                Signature::RedoIfNeeded,
-                Tree::CherryPick,
-            )
-            .is_err(),
-            "an unresolved cherry-pick aborts the complete rebase"
-        );
+        let Perform::Conflict(conflict) = perform(
+            &repo,
+            &graph,
+            Edit::Remove { target: middle },
+            Signature::RedoIfNeeded,
+            Tree::CherryPick,
+        )?
+        else {
+            return Err("the unresolved cherry-pick should suspend the complete rebase".into());
+        };
+        drop(conflict);
         assert_eq!(
             gix_testtools::repository::snapshot(fixture.path())?,
             before,

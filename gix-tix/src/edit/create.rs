@@ -199,25 +199,17 @@ pub(crate) fn apply(
 ) -> Result<ObjectId> {
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
     let commit = commit_from_edit(&prepared, edited)?;
-    let base_tree = match prepared.parent {
-        Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
-        None => repo.empty_tree().id,
-    };
-    let tree_mode = if base_tree == commit.tree {
-        rebase::Tree::LeaveAsIs
-    } else {
-        rebase::Tree::CherryPick
-    };
     rebase::perform(
-        repo,
+        &repo,
         graph,
         rebase::Edit::Insert {
             anchor: prepared.parent,
             commit,
         },
         rebase::Signature::RedoIfNeeded,
-        tree_mode,
+        rebase::Tree::LeaveAsIsAndMark,
     )?
+    .complete()?
     .selected
     .context("inserting a commit did not produce a selection")
 }

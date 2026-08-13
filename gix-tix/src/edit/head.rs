@@ -68,12 +68,13 @@ pub fn perform(
     }
     commit.tree = tree;
     Ok(rebase::perform(
-        repo,
+        &repo,
         graph,
         rebase::Edit::Replace { target: head, commit },
         rebase::Signature::InvalidateExisting,
         rebase::Tree::LeaveAsIsAndMark,
     )?
+    .complete()?
     .selected)
 }
 
