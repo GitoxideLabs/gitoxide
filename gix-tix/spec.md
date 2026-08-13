@@ -153,6 +153,9 @@ without trading responsiveness for metadata that is not visible.
 | `v m` | Toggle mailmap resolution. |
 | `v r` | Cycle all, normal, and no reference labels. |
 | `v h` | Show or hide configured hidden ancestry. |
+| `r` | Hide reference labels or restore the mode visible when they were hidden. |
+| `m`/`]` | Toggle the commit-message view. |
+| `c` | Cycle the tree/worktree changes display. |
 | `Shift-R` | Explicitly refresh the revision view and visible worktree status. |
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
@@ -165,7 +168,9 @@ shortcuts. The footer underlines the `v` in `view`; while active, `view (` conta
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
 `v` prefix and the `e` prefix when it is addressable. Remaining history-level
-actions follow before movement, panning, and diff navigation shortcuts.
+actions follow before movement, panning, and diff navigation shortcuts. Copy
+immediately follows the edit group; the reference toggle immediately precedes
+signature verification when verification is available; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.
 The Enter key is written as `<enter>` throughout.
@@ -217,10 +222,10 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Commit message
 
-- `o` or `]` toggles the commit view on the right. It uses at most half the
+- `m` or `]` toggles the commit view on the right. It uses at most half the
   terminal and reserves 80 content columns when space permits.
-- Its history-status action says `open message` or `close message`, avoiding
-  confusion with the edit group's commit-creation action.
+- Its history-status action says `message`, avoiding confusion with the edit
+  group's commit-creation action.
 - The panel has a minimally shaded background derived from the detected terminal
   background, with the default background as fallback.
 - The title begins on the first content row and is bold. Body text follows, then
