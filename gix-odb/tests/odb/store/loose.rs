@@ -16,21 +16,15 @@ fn ldb_at(path: impl Into<PathBuf>) -> Store {
 }
 
 fn ldb_at_opts(path: impl Into<PathBuf>, object_hash: gix_hash::Kind) -> Store {
-    Store::at(
-        path,
-        Options {
-            object_hash,
-            ..Options::default()
-        },
-    )
+    Store::at(path, object_hash)
 }
 
 fn limited_ldb(limit: usize) -> Store {
-    Store::at(
+    Store::at_opts(
         fixture_path("objects"),
+        gix_hash::Kind::Sha1,
         Options {
             alloc_limit_bytes: Some(limit),
-            object_hash: gix_hash::Kind::Sha1,
             ..Default::default()
         },
     )
@@ -80,11 +74,11 @@ mod write {
         let mut sizes = Vec::new();
         for level in [Compression::NONE, Compression::BEST] {
             let dir = gix_testtools::tempfile::tempdir()?;
-            let db = loose::Store::at(
+            let db = loose::Store::at_opts(
                 dir.path(),
+                gix_testtools::object_hash(),
                 loose::Options {
                     compression: level,
-                    object_hash: gix_testtools::object_hash(),
                     ..Default::default()
                 },
             );
@@ -146,32 +140,20 @@ mod write {
     #[test]
     #[cfg(unix)]
     fn it_writes_objects_with_similar_permissions() -> crate::Result {
-        let hk = gix_testtools::object_hash();
+        let object_hash = gix_testtools::object_hash();
         let git_store = loose::Store::at(
             crate::scripted_fixture_read_only("repo_with_loose_objects.sh")?.join(".git/objects"),
-            loose::Options {
-                object_hash: hk,
-                ..Default::default()
-            },
+            object_hash,
         );
         let expected_perm = git_store
-            .object_path(&gix_hash::ObjectId::empty_blob(hk))
+            .object_path(&object_hash.empty_blob())
             .metadata()?
             .permissions();
 
         let tmp = gix_testtools::tempfile::TempDir::new()?;
-        let store = loose::Store::at(
-            tmp.path(),
-            loose::Options {
-                object_hash: hk,
-                ..Default::default()
-            },
-        );
+        let store = loose::Store::at(tmp.path(), object_hash);
         store.write_buf(gix_object::Kind::Blob, &[])?;
-        let actual_perm = store
-            .object_path(&gix_hash::ObjectId::empty_blob(hk))
-            .metadata()?
-            .permissions();
+        let actual_perm = store.object_path(&object_hash.empty_blob()).metadata()?.permissions();
         assert_eq!(
             actual_perm, expected_perm,
             "we explicitly equalize permissions to be similar to what `git` would do"

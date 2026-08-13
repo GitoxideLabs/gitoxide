@@ -246,10 +246,10 @@ impl super::Store {
                 db_paths
                     .iter()
                     .map(|path| {
-                        crate::loose::Store::at(
+                        crate::loose::Store::at_opts(
                             path,
+                            self.object_hash,
                             crate::loose::Options {
-                                object_hash: self.object_hash,
                                 alloc_limit_bytes: self.alloc_limit_bytes,
                                 compression: loose_compression,
                             },
