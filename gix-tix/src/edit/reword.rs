@@ -95,7 +95,7 @@ pub(crate) fn apply(
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
-        rebase::Tree::LeaveAsIs,
+        rebase::Tree::LeaveAsIsAndMark,
     )?;
     Ok(outcome.selected.filter(|new_id| *new_id != old_id))
 }
@@ -311,6 +311,28 @@ mod tests {
     }
 
     #[test]
+    fn marks_the_reworded_commit_and_its_linear_descendants_for_lazy_replay() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides(["core.editor=:".to_owned()]),
+        )?;
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let (_, document) = document(&repository, middle)?;
+        let edited = document.replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
+        let graph = super::super::loaded_graph(&repository)?;
+        let new_middle = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
+        let new_tip = repository.head_id()?.detach();
+        for id in [new_middle, new_tip] {
+            assert!(
+                rebase::has_marker(&repository.find_commit(id)?.decode()?.into_owned()?),
+                "every rewritten commit is marked for lazy replay"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn rewrites_direct_refs_except_tags_and_remotes_and_signs_when_enabled() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());
@@ -356,6 +378,10 @@ mod tests {
             b"rewritten title\n\nrewritten body\n\nAssisted-by: GPT 5.6\n".as_bstr()
         );
         assert_eq!(decoded.author()?.name, b"New Author".as_bstr());
+        assert!(
+            rebase::has_marker(&decoded.into_owned()?),
+            "the reword is marked for lazy replay"
+        );
         assert!(
             commit
                 .verify_signature()?
