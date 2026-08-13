@@ -1,13 +1,15 @@
 use gix_object::Find as _;
 use gix_odb::Header as _;
 
+use crate::support::assert_object_once;
 use crate::{
     Result,
     odb_fixture::{Component, Database, OdbFixture, Pack},
 };
-#[path = "../../tools/scenario.rs"]
-mod support;
-use support::*;
+
+fn assert_object(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+    crate::assert_with_handles(handle, |handle| assert_object_once(handle, id))
+}
 
 fn open(fixture: &OdbFixture, slots: u16) -> std::io::Result<gix_odb::Handle> {
     open_with_slots(fixture, gix_odb::store::init::Slots::Limit(slots))
@@ -25,13 +27,16 @@ fn open_with_slots(fixture: &OdbFixture, slots: gix_odb::store::init::Slots) -> 
     )
 }
 
-fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+fn assert_missing_once(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
     let mut buffer = Vec::new();
-    assert!(
-        handle.try_find(id, &mut buffer)?.is_none(),
-        "the object is not reachable in the current fixture state"
-    );
+    if handle.try_find(id, &mut buffer)?.is_some() {
+        return Err(std::io::Error::other(format!("object {id} is not reachable in the current fixture state")).into());
+    }
     Ok(())
+}
+
+fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+    crate::assert_with_handles(handle, |handle| assert_missing_once(handle, id))
 }
 
 #[test]
