@@ -18,11 +18,11 @@ use gix::{
 use crate::history::HistoryGraph;
 
 const MARKER: &[u8] = b"tix-rebase";
+const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
 const PENDING: &[u8] = b"pending";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Signature {
-    #[allow(dead_code, reason = "available to edits which defer a rebase")]
     InvalidateExisting,
     RedoIfNeeded,
 }
@@ -46,7 +46,6 @@ pub(crate) enum Edit {
     Remove {
         target: ObjectId,
     },
-    #[allow(dead_code, reason = "available to resume a marked deferred rebase")]
     Repeat {
         base: ObjectId,
     },
@@ -54,6 +53,13 @@ pub(crate) enum Edit {
 
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
+    rewritten: HashMap<ObjectId, Option<ObjectId>>,
+}
+
+impl Outcome {
+    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
+        self.rewritten.get(&id).copied().unwrap_or(Some(id))
+    }
 }
 
 #[tracing::instrument(skip_all, fields(signature = ?signature, tree = ?tree_mode))]
@@ -98,7 +104,7 @@ pub(crate) fn perform(
     if inserted {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        marker(&mut commit, tree_mode == Tree::LeaveAsIsAndMark);
+        marker(&mut commit, tree_mode == Tree::LeaveAsIsAndMark, root);
         let id = write_commit(&repo, commit, signature, signing.clone())?;
         selected = Some(id);
         if let Some(root) = root {
@@ -149,9 +155,25 @@ pub(crate) fn perform(
         if Some(old_id) != root || repeat {
             commit.committer = committer.clone();
         }
-        commit.tree = rewritten_tree(&repo, &commit, &old_parents, &new_parents, tree_mode)?;
+        let original_parent = repeat.then(|| marked_parent(&commit)).transpose()?.flatten();
+        let original_parents = original_parent.into_iter().collect::<Vec<_>>();
+        commit.tree = rewritten_tree(
+            &repo,
+            &commit,
+            if original_parents.is_empty() {
+                &old_parents
+            } else {
+                &original_parents
+            },
+            &new_parents,
+            tree_mode,
+        )?;
         commit.parents = new_parents.into_iter().collect();
-        marker(&mut commit, tree_mode == Tree::LeaveAsIsAndMark);
+        marker(
+            &mut commit,
+            tree_mode == Tree::LeaveAsIsAndMark,
+            old_parents.first().copied(),
+        );
         let new_id = write_commit(&repo, commit, signature, signing.clone())?;
         rewritten.insert(old_id, Some(new_id));
         if Some(old_id) == root {
@@ -168,8 +190,15 @@ pub(crate) fn perform(
             .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
     }
 
-    let transitions = worktree_transitions(&repo, &rewritten, inserted)?;
-    let index_resets = inserted.then(|| inserted_index_resets(&repo, &rewritten)).transpose()?;
+    let transitions = worktree_transitions(&repo, &rewritten, inserted || tree_mode == Tree::LeaveAsIsAndMark)?;
+    let index_reset_from = if inserted || tree_mode == Tree::LeaveAsIsAndMark {
+        root
+    } else {
+        None
+    };
+    let index_resets = index_reset_from
+        .map(|old| index_resets(&repo, &rewritten, old))
+        .transpose()?;
     for transition in &transitions {
         super::forget::preflight_tree_transition(
             &transition.repo,
@@ -195,7 +224,7 @@ pub(crate) fn perform(
             return rollback(&repo, &committer, &transitions, &rollback_refs, err);
         }
     }
-    Ok(Outcome { selected })
+    Ok(Outcome { selected, rewritten })
 }
 
 fn rollback<T>(
@@ -222,9 +251,10 @@ fn rollback<T>(
     }
 }
 
-fn inserted_index_resets(
+fn index_resets(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+    reset_from: ObjectId,
 ) -> Result<Vec<IndexReset>> {
     let mut repos = vec![
         repo.main_repo()
@@ -248,6 +278,9 @@ fn inserted_index_resets(
         else {
             continue;
         };
+        if old != reset_from {
+            continue;
+        }
         let Some(Some(new)) = rewritten.get(&old).copied() else {
             continue;
         };
@@ -359,14 +392,30 @@ fn parent_tree(repo: &gix::Repository, parent: Option<ObjectId>) -> Result<Objec
     }
 }
 
-fn marker(commit: &mut gix::objs::Commit, add: bool) {
-    commit.extra_headers.retain(|(name, _)| name.as_slice() != MARKER);
+fn marker(commit: &mut gix::objs::Commit, add: bool, original_parent: Option<ObjectId>) {
+    commit
+        .extra_headers
+        .retain(|(name, _)| name.as_slice() != MARKER && name.as_slice() != ORIGINAL_PARENT);
     if add {
         commit.extra_headers.push((MARKER.into(), PENDING.into()));
+        if let Some(parent) = original_parent {
+            commit
+                .extra_headers
+                .push((ORIGINAL_PARENT.into(), parent.to_hex().to_string().into()));
+        }
     }
 }
 
-fn has_marker(commit: &gix::objs::Commit) -> bool {
+fn marked_parent(commit: &gix::objs::Commit) -> Result<Option<ObjectId>> {
+    commit
+        .extra_headers
+        .iter()
+        .find(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
+        .map(|(_, value)| ObjectId::from_hex(value).context("pending rebase has an invalid original parent"))
+        .transpose()
+}
+
+pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
     commit
         .extra_headers
         .iter()
@@ -692,7 +741,8 @@ mod tests {
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
-        let commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~2")?)?.tree_id()?.detach();
         let marked = perform(
             repo.clone(),
             &graph,
@@ -717,6 +767,16 @@ mod tests {
             assert!(!has_marker(&commit), "repeating clears every pending marker");
             id = commit.parents.first().copied();
         }
+        let files = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .output()?;
+        assert!(files.status.success());
+        assert_eq!(
+            files.stdout, b"base\ntip\n",
+            "repeat cherry-picks the descendant against its recorded original parent"
+        );
         Ok(())
     }
 

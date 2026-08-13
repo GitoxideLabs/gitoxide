@@ -5,10 +5,25 @@ use std::ffi::OsString;
 use anyhow::{Context, Result};
 
 fn main() -> Result<()> {
-    let (revisions, options, help) = arguments(gix::env::args_os().skip(1))?;
+    let mut args = gix::env::args_os().skip(1).peekable();
+    let edit = if args.peek().is_some_and(|arg| arg == "edit") {
+        args.next();
+        let edit = match args.next().as_deref() {
+            Some(value) if value == "amend" => gix_tix::HeadEdit::Amend,
+            Some(value) if value == "spill" => gix_tix::HeadEdit::Spill,
+            _ => anyhow::bail!("usage: tix edit amend|spill"),
+        };
+        if args.next().is_some() {
+            anyhow::bail!("usage: tix edit amend|spill");
+        }
+        Some(edit)
+    } else {
+        None
+    };
+    let (revisions, options, help) = arguments(args)?;
     if help {
         println!(
-            "Usage: tix [--quit-on-finish] [-w|--worktrees] [-h|--hide REVSPEC] [REVISION]...\n\nBrowse commits reachable from HEAD or the given revisions.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n  -w, --worktrees     Add all worktree HEADs as visible tips\n      --help          Print help"
+            "Usage: tix [--quit-on-finish] [-w|--worktrees] [-h|--hide REVSPEC] [REVISION]...\n       tix edit amend|spill\n\nBrowse commits reachable from HEAD or edit its checked-out commit.\n\nOptions:\n  -h, --hide REVSPEC  Hide this revision and all commits reachable from it\n  -w, --worktrees     Add all worktree HEADs as visible tips\n      --help          Print help"
         );
         return Ok(());
     }
@@ -16,6 +31,20 @@ fn main() -> Result<()> {
     let current_dir = std::env::current_dir().context("could not determine current directory")?;
     let repository = gix::ThreadSafeRepository::discover_with_environment_overrides(current_dir)
         .context("could not discover repository")?;
+    if let Some(edit) = edit {
+        match gix_tix::edit_head(repository, edit)? {
+            Some(id) => println!("{}", id.to_hex_with_len(7)),
+            None => println!(
+                "nothing to {}",
+                if edit == gix_tix::HeadEdit::Amend {
+                    "amend"
+                } else {
+                    "spill"
+                }
+            ),
+        }
+        return Ok(());
+    }
     gix_tix::run(repository, revisions, options)
 }
 

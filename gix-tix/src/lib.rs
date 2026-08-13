@@ -745,6 +745,30 @@ pub struct Options {
     pub worktrees: bool,
 }
 
+/// An edit applied to the commit checked out by the current worktree.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HeadEdit {
+    /// Add staged changes, or worktree changes when nothing is staged, to `HEAD`.
+    Amend,
+    /// Move the changes introduced by `HEAD` into the worktree.
+    Spill,
+}
+
+/// Apply `edit` to the current worktree's `HEAD` without starting the terminal UI.
+pub fn edit_head(repository: gix::ThreadSafeRepository, edit: HeadEdit) -> Result<Option<gix::ObjectId>> {
+    let _log_guard = logging::init().context("could not initialize tix diagnostics")?;
+    let repository = repository.to_thread_local();
+    let graph = edit::loaded_graph(&repository)?;
+    edit::head::perform(
+        repository,
+        &graph,
+        match edit {
+            HeadEdit::Amend => edit::head::Kind::Amend,
+            HeadEdit::Spill => edit::head::Kind::Spill,
+        },
+    )
+}
+
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
     let mut options = terminal_colorsaurus::QueryOptions::default();
     options.timeout = THEME_QUERY_TIMEOUT;
@@ -1740,6 +1764,44 @@ fn event_loop(
                         }
                         Ok(None) => app.leave_message("no commit created: no input was provided"),
                         Err(err) => app.leave_message(format!("new commit: {err:#}")),
+                    }
+                }
+                edit @ (Effect::Amend(id) | Effect::Spill(id)) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let kind = if matches!(edit, Effect::Amend(_)) {
+                        edit::head::Kind::Amend
+                    } else {
+                        edit::head::Kind::Spill
+                    };
+                    let verb = if kind == edit::head::Kind::Amend {
+                        "amend"
+                    } else {
+                        "spill"
+                    };
+                    let result = history_graph
+                        .as_ref()
+                        .context("editing HEAD requires a completed history graph")
+                        .and_then(|graph| {
+                            edit::head::perform(
+                                open_repository(&repository_path, repository_is_bare, false)
+                                    .context("could not open repository for HEAD edit")?,
+                                graph,
+                                kind,
+                            )
+                        });
+                    match result {
+                        Ok(Some(new_id)) => {
+                            app.leave_message(format!(
+                                "{verb}ed {} as {}",
+                                id.to_hex_with_len(7),
+                                new_id.to_hex_with_len(7)
+                            ));
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Ok(None) => app.leave_message(format!("nothing to {verb}")),
+                        Err(err) => app.leave_message(format!("{verb}: {err:#}")),
                     }
                 }
                 Effect::Forget(id) => {
@@ -3520,6 +3582,8 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
         KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
         KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
+        KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
+        KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -4405,6 +4469,8 @@ mod tests {
         for (key, expected) in [
             ('r', Action::Reword),
             ('n', Action::NewCommit),
+            ('a', Action::Amend),
+            ('s', Action::Spill),
             ('d', Action::Forget),
             ('t', Action::TimeTravel),
         ] {

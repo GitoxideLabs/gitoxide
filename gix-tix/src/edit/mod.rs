@@ -2,7 +2,6 @@ use std::{ffi::OsStr, io::Write, process::Command};
 
 use anyhow::{Context, Result};
 
-#[cfg(test)]
 pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
     use std::sync::atomic::AtomicBool;
 
@@ -46,6 +45,7 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
 
 pub(crate) mod create;
 pub(crate) mod forget;
+pub(crate) mod head;
 pub(crate) mod rebase;
 pub(crate) mod reword;
 pub(crate) mod time_travel;
