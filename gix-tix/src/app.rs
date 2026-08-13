@@ -137,15 +137,22 @@ pub(crate) struct PathChange {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Changes {
     pub parent: Option<ComparedParent>,
+    pub range: Option<ComparedRange>,
     pub paths: Vec<PathChange>,
     pub diffs: Vec<crate::FileChange>,
     pub lines_added: u64,
     pub lines_removed: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ComparedRange {
+    pub base: ObjectId,
+    pub tip: ObjectId,
+}
+
 impl Changes {
     pub(crate) fn is_visible(&self) -> bool {
-        self.parent.is_some() || !self.paths.is_empty()
+        self.parent.is_some() || self.range.is_some() || !self.paths.is_empty()
     }
 }
 
@@ -310,7 +317,7 @@ pub(crate) enum Effect {
     CopyAuthor(&'static Author),
     Reload(bool),
     OpenDiff(ChangePane, usize),
-    OpenCommitDiff(ObjectId),
+    OpenCommitDiff(TreeDiffTarget),
     Reword(ObjectId),
     NewCommit(Option<ObjectId>),
     Amend(ObjectId),
@@ -322,12 +329,28 @@ pub(crate) enum Effect {
     Quit,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TreeDiffTarget {
+    Commit { id: ObjectId, parent: usize },
+    Branch { base: ObjectId, tip: ObjectId },
+}
+
+impl TreeDiffTarget {
+    pub(crate) fn selected(self) -> ObjectId {
+        match self {
+            TreeDiffTarget::Commit { id, .. } => id,
+            TreeDiffTarget::Branch { base, .. } => base,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct App {
     pub rows: Vec<SharedCommitRow>,
     all_rows: HashMap<ObjectId, SharedCommitRow>,
     all_order: Vec<ObjectId>,
     hidden_rows: HashSet<ObjectId>,
+    hidden_branch_targets: HashMap<ObjectId, ObjectId>,
     pending_hidden_rows: Option<HashSet<ObjectId>>,
     titles: Vec<u8>,
     notes: HashMap<ObjectId, Vec<BString>>,
@@ -411,6 +434,7 @@ impl App {
             all_rows: HashMap::new(),
             all_order: Vec::new(),
             hidden_rows: HashSet::new(),
+            hidden_branch_targets: HashMap::new(),
             pending_hidden_rows: None,
             titles: Vec::new(),
             notes: HashMap::new(),
@@ -577,9 +601,7 @@ impl App {
             .reload_selection
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
         {
-            if !self.is_row_hidden(index) {
-                self.selected = Some(index);
-            }
+            self.selected = Some(index);
             self.reload_selection = None;
             self.ensure_visible();
         }
@@ -587,9 +609,7 @@ impl App {
             .pending_initial_selection
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
         {
-            if !self.is_row_hidden(index) {
-                self.selected = Some(index);
-            }
+            self.selected = Some(index);
             self.pending_initial_selection = None;
             self.ensure_visible();
         }
@@ -900,8 +920,8 @@ impl App {
                 return vec![Effect::OpenDiff(pane, changes.selected)];
             }
             Action::OpenDiff => {
-                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
-                    return vec![Effect::OpenCommitDiff(id)];
+                if let Some(target) = self.selected_tree_diff_target() {
+                    return vec![Effect::OpenCommitDiff(target)];
                 }
             }
             Action::Reword if self.can_reword() => {
@@ -1038,6 +1058,61 @@ impl App {
         self.hidden_branch_behind.get(&id).copied()
     }
 
+    pub(crate) fn selected_tree_diff_target(&self) -> Option<TreeDiffTarget> {
+        let id = self.selected.and_then(|index| self.rows.get(index))?.id;
+        Some(match self.hidden_branch_targets.get(&id) {
+            Some(&tip) => TreeDiffTarget::Branch { base: id, tip },
+            None => TreeDiffTarget::Commit {
+                id,
+                parent: self.changes_parent,
+            },
+        })
+    }
+
+    fn update_hidden_branch_targets(&mut self) {
+        #[derive(Clone, Copy)]
+        enum Leaves {
+            One(ObjectId),
+            Many,
+        }
+
+        let visible_parents: HashSet<_> = self
+            .rows
+            .iter()
+            .filter(|row| !self.hidden_rows.contains(&row.id))
+            .flat_map(|row| row.parent_ids.iter().copied())
+            .collect();
+        let mut leaves = HashMap::<ObjectId, Leaves>::new();
+        let mut targets = HashMap::new();
+        for row in &self.rows {
+            let state = if self.hidden_rows.contains(&row.id) {
+                leaves.get(&row.id).copied()
+            } else if !visible_parents.contains(&row.id) {
+                Some(Leaves::One(row.id))
+            } else {
+                leaves.get(&row.id).copied()
+            };
+            let Some(state) = state else { continue };
+            if self.hidden_rows.contains(&row.id) {
+                if let Leaves::One(tip) = state {
+                    targets.insert(row.id, tip);
+                }
+                continue;
+            }
+            for parent in &row.parent_ids {
+                leaves
+                    .entry(*parent)
+                    .and_modify(|existing| {
+                        if !matches!((*existing, state), (Leaves::One(a), Leaves::One(b)) if a == b) {
+                            *existing = Leaves::Many;
+                        }
+                    })
+                    .or_insert(state);
+            }
+        }
+        self.hidden_branch_targets = targets;
+    }
+
     pub(crate) fn start_refresh(
         &mut self,
         commits: LoadedCommits,
@@ -1125,6 +1200,7 @@ impl App {
         if let Some(hidden) = self.pending_hidden_rows.take() {
             self.hidden_rows = hidden;
         }
+        self.update_hidden_branch_targets();
         for row in &mut self.rows {
             if let Some(metadata) = metadata.get(&row.id) {
                 let row = Arc::make_mut(row);
@@ -1158,6 +1234,7 @@ impl App {
         self.all_rows.clear();
         self.all_order.clear();
         self.hidden_rows.clear();
+        self.hidden_branch_targets.clear();
         self.hidden_branch_behind.clear();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
@@ -1391,7 +1468,7 @@ impl App {
 
     fn select(&mut self, selected: usize) {
         self.pending_initial_selection = None;
-        if !self.rows.is_empty() && !self.is_row_hidden(selected) {
+        if !self.rows.is_empty() {
             let previous = self.selected;
             self.selected = Some(selected.min(self.rows.len() - 1));
             if self.selected != previous {
@@ -1403,7 +1480,7 @@ impl App {
     }
 
     fn first_selectable(&self) -> Option<usize> {
-        (0..self.rows.len()).find(|index| !self.is_row_hidden(*index))
+        (!self.rows.is_empty()).then_some(0)
     }
 
     fn update_worktree_head_descendants(&mut self) {
@@ -1421,10 +1498,9 @@ impl App {
     pub(crate) fn reword_shortcut_visible(&self) -> bool {
         self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self
-                .selected
-                .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| !self.known_merge_descendants.contains(&row.id))
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id)
+            })
     }
 
     pub(crate) fn can_create_commit(&self) -> bool {
@@ -1433,7 +1509,7 @@ impl App {
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
-                Some(row) => !self.known_merge_descendants.contains(&row.id),
+                Some(row) => !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id),
                 None => self.worktree_head_unborn,
             }
     }
@@ -1442,10 +1518,11 @@ impl App {
         self.state == State::Complete
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self
-                .selected
-                .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| row.parent_ids.len() <= 1 && !self.known_merge_descendants.contains(&row.id))
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                !self.hidden_rows.contains(&row.id)
+                    && row.parent_ids.len() <= 1
+                    && !self.known_merge_descendants.contains(&row.id)
+            })
     }
 
     fn can_edit_head(&self) -> bool {
@@ -1453,7 +1530,9 @@ impl App {
             && self.worktree_changes_available
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
-                Some(row.id) == self.worktree_head && !self.known_merge_descendants.contains(&row.id)
+                !self.hidden_rows.contains(&row.id)
+                    && Some(row.id) == self.worktree_head
+                    && !self.known_merge_descendants.contains(&row.id)
             })
     }
 
@@ -1497,24 +1576,18 @@ impl App {
             && !self.worktree_conflicted
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self.selected.is_some()
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id))
     }
 
     fn last_selectable(&self) -> Option<usize> {
-        (0..self.rows.len()).rev().find(|index| !self.is_row_hidden(*index))
+        self.rows.len().checked_sub(1)
     }
 
-    fn nearest_selectable(&self, target: usize, down: bool) -> Option<usize> {
-        if down {
-            (target..self.rows.len())
-                .find(|index| !self.is_row_hidden(*index))
-                .or_else(|| (0..target).rev().find(|index| !self.is_row_hidden(*index)))
-        } else {
-            (0..=target)
-                .rev()
-                .find(|index| !self.is_row_hidden(*index))
-                .or_else(|| (target + 1..self.rows.len()).find(|index| !self.is_row_hidden(*index)))
-        }
+    fn nearest_selectable(&self, target: usize, _down: bool) -> Option<usize> {
+        (!self.rows.is_empty()).then_some(target.min(self.rows.len() - 1))
     }
 
     fn retry_failed_signatures(&mut self) {
@@ -2609,7 +2682,11 @@ mod tests {
         hidden.extend_commits(vec![row(3)]);
         hidden.extend_hidden_commits(vec![row(2)]);
         complete(&mut hidden);
-        assert_eq!(hidden.selected, Some(0), "a hidden HEAD cannot become selected");
+        assert_eq!(
+            hidden.rows[hidden.selected.expect("the boundary HEAD is selected")].id,
+            id(2),
+            "a selectable boundary retains the normal startup HEAD selection"
+        );
     }
 
     #[test]
@@ -2637,26 +2714,60 @@ mod tests {
     }
 
     #[test]
-    fn hidden_boundary_rows_are_not_selectable_or_verifiable() {
+    fn hidden_boundary_rows_are_selectable_for_inspection_only() {
         let mut app = App::new(4);
         app.extend_commits(vec![row(1), row(2), row(3)]);
-        app.update(Action::Last);
         app.extend_hidden_commits(vec![row(4)]);
+        complete(&mut app);
         Arc::make_mut(&mut app.rows[3]).signature = SignatureState::Unverified;
 
-        assert_eq!(
-            app.selected,
-            Some(2),
-            "following the tail stops at the oldest visible commit"
-        );
-        app.update(Action::MoveDown);
-        assert_eq!(app.selected, Some(2), "j cannot enter the hidden boundary");
         app.update(Action::First);
         app.update(Action::PageDown);
-        assert_eq!(app.selected, Some(2), "paging skips the hidden boundary");
+        assert_eq!(app.selected, Some(3), "paging can select the hidden boundary");
+        assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
+        assert!(!app.can_reword());
+        assert!(!app.can_forget());
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
             "hidden signatures are not actionable"
+        );
+    }
+
+    #[test]
+    fn hidden_boundary_branch_diffs_require_one_descendant_leaf() {
+        let target = |visible: Vec<LoadedCommit>| {
+            let mut app = App::new(10);
+            app.extend_commits(visible);
+            app.extend_hidden_commits(vec![row(1)]);
+            complete(&mut app);
+            app.select_commit(id(1));
+            app.selected_tree_diff_target()
+        };
+
+        assert_eq!(
+            target(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1])]),
+            Some(TreeDiffTarget::Branch {
+                base: id(1),
+                tip: id(3),
+            }),
+            "a linear branch compares its boundary to its only leaf"
+        );
+        assert_eq!(
+            target(vec![
+                row_with_parents(4, &[2, 3]),
+                row_with_parents(2, &[1]),
+                row_with_parents(3, &[1]),
+            ]),
+            Some(TreeDiffTarget::Branch {
+                base: id(1),
+                tip: id(4),
+            }),
+            "forks which merge again still have one leaf"
+        );
+        assert_eq!(
+            target(vec![row_with_parents(2, &[1]), row_with_parents(3, &[1])]),
+            Some(TreeDiffTarget::Commit { id: id(1), parent: 0 }),
+            "multiple leaves retain the boundary commit's ordinary diff"
         );
     }
 
@@ -2758,7 +2869,10 @@ mod tests {
         app.update(Action::ToggleChanges);
         app.update(Action::ToggleChanges);
         assert_eq!(app.changes_focus, None, "closing the panel returns focus to history");
-        assert_eq!(app.update(Action::OpenDiff), vec![Effect::OpenCommitDiff(id(1))]);
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::OpenCommitDiff(TreeDiffTarget::Commit { id: id(1), parent: 0 })]
+        );
         assert_eq!(app.tree_changes.selected, 0);
         assert_eq!(app.tree_changes.offset, 0);
         assert_eq!(app.tree_changes.horizontal_offset, 0);
@@ -3059,9 +3173,9 @@ mod tests {
         app.extend_hidden_commits(vec![row(2)]);
         complete(&mut app);
         assert_eq!(
-            app.selected,
-            Some(0),
-            "a selection which becomes a hidden boundary falls back to the top row"
+            app.rows[app.selected.expect("the boundary selection is retained")].id,
+            selected,
+            "a selection which becomes a hidden boundary remains selected"
         );
     }
 

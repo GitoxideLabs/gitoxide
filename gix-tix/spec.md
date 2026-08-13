@@ -56,8 +56,14 @@ without trading responsiveness for metadata that is not visible.
 - Hidden ancestry is removed from the selectable view by default. Direct parents
   that connect visible history to hidden history remain as boundary rows.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
-  and cannot be selected, paged to, copied, signature-verified, restored as a
-  selection, or entered by Shift navigation.
+  and can be selected, paged to, restored as a selection, copied, and inspected.
+  They cannot be edited, signature-verified, or used for time travel, and Shift
+  navigation continues to skip them.
+- If a boundary has exactly one leaf among its visible descendants, selecting it
+  uses the boundary-to-leaf tree comparison for the changes block and selection
+  diff-stat. Forks which merge back into one leaf qualify; multiple surviving
+  leaves retain the boundary commit's ordinary parent diff. Enter opens the same
+  complete branch diff, labelled `<base>..<leaf>`.
 - Hidden revisions do not change the default reference display mode.
 - `v`, then `h`, toggles the full hidden projection. Toggling preserves the
   selected commit when it still exists and otherwise selects the newest
