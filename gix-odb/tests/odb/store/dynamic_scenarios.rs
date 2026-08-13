@@ -456,6 +456,121 @@ fn a_handle_rechecks_its_snapshot_after_waiting_for_an_index_loader() -> Result 
 
 #[cfg(feature = "parallel")]
 #[test]
+fn a_handle_rechecks_its_uninitialized_snapshot_after_waiting_for_initialization() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_initializer_tx, resume_initializer_rx) = crossbeam_channel::bounded(0);
+    let (resume_waiter_tx, resume_waiter_rx) = crossbeam_channel::bounded(0);
+    let pause_initializer = Arc::new(AtomicBool::new(true));
+    let pause_waiter = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_initializer = Arc::clone(&pause_initializer);
+        let pause_waiter = Arc::clone(&pause_waiter);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::RefreshScanStarted) && pause_initializer.swap(false, Ordering::SeqCst) {
+                resume_initializer_rx.recv().expect("the test releases initialization");
+            } else if matches!(point, Point::RefreshCompletionObserved) && pause_waiter.swap(false, Ordering::SeqCst) {
+                resume_waiter_rx.recv().expect("the test releases the waiting handle");
+            }
+        }
+    });
+    let first = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(1),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    let second = first.clone();
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+
+    let first_thread = lookup(first);
+    loop {
+        if matches!(
+            point_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the first handle starts initialization"),
+            Point::RefreshScanStarted
+        ) {
+            break;
+        }
+    }
+    pause_waiter.store(true, Ordering::SeqCst);
+    let second_thread = lookup(second);
+    loop {
+        if matches!(
+            point_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the second handle observes the old completion count"),
+            Point::RefreshCompletionObserved
+        ) {
+            break;
+        }
+    }
+    resume_initializer_tx
+        .send(())
+        .expect("the initializer is waiting for release");
+    loop {
+        if matches!(
+            point_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the first handle completes initialization"),
+            Point::RefreshScanCompleted {
+                outcome: LoadOutcome::Success
+            }
+        ) {
+            break;
+        }
+    }
+    assert!(
+        first_thread
+            .join()
+            .expect("the initializer does not panic")
+            .expect("the initializer lookup succeeds"),
+        "the initializing handle finds the object"
+    );
+    resume_waiter_tx
+        .send(())
+        .expect("the waiting handle is waiting for release");
+    assert!(
+        second_thread
+            .join()
+            .expect("the waiting handle does not panic")
+            .expect("the waiting lookup succeeds"),
+        "the waiting handle replaces its uninitialized snapshot"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
 fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
     use std::{
         sync::{
