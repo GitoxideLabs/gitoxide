@@ -58,6 +58,11 @@ pub mod fetch;
 pub struct Gitoxide;
 pub mod gitoxide;
 
+/// The `gpg` top-level section.
+#[derive(Copy, Clone, Default)]
+pub struct Gpg;
+pub mod gpg;
+
 /// The `http` top-level section.
 #[derive(Copy, Clone, Default)]
 pub struct Http;

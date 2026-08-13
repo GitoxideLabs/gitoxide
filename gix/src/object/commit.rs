@@ -220,6 +220,17 @@ impl<'repo> Commit<'repo> {
     {
         gix_object::CommitRefIter::signature(&self.data, self.id.kind())
     }
+
+    /// Verify this commit's signature using Git-compatible configuration and external verification programs.
+    ///
+    /// Returns `Ok(None)` if the commit has no signature. If it is signed, the returned
+    /// [`Outcome`](crate::commit::signature::Outcome) describes the signature's format, cryptographic status, trust,
+    /// signer identity, and verifier output. A successful call does not necessarily mean that the signature is valid;
+    /// use [`Outcome::is_valid()`](crate::commit::signature::Outcome::is_valid) to determine whether Git would accept it.
+    #[cfg(feature = "command")]
+    pub fn verify_signature(&self) -> Result<Option<crate::commit::signature::Outcome>, crate::commit::verify::Error> {
+        crate::commit::signature::verify(self)
+    }
 }
 
 impl std::fmt::Debug for Commit<'_> {

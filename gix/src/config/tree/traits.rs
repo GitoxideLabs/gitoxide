@@ -64,6 +64,18 @@ pub trait Key: std::fmt::Debug {
     fn link(&self) -> Option<&Link> {
         None
     }
+    /// Return the value to use if this key is unset, if one is known.
+    fn default_value(&self) -> Option<&BStr> {
+        None
+    }
+    /// Return the value to use if this key is unset.
+    ///
+    /// # Panics
+    ///
+    /// If no default value is set.
+    fn default_value_or_panic(&self) -> &BStr {
+        self.default_value().expect("BUG: default value must be set")
+    }
     /// Return a note about this key, if available.
     fn note(&self) -> Option<&Note> {
         None

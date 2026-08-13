@@ -4,6 +4,8 @@ use crate::{
 };
 use gix_ref::Category;
 
+use crate::config::tree::Key;
+
 /// The error returned by [`PrepareFetch::fetch_only()`].
 #[derive(Debug, thiserror::Error)]
 #[expect(missing_docs)]
@@ -133,7 +135,11 @@ impl PrepareFetch {
                 .string(crate::config::tree::Clone::DEFAULT_REMOTE_NAME)
                 .map(|n| crate::config::tree::Clone::DEFAULT_REMOTE_NAME.try_into_symbolic_name(n))
                 .transpose()?
-                .unwrap_or_else(|| "origin".into()),
+                .unwrap_or_else(|| {
+                    crate::config::tree::Clone::DEFAULT_REMOTE_NAME
+                        .default_value_or_panic()
+                        .into()
+                }),
         };
 
         let mut remote = repo.remote_at(self.url.clone())?;

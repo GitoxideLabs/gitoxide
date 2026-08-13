@@ -45,6 +45,12 @@ mod keys {
     }
 
     #[test]
+    #[should_panic(expected = "BUG: default value must be set")]
+    fn missing_default_panics() {
+        let _ = gix::config::tree::Author::NAME.default_value_or_panic();
+    }
+
+    #[test]
     fn remote_name() {
         assert!(
             gix::config::tree::Remote::PUSH_DEFAULT
@@ -847,6 +853,59 @@ mod protocol {
                 "The key \"protocol.version=5\" was invalid"
             );
         }
+    }
+}
+
+mod gpg {
+    use gix::{
+        bstr::BStr,
+        config::tree::{Gpg, Key, Section, gpg},
+    };
+
+    #[test]
+    fn keys_and_subsections_are_registered() {
+        for (actual, expected) in [
+            (Gpg::FORMAT.logical_name(), "gpg.format"),
+            (Gpg::PROGRAM.logical_name(), "gpg.program"),
+            (Gpg::MIN_TRUST_LEVEL.logical_name(), "gpg.minTrustLevel"),
+            (gpg::OpenPgp::PROGRAM.logical_name(), "gpg.openpgp.program"),
+            (gpg::X509::PROGRAM.logical_name(), "gpg.x509.program"),
+            (gpg::Ssh::PROGRAM.logical_name(), "gpg.ssh.program"),
+            (
+                gpg::Ssh::DEFAULT_KEY_COMMAND.logical_name(),
+                "gpg.ssh.defaultKeyCommand",
+            ),
+            (
+                gpg::Ssh::ALLOWED_SIGNERS_FILE.logical_name(),
+                "gpg.ssh.allowedSignersFile",
+            ),
+            (gpg::Ssh::REVOCATION_FILE.logical_name(), "gpg.ssh.revocationFile"),
+        ] {
+            assert_eq!(actual, expected);
+        }
+        assert_eq!(
+            Gpg.sub_sections()
+                .iter()
+                .map(|section| section.name())
+                .collect::<Vec<_>>(),
+            ["openpgp", "x509", "ssh"]
+        );
+        for (key, expected) in [
+            (&Gpg::PROGRAM as &dyn Key, BStr::new(b"gpg")),
+            (&gpg::OpenPgp::PROGRAM, BStr::new(b"gpg")),
+            (&gpg::X509::PROGRAM, BStr::new(b"gpgsm")),
+            (&gpg::Ssh::PROGRAM, BStr::new(b"ssh-keygen")),
+        ] {
+            assert_eq!(key.default_value(), Some(expected), "default for {key:?}");
+        }
+        #[cfg(feature = "command")]
+        for valid in ["undefined", "NEVER", "Marginal", "fully", " ultimate "] {
+            assert!(
+                Gpg::MIN_TRUST_LEVEL.validate(valid.into()).is_ok(),
+                "Git accepts {valid:?} as a minimum trust level"
+            );
+        }
+        assert!(Gpg::MIN_TRUST_LEVEL.validate("unknown".into()).is_err());
     }
 }
 

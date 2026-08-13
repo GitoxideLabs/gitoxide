@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use crate::{Repository, config::tree::gitoxide};
+use crate::{
+    Repository,
+    config::tree::{Key, gitoxide},
+};
 
 impl Repository {
     /// Return `true` if the repository is a shallow clone, i.e. contains history only up to a certain depth.
@@ -32,7 +35,7 @@ impl Repository {
             .config
             .resolved
             .string_filter(gitoxide::Core::SHALLOW_FILE, &mut self.filter_config_section())
-            .unwrap_or_else(|| "shallow".into());
+            .unwrap_or_else(|| gitoxide::Core::SHALLOW_FILE.default_value_or_panic().into());
         self.common_dir().join(gix_path::from_bstr(shallow_name))
     }
 }

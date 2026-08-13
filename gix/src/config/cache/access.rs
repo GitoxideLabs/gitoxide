@@ -22,7 +22,10 @@ impl Cache {
         use crate::config::{cache::util::ApplyLeniencyDefault, diff::algorithm::Error, tree::Diff};
         self.diff_algorithm
             .get_or_try_init(|| {
-                let name = self.resolved.string(Diff::ALGORITHM).unwrap_or_else(|| "myers".into());
+                let name = self
+                    .resolved
+                    .string(Diff::ALGORITHM)
+                    .unwrap_or_else(|| Diff::ALGORITHM.default_value_or_panic().into());
                 config::tree::Diff::ALGORITHM
                     .try_into_algorithm(name)
                     .or_else(|err| match err {

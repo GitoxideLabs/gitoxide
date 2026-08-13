@@ -5,8 +5,12 @@ use crate::{
 
 impl Diff {
     /// The `diff.algorithm` key.
-    pub const ALGORITHM: Algorithm = Algorithm::new_with_validate("algorithm", &config::Tree::DIFF, validate::Algorithm)
-                                        .with_deviation("'patience' diff is not implemented and can default to 'histogram' if lenient config is used, and defaults to histogram if unset for fastest and best results");
+    pub const ALGORITHM: Algorithm =
+        Algorithm::new_with_validate("algorithm", &config::Tree::DIFF, validate::Algorithm)
+            .with_default(b"myers")
+            .with_deviation(
+                "'patience' diff is not implemented and can default to 'histogram' if lenient config is used",
+            );
     /// The `diff.renameLimit` key.
     pub const RENAME_LIMIT: keys::UnsignedInteger = keys::UnsignedInteger::new_unsigned_integer(
         "renameLimit",

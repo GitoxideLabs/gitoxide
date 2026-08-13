@@ -39,6 +39,8 @@ pub(crate) mod root {
         pub const FETCH: sections::Fetch = sections::Fetch;
         /// The `gitoxide` section.
         pub const GITOXIDE: sections::Gitoxide = sections::Gitoxide;
+        /// The `gpg` section.
+        pub const GPG: sections::Gpg = sections::Gpg;
         /// The `http` section.
         pub const HTTP: sections::Http = sections::Http;
         /// The `index` section.
@@ -84,6 +86,7 @@ pub(crate) mod root {
                 &Self::EXTENSIONS,
                 &Self::FETCH,
                 &Self::GITOXIDE,
+                &Self::GPG,
                 &Self::HTTP,
                 &Self::INDEX,
                 &Self::INIT,
@@ -106,9 +109,9 @@ pub(crate) mod root {
 
 mod sections;
 pub use sections::{
-    Author, Branch, Checkout, Clone, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Http, Index, Init,
+    Author, Branch, Checkout, Clone, Committer, Core, Credential, Extensions, Fetch, Gitoxide, Gpg, Http, Index, Init,
     Mailmap, Merge, Pack, Protocol, Push, Remote, Safe, Ssh, Url, User, branch, checkout, core, credential, extensions,
-    fetch, gitoxide, http, index, protocol, push, remote, ssh,
+    fetch, gitoxide, gpg, http, index, protocol, push, remote, ssh,
 };
 #[cfg(feature = "blob-diff")]
 pub use sections::{Diff, diff};
