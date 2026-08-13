@@ -250,9 +250,10 @@ space first; changes blocks adapt within the remaining history width.
 - `Enter` in history opens the whole selected commit against the active parent.
   `Enter` in a focused changes block opens only its selected path.
 - A whole-commit diff starts with commit identity and a Git-style per-path
-  diffstat in diff order, followed by parent/root, kind totals, and aggregate line
-  totals. It then shows the internal patch and invokes any per-path external diff
-  drivers.
+  diffstat in diff order. Each textual path retains Git's churn count and bar,
+  followed by an aligned signed net `additions - deletions` count. Parent/root,
+  kind totals, and aggregate line totals follow before the internal patch and any
+  per-path external diff drivers.
 - Diff preparation honors Git attributes, text conversion, binary detection,
   external diff commands, and the configured `core.pager` pipeline.
 - Binary, submodule, conflicted, and otherwise unavailable file diffs do not
@@ -315,7 +316,7 @@ space first; changes blocks adapt within the remaining history width.
   repository starts from the empty tree.
 - The Markdown editor buffer contains editable identities and dates, a `what`
   title, a `why` body, optional attribution trailers, and a commented Git-style
-  per-path diffstat. Commit hooks are not run.
+  per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
   persists the already-prepared objects, and atomically advances every mutable
   direct ref pointing at the parent. This includes local branches, custom refs,

@@ -360,9 +360,9 @@ mod tests {
         assert!(
             prepared
                 .document
-                .windows(b"tracked".len())
-                .any(|window| window == b"tracked"),
-            "the editor buffer includes a commented per-file diffstat: {}",
+                .windows(b"tracked | 2 +- 0".len())
+                .any(|window| window == b"tracked | 2 +- 0"),
+            "the editor buffer includes a commented per-file diffstat with net lines: {}",
             prepared.document.as_bstr()
         );
         assert_eq!(

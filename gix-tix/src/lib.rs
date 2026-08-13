@@ -3973,7 +3973,7 @@ mod tests {
         diff.write_to(&mut streamed)?;
         assert!(
             streamed.starts_with(
-                format!("{title}\n topic       | 1 +\n topic-extra | 1 +\nroot · A 2 · +2 \n\n").as_bytes()
+                format!("{title}\n topic       | 1 + +1\n topic-extra | 1 + +1\nroot · A 2 · +2 \n\n").as_bytes()
             ),
             "the pager receives path statistics and the aggregate before the patch"
         );
