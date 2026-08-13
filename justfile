@@ -156,7 +156,9 @@ doc $RUSTDOCFLAGS='-D warnings':
 unit-tests:
     cargo nextest run --no-fail-fast
     cargo nextest run -p gix-attributes --features serde --no-fail-fast
+    # Test repository snapshots with the default pure-gix backend and the Git CLI backend.
     cargo nextest run -p gix-testtools --no-fail-fast
+    cargo nextest run -p gix-testtools --no-default-features --features worktree-exclusions,sha1,sha256 --no-fail-fast
     cargo nextest run -p gix-testtools --features xz --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1 --no-fail-fast
     env GIX_TEST_FIXTURE_HASH=sha1 cargo nextest run -p gix-archive --no-default-features --features sha1,tar --no-fail-fast

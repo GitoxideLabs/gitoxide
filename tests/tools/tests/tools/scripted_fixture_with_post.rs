@@ -78,3 +78,75 @@ fn scripted_fixture_with_post_can_return_complex_types() -> Result {
 
     Ok(())
 }
+
+#[test]
+fn version_compatible_writable_fixtures_support_both_creation_modes() -> Result {
+    let copied = gix_testtools::scripted_fixture_writable_with_args_with_git_version(
+        SCRIPT_NAME,
+        ["version-compatible-copy"],
+        Creation::CopyFromReadOnly,
+        |_| true,
+    )?
+    .expect("compatible Git allows fixture generation");
+    assert!(copied.path().join("script_file.txt").is_file());
+    std::fs::write(copied.path().join("writable"), b"yes")?;
+
+    let executed = gix_testtools::scripted_fixture_writable_with_args_with_git_version(
+        SCRIPT_NAME,
+        ["version-compatible-execute"],
+        Creation::Execute,
+        |_| true,
+    )?
+    .expect("compatible Git allows fixture generation");
+    assert!(executed.path().join("script_file.txt").is_file());
+    std::fs::write(executed.path().join("writable"), b"yes")?;
+
+    Ok(())
+}
+
+#[test]
+fn version_incompatible_writable_fixtures_never_run_the_script() -> Result {
+    assert!(
+        gix_testtools::scripted_fixture_writable_with_args_with_git_version(
+            SCRIPT_NAME,
+            ["version-incompatible-copy-without-archive"],
+            Creation::CopyFromReadOnly,
+            |_| false,
+        )?
+        .is_none(),
+        "copy mode reports an unavailable required archive"
+    );
+    assert!(
+        gix_testtools::scripted_fixture_writable_with_args_with_git_version(
+            SCRIPT_NAME,
+            ["version-incompatible-execute-without-archive"],
+            Creation::Execute,
+            |_| false,
+        )?
+        .is_none(),
+        "execute mode reports an unavailable required archive instead of running the script"
+    );
+
+    let mut post_process_was_called = false;
+    let fixture = gix_testtools::scripted_fixture_writable_with_args_with_post_with_git_version(
+        SCRIPT_NAME,
+        ["version-incompatible-post-process-without-archive"],
+        Creation::Execute,
+        1,
+        |_| {
+            post_process_was_called = true;
+            Ok(())
+        },
+        |_| false,
+    )?;
+    assert!(
+        fixture.is_none(),
+        "post-processing also reports the unavailable fixture"
+    );
+    assert!(
+        !post_process_was_called,
+        "post-processing is not invoked without a compatible fixture"
+    );
+
+    Ok(())
+}

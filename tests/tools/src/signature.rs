@@ -26,21 +26,34 @@ pub fn fixture(name: impl AsRef<Path>) -> PathBuf {
 
 /// Return `path` in a form understood by Unix-derived programs on Windows.
 ///
-/// Git for Windows commonly provides GnuPG and OpenSSH programs which interpret backslashes as
-/// escapes instead of path separators. Native programs accept the resulting forward slashes as well.
+/// Git for Windows commonly provides GnuPG and OpenSSH programs which expect MSYS paths like
+/// `/c/Users/name` instead of native paths like `C:\\Users\\name` or `C:/Users/name`.
 pub fn path_for_command(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
     #[cfg(windows)]
     {
-        PathBuf::from(
-            path.to_str()
-                .expect("signing test fixture paths must be valid UTF-8")
-                .replace('\\', "/"),
-        )
+        PathBuf::from(msys_path(
+            path.to_str().expect("signing test fixture paths must be valid UTF-8"),
+        ))
     }
     #[cfg(not(windows))]
     {
         path.to_owned()
+    }
+}
+
+#[cfg(any(windows, test))]
+fn msys_path(path: &str) -> String {
+    let path = path.replace('\\', "/");
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        format!(
+            "/{drive}{rest}",
+            drive = (bytes[0] as char).to_ascii_lowercase(),
+            rest = &path[2..]
+        )
+    } else {
+        path
     }
 }
 
@@ -56,6 +69,9 @@ pub fn program_available(program: &str) -> bool {
 
 /// Create an isolated signer home with suitably restrictive permissions.
 pub fn isolated_home() -> Result<crate::tempfile::TempDir> {
+    #[cfg(unix)]
+    let home = crate::tempfile::Builder::new().prefix("gix-sign-").tempdir_in("/tmp")?;
+    #[cfg(not(unix))]
     let home = crate::tempfile::TempDir::new()?;
     #[cfg(unix)]
     {
@@ -65,11 +81,16 @@ pub fn isolated_home() -> Result<crate::tempfile::TempDir> {
     Ok(home)
 }
 
-/// Copy the passwordless SSH signing key to a temporary file with suitably restrictive permissions.
+/// Copy the passwordless SSH signing key pair to temporary files with suitably restrictive permissions.
+///
+/// The returned path names the private key; its public key is available at the same path with the `.pub` extension.
+/// Keeping both files mirrors `ssh-keygen` key generation and is required by implementations which cannot derive the
+/// public key from the private key while signing.
 pub fn ssh_private_key() -> Result<(crate::tempfile::TempDir, PathBuf)> {
     let home = crate::tempfile::TempDir::new()?;
     let key = home.path().join("key");
     std::fs::copy(fixture("ssh-private"), &key)?;
+    std::fs::copy(fixture("ssh-private.pub"), key.with_extension("pub"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -141,4 +162,17 @@ fn run(command: &mut Command) -> Result {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::msys_path;
+
+    #[test]
+    fn windows_paths_for_unix_derived_commands_are_msys_paths() {
+        assert_eq!(msys_path(r"C:\Users\name\key"), "/c/Users/name/key");
+        assert_eq!(msys_path("D:/a/project/key"), "/d/a/project/key");
+        assert_eq!(msys_path(r"relative\key"), "relative/key");
+        assert_eq!(msys_path(r"\\server\share\key"), "//server/share/key");
+    }
 }
