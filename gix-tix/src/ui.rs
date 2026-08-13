@@ -173,7 +173,7 @@ pub(crate) fn draw_file_diff(frame: &mut Frame<'_>, diff: &BuiltInDiff, offset: 
         body,
     );
     frame.render_widget(
-        Paragraph::new("↑↓/jk move · h/l pan · Enter/q/Esc back").style(Style::default().add_modifier(Modifier::DIM)),
+        Paragraph::new("↑↓/jk move · h/l pan · <enter>/q/Esc back").style(Style::default().add_modifier(Modifier::DIM)),
         footer,
     );
 }
@@ -568,20 +568,26 @@ pub(crate) fn draw_with_worktree(
                         ),
                         color(COMPARED_PARENT_COLOR),
                     ),
-                    Span::raw(" · p next parent · "),
+                    Span::raw(" · "),
                 ]);
+                spans.extend(shortcut("next parent", 'p', true));
+                spans.push(Span::raw(" · "));
             }
             if let Some(error) = &app.changes(pane).error {
                 spans.push(Span::styled(format!("diff: {error}"), color(Color::LightRed)));
             } else {
-                spans.push(Span::raw("↑↓/jk move · h/l pan · Enter diff"));
+                spans.push(Span::raw("↑↓/jk move · h/l pan · <enter> diff"));
             }
-            spans.push(Span::raw(" · y copy"));
-            spans.push(Span::raw(match app.changes_mode {
-                Some(ChangesMode::Both) => " · c tree",
-                Some(ChangesMode::Tree) => " · c to hide",
-                None => "",
-            }));
+            spans.push(Span::raw(" · "));
+            spans.extend(shortcut("copy", 'y', true));
+            if let Some(label) = match app.changes_mode {
+                Some(ChangesMode::Both) => Some("cycle tree"),
+                Some(ChangesMode::Tree) => Some("close"),
+                None => None,
+            } {
+                spans.push(Span::raw(" · "));
+                spans.extend(shortcut(label, 'c', true));
+            }
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).style(Style::default().bg(PANE_STATUS_BACKGROUND)),
                 status,
@@ -615,8 +621,13 @@ pub(crate) fn draw_with_worktree(
         app.set_commit_bounds(area.height as usize, max_offset);
         if max_offset > 0 {
             frame.render_widget(
-                Paragraph::new("PgUp/C-b up page · PgDn/C-f down page · o to hide")
-                    .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
+                Paragraph::new(Line::from(vec![
+                    Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
+                    Span::raw("cl"),
+                    Span::styled("o", Style::default().add_modifier(Modifier::UNDERLINED)),
+                    Span::raw("se"),
+                ]))
+                .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
                 Rect::new(
                     outer.x.saturating_add(2),
                     outer.bottom().saturating_sub(1),
@@ -635,10 +646,9 @@ pub(crate) fn draw_with_worktree(
         State::Complete => "",
         State::Cancelled => " · cancelled",
     };
-    let mut footer_spans = vec![Span::raw(format!("{status} · ↑↓/jk move · h/l pan"))];
+    let mut footer_spans = vec![Span::raw(status)];
     let mut edit_prefix_spans = Vec::new();
     if app.changes_focus.is_none() {
-        footer_spans.push(Span::raw(" · Enter diff"));
         let time_travel = if app.time_travel_shortcut_visible()
             && decorations
                 .values()
@@ -656,9 +666,9 @@ pub(crate) fn draw_with_worktree(
                         .iter()
                         .any(|decoration| decoration.kind == DecorationKind::Pin)
                     {
-                        "t return"
+                        ("return", 't')
                     } else {
-                        "t travel"
+                        ("travel", 't')
                     },
                 )
             } else {
@@ -670,39 +680,39 @@ pub(crate) fn draw_with_worktree(
         if app.edit_expanded {
             let mut options = Vec::new();
             if app.reword_shortcut_visible() {
-                options.push("r reword");
+                options.push(("reword", 'r'));
             }
             if app.can_create_commit() {
-                options.push("n new");
+                options.push(("new", 'n'));
             }
             if app.can_forget() {
                 options.push(if app.forget_confirmation_visible() {
-                    "d again forget"
+                    ("d again forget", 'd')
                 } else {
-                    "d forget"
+                    ("d forget", 'd')
                 });
             }
             if let Some(label) = time_travel {
                 options.push(label);
             }
             edit_prefix_spans.push(Span::raw(" · "));
-            edit_prefix_spans.push(Span::styled(
-                "e active (",
-                Style::default().add_modifier(Modifier::BOLD),
-            ));
+            edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
+            edit_prefix_spans.push(Span::raw("dit ("));
             if options.is_empty() {
                 edit_prefix_spans.push(Span::raw("no actions"));
             } else {
-                for (index, option) in options.into_iter().enumerate() {
+                for (index, (label, key)) in options.into_iter().enumerate() {
                     if index > 0 {
                         edit_prefix_spans.push(Span::raw(" · "));
                     }
-                    edit_prefix_spans.push(Span::raw(option));
+                    edit_prefix_spans.extend(shortcut(label, key, true));
                 }
             }
             edit_prefix_spans.push(Span::raw(")"));
         } else if !app.history_display_expanded {
-            edit_prefix_spans.push(Span::raw(" · e edit"));
+            edit_prefix_spans.push(Span::raw(" · "));
+            edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
+            edit_prefix_spans.push(Span::raw("dit"));
         }
     }
     if app.tree_changes_visible || app.worktree_changes_visible {
@@ -715,48 +725,57 @@ pub(crate) fn draw_with_worktree(
         footer_spans.push(Span::raw(" · q/Esc history"));
     }
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
-    footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
-    footer_spans.extend([Span::raw(" · "), toggle("c changes", app.changes_mode.is_some())]);
+    footer_spans.push(Span::raw(" · "));
+    footer_spans.extend(shortcut(
+        if app.show_commit {
+            "close message"
+        } else {
+            "open message"
+        },
+        'o',
+        app.show_commit,
+    ));
+    footer_spans.push(Span::raw(" · "));
+    footer_spans.extend(shortcut("cycle changes", 'c', app.changes_mode.is_some()));
     let mut view_prefix_spans = Vec::new();
     if app.history_display_expanded {
         view_prefix_spans.push(Span::raw(" · "));
-        view_prefix_spans.push(Span::styled(
-            "v active (",
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-        view_prefix_spans.push(toggle("d date", app.show_committer_date));
-        view_prefix_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
+        view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+        view_prefix_spans.push(Span::raw("iew ("));
+        view_prefix_spans.extend(shortcut("date", 'd', app.show_committer_date));
+        view_prefix_spans.push(Span::raw(" · "));
+        view_prefix_spans.extend(shortcut("emails", 'e', app.show_emails));
         let (name_label, names_visible) = match app.name_mode {
-            NameMode::All => ("n names", true),
-            NameMode::Author => ("n name", true),
-            NameMode::None => ("n name", false),
+            NameMode::All => ("names", true),
+            NameMode::Author => ("name", true),
+            NameMode::None => ("name", false),
         };
-        view_prefix_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
-        for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
-            view_prefix_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
+        view_prefix_spans.push(Span::raw(" · "));
+        view_prefix_spans.extend(shortcut(name_label, 'n', names_visible));
+        for (label, key, enabled) in [("mailmap", 'm', app.use_mailmap), ("trailers", 't', app.show_trailers)] {
+            view_prefix_spans.push(Span::raw(" · "));
+            view_prefix_spans.extend(shortcut(label, key, enabled));
         }
         let ref_label = match app.ref_mode {
-            RefMode::All => "r all refs",
-            RefMode::Default => "r refs",
-            RefMode::None => "r no refs",
+            RefMode::All => "all refs",
+            RefMode::Default => "refs",
+            RefMode::None => "no refs",
         };
-        view_prefix_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
+        view_prefix_spans.push(Span::raw(" · "));
+        view_prefix_spans.extend(shortcut(ref_label, 'r', app.ref_mode != RefMode::None));
         if app.has_hidden_filter {
-            view_prefix_spans.extend([
-                Span::raw(" · "),
-                toggle(
-                    if app.show_hidden {
-                        "h hide hidden"
-                    } else {
-                        "h show hidden"
-                    },
-                    app.show_hidden,
-                ),
-            ]);
+            view_prefix_spans.push(Span::raw(" · "));
+            view_prefix_spans.extend(shortcut(
+                if app.show_hidden { "hide hidden" } else { "show hidden" },
+                'h',
+                app.show_hidden,
+            ));
         }
         view_prefix_spans.push(Span::raw(")"));
     } else {
-        view_prefix_spans.push(Span::raw(" · v view"));
+        view_prefix_spans.push(Span::raw(" · "));
+        view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
+        view_prefix_spans.push(Span::raw("iew"));
     }
     let mut ordered = vec![Span::raw(history_position(app))];
     ordered.append(&mut view_prefix_spans);
@@ -764,16 +783,19 @@ pub(crate) fn draw_with_worktree(
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
     if app.preview_author_copy && app.manual_refresh {
-        footer_spans.extend([
-            Span::raw(" · "),
-            toggle("R refresh", matches!(history_state, State::Complete | State::Cancelled)),
-        ]);
+        footer_spans.push(Span::raw(" · "));
+        footer_spans.extend(shortcut(
+            "Refresh",
+            'R',
+            matches!(history_state, State::Complete | State::Cancelled),
+        ));
     }
-    footer_spans.push(Span::raw(if app.preview_author_copy {
-        " · Y copy author"
+    footer_spans.push(Span::raw(" · "));
+    footer_spans.extend(if app.preview_author_copy {
+        shortcut("copY author", 'Y', true)
     } else {
-        " · y copy"
-    }));
+        shortcut("copy", 'y', true)
+    });
     if app.signature_failures > 0 {
         footer_spans.extend([
             Span::raw(format!(" · s {} ", app.signature_failures)),
@@ -791,7 +813,12 @@ pub(crate) fn draw_with_worktree(
         if history_state == State::Loading {
             footer_spans.push(Span::raw(" · Esc cancel"));
         }
-        footer_spans.push(Span::raw(" · q quit"));
+        footer_spans.push(Span::raw(" · "));
+        footer_spans.extend(shortcut("quit", 'q', true));
+    }
+    footer_spans.push(Span::raw(" · ↑↓/jk move · h/l pan"));
+    if app.changes_focus.is_none() {
+        footer_spans.push(Span::raw(" · <enter> diff"));
     }
     if let Some(message) = app.message() {
         footer_spans = vec![Span::raw(message)];
@@ -1407,6 +1434,21 @@ fn toggle(label: &'static str, enabled: bool) -> Span<'static> {
     )
 }
 
+fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>> {
+    let key_start = label.find(key).expect("shortcut key is present in its label");
+    let key_end = key_start + key.len_utf8();
+    let style = if enabled {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::DIM)
+    };
+    vec![
+        Span::styled(&label[..key_start], style),
+        Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
+        Span::styled(&label[key_end..], style),
+    ]
+}
+
 fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
     let mut out = Vec::with_capacity(spans.len());
     for span in spans {
@@ -1740,6 +1782,14 @@ mod tests {
     }
 
     #[test]
+    fn embeds_status_shortcuts_in_their_labels() {
+        let spans = shortcut("copy", 'y', false);
+        assert_eq!(Line::from(spans.clone()).to_string(), "copy");
+        assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
+        assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
     fn counts_commits_until_the_graph_is_complete_then_tracks_the_selected_row() {
         let mut app = App::new(3);
         app.extend_commits(
@@ -1805,7 +1855,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · v view · e edit · computing"),
+            computing.contains("1 commits · view · edit · computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -1932,7 +1982,7 @@ mod tests {
                 .map(Into::into)
                 .collect(),
         );
-        let mut terminal = Terminal::new(TestBackend::new(40, 7))?;
+        let mut terminal = Terminal::new(TestBackend::new(48, 7))?;
 
         terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
 
@@ -1946,7 +1996,7 @@ mod tests {
         ] {
             assert_eq!(terminal.backend().buffer()[(0, y)].fg, color);
         }
-        assert!(rendered_line(&terminal, 6).contains("Enter/q/Esc back"));
+        assert!(rendered_line(&terminal, 6).contains("<enter>/q/Esc back"));
         Ok(())
     }
 
@@ -2119,7 +2169,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &Decorations::new(), &mailmap, None, None))?;
 
         assert!(
-            !rendered_line(&terminal, 1).contains("e edit"),
+            !rendered_line(&terminal, 1).contains(" · edit ·"),
             "the view group keeps e reserved for toggling emails"
         );
 
@@ -2147,7 +2197,7 @@ mod tests {
         assert_eq!(style_at("Human"), Color::Green, "human trailer actors are green");
         assert_eq!(style_at("[Claude]"), Color::Green, "bot co-authors use agent styling");
         assert!(
-            rendered_line(&terminal, 1).contains("t trailers"),
+            rendered_line(&terminal, 1).contains("trailers"),
             "the footer advertises the trailer toggle"
         );
 
@@ -2291,7 +2341,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · v view · e edit · ↑↓/jk move · h/l pan · Enter diff · [ align · o commit · c changes · y copy · q quit";
+        let footer_text = "#1 · view · edit · [ align · open message · cycle changes · copy · quit · ↑↓/jk move · h/l pan · <enter> diff";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2315,11 +2365,29 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
-        let commit = footer_text[..footer_text.find("o commit").expect("the commit toggle is present")]
+        let message = footer_text[..footer_text.find("open message").expect("the message toggle is present")]
             .chars()
             .count();
-        for x in commit..commit + "o commit".len() {
+        for x in message..message + "open message".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
+        }
+        for (label, key) in [
+            ("view", 'v'),
+            ("edit", 'e'),
+            ("open message", 'o'),
+            ("cycle changes", 'c'),
+            ("copy", 'y'),
+            ("quit", 'q'),
+        ] {
+            let label_start = footer_text[..footer_text.find(label).expect("shortcut label is present")]
+                .chars()
+                .count();
+            let key_offset = label[..label.find(key).expect("shortcut key is in its label")]
+                .chars()
+                .count();
+            expected[((label_start + key_offset) as u16, 1)]
+                .modifier
+                .insert(Modifier::UNDERLINED);
         }
         terminal.backend().assert_buffer(&expected);
 
@@ -2382,7 +2450,7 @@ mod tests {
             rendered_row(&terminal).contains(" author subject"),
             "m restores the original author name"
         );
-        assert!(footer_is_dim(&terminal, "m mailmap"), "disabled mailmap is dimmed");
+        assert!(footer_is_dim(&terminal, "mailmap"), "disabled mailmap is dimmed");
 
         app.leave_message("no commit created: no input was provided");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
@@ -2404,8 +2472,8 @@ mod tests {
         );
         assert!(!row.contains("refs/patches"), "special refs are hidden until requested");
         assert!(row.contains("subject"), "the commit subject remains visible");
-        assert!(footer_is_dim(&terminal, "d date"), "disabled date is dimmed");
-        assert!(footer_is_dim(&terminal, "n name"), "disabled name is dimmed");
+        assert!(footer_is_dim(&terminal, "date"), "disabled date is dimmed");
+        assert!(footer_is_dim(&terminal, "name"), "disabled name is dimmed");
 
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
@@ -2414,7 +2482,7 @@ mod tests {
             "the second n restores the author name"
         );
         assert!(
-            !footer_is_dim(&terminal, "n name"),
+            !footer_is_dim(&terminal, "name"),
             "the restored name mode is not dimmed"
         );
 
@@ -2429,7 +2497,7 @@ mod tests {
             !rendered_row(&terminal).contains("refs/patches"),
             "no refs hides special refs"
         );
-        assert!(footer_is_dim(&terminal, "r no refs"), "no refs is dimmed");
+        assert!(footer_is_dim(&terminal, "no refs"), "no refs is dimmed");
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
@@ -2441,7 +2509,7 @@ mod tests {
             rendered_row(&terminal).contains("refs/patches"),
             "all refs shows special refs"
         );
-        assert!(!footer_is_dim(&terminal, "r all refs"), "all refs is not dimmed");
+        assert!(!footer_is_dim(&terminal, "all refs"), "all refs is not dimmed");
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
@@ -2453,18 +2521,18 @@ mod tests {
             !rendered_row(&terminal).contains("refs/patches"),
             "refs hides special refs"
         );
-        assert!(!footer_is_dim(&terminal, "r refs"), "refs is not dimmed");
+        assert!(!footer_is_dim(&terminal, "refs"), "refs is not dimmed");
 
         app.has_hidden_filter = true;
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
-            rendered_line(&terminal, 1).contains("h show hidden"),
+            rendered_line(&terminal, 1).contains("show hidden"),
             "the footer advertises the configured hidden-history toggle"
         );
         app.show_hidden = true;
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
-            rendered_line(&terminal, 1).contains("h hide hidden"),
+            rendered_line(&terminal, 1).contains("hide hidden"),
             "the footer reflects the unfiltered view"
         );
 
@@ -2486,15 +2554,15 @@ mod tests {
             "the author takes the copy color"
         );
         assert!(
-            rendered_line(&terminal, 1).contains("Y copy author"),
+            rendered_line(&terminal, 1).contains("copY author"),
             "the footer previews the shifted shortcut"
         );
         assert!(
-            rendered_line(&terminal, 1).contains("R refresh"),
+            rendered_line(&terminal, 1).contains("Refresh"),
             "the footer previews the shifted refresh shortcut"
         );
         assert!(
-            !rendered_line(&terminal, 1).contains("r refs"),
+            !rendered_line(&terminal, 1).contains(" · refs"),
             "the shifted refresh shortcut replaces the reference toggle"
         );
         Ok(())
@@ -2538,14 +2606,14 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
         assert!(
-            rendered_line(&terminal, 1).contains("e active (r reword · n new · d forget · t return)"),
+            rendered_line(&terminal, 1).contains("edit (reword · new · d forget · return)"),
             "the active edit prefix contains exactly its actionable commands"
         );
-        assert!(!rendered_line(&terminal, 1).contains("e edit"));
+        assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 1).contains("t travel"));
+        assert!(rendered_line(&terminal, 1).contains("travel"));
         Ok(())
     }
 
@@ -2560,26 +2628,26 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let footer = rendered_line(&terminal, 1);
-        let view = "v active (d date · e emails · n names · m mailmap · t trailers · r no refs · h show hidden)";
+        let view = "view (date · emails · names · mailmap · trailers · no refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · ↑↓/jk move")),
+            footer.starts_with(&format!("0 commits · {view} · [ align")),
             "the active view prefix follows the history position"
         );
-        let active = footer[..footer.find("v active").expect("the active view prefix is visible")]
+        let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
             .chars()
             .count() as u16;
         assert!(
             terminal.backend().buffer()[(active, 1)]
                 .modifier
-                .contains(Modifier::BOLD),
-            "the active prefix label is emphasized"
+                .contains(Modifier::UNDERLINED),
+            "the prefix key is underlined in its verb"
         );
 
         app.history_display_expanded = false;
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · v view · e active (no actions) · ↑↓/jk move"),
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · [ align"),
             "the edit prefix follows the view prefix even when no action is available"
         );
         Ok(())
@@ -3004,7 +3072,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(footer_is_dim(&terminal, "o commit"), "the closed commit pane is dimmed");
+        assert!(
+            footer_is_dim(&terminal, "open message"),
+            "the closed commit pane is dimmed"
+        );
 
         app.update(Action::ToggleCommit);
         terminal.draw(|frame| {
@@ -3048,7 +3119,7 @@ mod tests {
             "the commit body remains separated from its title"
         );
         assert!(
-            !footer_is_dim(&terminal, "o commit"),
+            !footer_is_dim(&terminal, "close message"),
             "the open commit pane is not dimmed"
         );
 
@@ -3446,7 +3517,7 @@ mod tests {
             "repeated history navigation temporarily hides the changes pane"
         );
         assert!(
-            app.changes_mode.is_some() && !footer_is_dim(&terminal, "c changes"),
+            app.changes_mode.is_some() && !footer_is_dim(&terminal, "cycle changes"),
             "temporary suppression leaves the persistent changes setting enabled"
         );
         app.changes_suppressed = false;
@@ -3541,11 +3612,11 @@ mod tests {
         assert!(rendered_line(&terminal, 14).contains("↑↓/jk move · h/l pan"));
 
         assert!(
-            rendered_line(&terminal, 14).contains("Enter diff · y copy · c tree"),
+            rendered_line(&terminal, 14).contains("<enter> diff · copy · cycle tree"),
             "the changes pane advertises the next cycle mode"
         );
         assert!(
-            rendered_line(&terminal, 14).contains("y copy"),
+            rendered_line(&terminal, 14).contains("copy"),
             "the changes pane advertises path copying"
         );
 
@@ -3626,7 +3697,7 @@ mod tests {
         );
         assert!(
             rendered_line(&terminal, 14).contains(
-                "vs parent 1/2 0202020 · p next parent · ↑↓/jk move · h/l pan · Enter diff · y copy · c tree"
+                "vs parent 1/2 0202020 · next parent · ↑↓/jk move · h/l pan · <enter> diff · copy · cycle tree"
             ),
             "merge diffs keep parent controls alongside navigation"
         );
@@ -3641,7 +3712,7 @@ mod tests {
             "the compared parent's hash is inverted"
         );
         assert!(
-            !rendered_line(&terminal, 15).contains("p next parent"),
+            !rendered_line(&terminal, 15).contains("next parent"),
             "parent cycling is absent from the main status line"
         );
 
@@ -4448,7 +4519,9 @@ mod tests {
     fn footer_is_dim(terminal: &Terminal<TestBackend>, label: &str) -> bool {
         let y = terminal.backend().buffer().area.height - 1;
         let footer = rendered_line(terminal, y);
-        let x = footer[..footer.find(label).expect("toggle is visible")].chars().count() as u16;
+        let x = footer[..footer.rfind(label).expect("toggle is visible")]
+            .chars()
+            .count() as u16;
         terminal.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM)
     }
 }
