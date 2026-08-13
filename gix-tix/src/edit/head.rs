@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
-use gix::ObjectId;
+use gix::{ObjectId, bstr::BStr};
 
 use super::{create, rebase};
+use crate::{ChangeKind, PathChange};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
@@ -14,6 +15,7 @@ pub fn perform(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     kind: Kind,
+    selected_path: Option<(&PathChange, Option<ObjectId>)>,
 ) -> Result<Option<ObjectId>> {
     let head = repo
         .head_id()
@@ -36,7 +38,12 @@ pub fn perform(
         None => repo.empty_tree().id,
     };
     let tree = match kind {
-        Kind::Spill => parent_tree,
+        Kind::Spill => match selected_path {
+            Some((path, selected_parent)) => {
+                spill_path_tree(&repo, old_tree, selected_parent.unwrap_or(parent_tree), path)?
+            }
+            None => parent_tree,
+        },
         Kind::Amend => {
             let index = repo.index_or_empty().context("could not load the index")?;
             if index
@@ -68,6 +75,63 @@ pub fn perform(
         rebase::Tree::LeaveAsIsAndMark,
     )?
     .selected)
+}
+
+fn spill_path_tree(
+    repo: &gix::Repository,
+    commit_tree: ObjectId,
+    parent_tree: ObjectId,
+    change: &PathChange,
+) -> Result<ObjectId> {
+    let parent = repo.find_tree(parent_tree).context("could not load the parent tree")?;
+    let mut editor = repo
+        .find_tree(commit_tree)
+        .context("could not load the commit tree")?
+        .edit()
+        .context("could not edit the commit tree")?;
+    match change.kind {
+        ChangeKind::Added => {
+            editor.remove(&change.path).context("could not spill the added path")?;
+        }
+        ChangeKind::Deleted | ChangeKind::Modified | ChangeKind::TypeChanged => {
+            restore_path(&parent, &mut editor, &change.path)?;
+        }
+        ChangeKind::Renamed | ChangeKind::Copied => {
+            editor
+                .remove(&change.path)
+                .context("could not spill the rewritten destination")?;
+            if change.kind == ChangeKind::Renamed {
+                restore_path(
+                    &parent,
+                    &mut editor,
+                    change.source.as_ref().context("a rename has no source path")?,
+                )?;
+            }
+        }
+        ChangeKind::Unmerged => anyhow::bail!("cannot spill an unmerged path"),
+    }
+    Ok(editor
+        .write()
+        .context("could not build the partially spilled tree")?
+        .detach())
+}
+
+fn restore_path(
+    parent: &gix::Tree<'_>,
+    editor: &mut gix::object::tree::Editor<'_>,
+    path: &gix::bstr::BString,
+) -> Result<()> {
+    let entry = parent
+        .lookup_entry(
+            path.split(|byte| *byte == b'/')
+                .map(|component| BStr::new(component).to_owned()),
+        )
+        .context("could not look up the path in the parent tree")?
+        .context("the path is absent from the parent tree")?;
+    editor
+        .upsert(path, entry.mode().kind(), entry.object_id())
+        .context("could not restore the path from the parent tree")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -103,7 +167,7 @@ mod tests {
         let repo = open(fixture.path())?;
         let old = repo.head_id()?.detach();
         let graph = super::super::loaded_graph(&repo)?;
-        let new = perform(repo, &graph, Kind::Amend)?.expect("staged changes amend HEAD");
+        let new = perform(repo, &graph, Kind::Amend, None)?.expect("staged changes amend HEAD");
         assert_ne!(new, old);
         assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
         assert_eq!(git(fixture.path(), &["show", "HEAD:tracked"])?, b"staged\n");
@@ -130,7 +194,7 @@ mod tests {
             .peel_to_tree()?
             .id;
         let graph = super::super::loaded_graph(&repo)?;
-        let new = perform(repo, &graph, Kind::Spill)?.expect("the tip introduces changes");
+        let new = perform(repo, &graph, Kind::Spill, None)?.expect("the tip introduces changes");
         let repo = open(fixture.path())?;
         assert_eq!(repo.find_commit(new)?.tree_id()?.detach(), parent_tree);
         assert_eq!(
@@ -144,7 +208,11 @@ mod tests {
         );
         assert_eq!(git(fixture.path(), &["status", "--short"])?, b"?? tip\n");
         let graph = super::super::loaded_graph(&repo)?;
-        assert_eq!(perform(repo, &graph, Kind::Spill)?, None, "an empty spill is a no-op");
+        assert_eq!(
+            perform(repo, &graph, Kind::Spill, None)?,
+            None,
+            "an empty spill is a no-op"
+        );
         Ok(())
     }
 
@@ -153,7 +221,7 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
-        let new = perform(repo, &graph, Kind::Spill)?.expect("the root has a non-empty tree");
+        let new = perform(repo, &graph, Kind::Spill, None)?.expect("the root has a non-empty tree");
         let repo = open(fixture.path())?;
         assert_eq!(repo.find_commit(new)?.tree_id()?.detach(), repo.empty_tree().id);
         assert!(
@@ -161,6 +229,38 @@ mod tests {
             "the root spill resets the index to empty"
         );
         assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+        Ok(())
+    }
+
+    #[test]
+    fn spilling_one_path_keeps_the_other_commit_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        std::fs::write(fixture.path().join("other"), "other\n")?;
+        git(fixture.path(), &["add", "other"])?;
+        git(fixture.path(), &["commit", "--amend", "--no-edit"])?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Added,
+            group: crate::ChangeGroup::Tree,
+            source: None,
+            path: "tip".into(),
+            lines: None,
+        };
+        let new =
+            perform(repo, &graph, Kind::Spill, Some((&selected, None)))?.expect("the selected path can be spilled");
+        let repo = open(fixture.path())?;
+        let tree = repo.find_commit(new)?.tree()?;
+        assert!(
+            tree.lookup_entry(["other"])?.is_some(),
+            "the unselected addition remains committed"
+        );
+        assert!(
+            tree.lookup_entry(["tip"])?.is_none(),
+            "the selected addition is spilled"
+        );
+        assert_eq!(std::fs::read(fixture.path().join("tip"))?, b"tip\n");
+        assert_eq!(git(fixture.path(), &["status", "--short"])?, b"?? tip\n");
         Ok(())
     }
 }

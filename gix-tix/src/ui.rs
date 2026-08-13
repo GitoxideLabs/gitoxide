@@ -657,7 +657,7 @@ pub(crate) fn draw_with_worktree(
     };
     let mut footer_spans = vec![Span::raw(status)];
     let mut edit_prefix_spans = Vec::new();
-    if app.changes_focus.is_none() {
+    if app.changes_focus != Some(ChangePane::Worktree) {
         let time_travel = if app.time_travel_shortcut_visible()
             && decorations
                 .values()
@@ -688,10 +688,10 @@ pub(crate) fn draw_with_worktree(
         };
         if app.edit_expanded {
             let mut options = Vec::new();
-            if app.reword_shortcut_visible() {
+            if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'r'));
             }
-            if app.can_create_commit() {
+            if app.changes_focus.is_none() && app.can_create_commit() {
                 options.push(("new", 'n'));
             }
             if app.can_amend() {
@@ -700,14 +700,16 @@ pub(crate) fn draw_with_worktree(
             if app.can_spill() {
                 options.push(("spill", 's'));
             }
-            if app.can_forget() {
+            if app.changes_focus.is_none() && app.can_forget() {
                 options.push(if app.forget_confirmation_visible() {
                     ("d again forget", 'd')
                 } else {
                     ("d forget", 'd')
                 });
             }
-            if let Some(label) = time_travel {
+            if app.changes_focus.is_none()
+                && let Some(label) = time_travel
+            {
                 options.push(label);
             }
             edit_prefix_spans.push(Span::raw(" · "));
@@ -2666,6 +2668,62 @@ mod tests {
             rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · [ align"),
             "the edit prefix follows the view prefix even when no action is available"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn focused_tree_path_offers_only_spill_in_the_main_edit_prefix() -> Result<(), Box<dyn std::error::Error>> {
+        let id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(4);
+        app.extend_commits(vec![Commit {
+            id,
+            parent_ids: Default::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        app.set_worktree_head(Some(id), false);
+        complete(&mut app);
+        app.changes_focus = Some(ChangePane::Tree);
+        app.edit_expanded = true;
+        let changes = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Added,
+                group: ChangeGroup::Tree,
+                source: None,
+                path: "file".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        let decorations = Decorations::from([(
+            id,
+            vec![Decoration {
+                name: "HEAD".into(),
+                kind: DecorationKind::Head,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        let footer = rendered_line(&terminal, 7);
+        assert!(
+            footer.contains("edit (spill)"),
+            "tree focus keeps the scoped edit visible: {footer}"
+        );
+        assert!(!footer.contains("amend"), "tree paths cannot be amended");
         Ok(())
     }
 
