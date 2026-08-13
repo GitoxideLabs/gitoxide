@@ -94,11 +94,12 @@ impl super::Store {
         let catalog = self.catalog.load_full();
         let index = &catalog.index;
         if !index.is_initialized() {
-            return self.consolidate_with_disk_state(
+            let snapshot = self.consolidate_with_disk_state(
                 true,  /* needs_init */
                 false, /* load one new index */
                 loose_compression,
-            );
+            )?;
+            return Ok(snapshot.or_else(|| self.collect_snapshot_if_marker_changed(marker)));
         }
 
         if marker.generation != index.generation || marker.state_id != index.state_id() {
@@ -111,10 +112,8 @@ impl super::Store {
             if loaded.as_ref().is_ok_and(|loaded| *loaded) {
                 Ok(Some(self.collect_snapshot()))
             } else {
-                let current_catalog = self.catalog.load();
-                let current_index = &current_catalog.index;
-                if marker.generation != current_index.generation || marker.state_id != current_index.state_id() {
-                    return Ok(Some(self.collect_snapshot()));
+                if let Some(snapshot) = self.collect_snapshot_if_marker_changed(marker) {
+                    return Ok(Some(snapshot));
                 }
                 // A failed index must not hide healthy packs published since the previous refresh.
                 let snapshot = match refresh_mode {
@@ -130,13 +129,7 @@ impl super::Store {
                             true,  /* load one new index */
                             loose_compression,
                         )?
-                        .or_else(|| {
-                            let current_catalog = self.catalog.load();
-                            let current_index = &current_catalog.index;
-                            (marker.generation != current_index.generation
-                                || marker.state_id != current_index.state_id())
-                            .then(|| self.collect_snapshot())
-                        }),
+                        .or_else(|| self.collect_snapshot_if_marker_changed(marker)),
                 };
                 match snapshot {
                     Some(snapshot) => Ok(Some(snapshot)),
@@ -144,6 +137,12 @@ impl super::Store {
                 }
             }
         }
+    }
+
+    fn collect_snapshot_if_marker_changed(&self, marker: types::SlotIndexMarker) -> Option<Snapshot> {
+        let catalog = self.catalog.load();
+        let index = &catalog.index;
+        (marker.generation != index.generation || marker.state_id != index.state_id()).then(|| self.collect_snapshot())
     }
 
     fn last_refresh_is_younger_than(&self, max_age: std::time::Duration) -> bool {
