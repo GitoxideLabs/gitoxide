@@ -423,6 +423,11 @@ space first; changes blocks adapt within the remaining history width.
 - Main status remains readable regardless of pane focus. Errors are surfaced in
   the nearest relevant status line; diagnostics never replace user-visible
   errors.
+- Global command and recovery feedback uses one transient message channel. A
+  message replaces the main status line until the next recognized user action;
+  pane-specific errors remain in their pane status line.
+- Closing the new-commit editor without changing its prepared buffer leaves the
+  repository untouched and reports `no commit created: no input was provided`.
 
 ## Regression coverage
 
