@@ -19,6 +19,7 @@ pub(crate) struct Commit<T> {
     pub attributions: Range<usize>,
     pub title: T,
     pub metadata_loaded: bool,
+    pub signature: SignatureState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +28,17 @@ pub(crate) struct Metadata<T> {
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
+    pub signature: SignatureState,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum SignatureState {
+    #[default]
+    Unsigned,
+    Unverified,
+    Verifying,
+    Verified,
+    Failed,
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -141,6 +153,7 @@ pub(crate) enum Action {
     ToggleHidden,
     ToggleAlign,
     ToggleCommit,
+    VerifySignatures,
     Cancel,
     Copy,
     CopyAuthor,
@@ -148,12 +161,13 @@ pub(crate) enum Action {
     Quit,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Effect {
     Cancel,
     CopyId(ObjectId),
     CopyAuthor(&'static Author),
     Reload(bool),
+    VerifySignatures(Vec<ObjectId>),
     Quit,
 }
 
@@ -188,6 +202,8 @@ pub(crate) struct App {
     horizontal_page: usize,
     horizontal_max: usize,
     follow_tail: bool,
+    pub(crate) signature_failures: usize,
+    signature_verification_running: bool,
 }
 
 impl App {
@@ -222,6 +238,8 @@ impl App {
             horizontal_page: 1,
             horizontal_max: 0,
             follow_tail: false,
+            signature_failures: 0,
+            signature_verification_running: false,
         }
     }
 
@@ -246,6 +264,7 @@ impl App {
                 attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
                 title: start..self.titles.len(),
                 metadata_loaded: row.metadata_loaded,
+                signature: row.signature,
             });
         }
         if was_empty {
@@ -273,6 +292,7 @@ impl App {
             author,
             attributions,
             title,
+            signature,
         } = metadata;
         let title_start = self.titles.len();
         self.titles.extend_from_slice(&title);
@@ -283,6 +303,7 @@ impl App {
         row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
         row.title = title_start..self.titles.len();
         row.metadata_loaded = true;
+        row.signature = signature;
     }
 
     pub(crate) fn title(&self, row: &CommitRow) -> &BStr {
@@ -328,7 +349,11 @@ impl App {
             Action::PageDown => self.move_selection(self.viewport_rows.max(1), true),
             Action::First => self.select(0),
             Action::Last if !self.rows.is_empty() => {
+                let previous = self.selected;
                 self.selected = Some(self.rows.len() - 1);
+                if self.selected != previous {
+                    self.retry_failed_signatures();
+                }
                 self.follow_tail = self.state == State::Loading;
                 self.ensure_visible();
             }
@@ -362,6 +387,22 @@ impl App {
             }
             Action::ToggleAlign => self.align_metadata = !self.align_metadata,
             Action::ToggleCommit => self.show_commit = !self.show_commit,
+            Action::VerifySignatures if !self.signature_verification_running => {
+                let start = self.offset.min(self.rows.len());
+                let end = start.saturating_add(self.viewport_rows).min(self.rows.len());
+                let ids: Vec<_> = self.rows[start..end]
+                    .iter_mut()
+                    .filter(|row| row.signature == SignatureState::Unverified)
+                    .map(|row| {
+                        row.signature = SignatureState::Verifying;
+                        row.id
+                    })
+                    .collect();
+                if !ids.is_empty() {
+                    self.signature_verification_running = true;
+                    return vec![Effect::VerifySignatures(ids)];
+                }
+            }
             Action::PreviewAuthorCopy(value) => self.preview_author_copy = value,
             Action::Cancel if self.state == State::Loading => {
                 self.state = State::Cancelling;
@@ -429,6 +470,7 @@ impl App {
                             author: row.author,
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
+                            signature: row.signature,
                         },
                     )
                 })
@@ -444,6 +486,7 @@ impl App {
                 row.attributions = metadata.attributions.clone();
                 row.title = metadata.title.clone();
                 row.metadata_loaded = true;
+                row.signature = metadata.signature;
             }
         }
         self.graph = Some(graph);
@@ -468,6 +511,25 @@ impl App {
         self.show_hidden = show_hidden;
         self.horizontal_offset = 0;
         self.follow_tail = false;
+        self.signature_failures = 0;
+        self.signature_verification_running = false;
+    }
+
+    pub(crate) fn finish_signature_verification(&mut self, results: Vec<(ObjectId, bool)>) {
+        let mut failed = 0;
+        for (id, valid) in results {
+            let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+                continue;
+            };
+            row.signature = if valid {
+                SignatureState::Verified
+            } else {
+                failed += 1;
+                SignatureState::Failed
+            };
+        }
+        self.signature_verification_running = false;
+        self.signature_failures = failed;
     }
 
     fn move_selection(&mut self, distance: usize, down: bool) {
@@ -477,16 +539,32 @@ impl App {
         } else {
             selected.saturating_sub(distance)
         });
+        if self.selected != Some(selected) {
+            self.retry_failed_signatures();
+        }
         self.follow_tail = false;
         self.ensure_visible();
     }
 
     fn select(&mut self, selected: usize) {
         if !self.rows.is_empty() {
+            let previous = self.selected;
             self.selected = Some(selected.min(self.rows.len() - 1));
+            if self.selected != previous {
+                self.retry_failed_signatures();
+            }
             self.follow_tail = false;
             self.ensure_visible();
         }
+    }
+
+    fn retry_failed_signatures(&mut self) {
+        for row in &mut self.rows {
+            if row.signature == SignatureState::Failed {
+                row.signature = SignatureState::Unverified;
+            }
+        }
+        self.signature_failures = 0;
     }
 
     pub(crate) fn ensure_visible(&mut self) {
@@ -831,6 +909,7 @@ mod tests {
             attributions: 0..0,
             title: format!("commit {n}").into(),
             metadata_loaded: true,
+            signature: SignatureState::Unsigned,
         }
     }
 
@@ -958,6 +1037,7 @@ mod tests {
                 author: row(1).author,
                 attributions: 0..0,
                 title: "loaded".into(),
+                signature: SignatureState::Unsigned,
             },
             Vec::new(),
         );
@@ -966,6 +1046,31 @@ mod tests {
 
         assert!(app.rows[0].metadata_loaded);
         assert_eq!(app.title(&app.rows[0]), "loaded");
+    }
+
+    #[test]
+    fn verifies_only_visible_unchecked_signatures() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row(1), row(2), row(3)]);
+        for row in &mut app.rows {
+            row.signature = SignatureState::Unverified;
+        }
+        app.offset = 1;
+
+        assert_eq!(
+            app.update(Action::VerifySignatures),
+            vec![Effect::VerifySignatures(vec![id(2), id(3)])]
+        );
+        assert_eq!(app.rows[0].signature, SignatureState::Unverified);
+        assert_eq!(app.rows[1].signature, SignatureState::Verifying);
+        app.finish_signature_verification(vec![(id(2), true), (id(3), false)]);
+        assert_eq!(app.rows[1].signature, SignatureState::Verified);
+        assert_eq!(app.rows[2].signature, SignatureState::Failed);
+        assert_eq!(app.signature_failures, 1);
+
+        app.update(Action::MoveDown);
+        assert_eq!(app.rows[2].signature, SignatureState::Unverified);
+        assert_eq!(app.signature_failures, 0);
     }
 
     #[test]

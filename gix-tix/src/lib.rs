@@ -8,7 +8,7 @@ mod ui;
 
 use std::{
     ffi::OsString,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -258,6 +258,7 @@ fn event_loop(
 
     let mut app = App::new(1);
     let mut lane_receiver = None;
+    let mut verification_receiver = None;
     let mut commit_message = None;
     let mut fill_repository = FillRepository {
         path: &repository_path,
@@ -282,6 +283,19 @@ fn event_loop(
     let mut inline_terminal = None;
     let mut history_requires_alternate_screen = false;
     let result: Result<Option<Duration>> = (|| loop {
+        if let Some(result) = verification_receiver.as_ref().map(mpsc::Receiver::try_recv) {
+            match result {
+                Ok(results) => {
+                    app.finish_signature_verification(results);
+                    verification_receiver = None;
+                    dirty = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    anyhow::bail!("signature verification worker stopped unexpectedly")
+                }
+            }
+        }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
@@ -358,7 +372,8 @@ fn event_loop(
             resize_inline,
             &mut inline_terminal,
         )?;
-        let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing);
+        let streaming = matches!(app.state, State::Loading | State::Cancelling | State::Computing)
+            || verification_receiver.is_some();
         if should_draw(dirty, streaming, last_draw.elapsed()) {
             draw(
                 terminal,
@@ -424,6 +439,9 @@ fn event_loop(
                         gix::features::threading::OwnShared::clone(&authors),
                     );
                 }
+                Effect::VerifySignatures(ids) => {
+                    verification_receiver = Some(start_signature_verification(repository_path.clone(), ids));
+                }
                 Effect::Quit => {
                     if app.inline {
                         app.show_selection_tail = false;
@@ -463,6 +481,42 @@ fn start_lane_worker(rows: Vec<CommitRow>) -> mpsc::Receiver<(Vec<CommitRow>, ap
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(app::compute_lanes(rows));
+    });
+    receiver
+}
+
+type SignatureVerification = (gix::ObjectId, bool);
+
+fn start_signature_verification(
+    repository_path: PathBuf,
+    ids: Vec<gix::ObjectId>,
+) -> mpsc::Receiver<Vec<SignatureVerification>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let results = match gix::open(repository_path) {
+            Ok(mut repository) => {
+                repository.object_cache_size(None);
+                ids.into_iter()
+                    .map(|id| {
+                        let result = repository
+                            .find_commit(id)
+                            .context("could not read signed commit")
+                            .and_then(|commit| {
+                                commit
+                                    .verify_signature()
+                                    .context("could not verify commit signature")
+                                    .and_then(|outcome| outcome.context("commit no longer has a signature"))
+                            });
+                        match result {
+                            Ok(outcome) if outcome.is_valid() => (id, true),
+                            Ok(_) | Err(_) => (id, false),
+                        }
+                    })
+                    .collect()
+            }
+            Err(_) => ids.into_iter().map(|id| (id, false)).collect(),
+        };
+        let _ = sender.send(results);
     });
     receiver
 }
@@ -618,6 +672,7 @@ fn action(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('t') => Some(Action::ToggleTrailers),
         KeyCode::Char('m') => Some(Action::ToggleMailmap),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
+        KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHidden),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
@@ -644,6 +699,11 @@ fn repeats_viewport(action: &Action) -> bool {
 
 fn retains_fill_repository(kind: KeyEventKind, action: Option<&Action>) -> bool {
     kind == KeyEventKind::Repeat && action.is_some_and(repeats_viewport)
+}
+
+#[cfg(test)]
+fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::open::Error> {
+    gix::open_opts(path.as_ref(), gix::open::Options::isolated())
 }
 
 #[cfg(test)]
@@ -787,6 +847,10 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
             Some(Action::ToggleHidden)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE)),
+            Some(Action::VerifySignatures)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE)),

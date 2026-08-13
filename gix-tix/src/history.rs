@@ -11,7 +11,7 @@ use gix::{
     objs::commit::ref_iter::Token,
 };
 
-use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits, Metadata};
+use crate::app::{Attribution, AttributionKind, Author, Commit, LoadedCommits, Metadata, SignatureState};
 
 pub(crate) type SharedAuthors = gix::features::threading::OwnShared<gix::features::threading::Mutable<Authors>>;
 static EMPTY_AUTHOR: std::sync::LazyLock<Author> = std::sync::LazyLock::new(|| Author {
@@ -96,11 +96,13 @@ pub(crate) fn load(
             author,
             attributions: row_attributions,
             title,
+            signature,
         } = metadata.unwrap_or_else(|| Metadata {
             committer_time: Default::default(),
             author: &EMPTY_AUTHOR,
             attributions: 0..0,
             title: BString::default(),
+            signature: SignatureState::Unsigned,
         });
         rows.push(Commit {
             id: info.id,
@@ -110,6 +112,7 @@ pub(crate) fn load(
             attributions: row_attributions,
             title,
             metadata_loaded,
+            signature,
         });
         if rows.len() == COMMIT_BATCH_SIZE
             && !emit(Event::Commits(LoadedCommits {
@@ -148,6 +151,7 @@ fn decode_metadata<'a>(
     let mut author = None;
     let attribution_start = attributions.len();
     let mut title = None;
+    let mut signature = SignatureState::Unsigned;
     for token in tokens {
         match token.context("could not decode commit")? {
             Token::Author { signature } => {
@@ -183,6 +187,9 @@ fn decode_metadata<'a>(
                     }
                 }
             }
+            Token::ExtraHeader((name, _)) if name == "gpgsig" || name == "gpgsig-sha256" => {
+                signature = SignatureState::Unverified;
+            }
             _ => {}
         }
     }
@@ -191,6 +198,7 @@ fn decode_metadata<'a>(
         author: author.context("commit has no author")?,
         attributions: attribution_start..attributions.len(),
         title: title.context("commit has no message")?,
+        signature,
     })
 }
 
@@ -357,7 +365,7 @@ mod tests {
         let mut events = Vec::new();
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let repo = gix::open(path)?;
+        let repo = crate::open_test_repository(path)?;
         load(
             &repo,
             &revisions.iter().map(OsString::from).collect::<Vec<_>>(),
@@ -460,7 +468,7 @@ mod tests {
             .current_dir(fixture_path)
             .env("GIT_AUTHOR_DATE", "2000-01-05T00:00:00 +0000")
             .env("GIT_COMMITTER_DATE", "2000-01-05T00:00:00 +0000")
-            .args(["commit", "-q", "-m", "new"])
+            .args(["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"])
             .status()?;
         assert!(commit.success(), "a commit newer than the graph is created");
 
@@ -481,7 +489,7 @@ mod tests {
             .find(|row| !row.metadata_loaded)
             .expect("older graph commits defer metadata");
 
-        let repo = gix::open(fixture_path)?;
+        let repo = crate::open_test_repository(fixture_path)?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let (metadata, _) = load_metadata(&repo, deferred.id, &authors)?;
