@@ -1535,6 +1535,145 @@ fn stable_location_remains_readable_while_slot_growth_is_published() -> Result {
     Ok(())
 }
 
+#[cfg(feature = "parallel")]
+#[test]
+fn stale_handles_mix_operations_after_pack_publication() -> Result {
+    use std::{sync::Arc, time::Duration};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let handle = open(&fixture, 4)?.into_arc()?;
+    let a = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object_once(&handle, &a)?;
+
+    let mut stable = handle.clone();
+    stable.prevent_pack_unload();
+    let mut buffer = Vec::new();
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &a, &mut buffer)
+        .expect("the stable handle records a location before the mutation");
+
+    let refresh = gix_odb::store::RefreshMode::AfterDuration(Duration::MAX);
+    let mut find = handle.clone();
+    let mut header = handle.clone();
+    let mut prefix = handle.clone();
+    let mut iterate = handle.clone();
+    let mut missing = handle.clone();
+    for handle in [&mut find, &mut header, &mut prefix, &mut iterate, &mut missing] {
+        handle.refresh = refresh;
+    }
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    let b = fixture.manifest.pack(Pack::B).object_ids[0];
+    handle.store_ref().mark_disk_state_stale();
+    let refreshes_before = handle.store_ref().metrics().num_refreshes;
+
+    let barrier = Arc::new(std::sync::Barrier::new(6));
+    let (result_tx, result_rx) = crossbeam_channel::bounded(6);
+    let workers = [
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            move || {
+                barrier.wait();
+                let result = assert_object_once(&find, &b).map_err(|err| err.to_string());
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            move || {
+                barrier.wait();
+                let result = header
+                    .try_header(&b)
+                    .map_err(|err| err.to_string())
+                    .and_then(|header| header.ok_or_else(|| "the published object has a header".to_owned()))
+                    .map(|_| ());
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            move || {
+                barrier.wait();
+                let result = gix_hash::Prefix::new(&b, b.kind().len_in_hex())
+                    .map_err(|err| err.to_string())
+                    .and_then(|prefix_value| prefix.lookup_prefix(prefix_value, None).map_err(|err| err.to_string()))
+                    .and_then(|outcome| match outcome {
+                        Some(Ok(id)) if id == b => Ok(()),
+                        other => Err(format!("exact prefix resolves to the published object, got {other:?}")),
+                    });
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            move || {
+                barrier.wait();
+                let result = iterate
+                    .iter()
+                    .map_err(|err| err.to_string())
+                    .and_then(|objects| {
+                        objects
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(|err| err.to_string())
+                    })
+                    .and_then(|ids| {
+                        ids.contains(&a)
+                            .then_some(())
+                            .ok_or_else(|| "iteration retains the object known before publication".to_owned())
+                    });
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            let missing_id = fixture.manifest.missing_id();
+            move || {
+                barrier.wait();
+                let result = assert_missing_once(&missing, &missing_id).map_err(|err| err.to_string());
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+        std::thread::spawn({
+            let barrier = Arc::clone(&barrier);
+            let result_tx = result_tx.clone();
+            move || {
+                barrier.wait();
+                let entry = gix_odb::pack::Find::entry_by_location(&stable, &location);
+                let mut buffer = Vec::new();
+                let current = gix_odb::pack::Find::location_by_oid(&stable, &a, &mut buffer);
+                let result = (entry.is_some() && current.is_some())
+                    .then_some(())
+                    .ok_or_else(|| "the stable handle retains and resolves its pre-mutation location".to_owned());
+                result_tx.send(result).expect("the result receiver stays alive");
+            }
+        }),
+    ];
+    drop(result_tx);
+    let mut outcome = Ok(());
+    for _ in 0..workers.len() {
+        let result = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("every mixed operation completes within the liveness bound");
+        if outcome.is_ok() {
+            outcome = result.map_err(std::io::Error::other);
+        }
+    }
+    for worker in workers {
+        worker.join().expect("a mixed-operation worker does not panic");
+    }
+    outcome?;
+    assert_eq!(
+        handle.store_ref().metrics().num_refreshes,
+        refreshes_before + 1,
+        "all stale operations share one refresh of the known disk mutation"
+    );
+    Ok(())
+}
+
 #[test]
 fn slot_exhaustion_keeps_the_loaded_pack_usable() -> Result {
     let mut fixture = OdbFixture::from_script()?;
