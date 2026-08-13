@@ -844,31 +844,31 @@ pub(crate) fn draw_with_worktree(
     } else {
         shortcut("copy", 'y', true)
     });
-    ordered.append(&mut footer_spans);
-    footer_spans = ordered;
-    footer_spans.push(Span::raw(" · "));
+    ordered.push(Span::raw(" · "));
     if app.preview_author_copy && app.manual_refresh {
-        footer_spans.extend(shortcut(
+        ordered.extend(shortcut(
             "Refresh",
             'R',
             matches!(history_state, State::Complete | State::Cancelled),
         ));
     } else {
-        footer_spans.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
+        ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     }
     if app.signature_failures > 0 {
-        footer_spans.extend([
+        ordered.extend([
             Span::raw(format!(" · s {} ", app.signature_failures)),
             Span::styled("●", color(Color::LightRed)),
         ]);
     } else if has_verifiable_signatures {
-        footer_spans.extend([
+        ordered.extend([
             Span::raw(" · s "),
             Span::styled("●", color(Color::Rgb(255, 165, 0))),
             Span::raw(" -> "),
             Span::styled("●", color(Color::Green)),
         ]);
     }
+    ordered.append(&mut footer_spans);
+    footer_spans = ordered;
     if app.changes_focus.is_none() && history_state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
@@ -2401,7 +2401,7 @@ mod tests {
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
         let footer_text =
-            "#1 · view · edit · copy · [ align · message · changes · refs · ↑↓/jk move · h/l pan · <enter> diff · quit";
+            "#1 · view · edit · copy · refs · [ align · message · changes · ↑↓/jk move · h/l pan · <enter> diff · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -3192,7 +3192,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("s ● -> ●"));
+        assert!(rendered_line(&terminal, 1).contains("copy · refs · s ● -> ●"));
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
