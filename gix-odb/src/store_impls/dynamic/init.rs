@@ -68,6 +68,8 @@ pub mod debug {
         IndexLoadClaimed {
             /// The claimed slot-map index.
             slot: usize,
+            /// The number of registered index loads, including this one.
+            active_loads: u16,
         },
         /// A loader found all index slots claimed by other loaders. No Store or slot lock is held.
         IndexLoadWaiting,
