@@ -789,8 +789,8 @@ pub(crate) fn draw_with_worktree(
         }
         footer_spans.push(Span::raw(" · q quit"));
     }
-    if let Some(notice) = &app.notice {
-        footer_spans = vec![Span::raw(notice)];
+    if let Some(message) = app.message() {
+        footer_spans = vec![Span::raw(message)];
     }
     if app.unseen_filesystem_redraw {
         footer_spans = notification_discs(footer_spans);
@@ -2362,7 +2362,7 @@ mod tests {
         );
         app.unseen_filesystem_redraw = false;
 
-        app.notice = Some("worktree removed; using common repository".into());
+        app.leave_message("worktree removed; using common repository");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert_eq!(
             rendered_line(&terminal, 1).trim(),
@@ -2372,13 +2372,21 @@ mod tests {
 
         app.history_display_expanded = true;
         app.update(Action::ToggleMailmap);
-        assert!(app.notice.is_none(), "the next action restores the normal status");
+        assert!(app.message().is_none(), "the next action restores the normal status");
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             rendered_row(&terminal).contains(" author subject"),
             "m restores the original author name"
         );
         assert!(footer_is_dim(&terminal, "m mailmap"), "disabled mailmap is dimmed");
+
+        app.leave_message("no commit created: no input was provided");
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+        assert_eq!(
+            rendered_line(&terminal, 1).trim(),
+            "no commit created: no input was provided",
+            "an unchanged new-commit editor explains why nothing happened"
+        );
         app.update(Action::ToggleMailmap);
 
         app.update(Action::ToggleDate);

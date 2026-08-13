@@ -364,7 +364,7 @@ pub(crate) struct App {
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
-    pub(crate) notice: Option<String>,
+    message: Option<String>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) edit_expanded: bool,
@@ -438,7 +438,7 @@ impl App {
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
-            notice: None,
+            message: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             edit_expanded: false,
@@ -460,6 +460,14 @@ impl App {
             manual_refresh: false,
             selection_relation: None,
         }
+    }
+
+    pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
+        self.message = Some(message.into());
+    }
+
+    pub(crate) fn message(&self) -> Option<&str> {
+        self.message.as_deref()
     }
 
     pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
@@ -647,7 +655,7 @@ impl App {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        self.notice = None;
+        self.message = None;
         if !matches!(&action, Action::Forget) {
             self.forget_confirmation = None;
         }

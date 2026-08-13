@@ -890,7 +890,7 @@ fn event_loop(
     app.set_worktree_head_unborn(worktree_head_unborn);
     app.commit_pane_background = commit_pane_background;
     if recovered_at_startup {
-        app.notice = Some("worktree removed; using the common repository without worktree changes".into());
+        app.leave_message("worktree removed; using the common repository without worktree changes");
     }
     app.manual_refresh = ref_watcher.is_none();
     let mut lane_receiver = None;
@@ -1000,7 +1000,7 @@ fn event_loop(
             };
             ref_watch_set_changed = false;
             app.manual_refresh = ref_watcher.is_none();
-            app.notice = Some("worktree removed; using the common repository without worktree changes".into());
+            app.leave_message("worktree removed; using the common repository without worktree changes");
             if history_graph.is_some() {
                 refresh_pending = true;
                 refresh_from_filesystem = true;
@@ -1684,14 +1684,14 @@ fn event_loop(
                         .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
                     match result {
                         Ok(true) => app.focus_history(),
-                        Err(err) => app.notice = Some(format!("diff: {err:#}")),
+                        Err(err) => app.leave_message(format!("diff: {err:#}")),
                         Ok(false) => {}
                     }
                 }
                 Effect::Reword(id) => {
                     match reword_commit(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
                         Ok(Some(new_id)) => {
-                            app.notice = Some(format!(
+                            app.leave_message(format!(
                                 "reworded {} as {}",
                                 id.to_hex_with_len(7),
                                 new_id.to_hex_with_len(7)
@@ -1700,7 +1700,7 @@ fn event_loop(
                             refresh_pending = true;
                         }
                         Ok(None) => {}
-                        Err(err) => app.notice = Some(format!("reword: {err:#}")),
+                        Err(err) => app.leave_message(format!("reword: {err:#}")),
                     }
                 }
                 Effect::NewCommit(parent) => {
@@ -1712,12 +1712,12 @@ fn event_loop(
                         enhanced_keyboard,
                     ) {
                         Ok(Some(new_id)) => {
-                            app.notice = Some(format!("created {}", new_id.to_hex_with_len(7)));
+                            app.leave_message(format!("created {}", new_id.to_hex_with_len(7)));
                             refresh_select_top_requested = true;
                             refresh_pending = true;
                         }
-                        Ok(None) => {}
-                        Err(err) => app.notice = Some(format!("new commit: {err:#}")),
+                        Ok(None) => app.leave_message("no commit created: no input was provided"),
+                        Err(err) => app.leave_message(format!("new commit: {err:#}")),
                     }
                 }
                 Effect::Forget(id) => {
@@ -1725,14 +1725,14 @@ fn event_loop(
                     fill_repository.retained = None;
                     match forget_commit(&repository_path, repository_is_bare, id) {
                         Ok(parent) => {
-                            app.notice = Some(format!("forgot {}", id.to_hex_with_len(7)));
+                            app.leave_message(format!("forgot {}", id.to_hex_with_len(7)));
                             if let Some(parent) = parent {
                                 app.select_commit(parent);
                             }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Err(err) => app.notice = Some(format!("forget: {err:#}")),
+                        Err(err) => app.leave_message(format!("forget: {err:#}")),
                     }
                 }
                 Effect::TimeTravel(id) => {
@@ -1754,12 +1754,12 @@ fn event_loop(
                     match result {
                         Ok(Some(notice)) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
-                            app.notice = Some(notice);
+                            app.leave_message(notice);
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
                         Ok(None) => {}
-                        Err(err) => app.notice = Some(format!("time-travel: {err:#}")),
+                        Err(err) => app.leave_message(format!("time-travel: {err:#}")),
                     }
                 }
                 Effect::VerifySignatures(ids) => {
