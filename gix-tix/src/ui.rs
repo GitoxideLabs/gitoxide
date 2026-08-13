@@ -1048,7 +1048,21 @@ pub(crate) fn commit_diff_summary(
         .map(|(added, removed)| u64::from(*added) + u64::from(*removed))
         .max()
         .unwrap_or_default();
-    let graph_width = max_changes.min(40);
+    let graph_width = max_changes.min(40) as usize;
+    let delta = |added: u32, removed: u32| i64::from(added) - i64::from(removed);
+    let format_delta = |delta: i64| {
+        if delta > 0 {
+            format!("+{delta}")
+        } else {
+            delta.to_string()
+        }
+    };
+    let delta_width = line_counts
+        .iter()
+        .flatten()
+        .map(|(added, removed)| format_delta(delta(*added, *removed)).len())
+        .max()
+        .unwrap_or_default();
     let mut lines = paths
         .into_iter()
         .zip(line_counts)
@@ -1060,10 +1074,25 @@ pub(crate) fn commit_diff_summary(
                     let total = u64::from(*added) + u64::from(*removed);
                     spans.push(Span::raw(format!("{total:>count_width$} ")));
                     let scaled = |count: u32| {
-                        (u64::from(count) * graph_width / max_changes.max(1)).max(u64::from(count > 0)) as usize
+                        (u64::from(count) * graph_width as u64 / max_changes.max(1)).max(u64::from(count > 0)) as usize
                     };
-                    spans.push(Span::styled("+".repeat(scaled(*added)), color(Color::Green)));
-                    spans.push(Span::styled("-".repeat(scaled(*removed)), color(Color::LightRed)));
+                    let added_width = scaled(*added);
+                    let removed_width = scaled(*removed);
+                    spans.push(Span::styled("+".repeat(added_width), color(Color::Green)));
+                    spans.push(Span::styled("-".repeat(removed_width), color(Color::LightRed)));
+                    let delta = delta(*added, *removed);
+                    let delta = format_delta(delta);
+                    spans.push(Span::raw(" ".repeat(
+                        graph_width.saturating_sub(added_width + removed_width) + 1 + delta_width - delta.len(),
+                    )));
+                    spans.push(Span::styled(
+                        delta,
+                        color(match added.cmp(removed) {
+                            std::cmp::Ordering::Greater => Color::Green,
+                            std::cmp::Ordering::Less => Color::LightRed,
+                            std::cmp::Ordering::Equal => Color::Reset,
+                        }),
+                    ));
                 }
                 None => spans.push(Span::raw(format!("{:>count_width$}", "Bin"))),
             }
@@ -1931,6 +1960,20 @@ mod tests {
                     path: "old".into(),
                     lines: None,
                 },
+                crate::app::PathChange {
+                    kind: ChangeKind::Deleted,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "gone".into(),
+                    lines: None,
+                },
+                crate::app::PathChange {
+                    kind: ChangeKind::Modified,
+                    group: ChangeGroup::Tree,
+                    source: None,
+                    path: "image.bin".into(),
+                    lines: None,
+                },
             ],
             ..Changes::default()
         };
@@ -1938,35 +1981,54 @@ mod tests {
             title.clone(),
             ["--- a/old", "+++ b/old"].into_iter().map(Into::into).collect(),
         )
-        .with_summary(commit_diff_summary(&changes, &[Some((2, 0)), Some((1, 1))], 3, 1));
+        .with_summary(commit_diff_summary(
+            &changes,
+            &[Some((2, 0)), Some((1, 1)), Some((0, 3)), None],
+            3,
+            4,
+        ));
         let mut terminal = Terminal::new(TestBackend::new(64, 9))?;
 
         terminal.draw(|frame| draw_file_diff(frame, &diff, 0, 0))?;
 
         assert_eq!(rendered_line(&terminal, 0).trim(), title);
-        assert_eq!(rendered_line(&terminal, 1).trim(), "new | 2 ++");
-        assert_eq!(rendered_line(&terminal, 2).trim(), "old | 2 +-");
-        let summary = "root · A 1 + M 1 = 2 · +3 -1";
-        assert_eq!(rendered_line(&terminal, 3).trim(), summary);
+        assert_eq!(rendered_line(&terminal, 1).trim(), "new       |   2 ++  +2");
+        assert_eq!(rendered_line(&terminal, 2).trim(), "old       |   2 +-   0");
+        assert_eq!(rendered_line(&terminal, 3).trim(), "gone      |   3 --- -3");
+        assert_eq!(rendered_line(&terminal, 4).trim(), "image.bin | Bin");
+        let summary = "root · A 1 + M 2 + D 1 = 4 · +3 -4";
+        assert_eq!(rendered_line(&terminal, 5).trim(), summary);
         let buffer = terminal.backend().buffer();
         let summary_x = |needle| {
             summary[..summary.find(needle).expect("summary term is present")]
                 .chars()
                 .count() as u16
         };
-        assert_eq!(buffer[(0, 3)].fg, COMPARED_PARENT_COLOR);
-        assert_eq!(buffer[(summary_x("A 1"), 3)].fg, Color::Green);
-        assert_eq!(buffer[(summary_x("-1"), 3)].fg, Color::LightRed);
-        assert_eq!(buffer[(9, 1)].fg, Color::Green);
-        assert_eq!(buffer[(10, 2)].fg, Color::LightRed);
-        assert_eq!(rendered_line(&terminal, 4).trim(), "");
-        assert_eq!(rendered_line(&terminal, 5).trim(), "--- a/old");
+        assert_eq!(buffer[(0, 5)].fg, COMPARED_PARENT_COLOR);
+        assert_eq!(buffer[(summary_x("A 1"), 5)].fg, Color::Green);
+        assert_eq!(buffer[(summary_x("-4"), 5)].fg, Color::LightRed);
+        let delta_x = rendered_line(&terminal, 1).find("+2").expect("positive delta") as u16;
+        let zero_x = rendered_line(&terminal, 2).rfind('0').expect("zero delta") as u16;
+        assert_eq!(
+            delta_x + 2,
+            zero_x + 1,
+            "deltas are right-aligned despite different sign widths"
+        );
+        assert_eq!(
+            delta_x,
+            rendered_line(&terminal, 3).find("-3").expect("negative delta") as u16
+        );
+        assert_eq!(buffer[(delta_x, 1)].fg, Color::Green);
+        assert_eq!(buffer[(zero_x, 2)].fg, Color::Reset);
+        assert_eq!(buffer[(delta_x, 3)].fg, Color::LightRed);
+        assert_eq!(rendered_line(&terminal, 6).trim(), "");
+        assert_eq!(rendered_line(&terminal, 7).trim(), "--- a/old");
 
         let mut streamed = Vec::new();
         diff.write_to(&mut streamed)?;
         assert_eq!(
             streamed,
-            b"0101010 mapped author subject\n new | 2 ++\n old | 2 +-\nroot \xc2\xb7 A 1 + M 1 = 2 \xc2\xb7 +3 -1 \n\n--- a/old\n+++ b/old\n"
+            b"0101010 mapped author subject\n new       |   2 ++  +2\n old       |   2 +-   0\n gone      |   3 --- -3\n image.bin | Bin\nroot \xc2\xb7 A 1 + M 2 + D 1 = 4 \xc2\xb7 +3 -4 \n\n--- a/old\n+++ b/old\n"
         );
         Ok(())
     }
