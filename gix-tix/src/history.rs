@@ -407,13 +407,51 @@ impl HistoryGraph {
             .map(|(visible, _)| crate::app::SelectionRelation::Visible(visible))
     }
 
+    pub(crate) fn hidden_branch_behind(
+        &self,
+        view_tips: &[ObjectId],
+        hidden_tips: impl IntoIterator<Item = ObjectId>,
+    ) -> HashMap<ObjectId, usize> {
+        let hidden_tips: HashSet<_> = hidden_tips.into_iter().collect();
+        let mut out: HashMap<ObjectId, usize> = HashMap::new();
+        for tip in hidden_tips {
+            let Some((ahead, _, bases)) = self.paint_with_bases(tip, view_tips) else {
+                continue;
+            };
+            if ahead == 0 {
+                continue;
+            }
+            for base in bases {
+                out.entry(base)
+                    .and_modify(|previous| *previous = (*previous).max(ahead))
+                    .or_insert(ahead);
+            }
+        }
+        out
+    }
+
     fn paint(&self, first: ObjectId, others: &[ObjectId]) -> Option<(usize, usize)> {
+        self.paint_inner(first, others, false)
+            .map(|(ahead, behind, _)| (ahead, behind))
+    }
+
+    fn paint_with_bases(&self, first: ObjectId, others: &[ObjectId]) -> Option<(usize, usize, Vec<ObjectId>)> {
+        self.paint_inner(first, others, true)
+    }
+
+    fn paint_inner(
+        &self,
+        first: ObjectId,
+        others: &[ObjectId],
+        collect_bases: bool,
+    ) -> Option<(usize, usize, Vec<ObjectId>)> {
         let first = self.index(first)?;
         let others: Vec<_> = others.iter().map(|id| self.index(*id)).collect::<Option<_>>()?;
         let mut flags = vec![0u8; self.commits.len()];
         let mut queue = gix::revwalk::PriorityQueue::<GenThenTime, CommitIndex>::new();
         let mut queued = vec![false; self.commits.len()];
         let mut pending = 0usize;
+        let mut bases = Vec::new();
         for (index, flag) in std::iter::once((first, VISIBLE)).chain(others.into_iter().map(|index| (index, HIDDEN))) {
             flags[index.as_usize()] |= flag;
             if !queued[index.as_usize()] {
@@ -430,6 +468,9 @@ impl HistoryGraph {
                 pending -= 1;
             }
             if propagated & (VISIBLE | HIDDEN) == VISIBLE | HIDDEN {
+                if collect_bases && propagated & STALE == 0 {
+                    bases.push(self.id(index));
+                }
                 propagated |= STALE;
                 flags[index.as_usize()] = propagated;
             }
@@ -461,7 +502,15 @@ impl HistoryGraph {
                 _ => {}
             }
         }
-        Some((ahead, behind))
+        if collect_bases && bases.len() > 1 {
+            let candidates = bases.clone();
+            bases.retain(|candidate| {
+                !candidates
+                    .iter()
+                    .any(|other| candidate != other && self.is_ancestor(*candidate, *other))
+            });
+        }
+        Some((ahead, behind, bases))
     }
 
     pub(crate) fn refresh(
@@ -1400,6 +1449,34 @@ fn resolve_tips(repo: &gix::Repository, revisions: &[OsString]) -> Result<Option
     }
 }
 
+#[expect(
+    clippy::type_complexity,
+    reason = "both successful revisions and warning text are returned"
+)]
+pub(crate) fn available_hidden_revisions(
+    repo: &gix::Repository,
+    revisions: &[OsString],
+) -> Result<(Vec<OsString>, Vec<(OsString, String)>)> {
+    let mut available = Vec::new();
+    let mut unavailable = Vec::new();
+    let mut first_error = None;
+    for revision in revisions {
+        match resolve_revisions(repo, std::slice::from_ref(revision), "hidden ") {
+            Ok(_) => available.push(revision.clone()),
+            Err(err) => {
+                unavailable.push((revision.clone(), format!("{err:#}")));
+                first_error.get_or_insert(err);
+            }
+        }
+    }
+    if available.is_empty()
+        && let Some(err) = first_error
+    {
+        return Err(err);
+    }
+    Ok((available, unavailable))
+}
+
 fn attribution_kind(trailer: &gix::objs::commit::message::body::TrailerRef<'_>) -> Option<AttributionKind> {
     if trailer.is_co_authored_by() {
         Some(AttributionKind::CoAuthor)
@@ -1653,6 +1730,42 @@ mod tests {
             Some((2, 2)),
             "both merge tips stop at the shared criss-cross ancestry"
         );
+    }
+
+    #[test]
+    fn marks_visible_views_behind_hidden_branches_at_their_base() {
+        let mut graph = HistoryGraph::default();
+        for (n, parents, generation) in [
+            (1, vec![], 1),
+            (2, vec![1], 2),
+            (3, vec![1], 2),
+            (4, vec![3], 3),
+            (5, vec![], 1),
+        ] {
+            insert_commit(&mut graph, n, &parents, generation);
+        }
+
+        assert_eq!(
+            graph.hidden_branch_behind(&[id(2), id(5)], [id(4)]),
+            HashMap::from([(id(1), 2)]),
+            "only the fork point in the hidden branch's past reports its missing commits"
+        );
+    }
+
+    #[test]
+    fn ignores_missing_hidden_revisions_only_if_another_one_resolves() -> gix_testtools::Result {
+        let fixture = fixture()?;
+        let repo = crate::open_test_repository(&fixture)?;
+        let revisions = ["unknown".into(), "main".into()];
+
+        let (available, unavailable) = available_hidden_revisions(&repo, &revisions)?;
+        assert_eq!(available, [OsString::from("main")]);
+        assert_eq!(unavailable.len(), 1);
+        assert!(
+            available_hidden_revisions(&repo, &[OsString::from("unknown")]).is_err(),
+            "all missing hidden revisions retain the previous fatal behavior"
+        );
+        Ok(())
     }
 
     #[test]
