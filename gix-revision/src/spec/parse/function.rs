@@ -678,11 +678,9 @@ where
                         b"" => delegate::PeelTo::RecursiveTagObject,
                         regex if regex.starts_with(b"/") => {
                             let (regex, negated) = parse_regex_prefix(regex[1..].as_bstr())?;
-                            if !regex.is_empty() {
-                                delegate.find(regex, negated).or_raise(|| {
-                                    Error::new(format!("Delegate couldn't find '{regex}' (negated: {negated})"))
-                                })?;
-                            }
+                            delegate.find(regex, negated).or_raise(|| {
+                                Error::new(format!("Delegate couldn't find '{regex}' (negated: {negated})"))
+                            })?;
                             continue;
                         }
                         invalid => return Err(Error::new_with_input("cannot peel to unknown target", invalid).raise()),
