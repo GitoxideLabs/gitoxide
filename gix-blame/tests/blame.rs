@@ -799,6 +799,11 @@ mod symlinks {
     fn file_becomes_symlink() -> gix_testtools::Result {
         run_test("file-then-symlink", "file-becomes-symlink.baseline")
     }
+
+    #[test]
+    fn symlink_becomes_file() -> gix_testtools::Result {
+        run_test("symlink-then-file", "symlink-becomes-file.baseline")
+    }
 }
 
 fn fixture_path() -> gix_testtools::Result<PathBuf> {
