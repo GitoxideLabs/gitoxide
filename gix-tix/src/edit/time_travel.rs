@@ -16,21 +16,43 @@ use crate::{history, open_repository};
 pub(crate) fn perform(
     repository_path: &Path,
     bare: bool,
-    selected: ObjectId,
+    mut selected: ObjectId,
     graph: &history::HistoryGraph,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
-    let repository =
+    let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
     let workdir = repository
         .workdir()
         .context("time-travel requires a worktree")?
         .to_owned();
     let head = repository.head().context("could not read HEAD before time-travel")?;
-    let Some(head_id) = head.id().map(gix::Id::detach) else {
+    let Some(mut head_id) = head.id().map(gix::Id::detach) else {
         anyhow::bail!("cannot time-travel from an unborn HEAD");
     };
+    let head_referent = head.referent_name().map(ToOwned::to_owned);
+    drop(head);
+    let mut completed_graph = None;
+    while let Some(base) = pending_base(&repository, head_id, selected)? {
+        let outcome = super::rebase::perform(
+            repository,
+            completed_graph.as_ref().unwrap_or(graph),
+            super::rebase::Edit::Repeat { base },
+            super::rebase::Signature::RedoIfNeeded,
+            super::rebase::Tree::CherryPick,
+        )?;
+        selected = outcome
+            .map(selected)
+            .context("the time-travel destination disappeared while completing its rebase")?;
+        head_id = outcome
+            .map(head_id)
+            .context("HEAD disappeared while completing its rebase")?;
+        repository = open_repository(repository_path, bare, false)
+            .context("could not reopen repository after completing a pending rebase")?;
+        completed_graph = Some(super::loaded_graph(&repository)?);
+    }
+    let graph = completed_graph.as_ref().unwrap_or(graph);
     if selected == head_id {
         return Ok(None);
     }
@@ -44,10 +66,7 @@ pub(crate) fn perform(
             Err(err) => format!("returned from {}; pin remains: {err:#}", pin_label(&pin)),
         }));
     }
-    let saved_target = head
-        .referent_name()
-        .map(|name| Target::Symbolic(name.to_owned()))
-        .unwrap_or(Target::Object(head_id));
+    let saved_target = head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id));
     let provisional = graph
         .is_ancestor(selected, head_id)
         .then(|| create_or_reuse_pin(&repository, saved_target, head_id))
@@ -89,6 +108,32 @@ pub(crate) fn perform(
         }
     }
     Ok(Some(notice))
+}
+
+fn pending_base(repository: &gix::Repository, head: ObjectId, selected: ObjectId) -> Result<Option<ObjectId>> {
+    for endpoint in [head, selected] {
+        let mut current = endpoint;
+        let mut base = None;
+        loop {
+            let commit = repository
+                .find_commit(current)
+                .context("could not inspect a time-travel endpoint for a pending rebase")?
+                .decode()?
+                .into_owned()?;
+            if !super::rebase::has_marker(&commit) {
+                break;
+            }
+            base = Some(current);
+            let Some(parent) = commit.parents.first().copied() else {
+                break;
+            };
+            current = parent;
+        }
+        if base.is_some() {
+            return Ok(base);
+        }
+    }
+    Ok(None)
 }
 
 fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Option<history::Pin>> {
@@ -374,6 +419,38 @@ mod tests {
             history::all_pins(&repository)?.is_empty(),
             "the provisional pin is removed"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn travelling_completes_the_whole_pending_rebase() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let root = repository.rev_parse_single("HEAD~2")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        let commit = repository.find_commit(middle)?.decode()?.into_owned()?;
+        super::super::rebase::perform(
+            repository.clone(),
+            &graph,
+            super::super::rebase::Edit::Replace { target: middle, commit },
+            super::super::rebase::Signature::InvalidateExisting,
+            super::super::rebase::Tree::LeaveAsIsAndMark,
+        )?;
+        let graph = loaded_graph(&repository, &[])?;
+        perform(&repository_path, false, root, &graph, &[], false)?;
+
+        let repository = crate::open_test_repository(fixture.path())?;
+        let mut current = Some(repository.find_reference("refs/heads/main")?.id().detach());
+        while let Some(id) = current {
+            let commit = repository.find_commit(id)?.decode()?.into_owned()?;
+            assert!(
+                !super::super::rebase::has_marker(&commit),
+                "time travel clears the complete pending region"
+            );
+            current = commit.parents.first().copied();
+        }
         Ok(())
     }
 }

@@ -243,6 +243,15 @@ pub(crate) fn draw_with_worktree(
         && changes_panes
             .iter()
             .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
+    let selected_is_head = app.selected.and_then(|index| app.rows.get(index)).is_some_and(|row| {
+        decorations
+            .get(&row.id)
+            .is_some_and(|refs| refs.iter().any(|r| r.kind == DecorationKind::Head))
+    });
+    app.set_head_edit_availability(
+        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+    );
     if app.changes_visible() {
         app.set_changes_layout(
             changes_layout,
@@ -684,6 +693,12 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_create_commit() {
                 options.push(("new", 'n'));
+            }
+            if app.can_amend() {
+                options.push(("amend", 'a'));
+            }
+            if app.can_spill() {
+                options.push(("spill", 's'));
             }
             if app.can_forget() {
                 options.push(if app.forget_confirmation_visible() {
@@ -1730,6 +1745,7 @@ fn signature_color(signature: SignatureState) -> Color {
         SignatureState::Unverified | SignatureState::Verifying => Color::Rgb(255, 165, 0),
         SignatureState::Verified => Color::Green,
         SignatureState::Failed => Color::LightRed,
+        SignatureState::PendingRebase => Color::LightCyan,
     }
 }
 
@@ -2796,6 +2812,7 @@ mod tests {
             (SignatureState::Unverified, Color::Rgb(255, 165, 0)),
             (SignatureState::Verified, Color::Green),
             (SignatureState::Failed, Color::LightRed),
+            (SignatureState::PendingRebase, Color::LightCyan),
         ];
         let mut terminal = Terminal::new(TestBackend::new(4, states.len() as u16))?;
         terminal.draw(|frame| {

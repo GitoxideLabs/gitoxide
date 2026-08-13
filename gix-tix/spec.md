@@ -333,6 +333,22 @@ space first; changes blocks adapt within the remaining history width.
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
 
+### Amend and spill
+
+- `e a` amends the current worktree's `@` commit with the changed index, or
+  worktree changes when the index already matches `HEAD`. `e s` spills that
+  commit's tree delta into the worktree by replacing its tree with its first
+  parent's tree, or the empty tree for a root commit. Clean operations are
+  unavailable and report a no-op through `tix edit amend|spill`.
+- Both operations leave worktree files untouched, reset the affected worktree's
+  index to the rewritten commit, and cheaply rewrite linear descendants with
+  their trees unchanged. Rewritten commits carry `tix-rebase: pending`, invalidate
+  existing signatures, retain the original parent needed for later replay, and
+  use a bright-cyan commit marker.
+- Time travel from either endpoint of a pending region completes the entire
+  marked rebase with cherry-picking and configured signing before checkout. A
+  conflict aborts before refs or worktrees change.
+
 ### Forget commits
 
 - `e`, then `d`, is available after history completion for a selected non-merge
@@ -377,8 +393,8 @@ space first; changes blocks adapt within the remaining history width.
 ### Editing shortcuts
 
 - `e` toggles the edit shortcut group. `e r` rewords, `e n` creates a commit,
-  `e d d` confirms forgetting a top commit, and `e t` enters or returns from time
-  travel when each action is available.
+  `e a` amends `@`, `e s` spills `@`, `e d d` confirms forgetting a top commit,
+  and `e t` enters or returns from time travel when each action is available.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.
