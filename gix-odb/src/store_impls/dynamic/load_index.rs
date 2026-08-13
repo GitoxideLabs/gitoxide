@@ -140,6 +140,7 @@ impl super::Store {
             }
             let previous_state_id = index.state_id();
             'retry_with_next_slot_index: loop {
+                let ongoing_operation = IncOnNewAndDecOnDrop::new(&index.num_indices_currently_being_loaded);
                 match index
                     .next_index_to_load
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
@@ -147,10 +148,13 @@ impl super::Store {
                     }) {
                     Ok(slot_map_index) => {
                         // This slot-map index is in bounds and was only given to us.
-                        let _ongoing_operation = IncOnNewAndDecOnDrop::new(&index.num_indices_currently_being_loaded);
+                        let _ongoing_operation = ongoing_operation;
                         let slot_id = index.slot_indices[slot_map_index];
                         #[cfg(feature = "test-support")]
-                        self.debug(crate::store::init::debug::Point::IndexLoadClaimed { slot: slot_id });
+                        self.debug(crate::store::init::debug::Point::IndexLoadClaimed {
+                            slot: slot_id,
+                            active_loads: index.num_indices_currently_being_loaded.load(Ordering::SeqCst),
+                        });
                         let slot = &catalog.slots[slot_id];
                         let _lock = slot.write.lock();
                         #[cfg(feature = "test-support")]
@@ -189,18 +193,13 @@ impl super::Store {
                         }
                     }
                     Err(_nothing_more_to_load) => {
+                        drop(ongoing_operation);
                         #[cfg(feature = "test-support")]
                         self.debug(crate::store::init::debug::Point::IndexLoadWaiting);
                         // There can be contention as many threads start working at the same time and take all the
                         // slots to load indices for. Some threads might just be left-over and have to wait for something
                         // to change.
                         // TODO: potentially hot loop - could this be a condition variable?
-                        // This is a timing-based fix for the case that the `num_indices_being_loaded` isn't yet incremented,
-                        // and we might break out here without actually waiting for the loading operation. Then we'd fail to
-                        // observe a change and the underlying handler would not have all the indices it needs at its disposal.
-                        // Yielding means we will definitely loose enough time to observe the ongoing operation,
-                        // or its effects.
-                        std::thread::yield_now();
                         while index.num_indices_currently_being_loaded.load(Ordering::SeqCst) != 0 {
                             std::thread::yield_now();
                         }
