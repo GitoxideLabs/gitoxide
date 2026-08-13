@@ -288,6 +288,7 @@ pub(crate) enum Action {
     NewCommit,
     Amend,
     Spill,
+    Split,
     Forget,
     TimeTravel,
     VerifySignatures,
@@ -313,6 +314,7 @@ pub(crate) enum Effect {
     NewCommit(Option<ObjectId>),
     Amend(ObjectId),
     Spill(ObjectId),
+    Split(ObjectId),
     Forget(ObjectId),
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
@@ -386,6 +388,7 @@ pub(crate) struct App {
     worktree_head_unborn: bool,
     amend_available: bool,
     spill_available: bool,
+    split_available: bool,
     known_descendants: HashSet<ObjectId>,
     known_merge_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
@@ -464,6 +467,7 @@ impl App {
             worktree_head_unborn: false,
             amend_available: false,
             spill_available: false,
+            split_available: false,
             known_descendants: HashSet::new(),
             known_merge_descendants: HashSet::new(),
             select_top_after_refresh: false,
@@ -693,6 +697,7 @@ impl App {
                 | Action::NewCommit
                 | Action::Amend
                 | Action::Spill
+                | Action::Split
                 | Action::Forget
                 | Action::TimeTravel
         ) {
@@ -870,6 +875,11 @@ impl App {
             Action::Spill if self.can_spill() => {
                 return vec![Effect::Spill(
                     self.rows[self.selected.expect("spill requires a selection")].id,
+                )];
+            }
+            Action::Split if self.can_split() => {
+                return vec![Effect::Split(
+                    self.rows[self.selected.expect("split requires a selection")].id,
                 )];
             }
             Action::Forget if self.can_forget() => {
@@ -1402,9 +1412,14 @@ impl App {
         self.can_edit_head() && matches!(self.changes_focus, None | Some(ChangePane::Tree)) && self.spill_available
     }
 
-    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, spill: bool) {
+    pub(crate) fn can_split(&self) -> bool {
+        self.can_edit_head() && self.changes_focus.is_none() && self.split_available
+    }
+
+    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, spill: bool, split: bool) {
         self.amend_available = amend;
         self.spill_available = spill;
+        self.split_available = split;
     }
 
     pub(crate) fn forget_confirmation_visible(&self) -> bool {
@@ -2087,16 +2102,23 @@ mod tests {
     }
 
     #[test]
-    fn amend_and_spill_are_limited_to_the_current_worktree_head() {
+    fn head_edits_are_limited_to_the_current_worktree_head_and_available_changes() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_head_edit_availability(true, true);
+        app.set_head_edit_availability(true, true, false);
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
         assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
+        assert!(
+            app.update(Action::Split).is_empty(),
+            "split needs both kinds of changes"
+        );
+        app.set_head_edit_availability(true, true, true);
+        assert_eq!(app.update(Action::Split), vec![Effect::Split(id(2))]);
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!app.can_amend(), "a tree path cannot be amended");
+        assert!(!app.can_split(), "a tree path cannot be split");
         assert_eq!(
             app.update(Action::Spill),
             vec![Effect::Spill(id(2))],
