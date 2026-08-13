@@ -2735,6 +2735,7 @@ fn show_commit_diff(
     Ok(false)
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn reword_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
@@ -2766,6 +2767,7 @@ fn reword_commit(
     edit::reword::apply(repository, graph, id, &edited)
 }
 
+#[tracing::instrument(skip_all, fields(parent = ?parent))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
@@ -2794,6 +2796,7 @@ fn create_commit(
     edit::create::apply(repository, graph, prepared, &edited).map(Some)
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
 fn forget_commit(
     repository_path: &Path,
     bare: bool,
