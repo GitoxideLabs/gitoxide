@@ -999,6 +999,7 @@ fn event_loop(
     let mut repeat_deadline: Option<Instant> = None;
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
+    let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(mut recovered) =
             recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
@@ -1505,6 +1506,7 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        let is_key_event = matches!(&terminal_event, TerminalEvent::Key(_));
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
                 let action = action_with_shortcut_groups(key, app.history_display_expanded, app.edit_expanded);
@@ -1604,6 +1606,50 @@ fn event_loop(
         } else if !is_repeat && app.changes_suppressed {
             app.changes_suppressed = false;
             repeat_deadline = None;
+            dirty = true;
+            urgent = true;
+        }
+        if is_key_event && pending_rebase_conflict.is_some() {
+            if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
+                let conflict = pending_rebase_conflict
+                    .take()
+                    .expect("a pending conflict was checked before accepting it");
+                match conflict.accept() {
+                    Ok((notice, id)) => {
+                        app.begin_conflict_resolution();
+                        app.leave_message(notice);
+                        app.select_commit_after_refresh(id);
+                    }
+                    Err(err) => {
+                        app.clear_rebase_conflict();
+                        app.leave_message(format!("conflict checkout: {err:#}"));
+                    }
+                }
+                sync_line_diff_pool(
+                    &mut line_diff_pool,
+                    app.changes_mode.is_some(),
+                    &repository_path,
+                    repository_is_bare,
+                    line_diff_parallelism,
+                )?;
+                if worktree_watcher.is_none() {
+                    match start_worktree_watcher(&repository_path, repository_is_bare) {
+                        Ok(watcher) => worktree_watcher = Some(watcher),
+                        Err(err) => {
+                            tracing::warn!(error = %err, "worktree watcher startup after conflict failed");
+                            app.worktree_changes.error = Some(format!("worktree watch: {err}"));
+                            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                        }
+                    }
+                }
+                invalidate_worktree_changes(&mut worktree_changes);
+                refresh_pending = true;
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            pending_rebase_conflict = None;
+            app.clear_rebase_conflict();
             dirty = true;
             urgent = true;
         }
@@ -1895,7 +1941,7 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(Some(notice)) => {
+                        Ok(edit::time_travel::Perform::Complete(Some(notice))) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
                             app.leave_message(notice);
                             if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
@@ -1906,7 +1952,13 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Ok(None) => {}
+                        Ok(edit::time_travel::Perform::Complete(None)) => {}
+                        Ok(edit::time_travel::Perform::Conflict(conflict)) => {
+                            let original = conflict.original();
+                            app.arm_rebase_conflict(original);
+                            app.select_commit(original);
+                            pending_rebase_conflict = Some(conflict);
+                        }
                         Err(err) => app.leave_message(format!("time-travel: {err:#}")),
                     }
                 }

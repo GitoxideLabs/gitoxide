@@ -243,6 +243,9 @@ pub(crate) fn draw_with_worktree(
         && changes_panes
             .iter()
             .any(|pane| pane.pane == ChangePane::Worktree && pane.outer.height > 0);
+    if let Some(changes) = worktree_changes {
+        app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
+    }
     let selected_is_head = app.selected.and_then(|index| app.rows.get(index)).is_some_and(|row| {
         decorations
             .get(&row.id)
@@ -422,15 +425,24 @@ pub(crate) fn draw_with_worktree(
         let style = highlight.map_or_else(Style::default, |highlight| {
             color(highlight).add_modifier(Modifier::REVERSED)
         });
+        let conflict = app.conflict_marker(visible_rows[index].id, head);
         frame.render_widget(
-            Paragraph::new(if head && worktree_dirty {
+            Paragraph::new(if conflict {
+                "C "
+            } else if head && worktree_dirty {
                 "D "
             } else if selected {
                 "> "
             } else {
                 "  "
             })
-            .style(if selected { style } else { Style::default() }),
+            .style(if conflict {
+                color(Color::LightRed).add_modifier(Modifier::SLOW_BLINK)
+            } else if selected {
+                style
+            } else {
+                Style::default()
+            }),
             Rect::new(body.x, y, body.width.min(2), 1),
         );
 
@@ -3097,6 +3109,52 @@ mod tests {
             terminal.backend().buffer()[(0, 0)]
                 .modifier
                 .contains(Modifier::REVERSED)
+        );
+
+        let conflicted = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Unmerged,
+                group: ChangeGroup::Unstaged,
+                source: None,
+                path: "dirty".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&conflicted),
+            );
+        })?;
+        assert!(rendered_line(&terminal, 0).starts_with("C @"));
+        assert_eq!(terminal.backend().buffer()[(0, 0)].fg, Color::LightRed);
+        assert!(
+            terminal.backend().buffer()[(0, 0)]
+                .modifier
+                .contains(Modifier::SLOW_BLINK),
+            "the conflict marker remains visually urgent"
+        );
+
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&dirty),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 0).starts_with("D @"),
+            "resolving the index restores the ordinary dirty marker"
         );
 
         app.changes_mode = Some(ChangesMode::Tree);

@@ -12,24 +12,15 @@ pub(crate) fn perform(
     id: ObjectId,
 ) -> Result<Option<ObjectId>> {
     let commit = repo.find_commit(id).context("could not find the commit to forget")?;
-    let parent = commit.parent_ids().next().map(gix::Id::detach);
-    let tree = commit.tree_id()?.detach();
-    let parent_tree = match parent {
-        Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
-        None => repo.empty_tree().id,
-    };
     drop(commit);
     Ok(rebase::perform(
-        repo,
+        &repo,
         graph,
         rebase::Edit::Remove { target: id },
         rebase::Signature::RedoIfNeeded,
-        if tree == parent_tree {
-            rebase::Tree::LeaveAsIs
-        } else {
-            rebase::Tree::CherryPick
-        },
+        rebase::Tree::LeaveAsIsAndMark,
     )?
+    .complete()?
     .selected)
 }
 

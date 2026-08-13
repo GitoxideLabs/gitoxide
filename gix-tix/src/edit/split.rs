@@ -78,7 +78,7 @@ pub(crate) fn apply(
     let mut upper = create::commit_from_edit(&prepared.create, edited)?;
     upper.tree = prepared.tree;
     rebase::perform(
-        repo,
+        &repo,
         graph,
         rebase::Edit::Split {
             target: prepared.target,
@@ -88,6 +88,7 @@ pub(crate) fn apply(
         rebase::Signature::InvalidateExisting,
         rebase::Tree::LeaveAsIsAndMark,
     )?
+    .complete()?
     .selected
     .context("splitting HEAD did not produce a selection")
 }
