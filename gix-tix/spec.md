@@ -324,15 +324,35 @@ space first; changes blocks adapt within the remaining history width.
   untouched. A ref changed by another process or a branch checked out in another
   worktree aborts safely.
 
+### Forget commits
+
+- `e`, then `d`, is available after history completion for a selected non-merge
+  commit with no descendants in the complete cached graph. The first `d` arms a
+  `d again forget` confirmation; the second performs it. Navigation, refresh,
+  cancellation, selection changes, and other commands disarm confirmation.
+- Forgetting does not require a worktree. Every mutable direct ref pointing at
+  the commit is atomically retargeted to its parent, or deleted for a root.
+  Tags and remote-tracking refs remain unchanged. A branch checked out in another
+  worktree aborts before mutation.
+- When the selected commit is the current worktree `HEAD`, Git preflights and
+  applies a two-tree index/worktree transition which discards only that commit's
+  tracked delta. Conflicting staged, tracked, or untracked state refuses the
+  operation; unrelated untracked content survives. When `HEAD` is unrelated, only
+  refs move and the worktree is untouched.
+- Forgetting an attached root deletes the branch and leaves symbolic `HEAD`
+  unborn. A selected detached root is rejected because it cannot produce a valid
+  unborn `HEAD`. Success refreshes history and selects the parent when present.
+
 ### Editing shortcuts
 
 - `e` toggles the edit shortcut group. `e r` rewords, `e n` creates a commit,
-  and `e t` enters or returns from time travel when each action is available.
+  `e d d` confirms forgetting a top commit, and `e t` enters or returns from time
+  travel when each action is available.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.
-- While the `v` group is open, `e`, `r`, and `t` retain their display meanings
-  for emails, references, and trailers.
+- While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
+  meanings for dates, emails, references, and trailers.
 
 ## Refresh, focus, and diagnostics
 

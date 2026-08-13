@@ -285,6 +285,7 @@ pub(crate) enum Action {
     OpenDiff,
     Reword,
     NewCommit,
+    Forget,
     TimeTravel,
     VerifySignatures,
     Cancel,
@@ -307,6 +308,7 @@ pub(crate) enum Effect {
     OpenCommitDiff(ObjectId),
     Reword(ObjectId),
     NewCommit(Option<ObjectId>),
+    Forget(ObjectId),
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
@@ -366,6 +368,7 @@ pub(crate) struct App {
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) edit_expanded: bool,
+    forget_confirmation: Option<ObjectId>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
     horizontal_page: usize,
@@ -439,6 +442,7 @@ impl App {
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             edit_expanded: false,
+            forget_confirmation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
             horizontal_page: 1,
@@ -644,6 +648,9 @@ impl App {
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
         self.notice = None;
+        if !matches!(&action, Action::Forget) {
+            self.forget_confirmation = None;
+        }
         if !matches!(
             &action,
             Action::ToggleHistoryDisplay
@@ -659,7 +666,7 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleEdit | Action::Reword | Action::NewCommit | Action::TimeTravel
+            Action::ToggleEdit | Action::Reword | Action::NewCommit | Action::Forget | Action::TimeTravel
         ) {
             self.edit_expanded = false;
         }
@@ -827,6 +834,14 @@ impl App {
                     self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
                 )];
             }
+            Action::Forget if self.can_forget() => {
+                let id = self.rows[self.selected.expect("forget requires a selection")].id;
+                if self.forget_confirmation == Some(id) {
+                    self.forget_confirmation = None;
+                    return vec![Effect::Forget(id)];
+                }
+                self.forget_confirmation = Some(id);
+            }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
@@ -927,6 +942,7 @@ impl App {
         hidden_tips: &[ObjectId],
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
+        self.forget_confirmation = None;
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -1310,6 +1326,28 @@ impl App {
                 Some(row) => !self.has_known_descendant(row.id),
                 None => self.worktree_head_unborn,
             }
+    }
+
+    pub(crate) fn can_forget(&self) -> bool {
+        self.state == State::Complete
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| row.parent_ids.len() <= 1 && !self.has_known_descendant(row.id))
+    }
+
+    pub(crate) fn forget_confirmation_visible(&self) -> bool {
+        self.selected
+            .and_then(|index| self.rows.get(index))
+            .is_some_and(|row| self.forget_confirmation == Some(row.id))
+    }
+
+    pub(crate) fn select_commit(&mut self, id: ObjectId) {
+        if let Some(index) = self.rows.iter().position(|row| row.id == id) {
+            self.select(index);
+        }
     }
 
     pub(crate) fn time_travel_shortcut_visible(&self) -> bool {
@@ -1983,6 +2021,31 @@ mod tests {
     }
 
     #[test]
+    fn forgetting_a_non_merge_tip_requires_a_second_d_and_navigation_cancels_it() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        assert!(!app.can_forget(), "loading history cannot forget commits");
+        complete(&mut app);
+        assert!(app.can_forget());
+        assert!(
+            app.update(Action::Forget).is_empty(),
+            "the first d only arms confirmation"
+        );
+        assert!(app.forget_confirmation_visible());
+        app.update(Action::MoveDown);
+        assert!(!app.forget_confirmation_visible(), "navigation cancels confirmation");
+        assert!(!app.can_forget(), "a commit with a descendant cannot be forgotten");
+        app.update(Action::MoveUp);
+        assert!(app.update(Action::Forget).is_empty());
+        assert_eq!(app.update(Action::Forget), vec![Effect::Forget(id(2))]);
+
+        let mut merge = App::new(10);
+        merge.extend_commits(vec![row_with_parents(3, &[2, 1]), row(2), row(1)]);
+        complete(&mut merge);
+        assert!(!merge.can_forget(), "merge commits are not forgettable");
+    }
+
+    #[test]
     fn editing_requires_no_known_descendants_and_new_commits_support_unborn_head() {
         let mut app = App::new(10);
         app.extend_commits(vec![row(2)]);
@@ -2516,6 +2579,7 @@ mod tests {
         assert!(app.edit_expanded);
         app.update(Action::Reword);
         app.update(Action::NewCommit);
+        app.update(Action::Forget);
         assert!(app.edit_expanded, "grouped edit commands keep the group open");
 
         app.update(Action::MoveDown);
