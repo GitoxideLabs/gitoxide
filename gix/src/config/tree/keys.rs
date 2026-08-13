@@ -474,7 +474,7 @@ mod time {
         pub fn try_into_time(
             &self,
             value: impl gix_utils::AsBStr,
-            now: Option<std::time::SystemTime>,
+            now: Option<gix_date::Zoned>,
         ) -> Result<gix_date::Time, Exn<gix_date::Error>> {
             let value = value.as_bstr();
             gix_date::parse(
@@ -571,8 +571,7 @@ pub mod validate {
 
     impl Validate for Time {
         fn validate(&self, value: &BStr) -> Result<(), Box<dyn Error + Send + Sync + 'static>> {
-            gix_date::parse(value.to_str()?, std::time::SystemTime::now().into())
-                .map_err(gix_error::Exn::into_inner)?;
+            gix_date::parse(value.to_str()?, gix_date::Zoned::now().into()).map_err(gix_error::Exn::into_inner)?;
             Ok(())
         }
     }
