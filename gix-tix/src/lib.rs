@@ -934,8 +934,6 @@ fn event_loop(
     let mut refresh_pending = false;
     let mut refresh_from_filesystem = false;
     let mut ref_refresh_deadline: Option<Instant> = None;
-    let mut refresh_select_top = false;
-    let mut refresh_select_top_requested = false;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
     let mut commit_message = None;
@@ -1280,12 +1278,19 @@ fn event_loop(
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "history-refresh-completed");
                     filesystem_responses.queue_frame(&response_ids, "history-refresh-completed");
+                    let decorated_successor = app
+                        .selected
+                        .and_then(|index| app.rows.get(index))
+                        .and_then(|row| decoration_successor(row.id, &decorations, &result.decorations));
                     app.set_worktree_head(
                         (!repository_is_bare)
                             .then(|| decoration_head(&result.decorations))
                             .flatten(),
                         false,
                     );
+                    if let Some(successor) = decorated_successor {
+                        app.select_commit_after_refresh(successor);
+                    }
                     worktree_head_unborn = !repository_is_bare
                         && open_repository(&repository_path, false, false)
                             .and_then(|repo| Ok(repo.head()?.is_unborn()))
@@ -1299,12 +1304,7 @@ fn event_loop(
                     } else {
                         result.refs.hidden_tips.as_slice()
                     };
-                    if let Some(rows) = app.start_refresh(
-                        result.commits,
-                        &result.refs.view_tips,
-                        hidden_tips,
-                        std::mem::take(&mut refresh_select_top),
-                    ) {
+                    if let Some(rows) = app.start_refresh(result.commits, &result.refs.view_tips, hidden_tips, false) {
                         lane_receiver = Some(start_lane_worker(rows));
                     }
                     refresh_receiver = None;
@@ -1343,7 +1343,6 @@ fn event_loop(
                 hidden_changed,
                 "compared reference snapshot"
             );
-            let select_top = std::mem::take(&mut refresh_select_top_requested);
             ref_snapshot = next;
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
@@ -1364,13 +1363,12 @@ fn event_loop(
                     .take()
                     .expect("refresh starts only with a cached history graph"),
             ));
-            refresh_select_top = select_top;
             refresh_expand_hidden = false;
             app.deferred_history_state = Some(app.state);
             history_status_deadline = Some(refresh_started + HISTORY_STATUS_DELAY);
             app.state = State::Loading;
             filesystem_responses.phase(&response_ids, "history-refresh-started");
-            tracing::info!(?response_ids, select_top, "started history refresh");
+            tracing::info!(?response_ids, "started history refresh");
         }
         let now = Instant::now();
         if motion.timeout(now) == Some(Duration::ZERO)
@@ -1749,7 +1747,7 @@ fn event_loop(
                                 id.to_hex_with_len(7),
                                 new_id.to_hex_with_len(7)
                             ));
-                            refresh_select_top_requested = true;
+                            app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(None) => {}
@@ -1773,7 +1771,7 @@ fn event_loop(
                     match result {
                         Ok(Some(new_id)) => {
                             app.leave_message(format!("created {}", new_id.to_hex_with_len(7)));
-                            refresh_select_top_requested = true;
+                            app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(None) => app.leave_message("no commit created: no input was provided"),
@@ -1797,7 +1795,7 @@ fn event_loop(
                                 new_id.to_hex_with_len(7)
                             ));
                             invalidate_worktree_changes(&mut worktree_changes);
-                            refresh_select_top_requested = true;
+                            app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(None) => app.leave_message("no split performed: no input was provided"),
@@ -1854,6 +1852,7 @@ fn event_loop(
                                 new_id.to_hex_with_len(7)
                             ));
                             invalidate_worktree_changes(&mut worktree_changes);
+                            app.select_commit_after_refresh(new_id);
                             refresh_pending = true;
                         }
                         Ok(None) => app.leave_message(format!("nothing to {verb}")),
@@ -1899,6 +1898,11 @@ fn event_loop(
                         Ok(Some(notice)) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
                             app.leave_message(notice);
+                            if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
+                                .and_then(|repo| Ok(repo.head_id()?.detach()))
+                            {
+                                app.select_commit_after_refresh(head);
+                            }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
@@ -2170,6 +2174,18 @@ fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
             .any(|decoration| decoration.kind == history::DecorationKind::Head)
             .then_some(*id)
     })
+}
+
+fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &Decorations) -> Option<gix::ObjectId> {
+    let selected = current.get(&selected)?;
+    let mut matches = next.iter().filter_map(|(id, decorations)| {
+        decorations
+            .iter()
+            .any(|decoration| selected.contains(decoration))
+            .then_some(*id)
+    });
+    let successor = matches.next()?;
+    matches.all(|candidate| candidate == successor).then_some(successor)
 }
 
 fn update_hidden_branch_behind(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
@@ -3770,6 +3786,20 @@ mod tests {
         assert!(unseen_filesystem_redraw(false, false, true));
         assert!(unseen_filesystem_redraw(true, false, false));
         assert!(!unseen_filesystem_redraw(true, true, true));
+    }
+
+    #[test]
+    fn follows_a_reference_across_a_rewrite() {
+        let old = gix::ObjectId::Sha1([1; 20]);
+        let new = gix::ObjectId::Sha1([2; 20]);
+        let decoration = history::Decoration {
+            name: "refs/patches/topic/selected".into(),
+            kind: history::DecorationKind::Special,
+        };
+        let current = Decorations::from([(old, vec![decoration.clone()])]);
+        let next = Decorations::from([(new, vec![decoration])]);
+
+        assert_eq!(decoration_successor(old, &current, &next), Some(new));
     }
 
     #[test]
