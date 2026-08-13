@@ -7,7 +7,7 @@ pub mod odb_fixture;
 #[path = "tools/scenario.rs"]
 mod support;
 use odb_fixture::{Component, Database, OdbFixture, Pack};
-use support::*;
+use support::assert_object_once as assert_object;
 
 fn contended_lookup(
     first: gix_odb::HandleArc,
@@ -951,3 +951,46 @@ fn a_handle_rechecks_its_snapshot_after_waiting_for_an_index_loader() -> Result 
     );
     Ok(())
 }
+
+fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result + Sync) -> Result {
+    let threads = match std::env::var_os("GIX_ODB_TEST_THREADS") {
+        Some(value) => value
+            .into_string()
+            .map_err(|_| std::io::Error::other("GIX_ODB_TEST_THREADS must be valid UTF-8"))?
+            .parse::<std::num::NonZeroUsize>()
+            .map_err(|err| std::io::Error::other(format!("invalid GIX_ODB_TEST_THREADS: {err}")))?
+            .get(),
+        None => 1,
+    };
+    if threads == 1 {
+        return assertion(handle);
+    }
+
+    let barrier = std::sync::Barrier::new(threads);
+    std::thread::scope(|scope| {
+        let workers = (1..threads)
+            .map(|_| {
+                let handle = handle.clone();
+                let barrier = &barrier;
+                let assertion = &assertion;
+                scope.spawn(move || {
+                    barrier.wait();
+                    assertion(&handle)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        let mut outcome = assertion(handle);
+        for worker in workers {
+            let worker = worker.join().expect("a contending assertion does not panic");
+            if outcome.is_ok() {
+                outcome = worker;
+            }
+        }
+        outcome
+    })
+}
+
+#[path = "odb/store/dynamic_scenarios.rs"]
+mod scenarios;

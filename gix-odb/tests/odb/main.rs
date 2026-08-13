@@ -41,3 +41,10 @@ pub mod memory;
 pub mod regression;
 pub mod sink;
 pub mod store;
+
+fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result) -> Result {
+    assertion(handle)
+}
+
+#[path = "../tools/scenario.rs"]
+mod support;
