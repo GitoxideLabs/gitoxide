@@ -95,6 +95,7 @@ sha1 = [
 ## Enable support for the SHA-256 hash throughout the `gix` stack.
 sha256 = [
     "gix-hash/sha256",
+    "gix-object/sha256",
     "gix-pack/sha256",
     "gix-worktree-stream?/sha256",
 ]

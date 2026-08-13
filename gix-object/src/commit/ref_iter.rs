@@ -6,7 +6,7 @@ use gix_hash::{ObjectId, oid};
 use crate::{
     CommitRefIter,
     bstr::ByteSlice,
-    commit::{SIGNATURE_FIELD_NAME, SignedData, decode},
+    commit::{SignedData, decode, signature_field_name},
     parse,
 };
 
@@ -64,7 +64,7 @@ impl<'a> CommitRefIter<'a> {
         for token in raw_tokens {
             let token = token?;
             if let Token::ExtraHeader((name, value)) = &token.token {
-                if *name == SIGNATURE_FIELD_NAME {
+                if *name == signature_field_name(hash_kind) {
                     // keep track of the signature range alongside the signature data,
                     // because all but the signature is the signed data.
                     signature_and_range = Some((value.clone(), token.token_range));

@@ -5,8 +5,20 @@ use bstr::{BStr, BString, ByteSlice};
 use crate::parse::parse_signature;
 use crate::{Commit, CommitRef, TagRef};
 
-/// The well-known field name for gpg signatures.
+/// The well-known field name for signatures on SHA-1 commits.
 pub const SIGNATURE_FIELD_NAME: &str = "gpgsig";
+/// The well-known field name for signatures on SHA-256 commits.
+pub const SIGNATURE_FIELD_NAME_SHA256: &str = "gpgsig-sha256";
+
+/// Return the signature field name Git uses for `hash_kind`.
+pub fn signature_field_name(hash_kind: gix_hash::Kind) -> &'static str {
+    #[cfg(feature = "sha256")]
+    if hash_kind == gix_hash::Kind::Sha256 {
+        return SIGNATURE_FIELD_NAME_SHA256;
+    }
+    let _ = hash_kind;
+    SIGNATURE_FIELD_NAME
+}
 
 mod decode;
 ///
@@ -189,6 +201,7 @@ where
 
     /// Return the cryptographic signature provided by gpg/pgp verbatim.
     pub fn pgp_signature(self) -> Option<&'a BStr> {
-        self.find(SIGNATURE_FIELD_NAME)
+        let field_name = signature_field_name(self.hash_kind);
+        self.find(field_name)
     }
 }
