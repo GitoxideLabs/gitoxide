@@ -300,6 +300,101 @@ fn an_index_load_is_registered_before_its_slot_is_reserved() -> Result {
 
 #[cfg(feature = "parallel")]
 #[test]
+fn a_handle_rechecks_its_snapshot_after_waiting_for_an_index_loader() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::Point;
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.install_pack(Database::Alternate, Pack::B)?;
+    fixture.corrupt_index(Database::Alternate, Pack::B)?;
+    fixture.set_alternate(true)?;
+
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_waiter_tx, resume_waiter_rx) = crossbeam_channel::bounded(0);
+    let pause_waiter = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_waiter = Arc::clone(&pause_waiter);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::IndexRetrySlotLocking { .. }) && pause_waiter.swap(false, Ordering::SeqCst) {
+                resume_waiter_rx
+                    .recv()
+                    .expect("the test releases the stale handle's retry");
+            }
+        }
+    });
+    let mut handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(2),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    let second_object_id = fixture.manifest.pack(Pack::B).object_ids[0];
+    handle
+        .try_header(&second_object_id)
+        .expect_err("the second index records a failed load before it can be retried");
+    handle.refresh_never();
+    let stale = handle.clone();
+    let loader = handle.clone();
+    fixture.publish(Database::Alternate, Pack::B, Component::Index)?;
+    point_rx.try_iter().for_each(drop);
+
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            handle
+                .try_header(&second_object_id)
+                .map(|header| header.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    pause_waiter.store(true, Ordering::SeqCst);
+    let stale_thread = lookup(stale);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the stale handle is about to lock the failed index for a retry");
+        if matches!(point, Point::IndexRetrySlotLocking { .. }) {
+            break;
+        }
+    }
+    // Another loader publishes the repaired index while the stale handle is paused before acquiring its retry lock.
+    let loaded = lookup(loader).join().expect("the loader does not panic");
+    resume_waiter_tx
+        .send(())
+        .expect("the stale handle is waiting for its release");
+
+    assert!(
+        loaded.expect("the loader lookup succeeds"),
+        "the loading handle finds the object"
+    );
+    assert!(
+        stale_thread
+            .join()
+            .expect("the stale lookup does not panic")
+            .expect("the stale lookup succeeds"),
+        "the stale handle observes the index published while it waited"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
 fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
     use std::{
         sync::{
