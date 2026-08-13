@@ -363,6 +363,8 @@ space first; changes blocks adapt within the remaining history width.
   their trees unchanged. Rewritten commits carry `tix-rebase: pending`, invalidate
   existing signatures, retain the original parent needed for later replay, and
   use a bright-cyan commit marker.
+- Edit graph discovery follows refs that point to commits and ignores refs whose
+  targets are trees, blobs, or other non-commit objects.
 - Time travel from either endpoint of a pending region completes the entire
   marked rebase with cherry-picking and configured signing before checkout. A
   conflict aborts before refs or worktrees change.
