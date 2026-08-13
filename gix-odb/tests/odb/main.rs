@@ -48,3 +48,10 @@ fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Ha
 
 #[path = "../tools/scenario.rs"]
 mod support;
+
+fn test_threads() -> Result<usize> {
+    Ok(1)
+}
+fn assert_cohort(handles: &mut [gix_odb::Handle], assertion: impl Fn(&gix_odb::Handle) -> Result) -> Result {
+    assertion(&handles[0])
+}
