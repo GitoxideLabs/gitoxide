@@ -139,9 +139,13 @@ impl super::Store {
                     }) {
                     Ok(slot_map_index) => {
                         // This slot-map index is in bounds and was only given to us.
+                        let _ongoing_operation = ongoing_operation;
                         let slot_id = index.slot_indices[slot_map_index];
                         #[cfg(feature = "test-support")]
-                        self.debug(crate::store::init::debug::Point::IndexLoadClaimed { slot: slot_id });
+                        self.debug(crate::store::init::debug::Point::IndexLoadClaimed {
+                            slot: slot_id,
+                            active_loads: index.num_indices_currently_being_loaded.load(Ordering::SeqCst),
+                        });
                         let slot = &catalog.slots[slot_id];
                         let _lock = slot.write.lock();
                         #[cfg(feature = "test-support")]
