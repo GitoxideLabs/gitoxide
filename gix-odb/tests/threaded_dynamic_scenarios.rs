@@ -1004,15 +1004,7 @@ fn a_handle_rechecks_its_snapshot_after_waiting_for_an_index_loader() -> Result 
 }
 
 fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result + Sync) -> Result {
-    let threads = match std::env::var_os("GIX_ODB_TEST_THREADS") {
-        Some(value) => value
-            .into_string()
-            .map_err(|_| std::io::Error::other("GIX_ODB_TEST_THREADS must be valid UTF-8"))?
-            .parse::<std::num::NonZeroUsize>()
-            .map_err(|err| std::io::Error::other(format!("invalid GIX_ODB_TEST_THREADS: {err}")))?
-            .get(),
-        None => 1,
-    };
+    let threads = test_threads()?;
     if threads == 1 {
         return assertion(handle);
     }
@@ -1045,3 +1037,44 @@ fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Ha
 
 #[path = "odb/store/dynamic_scenarios.rs"]
 mod scenarios;
+
+fn test_threads() -> Result<usize> {
+    Ok(match std::env::var_os("GIX_ODB_TEST_THREADS") {
+        Some(value) => value
+            .into_string()
+            .map_err(|_| std::io::Error::other("GIX_ODB_TEST_THREADS must be valid UTF-8"))?
+            .parse::<std::num::NonZeroUsize>()
+            .map_err(|err| std::io::Error::other(format!("invalid GIX_ODB_TEST_THREADS: {err}")))?
+            .get(),
+        None => 1,
+    })
+}
+
+fn assert_cohort(handles: &mut [gix_odb::Handle], assertion: impl Fn(&gix_odb::Handle) -> Result + Sync) -> Result {
+    if handles.len() == 1 {
+        return assertion(&handles[0]);
+    }
+    let barrier = std::sync::Barrier::new(handles.len());
+    std::thread::scope(|scope| {
+        let workers = handles
+            .iter_mut()
+            .map(|handle| {
+                let barrier = &barrier;
+                let assertion = &assertion;
+                scope.spawn(move || {
+                    barrier.wait();
+                    assertion(handle)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut outcome = Ok(());
+        for worker in workers {
+            let worker = worker.join().expect("a persistent contending assertion does not panic");
+            if outcome.is_ok() {
+                outcome = worker;
+            }
+        }
+        outcome
+    })
+}

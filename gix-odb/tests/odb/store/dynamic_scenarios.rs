@@ -39,6 +39,30 @@ fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
     crate::assert_with_handles(handle, |handle| assert_missing_once(handle, id))
 }
 
+struct HandleCohort {
+    handles: Vec<gix_odb::Handle>,
+}
+
+impl HandleCohort {
+    fn from(handle: &gix_odb::Handle) -> Result<Self> {
+        Ok(HandleCohort {
+            handles: (0..crate::test_threads()?).map(|_| handle.clone()).collect(),
+        })
+    }
+
+    fn assert_object(&mut self, id: &gix_hash::oid) -> Result {
+        self.assert(|handle| assert_object_once(handle, id))
+    }
+
+    fn assert_missing(&mut self, id: &gix_hash::oid) -> Result {
+        self.assert(|handle| assert_missing_once(handle, id))
+    }
+
+    fn assert(&mut self, assertion: impl Fn(&gix_odb::Handle) -> Result + Sync) -> Result {
+        crate::assert_cohort(&mut self.handles, assertion)
+    }
+}
+
 #[test]
 fn fixture_actions_build_a_valid_odb_from_empty() -> Result {
     let mut fixture = OdbFixture::from_script()?;
@@ -70,31 +94,32 @@ fn fixture_actions_build_a_valid_odb_from_empty() -> Result {
 fn stale_handles_interleave_pack_publication_and_removal() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Primary, Pack::A)?;
-    let first = open(&fixture, 8)?;
-    let second = first.clone();
+    let handle = open(&fixture, 8)?;
+    let mut first = HandleCohort::from(&handle)?;
+    let mut second = HandleCohort::from(&handle)?;
     let a = fixture.manifest.pack(Pack::A).object_ids[0];
     let b = fixture.manifest.pack(Pack::B).object_ids[0];
-    assert_object(&first, &a)?;
+    first.assert_object(&a)?;
 
     fixture.publish(Database::Primary, Pack::B, Component::Pack)?;
-    assert_missing(&second, &b)?;
+    second.assert_missing(&b)?;
     fixture.publish(Database::Primary, Pack::B, Component::ReverseIndex)?;
     fixture.publish(Database::Primary, Pack::B, Component::Index)?;
-    assert_object(&second, &b)?;
-    assert_object(&first, &a)?;
+    second.assert_object(&b)?;
+    first.assert_object(&a)?;
 
     fixture.remove(Database::Primary, Pack::A, Component::Index)?;
     assert!(
         !fixture.is_valid(),
         "component-wise deletion exposes its intermediate state"
     );
-    assert_missing(&second, &fixture.manifest.missing_id())?;
+    second.assert_missing(&fixture.manifest.missing_id())?;
     fixture.remove_pack(Database::Primary, Pack::A)?;
     assert!(fixture.is_valid(), "the completed removal is valid again");
 
     let current = open(&fixture, 8)?;
     assert_missing(&current, &a)?;
-    assert_object(&first, &b)?;
+    first.assert_object(&b)?;
     Ok(())
 }
 
@@ -104,19 +129,20 @@ fn stale_handles_follow_multi_index_rewrites() -> Result {
     fixture.install_pack(Database::Primary, Pack::A)?;
     fixture.install_pack(Database::Primary, Pack::B)?;
     fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
-    let first = open(&fixture, 8)?;
-    let second = first.clone();
+    let handle = open(&fixture, 8)?;
+    let mut first = HandleCohort::from(&handle)?;
+    let mut second = HandleCohort::from(&handle)?;
     let a = fixture.manifest.pack(Pack::A).object_ids[0];
     let c = fixture.manifest.pack(Pack::C).object_ids[0];
-    assert_object(&first, &a)?;
+    first.assert_object(&a)?;
 
     fixture.install_pack(Database::Primary, Pack::C)?;
     fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B, Pack::C])?;
-    assert_object(&second, &c)?;
+    second.assert_object(&c)?;
 
     fixture.write_multi_index(Database::Primary, &[Pack::B, Pack::C])?;
     fixture.remove_pack(Database::Primary, Pack::A)?;
-    assert_missing(&second, &fixture.manifest.missing_id())?;
+    second.assert_missing(&fixture.manifest.missing_id())?;
     let current = open(&fixture, 8)?;
     assert_missing(&current, &a)?;
     assert_object(&current, &c)?;
@@ -145,16 +171,17 @@ fn a_multi_index_subset_and_standalone_index_use_their_own_packs() -> Result {
 fn alternates_can_change_while_handles_are_alive() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     fixture.install_pack(Database::Alternate, Pack::C)?;
-    let first = open(&fixture, 8)?;
-    let second = first.clone();
+    let handle = open(&fixture, 8)?;
+    let mut first = HandleCohort::from(&handle)?;
+    let mut second = HandleCohort::from(&handle)?;
     let id = fixture.manifest.pack(Pack::C).object_ids[0];
-    assert_missing(&first, &id)?;
+    first.assert_missing(&id)?;
 
     fixture.set_alternate(true)?;
-    assert_object(&second, &id)?;
+    second.assert_object(&id)?;
 
     fixture.set_alternate(false)?;
-    assert_missing(&second, &fixture.manifest.missing_id())?;
+    second.assert_missing(&fixture.manifest.missing_id())?;
     let current = open(&fixture, 8)?;
     assert_missing(&current, &id)?;
     Ok(())
@@ -585,19 +612,20 @@ fn copied_stores_preserve_slot_growth_policy() -> Result {
 #[test]
 fn growable_slots_expand_without_invalidating_existing_handles() -> Result {
     let mut fixture = OdbFixture::from_script()?;
-    let first = open_with_slots(&fixture, gix_odb::store::init::Slots::Growable { initial: 1 })?;
-    let second = first.clone();
-    let mut stable = first.clone();
+    let handle = open_with_slots(&fixture, gix_odb::store::init::Slots::Growable { initial: 1 })?;
+    let mut first = HandleCohort::from(&handle)?;
+    let mut second = HandleCohort::from(&handle)?;
+    let mut stable = handle.clone();
     stable.prevent_pack_unload();
     assert_eq!(
-        first.store_ref().metrics().num_refreshes,
+        handle.store_ref().metrics().num_refreshes,
         0,
         "opening a growable store does not scan the pack directory"
     );
 
     fixture.install_pack(Database::Primary, Pack::A)?;
     let a = fixture.manifest.pack(Pack::A).object_ids[0];
-    assert_object(&first, &a)?;
+    first.assert_object(&a)?;
     let mut buffer = Vec::new();
     let location = gix_odb::pack::Find::location_by_oid(&stable, &a, &mut buffer)?
         .expect("the stable handle locates the first pack");
@@ -606,15 +634,15 @@ fn growable_slots_expand_without_invalidating_existing_handles() -> Result {
     fixture.install_pack(Database::Primary, Pack::C)?;
     let b = fixture.manifest.pack(Pack::B).object_ids[0];
     let c = fixture.manifest.pack(Pack::C).object_ids[0];
-    assert_object(&second, &c)?;
-    assert_object(&first, &b)?;
+    second.assert_object(&c)?;
+    first.assert_object(&b)?;
     assert_object(&stable, &a)?;
     assert!(
         gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
         "growing the slot map preserves stable pack locations"
     );
     assert_eq!(
-        first.store_ref().metrics().known_reachable_indices,
+        handle.store_ref().metrics().known_reachable_indices,
         3,
         "all standalone indices are represented after growth"
     );
