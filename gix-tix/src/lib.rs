@@ -966,6 +966,48 @@ fn event_loop(
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
     let result: Result<Option<Duration>> = (|| loop {
+        if let Some(mut recovered) =
+            recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
+        {
+            recovered.object_cache_size(None);
+            mailmap = recovered.open_mailmap();
+            fill_repository.path.clone_from(&repository_path);
+            fill_repository.bare = true;
+            fill_repository.retain = false;
+            fill_repository.retained = None;
+            app.set_worktree_changes_available(false);
+            worktree_watcher = None;
+            worktree_refresh_deadline = None;
+            worktree_watch_set_changed = false;
+            filesystem_responses.cancel_pending_worktree("worktree-unavailable");
+            worktree_changes = None;
+            line_diff_pool = None;
+            sync_line_diff_pool(
+                &mut line_diff_pool,
+                app.changes_mode.is_some(),
+                &repository_path,
+                true,
+                line_diff_parallelism,
+            )?;
+            tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
+            ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
+                Ok(watcher) => Some(watcher),
+                Err(err) => {
+                    tracing::warn!(error = %err, "reference watcher recovery failed");
+                    schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
+                    None
+                }
+            };
+            ref_watch_set_changed = false;
+            app.manual_refresh = ref_watcher.is_none();
+            app.notice = Some("worktree removed; using the common repository without worktree changes".into());
+            if history_graph.is_some() {
+                refresh_pending = true;
+                refresh_from_filesystem = true;
+            }
+            dirty = true;
+            urgent = true;
+        }
         let mut worktree_watch_error = None;
         if let Some(watcher) = worktree_watcher.as_mut() {
             let mut received = 0;
@@ -1244,45 +1286,7 @@ fn event_loop(
             let response_ids = filesystem_responses.begin_reference_refresh();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
                 Ok(repository) => repository,
-                Err(_err) if worktree_repository_is_gone(&repository_path) => {
-                    let mut recovered = recover_common_repository(&common_dir)
-                        .context("could not recover after the worktree repository disappeared")?;
-                    recovered.object_cache_size(None);
-                    repository_path.clone_from(&common_dir);
-                    repository_is_bare = true;
-                    mailmap = recovered.open_mailmap();
-                    fill_repository.path.clone_from(&repository_path);
-                    fill_repository.bare = true;
-                    fill_repository.retain = false;
-                    fill_repository.retained = None;
-                    app.set_worktree_changes_available(false);
-                    worktree_watcher = None;
-                    worktree_refresh_deadline = None;
-                    worktree_watch_set_changed = false;
-                    filesystem_responses.cancel_pending_worktree("worktree-unavailable");
-                    worktree_changes = None;
-                    line_diff_pool = None;
-                    sync_line_diff_pool(
-                        &mut line_diff_pool,
-                        app.changes_mode.is_some(),
-                        &repository_path,
-                        true,
-                        line_diff_parallelism,
-                    )?;
-                    tracing::warn!(common_dir = %repository_path.display(), "worktree disappeared; recovered with common repository");
-                    ref_watcher = match start_ref_watcher(&repository_path, &repository_path) {
-                        Ok(watcher) => Some(watcher),
-                        Err(err) => {
-                            tracing::warn!(error = %err, "reference watcher recovery failed");
-                            schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
-                            None
-                        }
-                    };
-                    ref_watch_set_changed = false;
-                    app.manual_refresh = ref_watcher.is_none();
-                    app.notice = Some("worktree removed; using the common repository without worktree changes".into());
-                    recovered
-                }
+                Err(_err) if worktree_repository_is_gone(&repository_path) => continue,
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
             let next = history::snapshot(&repository, &revisions, &hide, worktrees)?;
@@ -2380,6 +2384,21 @@ fn recover_common_repository(common_dir: &Path) -> Result<gix::Repository> {
     })?;
     open_repository(common_dir, true, false)
         .with_context(|| format!("could not open common repository at {} as bare", common_dir.display()))
+}
+
+fn recover_event_loop_repository(
+    repository_path: &mut PathBuf,
+    common_dir: &Path,
+    bare: &mut bool,
+) -> Result<Option<gix::Repository>> {
+    if *bare || !worktree_repository_is_gone(repository_path) {
+        return Ok(None);
+    }
+    let repository =
+        recover_common_repository(common_dir).context("could not recover after the worktree repository disappeared")?;
+    common_dir.clone_into(repository_path);
+    *bare = true;
+    Ok(Some(repository))
 }
 
 fn normalize_common_dir(common_dir: PathBuf) -> Result<PathBuf> {
@@ -4122,6 +4141,18 @@ mod tests {
                 Some(true),
                 "recovery configures the common repository as bare"
             );
+
+            let mut stale_git_dir = git_dir.join("worktrees/deleted-during-event-loop");
+            let mut bare = false;
+            assert!(
+                recover_event_loop_repository(&mut stale_git_dir, &git_dir, &mut bare)?.is_some(),
+                "the event-loop boundary recovers before its next action"
+            );
+            assert_eq!(
+                stale_git_dir, git_dir,
+                "future event-loop opens use the common repository"
+            );
+            assert!(bare, "future event-loop opens treat the common repository as bare");
             return Ok(());
         }
 
