@@ -155,6 +155,11 @@ unit-tests:
     cargo nextest run -p gix --no-default-features --features sha256 --lib --no-fail-fast
     cargo nextest run -p gitoxide-core --no-fail-fast
 
+# Run dynamic ODB state-change scenarios with contending handles
+[group('Tests')]
+test-odb-threaded-scenarios:
+    env GIX_ODB_TEST_THREADS=8 cargo test -p gix-odb --features gix-parallel/parallel --test threaded_dynamic_scenarios -- --test-threads=1
+
 # Run all doctests
 [group('Tests')]
 doc-tests:
