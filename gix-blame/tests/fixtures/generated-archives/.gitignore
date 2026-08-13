@@ -5,3 +5,8 @@
 # variants share this constraint.
 make_blame_repo.tar
 make_blame_repo_sha256.tar
+
+# Uses `ln -s`, including breakout symlinks (`../..`) that cannot be safely
+# extracted on Windows.
+make_blame_symlinks_repo.tar
+make_blame_symlinks_repo_sha256.tar
