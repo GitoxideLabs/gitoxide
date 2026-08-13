@@ -112,11 +112,19 @@ impl super::Store {
                         Ok(None)
                     }
                     RefreshMode::AfterAllIndicesLoaded | RefreshMode::AfterDuration(_) => {
-                        self.consolidate_with_disk_state(
+                        let snapshot = self.consolidate_with_disk_state(
                             false, /* needs init */
                             true,  /* load one new index */
                             loose_compression,
-                        )
+                        )?;
+                        if snapshot.is_some() {
+                            return Ok(snapshot);
+                        }
+                        let current_catalog = self.catalog.load();
+                        let current_index = &current_catalog.index;
+                        Ok((marker.generation != current_index.generation
+                            || marker.state_id != current_index.state_id())
+                        .then(|| self.collect_snapshot()))
                     }
                 }
             }
@@ -282,6 +290,8 @@ impl super::Store {
         loose_compression: gix_zlib::Compression,
     ) -> Result<Option<Snapshot>, Error> {
         let completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
+        #[cfg(feature = "test-support")]
+        self.debug(crate::store::init::debug::Point::RefreshCompletionObserved);
         let previous_catalog = self.catalog.load_full();
 
         // IMPORTANT: get a lock after we recorded the previous state.
