@@ -658,9 +658,9 @@ pub(crate) fn draw_with_worktree(
                         .iter()
                         .any(|decoration| decoration.kind == DecorationKind::Pin)
                     {
-                        " · t return"
+                        "t return"
                     } else {
-                        " · t travel"
+                        "t travel"
                     },
                 )
             } else {
@@ -670,22 +670,39 @@ pub(crate) fn draw_with_worktree(
             None
         };
         if app.edit_expanded {
-            if let Some(label) = time_travel {
-                footer_spans.push(Span::raw(label));
-            }
+            let mut options = Vec::new();
             if app.reword_shortcut_visible() {
-                footer_spans.push(Span::raw(" · r reword"));
+                options.push("r reword");
             }
             if app.can_create_commit() {
-                footer_spans.push(Span::raw(" · n new"));
+                options.push("n new");
             }
             if app.can_forget() {
-                footer_spans.push(Span::raw(if app.forget_confirmation_visible() {
-                    " · d again forget"
+                options.push(if app.forget_confirmation_visible() {
+                    "d again forget"
                 } else {
-                    " · d forget"
-                }));
+                    "d forget"
+                });
             }
+            if let Some(label) = time_travel {
+                options.push(label);
+            }
+            footer_spans.push(Span::raw(" · "));
+            footer_spans.push(Span::styled(
+                "e active (",
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+            if options.is_empty() {
+                footer_spans.push(Span::raw("no actions"));
+            } else {
+                for (index, option) in options.into_iter().enumerate() {
+                    if index > 0 {
+                        footer_spans.push(Span::raw(" · "));
+                    }
+                    footer_spans.push(Span::raw(option));
+                }
+            }
+            footer_spans.push(Span::raw(")"));
         } else if !app.history_display_expanded {
             footer_spans.push(Span::raw(" · e edit"));
         }
@@ -703,7 +720,12 @@ pub(crate) fn draw_with_worktree(
     footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
     footer_spans.extend([Span::raw(" · "), toggle("c changes", app.changes_mode.is_some())]);
     if app.history_display_expanded {
-        footer_spans.extend([Span::raw(" · "), toggle("d date", app.show_committer_date)]);
+        footer_spans.push(Span::raw(" · "));
+        footer_spans.push(Span::styled(
+            "v active (",
+            Style::default().add_modifier(Modifier::BOLD),
+        ));
+        footer_spans.push(toggle("d date", app.show_committer_date));
         footer_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
         let (name_label, names_visible) = match app.name_mode {
             NameMode::All => ("n names", true),
@@ -733,6 +755,7 @@ pub(crate) fn draw_with_worktree(
                 ),
             ]);
         }
+        footer_spans.push(Span::raw(")"));
     } else {
         footer_spans.push(Span::raw(" · v view"));
     }
@@ -2502,12 +2525,51 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
-        assert!(rendered_line(&terminal, 1).contains("t return"));
+        assert!(
+            rendered_line(&terminal, 1).contains("e active (r reword · n new · d forget · t return)"),
+            "the active edit prefix contains exactly its actionable commands"
+        );
         assert!(!rendered_line(&terminal, 1).contains("e edit"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 1).contains("t travel"));
+        Ok(())
+    }
+
+    #[test]
+    fn visually_groups_active_prefix_options() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        app.changes_mode = None;
+        app.configure_hidden_filter(true);
+        app.history_display_expanded = true;
+        let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+
+        let footer = rendered_line(&terminal, 1);
+        let view = "v active (d date · e emails · n names · m mailmap · t trailers · r no refs · h show hidden)";
+        assert!(
+            footer.contains(view),
+            "the view prefix encloses all of its applicable options"
+        );
+        let active = footer[..footer.find("v active").expect("the active view prefix is visible")]
+            .chars()
+            .count() as u16;
+        assert!(
+            terminal.backend().buffer()[(active, 1)]
+                .modifier
+                .contains(Modifier::BOLD),
+            "the active prefix label is emphasized"
+        );
+
+        app.history_display_expanded = false;
+        app.edit_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 1).contains("e active (no actions)"),
+            "an active prefix remains explicit when the current context offers no actions"
+        );
         Ok(())
     }
 
