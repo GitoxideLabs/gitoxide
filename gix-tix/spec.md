@@ -391,10 +391,12 @@ space first; changes blocks adapt within the remaining history width.
   semantic trigger, coalesced paths, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
   days, and are best-effort.
-- If a linked worktree disappears, tix lexically normalizes and enters the common
-  repository, reopens it as bare, drops worktree state, keeps tree/history views
-  live, and reports recovery in the status line. If recovery fails, terminal state
-  is restored and the contextual error is returned.
+- After every event-loop wait, tix assumes that the original worktree and process
+  working directory may have disappeared. Before processing filesystem events or
+  redrawing, it lexically normalizes and enters the common repository, reopens it
+  as bare, drops worktree state, keeps tree/history views live, and reports recovery
+  in the status line. If recovery fails, terminal state is restored and the
+  contextual error is returned.
 
 ## Resource and responsiveness invariants
 
