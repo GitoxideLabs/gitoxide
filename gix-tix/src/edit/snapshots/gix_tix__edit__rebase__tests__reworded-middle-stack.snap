@@ -1,0 +1,56 @@
+---
+source: gix-tix/src/edit/rebase.rs
+expression: "gix_testtools::repository::snapshot(fixture.path())?.to_string()"
+---
+HEAD refs/heads/main -> C2
+
+[refs]
+refs/heads/main = C2
+refs/patches/middle = C1
+refs/patches/tip = C2
+
+[commits]
+C0
+  tree T2
+  author author <author@example.com> 946684800 +0000
+  committer committer <committer@example.com> 946684800 +0000
+  
+  base
+
+C1
+  tree T0
+  parent C0
+  author author <author@example.com> 946771200 +0000
+  committer committer <committer@example.com> 946771200 +0000
+  
+  rewritten middle
+
+C2
+  tree T1
+  parent C1
+  author author <author@example.com> 946857600 +0000
+  committer rebasing committer <rebasing@example.com> 978307200 +0000
+  
+  tip
+
+[index]
+tree = T1
+100644 B1 stage=0 "base"
+100644 B2 stage=0 "middle"
+100644 B0 stage=0 "tip"
+
+[worktree]
+100644 file "base" = "base\n"
+100644 file "middle" = "middle\n"
+100644 file "tip" = "tip\n"
+
+[objects]
+C1 = 347d88644e1829f6255a5d6dc8721a29fa8352f4
+C0 = 5295d5ce934d18b6a1f48c3b7d836d53b55304e5
+T0 = 559dc660acc84805fedbcb75588371240372c173
+T1 = 569961a34e2a909d8c7a2940ed4ad365504e64ed
+T2 = 8552142164d268c95f60dabb74465a2f4ffb51b7
+B0 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
+B1 = df967b96a579e45a18b8251732d16804b2e56a55
+C2 = e2722ab1d7aeafc5fb8cddb4a8e504cfa7855b85
+B2 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a

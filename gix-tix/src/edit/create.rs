@@ -1,29 +1,21 @@
-use std::{ffi::OsString, path::Path};
+use std::ffi::OsString;
 
 use anyhow::{Context, Result};
-use gix::{ObjectId, bstr::ByteSlice, objs::Write};
+use gix::{ObjectId, bstr::ByteSlice};
 
 use crate::{
     ChangeGroup, ChangeKind, ComparedParent, add_line_counts, load_tree_changes_without_lines,
     load_worktree_changes_without_lines, ui,
 };
 
-use super::{refs::MutableRefs, reword, time_travel};
+use super::{rebase, reword};
 
 pub(crate) struct Prepared {
     pub editor: OsString,
     pub document: Vec<u8>,
     parent: Option<ObjectId>,
     tree: ObjectId,
-    references: MutableRefs,
-    checkout: Checkout,
     objects: gix::odb::memory::Storage,
-}
-
-enum Checkout {
-    None,
-    Branch(gix::refs::FullName),
-    Detached,
 }
 
 pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
@@ -37,31 +29,9 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
         repo.find_commit(parent)
             .context("could not find the selected parent commit")?;
     }
-    let (references, checkout) = match parent {
-        Some(parent) => {
-            let references = MutableRefs::pointing_to(&repo, parent)?;
-            if references.is_empty() {
-                anyhow::bail!("no mutable reference points to the selected parent");
-            }
-            references.ensure_not_checked_out_elsewhere(&repo)?;
-            let checkout = if head_id == Some(parent) {
-                match head.referent_name() {
-                    Some(name) => Checkout::Branch(name.to_owned()),
-                    None => Checkout::Detached,
-                }
-            } else {
-                Checkout::None
-            };
-            (references, checkout)
-        }
-        None => {
-            let name = head
-                .referent_name()
-                .context("an unborn HEAD must point to a branch")?
-                .to_owned();
-            (MutableRefs::unborn(&repo)?, Checkout::Branch(name))
-        }
-    };
+    if parent.is_none() {
+        head.referent_name().context("an unborn HEAD must point to a branch")?;
+    }
     let editor = repo.editor().context("no Git editor is available")?;
     let author = repo
         .author()
@@ -159,8 +129,6 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
         document,
         parent,
         tree,
-        references,
-        checkout,
         objects,
     })
 }
@@ -209,25 +177,18 @@ fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<Obj
     Ok(editor.write().context("could not build the worktree tree")?.detach())
 }
 
-pub(crate) fn apply(mut repo: gix::Repository, mut prepared: Prepared, edited: &[u8]) -> Result<ObjectId> {
+pub(crate) fn apply(
+    mut repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    mut prepared: Prepared,
+    edited: &[u8],
+) -> Result<ObjectId> {
     let edit = reword::parse(edited)?;
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
     }
-    prepared.references.validate(&repo)?;
-    let references = match prepared.parent {
-        Some(parent) => MutableRefs::pointing_to(&repo, parent)?,
-        None => MutableRefs::unborn(&repo)?,
-    };
-    if references.is_empty() {
-        anyhow::bail!("no mutable reference points to the selected parent anymore");
-    }
-    references.ensure_not_checked_out_elsewhere(&repo)?;
-    let signing = repo
-        .commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?;
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let mut commit = gix::objs::Commit {
+    let commit = gix::objs::Commit {
         message: edit.message,
         tree: prepared.tree,
         author: reword::actor(edit.author, edit.author_time, "author")?,
@@ -236,83 +197,32 @@ pub(crate) fn apply(mut repo: gix::Repository, mut prepared: Prepared, edited: &
         parents: prepared.parent.into_iter().collect(),
         extra_headers: Vec::new(),
     };
-    if let Some(options) = signing {
-        commit = commit.sign(options).context("could not sign the new commit")?;
-    }
-    let new_id = repo
-        .write_object(&commit)
-        .context("could not prepare the final commit")?
-        .detach();
-    let objects = repo
-        .objects
-        .take_object_memory()
-        .context("candidate object memory was unavailable")?;
-    for (id, (kind, data)) in objects.iter() {
-        repo.write_buf_with_known_id(*kind, data, *id)
-            .map_err(|err| anyhow::anyhow!("could not persist a prepared commit object: {err}"))?;
-    }
-    let log_message = gix::reference::log::message("commit", commit.message.as_bstr(), commit.parents.len());
-    let mut time_buf = gix::date::parse::TimeBuf::default();
-    references.update(
-        &repo,
-        new_id,
-        log_message.as_bstr(),
-        Some(commit.committer.to_ref(&mut time_buf)),
-    )?;
-    let checkout = match &prepared.checkout {
-        Checkout::None => Ok(()),
-        Checkout::Branch(name) => {
-            let workdir = repo.workdir().context("creating a commit requires a worktree")?;
-            let branch = name
-                .as_bstr()
-                .strip_prefix(b"refs/heads/")
-                .context("the destination isn't a local branch")?;
-            time_travel::checkout(
-                workdir,
-                [
-                    OsString::from("--no-guess"),
-                    gix::path::from_bstr(branch.as_bstr()).into_owned().into_os_string(),
-                ],
-            )
-            .and_then(|()| reset_index(workdir, new_id))
-        }
-        Checkout::Detached => {
-            let workdir = repo.workdir().context("creating a commit requires a worktree")?;
-            time_travel::checkout_detached(workdir, new_id)
-        }
+    let base_tree = match prepared.parent {
+        Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
+        None => repo.empty_tree().id,
     };
-    if let Err(err) = checkout {
-        let rollback = references.rollback(&repo, new_id);
-        return match rollback {
-            Ok(()) => Err(err),
-            Err(rollback) => Err(err.context(format!("the destination could not be rolled back: {rollback:#}"))),
-        };
-    }
-    Ok(new_id)
-}
-
-fn reset_index(workdir: &Path, id: ObjectId) -> Result<()> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .args(["reset", "--mixed", "--quiet"])
-        .arg(id.to_string())
-        .output()
-        .context("could not update the index after checkout")?;
-    if output.status.success() {
-        Ok(())
+    let tree_mode = if base_tree == commit.tree {
+        rebase::Tree::LeaveAsIs
     } else {
-        anyhow::bail!(
-            "git reset failed with {}: {}",
-            output.status,
-            output.stderr.to_str_lossy().trim()
-        )
-    }
+        rebase::Tree::CherryPick
+    };
+    rebase::perform(
+        repo,
+        graph,
+        rebase::Edit::Insert {
+            anchor: prepared.parent,
+            commit,
+        },
+        rebase::Signature::RedoIfNeeded,
+        tree_mode,
+    )?
+    .selected
+    .context("inserting a commit did not produce a selection")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::{path::Path, process::Command};
 
     use super::*;
 
@@ -386,7 +296,8 @@ mod tests {
         );
 
         let edited = prepared.document.replacen(b"what\n\nwhy", b"title\n\nbody", 1);
-        let new_id = apply(open(fixture.path())?, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let after = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             after.head,
@@ -447,7 +358,8 @@ mod tests {
         let parent = open(fixture.path())?.head_id()?.detach();
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
         let edited = prepared.document.replacen(b"what\n\nwhy", b"worktree\n\nstate", 1);
-        let new_id = apply(open(fixture.path())?, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let after = gix_testtools::repository::snapshot(fixture.path())?;
         let repository = open(fixture.path())?;
         let commit = repository.find_commit(new_id)?;
@@ -487,7 +399,8 @@ mod tests {
             "root-commit preflight is unobservable"
         );
         let edited = prepared.document.replacen(b"what\n\nwhy", b"root\n\nreason", 1);
-        let new_id = apply(open(fixture.path())?, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let repository = open(fixture.path())?;
         let commit = repository.find_commit(new_id)?;
         assert!(commit.parent_ids().next().is_none(), "the root has no parent");
@@ -544,7 +457,8 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
         let edited = prepared.document.replacen(b"what\n\nwhy", b"child\n\nreason", 1);
-        let new_id = apply(open(fixture.path())?, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
         let after = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             after.head, before.head,
