@@ -37,6 +37,9 @@ use std::sync::LazyLock;
 
 pub use tempfile;
 
+/// Shared setup for tests involving Git-compatible signatures.
+pub mod signature;
+
 const ARCHIVE_DIR_NAME: &str = "generated-archives";
 
 /// A result type to allow using the try operator `?` in unit tests.

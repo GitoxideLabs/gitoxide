@@ -1,1 +1,3 @@
 fixtures/
+!src/signature/fixtures/
+!src/signature/fixtures/**
