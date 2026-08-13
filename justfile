@@ -18,6 +18,10 @@ test: clippy check doc unit-tests doc-tests journey-tests-pure journey-tests-sma
 # Run all tests, without clippy, and try building docs
 ci-test: check doc unit-tests check-mode
 
+# Run dynamic ODB state-change scenarios with contending handles
+test-odb-threaded-scenarios:
+    env GIX_ODB_TEST_THREADS=8 cargo test -p gix-odb --features parallel --test odb store::dynamic_scenarios:: -- --test-threads=1
+
 # Run all journey tests - should be run in a fresh clone or after `cargo clean`
 ci-journey-tests: journey-tests-pure journey-tests-small journey-tests-async journey-tests
 

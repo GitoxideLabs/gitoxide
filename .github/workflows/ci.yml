@@ -218,6 +218,9 @@ jobs:
         env:
           GIX_TEST_IGNORE_ARCHIVES: "1"
         run: just ci-test
+      - name: Test dynamic ODB scenarios with contending handles
+        timeout-minutes: 5
+        run: just test-odb-threaded-scenarios
 
   test-doc:
     runs-on: ubuntu-latest
