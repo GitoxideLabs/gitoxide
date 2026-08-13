@@ -251,6 +251,12 @@ pub(crate) fn draw_with_worktree(
     app.set_head_edit_availability(
         selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        selected_is_head
+            && worktree_changes.is_some_and(|changes| {
+                changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
+                    && changes.paths.iter().any(|change| change.group == ChangeGroup::Unstaged)
+                    && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
+            }),
     );
     if app.changes_visible() {
         app.set_changes_layout(
@@ -728,6 +734,9 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_spill() {
                 options.push(("spill", 's'));
+            }
+            if app.can_split() {
+                options.push(("split", 'p'));
             }
             if app.changes_focus.is_none() && app.can_forget() {
                 options.push(if app.forget_confirmation_visible() {

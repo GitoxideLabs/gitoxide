@@ -46,6 +46,11 @@ pub(crate) enum Edit {
     Remove {
         target: ObjectId,
     },
+    Split {
+        target: ObjectId,
+        source: gix::objs::Commit,
+        upper: gix::objs::Commit,
+    },
     Repeat {
         base: ObjectId,
     },
@@ -70,11 +75,12 @@ pub(crate) fn perform(
     signature: Signature,
     mut tree_mode: Tree,
 ) -> Result<Outcome> {
-    let (root, replacement, inserted, removed, repeat) = match edit {
-        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false),
-        Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false),
-        Edit::Remove { target } => (Some(target), None, false, true, false),
-        Edit::Repeat { base } => (Some(base), None, false, false, true),
+    let (root, replacement, inserted, removed, repeat, mut split_upper) = match edit {
+        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, None),
+        Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false, None),
+        Edit::Remove { target } => (Some(target), None, false, true, false, None),
+        Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, Some(upper)),
+        Edit::Repeat { base } => (Some(base), None, false, false, true, None),
     };
     if repeat {
         tree_mode = Tree::CherryPick;
@@ -177,7 +183,15 @@ pub(crate) fn perform(
         let new_id = write_commit(&repo, commit, signature, signing.clone())?;
         rewritten.insert(old_id, Some(new_id));
         if Some(old_id) == root {
-            selected = Some(new_id);
+            if let Some(mut upper) = split_upper.take() {
+                upper.parents = [new_id].into_iter().collect();
+                marker(&mut upper, true, Some(new_id));
+                let upper_id = write_commit(&repo, upper, Signature::RedoIfNeeded, signing.clone())?;
+                rewritten.insert(old_id, Some(upper_id));
+                selected = Some(upper_id);
+            } else {
+                selected = Some(new_id);
+            }
         }
     }
 
@@ -367,13 +381,28 @@ fn rewritten_tree(
     if old_base == new_base {
         return Ok(commit.tree);
     }
+    cherry_pick_tree(repo, old_base, new_base, commit.tree)
+}
+
+pub(super) fn cherry_pick_tree(
+    repo: &gix::Repository,
+    old_base: ObjectId,
+    new_base: ObjectId,
+    tree: ObjectId,
+) -> Result<ObjectId> {
+    if tree == old_base {
+        return Ok(new_base);
+    }
+    if old_base == new_base {
+        return Ok(tree);
+    }
     let labels = gix::merge::blob::builtin_driver::text::Labels {
         ancestor: Some(BStr::new(b"parent")),
         current: Some(BStr::new(b"rebased parent")),
         other: Some(BStr::new(b"commit")),
     };
     let mut outcome = repo
-        .merge_trees(old_base, new_base, commit.tree, labels, repo.tree_merge_options()?)
+        .merge_trees(old_base, new_base, tree, labels, repo.tree_merge_options()?)
         .context("could not cherry-pick a descendant tree")?;
     if outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git()) {
         anyhow::bail!("rebasing would cause a merge conflict");
