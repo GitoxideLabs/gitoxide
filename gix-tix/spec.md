@@ -155,7 +155,9 @@ without trading responsiveness for metadata that is not visible.
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. `[` and overlay controls remain direct
-shortcuts.
+shortcuts. While active, the footer renders a bold `v active (` marker, every
+applicable display option, and a closing `)` so direct shortcuts remain visibly
+outside the prefix.
 
 ### Time-travel
 
@@ -352,6 +354,9 @@ space first; changes blocks adapt within the remaining history width.
 - Edit shortcuts keep the group open. Navigation or another recognized command
   closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
   mutate the repository.
+- While active, the footer renders a bold `e active (` marker and only the edit
+  actions available for the current selection, followed by `)`. An empty group
+  says `no actions`.
 - While the `v` group is open, `d`, `e`, `r`, and `t` retain their display
   meanings for dates, emails, references, and trailers.
 
