@@ -125,6 +125,8 @@ pub mod debug {
         },
         /// A refresh is about to acquire the Store write lock.
         RefreshLocking,
+        /// A refresh read the shared completion counter and is about to snapshot the catalog.
+        RefreshCompletionObserved,
         /// A refresh acquired the Store write lock.
         ///
         /// The Store write lock is held while the hook runs.
