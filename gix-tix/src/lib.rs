@@ -3677,18 +3677,20 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('m') if history_display_expanded => Some(Action::ToggleMailmap),
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
-        KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
+        KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
         KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
         KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
         KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
+        KeyCode::Char('m') => Some(Action::ToggleCommit),
+        KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
-        KeyCode::Char(']' | 'o') => Some(Action::ToggleCommit),
+        KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::CopyAuthor),
         KeyCode::Char('y') => Some(Action::Copy),
@@ -4527,8 +4529,14 @@ mod tests {
             Some(Action::ToggleEdit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)), None);
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)), None);
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
+            Some(Action::ToggleCommit)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+            Some(Action::ToggleRefs)
+        );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
@@ -4550,7 +4558,7 @@ mod tests {
             ('n', Action::ToggleName),
             ('t', Action::ToggleTrailers),
             ('m', Action::ToggleMailmap),
-            ('r', Action::ToggleRefs),
+            ('r', Action::CycleRefs),
             ('h', Action::ToggleHidden),
         ] {
             assert_eq!(
@@ -4596,10 +4604,7 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE)),
             Some(Action::ToggleCommit)
         );
-        assert_eq!(
-            action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
-            Some(Action::ToggleCommit)
-        );
+        assert_eq!(action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)), None);
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             Some(Action::CycleChangesParent)

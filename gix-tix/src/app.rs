@@ -273,6 +273,7 @@ pub(crate) enum Action {
     ToggleEmail,
     ToggleTrailers,
     ToggleMailmap,
+    CycleRefs,
     ToggleRefs,
     Refresh,
     ToggleHidden,
@@ -346,6 +347,7 @@ pub(crate) struct App {
     pub show_trailers: bool,
     pub use_mailmap: bool,
     pub ref_mode: RefMode,
+    visible_ref_mode: RefMode,
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
     pub align_metadata: bool,
@@ -425,6 +427,7 @@ impl App {
             show_trailers: true,
             use_mailmap: true,
             ref_mode: RefMode::Default,
+            visible_ref_mode: RefMode::Default,
             has_hidden_filter: false,
             show_hidden: false,
             align_metadata: true,
@@ -685,7 +688,7 @@ impl App {
                 | Action::ToggleName
                 | Action::ToggleTrailers
                 | Action::ToggleMailmap
-                | Action::ToggleRefs
+                | Action::CycleRefs
                 | Action::ToggleHidden
         ) {
             self.history_display_expanded = false;
@@ -794,13 +797,20 @@ impl App {
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
             Action::ToggleEdit => self.edit_expanded = !self.edit_expanded,
-            Action::ToggleRefs => {
+            Action::CycleRefs => {
                 self.ref_mode = match self.ref_mode {
                     RefMode::All => RefMode::Default,
                     RefMode::Default => RefMode::None,
                     RefMode::None => RefMode::All,
                 };
             }
+            Action::ToggleRefs => match self.ref_mode {
+                RefMode::None => self.ref_mode = self.visible_ref_mode,
+                visible => {
+                    self.visible_ref_mode = visible;
+                    self.ref_mode = RefMode::None;
+                }
+            },
             Action::Refresh if matches!(self.state, State::Complete | State::Cancelled) => {
                 return vec![Effect::Reload(self.show_hidden)];
             }
@@ -2649,7 +2659,7 @@ mod tests {
         app.update(Action::ToggleName);
         app.update(Action::ToggleTrailers);
         app.update(Action::ToggleMailmap);
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         app.update(Action::ToggleAlign);
         app.update(Action::ToggleCommit);
         app.update(Action::CycleChangesParent);
@@ -2661,9 +2671,9 @@ mod tests {
         assert!(!app.show_trailers);
         assert!(!app.use_mailmap);
         assert_eq!(app.ref_mode, RefMode::None);
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         assert_eq!(app.ref_mode, RefMode::All);
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         assert_eq!(app.ref_mode, RefMode::Default);
         assert!(!app.align_metadata);
         assert!(app.show_commit);
@@ -2671,6 +2681,23 @@ mod tests {
         assert_eq!(app.changes_parent, 0);
         app.update(Action::ToggleAlign);
         assert!(app.align_metadata);
+    }
+
+    #[test]
+    fn reference_visibility_toggle_restores_the_mode_it_hid() {
+        let mut app = App::new(1);
+        app.update(Action::CycleRefs);
+        app.update(Action::CycleRefs);
+        assert_eq!(app.ref_mode, RefMode::All);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::None);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::All);
+        app.update(Action::CycleRefs);
+        assert_eq!(app.ref_mode, RefMode::Default);
+        app.update(Action::ToggleRefs);
+        app.update(Action::ToggleRefs);
+        assert_eq!(app.ref_mode, RefMode::Default);
     }
 
     #[test]
