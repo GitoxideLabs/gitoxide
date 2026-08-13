@@ -73,6 +73,11 @@ pub mod debug {
         },
         /// A loader found all index slots claimed by other loaders. No Store or slot lock is held.
         IndexLoadWaiting,
+        /// A failed-load check is about to acquire an index slot lock.
+        IndexRetrySlotLocking {
+            /// The index slot about to be locked.
+            slot: usize,
+        },
         /// Snapshot collection is waiting for an in-progress index load. No Store or slot lock is held.
         SnapshotWaitingForIndexLoad,
         /// The claimed index slot was locked, immediately before its file is loaded.
