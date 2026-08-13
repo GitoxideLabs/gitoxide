@@ -7,9 +7,35 @@ use super::*;
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-/// Convert a hexadecimal hash into its corresponding `ObjectId` or _panic_.
+static SHA1_TO_SHA256_HASHES: std::sync::LazyLock<std::collections::HashMap<&str, &str>> =
+    std::sync::LazyLock::new(|| {
+        [
+            (
+                "28ce6a8b26aa170e1de65536fe8abe1832bd3242",
+                "28ce6a8b26aa170e1de65536fe8abe1832bd3242000000000000000000000000",
+            ),
+            (
+                "0000000000000000000000111111111111111111",
+                "0000000000000000000000111111111111111111000000000000000000000000",
+            ),
+        ]
+        .into()
+    });
+
+/// Convert a hexadecimal SHA-1 hash or the corresponding SHA-256 hash into an `ObjectId` or
+/// _panic_.
 fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
-    gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex")
+    match gix_testtools::object_hash() {
+        gix_hash::Kind::Sha1 => gix_hash::ObjectId::from_hex(hex.as_bytes()).expect("40 bytes hex"),
+        gix_hash::Kind::Sha256 => gix_hash::ObjectId::from_hex(
+            SHA1_TO_SHA256_HASHES
+                .get(hex)
+                .unwrap_or_else(|| panic!("SHA-1 {hex} wasn't mapped to SHA-256 yet"))
+                .as_bytes(),
+        )
+        .expect("64 bytes hex"),
+        _ => unimplemented!(),
+    }
 }
 
 fn empty_store(writemode: WriteReflog) -> Result<(TempDir, file::Store)> {
@@ -18,6 +44,7 @@ fn empty_store(writemode: WriteReflog) -> Result<(TempDir, file::Store)> {
         dir.path().into(),
         crate::store::init::Options {
             write_reflog: writemode,
+            object_hash: gix_testtools::object_hash(),
             ..Default::default()
         },
     );
@@ -74,7 +101,7 @@ fn missing_reflog_creates_it_even_if_similarly_named_empty_dir_exists_and_append
                 assert_eq!(
                     reflog_lines(&store, full_name_str, &mut buf)?,
                     vec![crate::log::Line {
-                        previous_oid: gix_hash::Kind::Sha1.null(),
+                        previous_oid: gix_testtools::object_hash().null(),
                         new_oid: new,
                         signature: committer.clone(),
                         message: "the message".into()
@@ -181,7 +208,7 @@ fn reflog_write_normalizes_committer_name_and_email_like_git() -> Result {
     assert_eq!(
         reflog_lines(&store, full_name_str, &mut buf)?,
         vec![crate::log::Line {
-            previous_oid: gix_hash::Kind::Sha1.null(),
+            previous_oid: gix_testtools::object_hash().null(),
             new_oid: new,
             signature: Signature {
                 name: "committer".into(),

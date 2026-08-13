@@ -18,7 +18,14 @@ fn large_transactions_hold_a_constant_number_of_file_descriptors() -> gix_testto
     }
 
     let dir = gix_testtools::tempfile::TempDir::new()?;
-    let store = file::Store::at(dir.path().into(), Default::default());
+    let object_hash = gix_testtools::object_hash();
+    let store = file::Store::at(
+        dir.path().into(),
+        gix_ref::store::init::Options {
+            object_hash,
+            ..Default::default()
+        },
+    );
     let edits = (0..20).map(|i| RefEdit {
         change: Change::Update {
             log: LogChange {
@@ -27,7 +34,7 @@ fn large_transactions_hold_a_constant_number_of_file_descriptors() -> gix_testto
                 message: "log peeled".into(),
             },
             expected: PreviousValue::MustNotExist,
-            new: Target::Object(gix_hash::Kind::Sha1.empty_blob()),
+            new: Target::Object(object_hash.empty_blob()),
         },
         name: format!("refs/heads/fd-{i:02}").try_into().expect("valid ref name"),
         deref: false,

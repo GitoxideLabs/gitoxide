@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::{path::PathBuf, sync::atomic::AtomicBool};
 
 use gix_features::progress;
 use gix_odb::loose::{Options, Store};
@@ -8,7 +8,21 @@ use pretty_assertions::assert_eq;
 use crate::hex_to_id;
 
 fn ldb() -> Store {
-    Store::at(fixture_path("objects"), Options::default())
+    ldb_at(fixture_path("objects"))
+}
+
+fn ldb_at(path: impl Into<PathBuf>) -> Store {
+    ldb_at_opts(path, gix_hash::Kind::Sha1)
+}
+
+fn ldb_at_opts(path: impl Into<PathBuf>, object_hash: gix_hash::Kind) -> Store {
+    Store::at(
+        path,
+        Options {
+            object_hash,
+            ..Options::default()
+        },
+    )
 }
 
 fn limited_ldb(limit: usize) -> Store {
@@ -16,6 +30,7 @@ fn limited_ldb(limit: usize) -> Store {
         fixture_path("objects"),
         Options {
             alloc_limit_bytes: Some(limit),
+            object_hash: gix_hash::Kind::Sha1,
             ..Default::default()
         },
     )
@@ -56,7 +71,7 @@ mod write {
     use gix_object::Write;
     use gix_odb::loose;
 
-    use crate::store::loose::{locate_oid, object_ids};
+    use crate::store::loose::{ldb_at, ldb_at_opts, locate_oid, object_ids};
 
     #[test]
     fn compression_level_is_respected() -> crate::Result {
@@ -69,6 +84,7 @@ mod write {
                 dir.path(),
                 loose::Options {
                     compression: level,
+                    object_hash: gix_testtools::object_hash(),
                     ..Default::default()
                 },
             );
@@ -92,7 +108,7 @@ mod write {
     #[test]
     fn read_and_write() -> crate::Result {
         let dir = gix_testtools::tempfile::tempdir()?;
-        let db = loose::Store::at(dir.path(), loose::Options::default());
+        let db = ldb_at(dir.path());
         let mut buf = Vec::new();
         let mut buf2 = Vec::new();
 
@@ -168,7 +184,7 @@ mod write {
         let dir = gix_testtools::tempfile::tempdir()?;
 
         fn write_empty_trees(dir: &std::path::Path) {
-            let db = loose::Store::at(dir, loose::Options::default());
+            let db = ldb_at_opts(dir, gix_testtools::object_hash());
             let empty_tree = gix_object::Tree::empty();
             for _ in 0..2 {
                 let id = db.write(&empty_tree).expect("works");
@@ -211,7 +227,10 @@ mod lookup_prefix {
     use gix_testtools::fixture_path;
     use maplit::hashset;
 
-    use crate::{hex_to_id, store::loose::ldb};
+    use crate::{
+        hex_to_id,
+        store::loose::{ldb, ldb_at},
+    };
 
     #[test]
     fn returns_none_for_prefixes_without_any_match() {
@@ -239,7 +258,7 @@ mod lookup_prefix {
             b"fake",
         )
         .unwrap();
-        let store = gix_odb::loose::Store::at(objects_dir.path(), gix_odb::loose::Options::default());
+        let store = ldb_at(objects_dir.path());
         let input_id = hex_to_id("37d4e6c5c48ba0d245164c4e10d5f41140cab980");
         let prefix = gix_hash::Prefix::new(&input_id, 4).unwrap();
         assert_eq!(
@@ -290,8 +309,8 @@ mod find {
     use gix_odb::loose;
 
     use crate::{
-        hex_to_id,
-        store::loose::{ldb, limited_ldb, locate_oid},
+        hex_to_id, hex_to_id_for_hash,
+        store::loose::{ldb, ldb_at_opts, limited_ldb, locate_oid},
     };
 
     fn find<'a>(hex: &str, buf: &'a mut Vec<u8>) -> gix_object::Data<'a> {
@@ -303,11 +322,21 @@ mod find {
         let tmp = gix_testtools::tempfile::tempdir()?;
         let base = tmp.path().join("aa");
         std::fs::create_dir(&base)?;
-        std::fs::write(base.join("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), [])?;
-        let db = loose::Store::at(tmp.path(), loose::Options::default());
+        std::fs::write(
+            base.join(match gix_testtools::object_hash() {
+                gix_hash::Kind::Sha1 => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                gix_hash::Kind::Sha256 => "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                _ => unimplemented!(),
+            }),
+            [],
+        )?;
+        let db = ldb_at_opts(tmp.path(), gix_testtools::object_hash());
 
         let mut buf = Vec::new();
-        let id = hex_to_id("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let id = hex_to_id_for_hash(
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
         assert!(db.try_find(&id, &mut buf).is_err(), "it must not panic");
         assert!(db.try_header(&id).is_err(), "it must not panic");
 
