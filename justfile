@@ -74,6 +74,11 @@ doc $RUSTDOCFLAGS='-D warnings':
 unit-tests:
     cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --mode exhaustive --stage tests
 
+# Run dynamic ODB state-change scenarios with contending handles
+[group('Tests')]
+test-odb-threaded-scenarios:
+    env GIX_ODB_TEST_THREADS=8 cargo test -p gix-odb --features gix-parallel/parallel --test threaded_dynamic_scenarios -- --test-threads=1
+
 # Run all doctests
 [group('Tests')]
 doc-tests:
