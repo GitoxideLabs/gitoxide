@@ -22,27 +22,84 @@ fn open_with_slots(fixture: &OdbFixture, slots: gix_odb::store::init::Slots) -> 
     )
 }
 
-fn assert_object(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+#[cfg(feature = "parallel")]
+fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result + Sync) -> Result {
+    let threads = match std::env::var_os("GIX_ODB_TEST_THREADS") {
+        Some(value) => value
+            .into_string()
+            .map_err(|_| std::io::Error::other("GIX_ODB_TEST_THREADS must be valid UTF-8"))?
+            .parse::<std::num::NonZeroUsize>()
+            .map_err(|err| std::io::Error::other(format!("invalid GIX_ODB_TEST_THREADS: {err}")))?
+            .get(),
+        None => 1,
+    };
+    if threads == 1 {
+        return assertion(handle);
+    }
+
+    let barrier = std::sync::Barrier::new(threads);
+    std::thread::scope(|scope| {
+        let workers = (1..threads)
+            .map(|_| {
+                let handle = handle.clone();
+                let barrier = &barrier;
+                let assertion = &assertion;
+                scope.spawn(move || {
+                    barrier.wait();
+                    assertion(&handle)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        let mut outcome = assertion(handle);
+        for worker in workers {
+            let worker = worker.join().expect("a contending assertion does not panic");
+            if outcome.is_ok() {
+                outcome = worker;
+            }
+        }
+        outcome
+    })
+}
+
+#[cfg(not(feature = "parallel"))]
+fn assert_with_handles(handle: &gix_odb::Handle, assertion: impl Fn(&gix_odb::Handle) -> Result) -> Result {
+    assertion(handle)
+}
+
+fn assert_object_once(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
     let mut buffer = Vec::new();
-    let object = handle.try_find(id, &mut buffer)?.expect("fixture object is available");
+    let object = handle
+        .try_find(id, &mut buffer)?
+        .ok_or_else(|| std::io::Error::other(format!("fixture object {id} is available")))?;
     assert_eq!(
         gix_object::compute_hash(id.kind(), object.kind, object.data)?,
         id,
         "the ODB returned bytes belonging to the requested object"
     );
-    let header = handle.try_header(id)?.expect("the same object has a header");
+    let header = handle
+        .try_header(id)?
+        .ok_or_else(|| std::io::Error::other(format!("fixture object {id} has a header")))?;
     assert_eq!(header.kind(), object.kind, "header and object kinds agree");
     assert_eq!(header.size(), object.data.len() as u64, "header and object sizes agree");
     Ok(())
 }
 
-fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+fn assert_object(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+    assert_with_handles(handle, |handle| assert_object_once(handle, id))
+}
+
+fn assert_missing_once(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
     let mut buffer = Vec::new();
-    assert!(
-        handle.try_find(id, &mut buffer)?.is_none(),
-        "the object is not reachable in the current fixture state"
-    );
+    if handle.try_find(id, &mut buffer)?.is_some() {
+        return Err(std::io::Error::other(format!("object {id} is not reachable in the current fixture state")).into());
+    }
     Ok(())
+}
+
+fn assert_missing(handle: &gix_odb::Handle, id: &gix_hash::oid) -> Result {
+    assert_with_handles(handle, |handle| assert_missing_once(handle, id))
 }
 
 #[cfg(feature = "parallel")]
@@ -276,7 +333,7 @@ fn a_handle_rechecks_its_snapshot_after_waiting_for_an_index_loader() -> Result 
         },
     )?
     .into_arc()?;
-    assert_object(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    assert_object_once(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
     let stale = handle.clone();
     let loader = handle.clone();
     let second_id = fixture.manifest.pack(Pack::B).object_ids[0];
