@@ -1231,6 +1231,310 @@ fn a_failed_pack_load_is_shared_and_recovers_after_replacement() -> Result {
     Ok(())
 }
 
+#[cfg(feature = "parallel")]
+#[test]
+fn pack_removal_during_loading_is_observed_by_all_waiters() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_loader = Arc::new(AtomicBool::new(true));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_loader = Arc::clone(&pause_loader);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::PackSlotLocked { .. }) && pause_loader.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the pack loader");
+            }
+        }
+    });
+    let handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(4),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    assert_eq!(
+        handle.packed_object_count()?,
+        fixture.manifest.pack(Pack::A).object_ids.len() as u64,
+        "the index is loaded while its pack stays unopened"
+    );
+    point_rx.try_iter().for_each(drop);
+
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    let first_thread = lookup(handle.clone());
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first lookup locks the pack slot");
+        if matches!(point, Point::PackSlotLocked { .. }) {
+            break;
+        }
+    }
+    let second_thread = lookup(handle.clone());
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second lookup waits for the pack slot");
+        if matches!(point, Point::PackSlotLocking { .. }) {
+            break;
+        }
+    }
+
+    fixture.remove(Database::Primary, Pack::A, Component::Pack)?;
+    resume_tx.send(()).expect("the pack loader is waiting for release");
+    assert!(
+        !first_thread
+            .join()
+            .expect("the first lookup does not panic")
+            .expect("a removed pack is a miss"),
+        "the first handle observes the maintenance removal"
+    );
+    assert!(
+        !second_thread
+            .join()
+            .expect("the second lookup does not panic")
+            .expect("a removed pack is a shared miss"),
+        "the waiting handle observes the shared missing-pack state"
+    );
+    assert_eq!(
+        point_rx
+            .try_iter()
+            .filter(|point| matches!(
+                point,
+                Point::PackLoadCompleted {
+                    outcome: LoadOutcome::Failure,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "contending handles attempt to open the removed pack once"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn multi_index_rewrite_during_refresh_publishes_one_current_state() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    fixture.write_multi_index(Database::Primary, &[Pack::A])?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_refresh = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_refresh = Arc::clone(&pause_refresh);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::RefreshScanStarted) && pause_refresh.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases the refresh scan");
+            }
+        }
+    });
+    let handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Growable { initial: 1 },
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    assert_object_once(&handle, &fixture.manifest.pack(Pack::A).object_ids[0])?;
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    point_rx.try_iter().for_each(drop);
+
+    let id = fixture.manifest.pack(Pack::B).object_ids[0];
+    pause_refresh.store(true, Ordering::SeqCst);
+    let lookup = std::thread::spawn({
+        let handle = handle.clone();
+        move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        }
+    });
+    loop {
+        if matches!(
+            point_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the lookup starts its refresh scan"),
+            Point::RefreshScanStarted
+        ) {
+            break;
+        }
+    }
+    fixture.write_multi_index(Database::Primary, &[Pack::A, Pack::B])?;
+    resume_tx.send(()).expect("the refresh scan is waiting for release");
+    assert!(
+        lookup
+            .join()
+            .expect("the lookup does not panic")
+            .expect("the lookup succeeds after maintenance"),
+        "the handle finds the object after the concurrent MIDX rewrite"
+    );
+    let observed = point_rx.try_iter().collect::<Vec<_>>();
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(
+                point,
+                Point::RefreshScanCompleted {
+                    outcome: LoadOutcome::Success
+                }
+            ))
+            .count(),
+        1,
+        "the lookup completes one successful refresh"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().known_reachable_indices,
+        1,
+        "the rewritten MIDX is the sole reachable index"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
+fn stable_location_remains_readable_while_slot_growth_is_published() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::Point;
+
+    let mut fixture = OdbFixture::from_script()?;
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let pause_publication = Arc::new(AtomicBool::new(false));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_publication = Arc::clone(&pause_publication);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::IndexStatePublished) && pause_publication.swap(false, Ordering::SeqCst) {
+                resume_rx.recv().expect("the test releases catalog publication");
+            }
+        }
+    });
+    let handle = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Growable { initial: 1 },
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    let mut stable = handle.clone();
+    stable.prevent_pack_unload();
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let a = fixture.manifest.pack(Pack::A).object_ids[0];
+    assert_object_once(&stable, &a)?;
+    let mut buffer = Vec::new();
+    let location = gix_odb::pack::Find::location_by_oid(&stable, &a, &mut buffer)
+        .expect("the stable handle locates the first pack");
+
+    fixture.install_pack(Database::Primary, Pack::B)?;
+    fixture.install_pack(Database::Primary, Pack::C)?;
+    let c = fixture.manifest.pack(Pack::C).object_ids[0];
+    point_rx.try_iter().for_each(drop);
+    pause_publication.store(true, Ordering::SeqCst);
+    let growth = std::thread::spawn({
+        let handle = handle.clone();
+        move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&c, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        }
+    });
+    loop {
+        if matches!(
+            point_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("slot growth publishes a new catalog"),
+            Point::IndexStatePublished
+        ) {
+            break;
+        }
+    }
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the old stable location remains readable while the grown catalog is being published"
+    );
+    resume_tx.send(()).expect("catalog publication is waiting for release");
+    assert!(
+        growth
+            .join()
+            .expect("the growing lookup does not panic")
+            .expect("the growing lookup succeeds"),
+        "the lookup finds the object added during slot growth"
+    );
+    assert_eq!(
+        handle.store_ref().metrics().known_reachable_indices,
+        3,
+        "the grown catalog exposes every installed index"
+    );
+    assert!(
+        gix_odb::pack::Find::entry_by_location(&stable, &location).is_some(),
+        "the old stable location remains readable after publication completes"
+    );
+    Ok(())
+}
+
 #[test]
 fn slot_exhaustion_keeps_the_loaded_pack_usable() -> Result {
     let mut fixture = OdbFixture::from_script()?;
