@@ -91,12 +91,13 @@ pub(crate) fn apply(
     commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
     commit.message = edit.message;
     let outcome = rebase::perform(
-        repo,
+        &repo,
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
-    )?;
+    )?
+    .complete()?;
     Ok(outcome.selected.filter(|new_id| *new_id != old_id))
 }
 

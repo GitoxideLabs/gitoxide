@@ -19,7 +19,7 @@
   the original worktree directory and process CWD may no longer exist; recover
   to the normalized common repository before processing watchers, loading view
   data, or drawing.
-- Do not retain a `gix::Repository`, or a platform/object that owns one, in application or event-loop state while tix is idle.
+- Do not retain a `gix::Repository`, or a platform/object that owns one, in application or event-loop state while tix is idle. The sole exception is an unresolved in-memory rebase result awaiting the user's immediate accept-or-cancel key; dropping it must leave no observable repository state.
 - Open a fresh, non-isolated repository for bounded view population so configuration such as mailmap and diff filters is honored, then retain only detached display data.
 - The fill repository may be reused only while continuous navigation is active and must be dropped when its idle timer expires.
 - Filesystem watchers retain paths and native watcher handles, never repositories.

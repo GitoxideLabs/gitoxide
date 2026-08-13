@@ -389,6 +389,8 @@ pub(crate) struct App {
     worktree_head: Option<ObjectId>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
+    pending_rebase_conflict: Option<ObjectId>,
+    worktree_conflicted: bool,
     amend_available: bool,
     spill_available: bool,
     split_available: bool,
@@ -470,6 +472,8 @@ impl App {
             worktree_head: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
+            pending_rebase_conflict: None,
+            worktree_conflicted: false,
             amend_available: false,
             spill_available: false,
             split_available: false,
@@ -510,6 +514,31 @@ impl App {
 
     pub(crate) fn set_worktree_head_unborn(&mut self, unborn: bool) {
         self.worktree_head_unborn = unborn;
+    }
+
+    pub(crate) fn arm_rebase_conflict(&mut self, id: ObjectId) {
+        self.pending_rebase_conflict = Some(id);
+        self.leave_message("rebase conflict · <enter> checkout for resolution · any other key cancel");
+    }
+
+    pub(crate) fn clear_rebase_conflict(&mut self) {
+        self.pending_rebase_conflict = None;
+        self.message = None;
+    }
+
+    pub(crate) fn begin_conflict_resolution(&mut self) {
+        self.pending_rebase_conflict = None;
+        self.worktree_conflicted = true;
+        self.changes_mode = Some(ChangesMode::Both);
+        self.changes_focus = None;
+    }
+
+    pub(crate) fn set_worktree_conflicted(&mut self, conflicted: bool) {
+        self.worktree_conflicted = conflicted;
+    }
+
+    pub(crate) fn conflict_marker(&self, id: ObjectId, head: bool) -> bool {
+        self.pending_rebase_conflict == Some(id) || (head && self.worktree_conflicted)
     }
 
     pub(crate) fn set_known_descendants(&mut self, ids: HashSet<ObjectId>) {
@@ -1464,6 +1493,8 @@ impl App {
 
     pub(crate) fn time_travel_shortcut_visible(&self) -> bool {
         self.worktree_changes_available
+            && self.pending_rebase_conflict.is_none()
+            && !self.worktree_conflicted
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.is_some()
@@ -2289,6 +2320,25 @@ mod tests {
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
         app.set_worktree_changes_available(false);
         assert!(app.update(Action::TimeTravel).is_empty());
+    }
+
+    #[test]
+    fn unresolved_conflicts_disable_time_travel() {
+        let mut app = App::new(2);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        app.set_worktree_head(Some(id(2)), false);
+        complete(&mut app);
+        app.update(Action::MoveDown);
+        assert!(app.time_travel_shortcut_visible());
+
+        app.set_worktree_conflicted(true);
+        assert!(!app.time_travel_shortcut_visible());
+        assert!(app.update(Action::TimeTravel).is_empty());
+        app.set_worktree_conflicted(false);
+        app.arm_rebase_conflict(id(1));
+        assert!(!app.time_travel_shortcut_visible());
+        app.clear_rebase_conflict();
+        assert!(app.time_travel_shortcut_visible());
     }
 
     #[test]

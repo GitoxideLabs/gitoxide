@@ -340,7 +340,7 @@ space first; changes blocks adapt within the remaining history width.
   title, a `why` body, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
-  rebases linear descendants, persists the prepared objects, and atomically
+  marks linear descendants for lazy replay, persists the prepared objects, and atomically
   advances mutable refs throughout the rewritten stack. This includes local
   branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
@@ -372,9 +372,16 @@ space first; changes blocks adapt within the remaining history width.
   use a bright-cyan commit marker.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
-- Time travel from either endpoint of a pending region completes the entire
-  marked rebase with cherry-picking and configured signing before checkout. A
-  conflict aborts before refs or worktrees change.
+- Time travel from either endpoint of a pending region completes the marked
+  rebase with cherry-picking and configured signing before checkout. A conflict
+  retains the exact merge tree, conflict stages, prepared commits, and in-memory
+  objects without changing the repository. The conflicting row shows a blinking
+  red `C`; `<enter>` persists the prepared rebase, leaves later descendants lazy,
+  and checks out the conflict tree with an unmerged index. Any other key discards
+  the suspended operation.
+- A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
+  disables time travel until all conflict stages are resolved. The worktree
+  changes block is shown for resolution.
 
 ### Forget commits
 
@@ -382,10 +389,9 @@ space first; changes blocks adapt within the remaining history width.
   commit with no known merge descendant. The first `d` arms a
   `d again forget` confirmation; the second performs it. Navigation, refresh,
   cancellation, selection changes, and other commands disarm confirmation.
-- Forgetting does not require a worktree. Linear descendants are cherry-picked
-  onto the selected commit's parent, and mutable refs throughout the rewritten
-  stack move atomically. Empty commits only need parent rewriting. Tags and
-  remote-tracking refs remain unchanged.
+- Forgetting does not require a worktree. Linear descendants are reparented with
+  unchanged trees and marked for lazy replay; mutable refs throughout the
+  rewritten stack move atomically. Tags and remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
   applies a two-tree index/worktree transition which discards only that commit's
   tracked delta. Conflicting staged, tracked, or untracked state refuses the
@@ -397,15 +403,16 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Transactional rebases
 
-- Reword, new-commit, and forget edits share one in-memory rebase primitive.
+- All edits share one in-memory rebase primitive.
   Forks are preserved, descendant merges are rejected, and all commit/tree
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
   `LeaveAsIsAndMark` additionally writes `tix-rebase: pending`; and `CherryPick`
-  transplants each tree delta, aborting the entire edit on unresolved conflicts.
-  A marked operation can be repeated from its marked base and clears all markers
-  after a successful cherry-pick.
+  transplants each tree delta. User edits use `LeaveAsIsAndMark`; time travel is
+  the only eager `CherryPick` caller. A successful repeated rebase clears its
+  markers. On conflict, the existing `tix-rebase-parent` identifies the original
+  base and later descendants remain marked instead of being cherry-picked.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is
@@ -416,6 +423,10 @@ space first; changes blocks adapt within the remaining history width.
   one compare-and-swap transaction. A checkout failure rolls back already-applied
   worktree transitions and the ref transaction; newly written unreachable objects
   may remain for normal Git garbage collection.
+- A suspended conflict temporarily owns a cloned repository with object memory
+  while awaiting one confirmation key. Dropping it writes nothing; accepting it
+  consumes the repository immediately after persisting and checking out the
+  retained merge result.
 
 ### Editing shortcuts
 
