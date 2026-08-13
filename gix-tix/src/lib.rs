@@ -1716,6 +1716,21 @@ fn event_loop(
                         Err(err) => app.notice = Some(format!("new commit: {err:#}")),
                     }
                 }
+                Effect::Forget(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match forget_commit(&repository_path, repository_is_bare, id) {
+                        Ok(parent) => {
+                            app.notice = Some(format!("forgot {}", id.to_hex_with_len(7)));
+                            if let Some(parent) = parent {
+                                app.select_commit(parent);
+                            }
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.notice = Some(format!("forget: {err:#}")),
+                    }
+                }
                 Effect::TimeTravel(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -2728,6 +2743,13 @@ fn create_commit(
     edit::create::apply(repository, prepared, &edited).map(Some)
 }
 
+fn forget_commit(repository_path: &Path, bare: bool, id: gix::ObjectId) -> Result<Option<gix::ObjectId>> {
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not open repository before forgetting commit")?;
+    repository.object_cache_size(None);
+    edit::forget::perform(&repository, id)
+}
+
 fn run_external_diff(
     terminal: &mut ratatui::DefaultTerminal,
     mut command: gix::diff::blob::platform::prepare_diff_command::Command,
@@ -3439,6 +3461,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('r') if history_display_expanded => Some(Action::ToggleRefs),
         KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
         KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
+        KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
@@ -4311,6 +4334,7 @@ mod tests {
         for (key, expected) in [
             ('r', Action::Reword),
             ('n', Action::NewCommit),
+            ('d', Action::Forget),
             ('t', Action::TimeTravel),
         ] {
             assert_eq!(

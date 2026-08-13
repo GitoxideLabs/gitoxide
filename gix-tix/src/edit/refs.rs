@@ -148,6 +148,16 @@ impl MutableRefs {
             None => current_refs.delete(repo, b"tix edit rollback".as_bstr(), committer),
         }
     }
+
+    pub(super) fn rollback_deleted(&self, repo: &gix::Repository) -> Result<()> {
+        let old = self.old.context("an unborn reference was not deleted")?;
+        let deleted = Self {
+            names: self.names.clone(),
+            old: None,
+        };
+        let committer = repo.committer().transpose()?;
+        deleted.update(repo, old, b"tix edit rollback".as_bstr(), committer)
+    }
 }
 
 fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {

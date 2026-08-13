@@ -679,6 +679,13 @@ pub(crate) fn draw_with_worktree(
             if app.can_create_commit() {
                 footer_spans.push(Span::raw(" · n new"));
             }
+            if app.can_forget() {
+                footer_spans.push(Span::raw(if app.forget_confirmation_visible() {
+                    " · d again forget"
+                } else {
+                    " · d forget"
+                }));
+            }
         } else if !app.history_display_expanded {
             footer_spans.push(Span::raw(" · e edit"));
         }
