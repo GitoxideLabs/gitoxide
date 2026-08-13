@@ -309,8 +309,10 @@ space first; changes blocks adapt within the remaining history width.
   regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
-  linear descendant with unchanged trees and corrected parentage. Mutable refs
-  follow every rewritten commit; tags and remote-tracking refs remain unchanged.
+  linear descendant with unchanged trees and corrected parentage. The rewritten
+  region is marked `tix-rebase: pending` for cherry-pick replay during time travel.
+  Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
+  unchanged.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
   the main status line and do not leave a repository retained by the UI.
 
