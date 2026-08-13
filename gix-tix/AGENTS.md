@@ -15,6 +15,10 @@
 
 ## Repository lifetime
 
+- Treat the event-loop head as a repository-lifecycle boundary. After any wait,
+  the original worktree directory and process CWD may no longer exist; recover
+  to the normalized common repository before processing watchers, loading view
+  data, or drawing.
 - Do not retain a `gix::Repository`, or a platform/object that owns one, in application or event-loop state while tix is idle.
 - Open a fresh, non-isolated repository for bounded view population so configuration such as mailmap and diff filters is honored, then retain only detached display data.
 - The fill repository may be reused only while continuous navigation is active and must be dropped when its idle timer expires.
