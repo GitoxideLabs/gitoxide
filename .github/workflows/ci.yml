@@ -165,6 +165,7 @@ jobs:
           curl -LSfs "https://raw.githubusercontent.com/the-lean-crate/cargo-diet/refs/tags/$CARGO_DIET_TAG/ci/install.sh" |
             sh -s -- --git the-lean-crate/cargo-diet --target x86_64-unknown-linux-musl --tag "$CARGO_DIET_TAG"
       - name: Run the selected checks
+        timeout-minutes: ${{ contains(matrix.tasks, 'odb-threaded-scenarios') && 5 || 360 }}
         # Keep Windows' native shell; the shared runner configures every task's environment.
         run: cargo run --profile qa --locked -p internal-tools --no-default-features --bin qa -- run --from-env
 
