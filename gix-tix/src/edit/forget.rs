@@ -5,6 +5,7 @@ use gix::{ObjectId, bstr::ByteSlice};
 
 use super::rebase;
 
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn perform(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,

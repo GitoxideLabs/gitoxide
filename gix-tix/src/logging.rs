@@ -372,6 +372,7 @@ pub(crate) fn init() -> Result<tracing::subscriber::DefaultGuard> {
         tracing_subscriber::fmt::layer()
             .with_ansi(false)
             .with_target(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
             .with_writer(appender)
             .with_filter(
                 Targets::new()

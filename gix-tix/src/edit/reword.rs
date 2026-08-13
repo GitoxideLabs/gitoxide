@@ -20,6 +20,7 @@ pub(super) struct Edit<'a> {
     pub message: BString,
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std::ffi::OsString, Vec<u8>)> {
     let editor = repo.editor().context("no Git editor is available")?;
     let mut commit = repo
@@ -67,6 +68,7 @@ pub(super) fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 
     ]
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %old_id))]
 pub(crate) fn apply(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,

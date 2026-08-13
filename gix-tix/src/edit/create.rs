@@ -18,6 +18,7 @@ pub(crate) struct Prepared {
     objects: gix::odb::memory::Storage,
 }
 
+#[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
     repo.workdir().context("creating a commit requires a worktree")?;
     let head = repo.head().context("could not read HEAD before creating a commit")?;
@@ -177,6 +178,7 @@ fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<Obj
     Ok(editor.write().context("could not build the worktree tree")?.detach())
 }
 
+#[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
 pub(crate) fn apply(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
