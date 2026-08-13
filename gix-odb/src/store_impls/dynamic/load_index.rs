@@ -95,9 +95,14 @@ impl super::Store {
         } else {
             // always compare to the latest state
             // Nothing changed in the meantime, try to load another index…
-            if self.load_next_index(catalog)? {
+            if self.load_next_index(Arc::clone(&catalog))? {
                 Ok(Some(self.collect_snapshot()))
             } else {
+                let current_catalog = self.catalog.load();
+                let current_index = &current_catalog.index;
+                if marker.generation != current_index.generation || marker.state_id != current_index.state_id() {
+                    return Ok(Some(self.collect_snapshot()));
+                }
                 // …and if that didn't yield anything new consider refreshing our disk state.
                 match refresh_mode {
                     RefreshMode::Never => Ok(None),
@@ -233,6 +238,8 @@ impl super::Store {
         let claimed = index.next_index_to_load.load(Ordering::SeqCst);
         for &slot_id in index.slot_indices.iter().take(claimed) {
             let slot = &catalog.slots[slot_id];
+            #[cfg(feature = "test-support")]
+            self.debug(crate::store::init::debug::Point::IndexRetrySlotLocking { slot: slot_id });
             let _lock = slot.write.lock();
             if slot.generation.load(Ordering::SeqCst) > index.generation {
                 continue;
