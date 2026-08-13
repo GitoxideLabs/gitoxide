@@ -1380,7 +1380,6 @@ impl App {
     fn can_edit_head(&self) -> bool {
         self.state == State::Complete
             && self.worktree_changes_available
-            && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
                 Some(row.id) == self.worktree_head && !self.known_merge_descendants.contains(&row.id)
@@ -1388,11 +1387,11 @@ impl App {
     }
 
     pub(crate) fn can_amend(&self) -> bool {
-        self.can_edit_head() && self.amend_available
+        self.can_edit_head() && self.changes_focus.is_none() && self.amend_available
     }
 
     pub(crate) fn can_spill(&self) -> bool {
-        self.can_edit_head() && self.spill_available
+        self.can_edit_head() && matches!(self.changes_focus, None | Some(ChangePane::Tree)) && self.spill_available
     }
 
     pub(crate) fn set_head_edit_availability(&mut self, amend: bool, spill: bool) {
@@ -2088,6 +2087,16 @@ mod tests {
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
         assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
+        app.changes_focus = Some(ChangePane::Tree);
+        assert!(!app.can_amend(), "a tree path cannot be amended");
+        assert_eq!(
+            app.update(Action::Spill),
+            vec![Effect::Spill(id(2))],
+            "tree focus scopes spill to its selected path"
+        );
+        app.changes_focus = Some(ChangePane::Worktree);
+        assert!(!app.can_spill(), "worktree paths cannot be spilled from a commit");
+        app.changes_focus = None;
         app.update(Action::MoveDown);
         assert!(!app.can_amend());
         assert!(app.update(Action::Amend).is_empty());
