@@ -13,14 +13,22 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
     ));
     let mut revisions = Vec::new();
     for reference in repo.references()?.all()? {
-        let reference = reference.map_err(|err| anyhow::anyhow!("could not read test reference: {err}"))?;
-        if reference.name().as_bstr() != b"HEAD" && reference.try_id().is_some() {
-            revisions.push(
-                gix::path::from_bstr(reference.name().as_bstr())
-                    .into_owned()
-                    .into_os_string(),
-            );
+        let reference = reference.map_err(|err| anyhow::anyhow!("could not read reference: {err}"))?;
+        let Some(id) = reference.try_id() else { continue };
+        if reference.name().as_bstr() == b"HEAD"
+            || repo
+                .find_header(id)
+                .context("could not inspect reference target")?
+                .kind()
+                != gix::object::Kind::Commit
+        {
+            continue;
         }
+        revisions.push(
+            gix::path::from_bstr(reference.name().as_bstr())
+                .into_owned()
+                .into_os_string(),
+        );
     }
     if repo.head().is_ok_and(|head| head.referent_name().is_none()) {
         revisions.push("HEAD".into());
@@ -89,4 +97,31 @@ pub(crate) fn edit_document(
     }
     let edited = std::fs::read(tempfile.path()).context("could not read edited commit message")?;
     Ok((edited != document).then_some(edited))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    #[test]
+    fn edit_graph_ignores_refs_that_do_not_point_to_commits() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["update-ref", "refs/cache/tree", "HEAD^{tree}"])
+            .output()?;
+        assert!(
+            output.status.success(),
+            "the non-commit ref is created: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let head = repo.head_id()?.detach();
+        let graph = loaded_graph(&repo)?;
+        assert!(graph.parents_of(head).is_some(), "HEAD remains part of the edit graph");
+        Ok(())
+    }
 }
