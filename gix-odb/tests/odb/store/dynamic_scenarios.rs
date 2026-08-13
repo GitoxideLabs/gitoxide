@@ -575,16 +575,22 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
     let mut fixture = OdbFixture::from_script()?;
     let (point_tx, point_rx) = crossbeam_channel::unbounded();
     let (resume_tx, resume_rx) = crossbeam_channel::bounded(0);
+    let (resume_observer_tx, resume_observer_rx) = crossbeam_channel::bounded(0);
     let pause_next_refresh = Arc::new(AtomicBool::new(false));
+    let pause_next_observer = Arc::new(AtomicBool::new(false));
     let now = Arc::new(Mutex::new(Instant::now()));
     let debug = gix_odb::store::init::debug::Options::new({
         let pause_next_refresh = Arc::clone(&pause_next_refresh);
+        let pause_next_observer = Arc::clone(&pause_next_observer);
         move |point| {
             point_tx
                 .send(point)
                 .expect("the test receives every synchronization point");
             if matches!(point, Point::RefreshScanStarted) && pause_next_refresh.swap(false, Ordering::SeqCst) {
                 resume_rx.recv().expect("the test releases the refresh scan");
+            }
+            if matches!(point, Point::RefreshCompletionObserved) && pause_next_observer.swap(false, Ordering::SeqCst) {
+                resume_observer_rx.recv().expect("the test releases the observer");
             }
         }
     })
@@ -617,14 +623,59 @@ fn debug_hooks_coalesce_successful_refreshes() -> Result {
     fixture.install_pack(Database::Primary, Pack::A)?;
     point_rx.try_iter().for_each(drop);
     let id = fixture.manifest.pack(Pack::A).object_ids[0];
-    let (first, second, observed) = contended_lookup(
-        handle.clone(),
-        handle.clone(),
-        id,
-        &pause_next_refresh,
-        &point_rx,
-        &resume_tx,
-    );
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            let mut buffer = Vec::new();
+            handle
+                .try_find(&id, &mut buffer)
+                .map(|object| object.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    pause_next_refresh.store(true, Ordering::SeqCst);
+    let first_thread = lookup(handle.clone());
+    let mut observed = Vec::new();
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first handle starts its refresh scan");
+        observed.push(point);
+        if matches!(point, Point::RefreshScanStarted) {
+            break;
+        }
+    }
+    pause_next_observer.store(true, Ordering::SeqCst);
+    let second_thread = lookup(handle.clone());
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second handle observes refresh completion");
+        observed.push(point);
+        if matches!(point, Point::RefreshCompletionObserved) {
+            break;
+        }
+    }
+    resume_tx.send(()).expect("the first refresh is waiting for release");
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first handle completes its refresh scan");
+        observed.push(point);
+        if matches!(
+            point,
+            Point::RefreshScanCompleted {
+                outcome: gix_odb::store::init::debug::LoadOutcome::Success
+            }
+        ) {
+            break;
+        }
+    }
+    resume_observer_tx
+        .send(())
+        .expect("the second observer is waiting for release");
+    let first = first_thread.join().expect("the first lookup does not panic");
+    let second = second_thread.join().expect("the second lookup does not panic");
+    observed.extend(point_rx.try_iter());
     assert!(
         first.expect("the first lookup succeeds"),
         "the first handle finds the new object"
