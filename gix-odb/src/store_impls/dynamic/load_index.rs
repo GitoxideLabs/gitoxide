@@ -105,7 +105,14 @@ impl super::Store {
                             false, /* needs init */
                             true,  /* load one new index */
                             loose_compression,
-                        )?,
+                        )?
+                        .or_else(|| {
+                            let current_catalog = self.catalog.load();
+                            let current_index = &current_catalog.index;
+                            (marker.generation != current_index.generation
+                                || marker.state_id != current_index.state_id())
+                            .then(|| self.collect_snapshot())
+                        }),
                 };
                 match snapshot {
                     Some(snapshot) => Ok(Some(snapshot)),
@@ -294,6 +301,8 @@ impl super::Store {
     ) -> Result<Option<Snapshot>> {
         let stale_marks = self.num_disk_state_stale_marks.load(Ordering::Acquire);
         let completed_refreshes = self.num_disk_state_consolidations_completed.load(Ordering::Acquire);
+        #[cfg(feature = "test-support")]
+        self.debug(crate::store::init::debug::Point::RefreshCompletionObserved);
         let previous_catalog = self.catalog.load_full();
 
         // IMPORTANT: get a lock after we recorded the previous state.
