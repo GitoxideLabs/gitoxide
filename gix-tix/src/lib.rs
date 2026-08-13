@@ -799,7 +799,7 @@ fn shade_terminal_background((red, green, blue): (u8, u8, u8), dark: bool) -> (u
 }
 
 /// Run the interactive commit graph for `repository`.
-pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, options: Options) -> Result<()> {
+pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut options: Options) -> Result<()> {
     let _log_guard = match logging::init() {
         Ok(guard) => Some(guard),
         Err(err) => {
@@ -807,6 +807,17 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, opti
             None
         }
     };
+    let mut repository_path = repository.git_dir().to_owned();
+    let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
+    let (validation_repository, _) = open_history_repository(&mut repository_path, &common_dir)?;
+    let (hide, unavailable) = history::available_hidden_revisions(&validation_repository, &options.hide)?;
+    options.hide = hide;
+    for (revision, err) in unavailable {
+        eprintln!(
+            "warning: ignoring unavailable hidden revision {}: {err}",
+            revision.to_string_lossy()
+        );
+    }
     tracing::info!(
         revision_count = revisions.len(),
         hidden_revision_count = options.hide.len(),
@@ -1237,6 +1248,7 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
+                    update_hidden_branch_behind(&mut app, history_graph.as_ref(), &ref_snapshot);
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "lane-computation-completed");
                     filesystem_responses.queue_frame(&response_ids, "lane-computation-completed");
@@ -1427,6 +1439,7 @@ fn event_loop(
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     history_graph = Some(graph);
+                    update_hidden_branch_behind(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
                     app.selection_relation = None;
                 }
@@ -2133,6 +2146,19 @@ fn decoration_head(decorations: &Decorations) -> Option<gix::ObjectId> {
             .any(|decoration| decoration.kind == history::DecorationKind::Head)
             .then_some(*id)
     })
+}
+
+fn update_hidden_branch_behind(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
+    let markers = graph.map_or_else(HashMap::new, |graph| {
+        graph.hidden_branch_behind(
+            &refs.view_tips,
+            refs.hidden
+                .iter()
+                .filter(|(name, _)| name.starts_with(b"refs/heads/"))
+                .filter_map(|(_, target)| target.try_id().map(ToOwned::to_owned)),
+        )
+    });
+    app.set_hidden_branch_behind(markers);
 }
 
 fn restore_change_selection(view: &mut app::ChangesView, changes: &Changes, remembered: Option<(BString, usize)>) {

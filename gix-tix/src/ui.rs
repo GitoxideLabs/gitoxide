@@ -384,6 +384,27 @@ pub(crate) fn draw_with_worktree(
         let underline = head_has_descendants && !selected;
         let head_state = head.then_some(head_has_descendants);
         let metadata_width = metadata.width();
+        let hidden_branch_behind = app.hidden_branch_behind(visible_rows[index].id);
+        let line_width = if align_metadata {
+            align_width.saturating_add(metadata_width)
+        } else {
+            lane.chars()
+                .count()
+                .saturating_add(metadata_width)
+                .saturating_sub(horizontal_offset)
+        };
+        let hidden_branch_marker = hidden_branch_behind.and_then(|behind| {
+            let marker = format!("⇣{behind}");
+            let width = marker.chars().count() as u16;
+            (body.width > width.saturating_add(2)).then(|| {
+                let natural_x = content
+                    .x
+                    .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
+                    .saturating_add(1);
+                let x = natural_x.min(body.right().saturating_sub(width).saturating_sub(1));
+                (marker, x, width)
+            })
+        });
         let signature_color = signature_color(visible_rows[index].signature);
         let highlight = if selected && app.show_selection_tail {
             Some(signature_color)
@@ -475,21 +496,16 @@ pub(crate) fn draw_with_worktree(
             }
         }
         if selected && app.show_selection_tail && body.width > 0 {
-            let line_width = if align_metadata {
-                align_width.saturating_add(metadata_width)
-            } else {
-                lane.chars()
-                    .count()
-                    .saturating_add(metadata_width)
-                    .saturating_sub(horizontal_offset)
-            };
+            let marker_limit = hidden_branch_marker
+                .as_ref()
+                .map_or_else(|| body.right().saturating_sub(1), |(_, x, _)| x.saturating_sub(2));
             let marker_x = content
                 .x
                 .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
                 .saturating_add(1)
                 .saturating_add(u16::try_from(selection_info_width).unwrap_or(u16::MAX))
                 .saturating_add(1)
-                .min(body.right().saturating_sub(1));
+                .min(marker_limit);
             if selection_info_width > 0 {
                 let width = u16::try_from(selection_info_width)
                     .unwrap_or(u16::MAX)
@@ -526,6 +542,19 @@ pub(crate) fn draw_with_worktree(
                     .set_fg(Color::Reset)
                     .set_bg(Color::Reset)
                     .set_style(Style::default().add_modifier(Modifier::DIM));
+            }
+        }
+        if let Some((marker, x, width)) = hidden_branch_marker {
+            frame.buffer_mut()[(x - 1, y)].set_symbol(" ");
+            frame.render_widget(
+                Paragraph::new(marker).style(color(Color::LightRed)),
+                Rect::new(x, y, width, 1),
+            );
+            frame.buffer_mut()[(x + width, y)].set_symbol(" ");
+            for marker_x in x..x + width {
+                let cell = &mut frame.buffer_mut()[(marker_x, y)];
+                cell.set_fg(Color::LightRed);
+                cell.modifier.remove(Modifier::DIM | Modifier::REVERSED);
             }
         }
     }
@@ -2646,7 +2675,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let footer = rendered_line(&terminal, 1);
-        let view = "view (date · emails · names · mailmap · trailers · no refs · show hidden)";
+        let view = "view (date · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
             footer.starts_with(&format!("0 commits · {view} · [ align")),
             "the active view prefix follows the history position"
@@ -4315,6 +4344,7 @@ mod tests {
         app.extend_commits(vec![commit(1)]);
         app.extend_hidden_commits(vec![commit(2)]);
         complete(&mut app);
+        app.set_hidden_branch_behind(std::collections::HashMap::from([(gix::ObjectId::Sha1([2; 20]), 2)]));
         app.set_lane(0, "● ");
         app.set_lane(1, "● ");
         let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
@@ -4331,8 +4361,22 @@ mod tests {
             terminal.backend().buffer()[(hash, 1)].modifier.contains(Modifier::BOLD),
             "non-color styling is retained"
         );
+        let marker_byte = line.find("⇣2").expect("the behind count is visible");
+        let marker = line[..marker_byte].chars().count() as u16;
+        assert_eq!(&line[marker_byte - 1..marker_byte], " ", "the marker has a left margin");
+        assert_eq!(
+            terminal.backend().buffer()[(marker + 2, 1)].symbol(),
+            " ",
+            "the marker has a right margin"
+        );
+        assert!(line.contains("subject 2 ⇣2 "), "the marker naturally follows the title");
         for x in 0..terminal.backend().buffer().area.width {
             let cell = &terminal.backend().buffer()[(x, 1)];
+            if (marker..marker + 2).contains(&x) {
+                assert_eq!(cell.fg, Color::LightRed, "behind information uses its usual color");
+                assert!(!cell.modifier.contains(Modifier::DIM));
+                continue;
+            }
             assert_eq!(cell.fg, Color::Reset, "the hidden row has no foreground colors");
             assert_eq!(cell.bg, Color::Reset, "the hidden row has no background colors");
             assert!(cell.modifier.contains(Modifier::DIM), "the hidden row is dimmed");
@@ -4341,6 +4385,13 @@ mod tests {
             terminal.backend().buffer()[(0, 1)].symbol(),
             ">",
             "the hidden row is not selected"
+        );
+
+        let mut narrow = Terminal::new(TestBackend::new(28, 3))?;
+        narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&narrow, 1).ends_with(" ⇣2 "),
+            "the terminal edge pushes the marker over clipped title text"
         );
         Ok(())
     }

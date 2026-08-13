@@ -393,6 +393,7 @@ pub(crate) struct App {
     signature_verification_running: bool,
     pub(crate) manual_refresh: bool,
     pub(crate) selection_relation: Option<SelectionRelation>,
+    hidden_branch_behind: HashMap<ObjectId, usize>,
 }
 
 impl App {
@@ -470,6 +471,7 @@ impl App {
             signature_verification_running: false,
             manual_refresh: false,
             selection_relation: None,
+            hidden_branch_behind: HashMap::new(),
         }
     }
 
@@ -483,9 +485,6 @@ impl App {
 
     pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
         self.has_hidden_filter = present;
-        if present {
-            self.ref_mode = RefMode::None;
-        }
     }
 
     pub(crate) fn set_worktree_head(&mut self, head: Option<ObjectId>, select_on_load: bool) {
@@ -974,6 +973,14 @@ impl App {
         self.hidden_rows.clone()
     }
 
+    pub(crate) fn set_hidden_branch_behind(&mut self, markers: HashMap<ObjectId, usize>) {
+        self.hidden_branch_behind = markers;
+    }
+
+    pub(crate) fn hidden_branch_behind(&self, id: ObjectId) -> Option<usize> {
+        self.hidden_branch_behind.get(&id).copied()
+    }
+
     pub(crate) fn start_refresh(
         &mut self,
         commits: LoadedCommits,
@@ -1089,6 +1096,7 @@ impl App {
         self.all_rows.clear();
         self.all_order.clear();
         self.hidden_rows.clear();
+        self.hidden_branch_behind.clear();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
@@ -2791,8 +2799,8 @@ mod tests {
         app.configure_hidden_filter(true);
         assert_eq!(
             app.ref_mode,
-            RefMode::None,
-            "hidden ancestry hides references by default"
+            RefMode::Default,
+            "hidden ancestry keeps the normal reference display"
         );
         app.extend_commits(vec![row(1)]);
         assert!(
