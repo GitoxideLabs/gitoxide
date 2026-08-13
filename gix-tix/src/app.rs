@@ -42,6 +42,7 @@ pub(crate) enum SignatureState {
     Verifying,
     Verified,
     Failed,
+    PendingRebase,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -285,6 +286,8 @@ pub(crate) enum Action {
     OpenDiff,
     Reword,
     NewCommit,
+    Amend,
+    Spill,
     Forget,
     TimeTravel,
     VerifySignatures,
@@ -308,6 +311,8 @@ pub(crate) enum Effect {
     OpenCommitDiff(ObjectId),
     Reword(ObjectId),
     NewCommit(Option<ObjectId>),
+    Amend(ObjectId),
+    Spill(ObjectId),
     Forget(ObjectId),
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
@@ -379,6 +384,8 @@ pub(crate) struct App {
     worktree_head: Option<ObjectId>,
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
+    amend_available: bool,
+    spill_available: bool,
     known_descendants: HashSet<ObjectId>,
     known_merge_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
@@ -454,6 +461,8 @@ impl App {
             worktree_head: None,
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
+            amend_available: false,
+            spill_available: false,
             known_descendants: HashSet::new(),
             known_merge_descendants: HashSet::new(),
             select_top_after_refresh: false,
@@ -680,7 +689,13 @@ impl App {
         }
         if !matches!(
             &action,
-            Action::ToggleEdit | Action::Reword | Action::NewCommit | Action::Forget | Action::TimeTravel
+            Action::ToggleEdit
+                | Action::Reword
+                | Action::NewCommit
+                | Action::Amend
+                | Action::Spill
+                | Action::Forget
+                | Action::TimeTravel
         ) {
             self.edit_expanded = false;
         }
@@ -846,6 +861,16 @@ impl App {
             Action::NewCommit if self.can_create_commit() => {
                 return vec![Effect::NewCommit(
                     self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
+                )];
+            }
+            Action::Amend if self.can_amend() => {
+                return vec![Effect::Amend(
+                    self.rows[self.selected.expect("amend requires a selection")].id,
+                )];
+            }
+            Action::Spill if self.can_spill() => {
+                return vec![Effect::Spill(
+                    self.rows[self.selected.expect("spill requires a selection")].id,
                 )];
             }
             Action::Forget if self.can_forget() => {
@@ -1350,6 +1375,29 @@ impl App {
                 .selected
                 .and_then(|index| self.rows.get(index))
                 .is_some_and(|row| row.parent_ids.len() <= 1 && !self.known_merge_descendants.contains(&row.id))
+    }
+
+    fn can_edit_head(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                Some(row.id) == self.worktree_head && !self.known_merge_descendants.contains(&row.id)
+            })
+    }
+
+    pub(crate) fn can_amend(&self) -> bool {
+        self.can_edit_head() && self.amend_available
+    }
+
+    pub(crate) fn can_spill(&self) -> bool {
+        self.can_edit_head() && self.spill_available
+    }
+
+    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, spill: bool) {
+        self.amend_available = amend;
+        self.spill_available = spill;
     }
 
     pub(crate) fn forget_confirmation_visible(&self) -> bool {
@@ -2029,6 +2077,20 @@ mod tests {
         app.update(Action::MoveDown);
         assert!(app.can_reword(), "linear descendants can be rebased after rewording");
         assert_eq!(app.update(Action::Reword), vec![Effect::Reword(id(1))]);
+    }
+
+    #[test]
+    fn amend_and_spill_are_limited_to_the_current_worktree_head() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        app.set_worktree_head(Some(id(2)), false);
+        app.set_head_edit_availability(true, true);
+        complete(&mut app);
+        assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
+        assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
+        app.update(Action::MoveDown);
+        assert!(!app.can_amend());
+        assert!(app.update(Action::Amend).is_empty());
     }
 
     #[test]

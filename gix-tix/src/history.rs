@@ -1361,7 +1361,12 @@ fn decode_metadata<'a>(
                     }
                 }
             }
-            Token::ExtraHeader((name, _)) if name == "gpgsig" || name == "gpgsig-sha256" => {
+            Token::ExtraHeader((name, value)) if name == "tix-rebase" && value.as_ref() == b"pending" => {
+                signature = SignatureState::PendingRebase;
+            }
+            Token::ExtraHeader((name, _))
+                if (name == "gpgsig" || name == "gpgsig-sha256") && signature != SignatureState::PendingRebase =>
+            {
                 signature = SignatureState::Unverified;
             }
             _ => {}

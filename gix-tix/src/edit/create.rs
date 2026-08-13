@@ -66,20 +66,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
     {
         anyhow::bail!("cannot create a commit with unresolved index conflicts");
     }
-    let mut index_editor = repo.empty_tree().edit().context("could not prepare the index tree")?;
-    for entry in index.entries() {
-        let mode = entry
-            .mode
-            .to_tree_entry_mode()
-            .context("an index entry has an invalid mode")?;
-        index_editor
-            .upsert(entry.path(&index), mode.kind(), entry.id)
-            .context("could not add an index entry to the candidate tree")?;
-    }
-    let index_tree = index_editor
-        .write()
-        .context("could not build the candidate index tree")?
-        .detach();
+    let index_tree = index_tree(&repo, &index)?;
     let based_on_parent = head_id == parent;
     let tree = if based_on_parent && index_tree != baseline.id {
         index_tree
@@ -134,7 +121,24 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
     })
 }
 
-fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
+pub(super) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Result<ObjectId> {
+    let mut editor = repo.empty_tree().edit().context("could not prepare the index tree")?;
+    for entry in index.entries() {
+        let mode = entry
+            .mode
+            .to_tree_entry_mode()
+            .context("an index entry has an invalid mode")?;
+        editor
+            .upsert(entry.path(index), mode.kind(), entry.id)
+            .context("could not add an index entry to the candidate tree")?;
+    }
+    Ok(editor
+        .write()
+        .context("could not build the candidate index tree")?
+        .detach())
+}
+
+pub(super) fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
     let changes = load_worktree_changes_without_lines(repo)?;
     if changes.paths.is_empty() {
         return Ok(baseline.id);
