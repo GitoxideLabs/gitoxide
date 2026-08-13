@@ -766,6 +766,7 @@ pub fn edit_head(repository: gix::ThreadSafeRepository, edit: HeadEdit) -> Resul
             HeadEdit::Amend => edit::head::Kind::Amend,
             HeadEdit::Spill => edit::head::Kind::Spill,
         },
+        None,
     )
 }
 
@@ -1779,16 +1780,34 @@ fn event_loop(
                     } else {
                         "spill"
                     };
+                    let path = (kind == edit::head::Kind::Spill && app.changes_focus == Some(ChangePane::Tree))
+                        .then(|| {
+                            tree_changes
+                                .as_ref()
+                                .filter(|(cached_id, _, _)| *cached_id == id)
+                                .and_then(|(_, _, changes)| {
+                                    changes
+                                        .paths
+                                        .get(app.tree_changes.selected)
+                                        .cloned()
+                                        .map(|path| (path, changes.parent.map(|parent| parent.id)))
+                                })
+                                .context("selected tree path is no longer available")
+                        })
+                        .transpose();
                     let result = history_graph
                         .as_ref()
                         .context("editing HEAD requires a completed history graph")
                         .and_then(|graph| {
-                            edit::head::perform(
-                                open_repository(&repository_path, repository_is_bare, false)
-                                    .context("could not open repository for HEAD edit")?,
-                                graph,
-                                kind,
-                            )
+                            path.and_then(|path| {
+                                edit::head::perform(
+                                    open_repository(&repository_path, repository_is_bare, false)
+                                        .context("could not open repository for HEAD edit")?,
+                                    graph,
+                                    kind,
+                                    path.as_ref().map(|(path, parent)| (path, *parent)),
+                                )
+                            })
                         });
                     match result {
                         Ok(Some(new_id)) => {

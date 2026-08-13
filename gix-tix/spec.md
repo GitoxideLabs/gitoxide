@@ -340,6 +340,9 @@ space first; changes blocks adapt within the remaining history width.
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
   unavailable and report a no-op through `tix edit amend|spill`.
+- With a path selected in the focused tree-changes block, the main `e` prefix
+  offers `spill` and `e s` spills only that path against the displayed parent.
+  The CLI intentionally supports only whole-commit spilling.
 - Both operations leave worktree files untouched, reset the affected worktree's
   index to the rewritten commit, and cheaply rewrite linear descendants with
   their trees unchanged. Rewritten commits carry `tix-rebase: pending`, invalidate
