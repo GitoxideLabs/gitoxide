@@ -409,7 +409,14 @@ pub(crate) fn draw_with_worktree(
                 let natural_x = content
                     .x
                     .saturating_add(u16::try_from(line_width).unwrap_or(u16::MAX))
-                    .saturating_add(1);
+                    .saturating_add(1)
+                    .saturating_add(if selected && app.show_selection_tail && selection_info_width > 0 {
+                        u16::try_from(selection_info_width)
+                            .unwrap_or(u16::MAX)
+                            .saturating_add(3)
+                    } else {
+                        0
+                    });
                 let x = natural_x.min(body.right().saturating_sub(width).saturating_sub(1));
                 (marker, x, width)
             })
@@ -560,6 +567,9 @@ pub(crate) fn draw_with_worktree(
                     .set_fg(Color::Reset)
                     .set_bg(Color::Reset)
                     .set_style(Style::default().add_modifier(Modifier::DIM));
+            }
+            if selected && let Some(area) = selection_info_area {
+                frame.render_widget(Paragraph::new(selection_info.clone()), area);
             }
         }
         if let Some((marker, x, width)) = hidden_branch_marker {
@@ -1211,8 +1221,12 @@ pub(crate) fn commit_diff_summary(
             Line::from(spans)
         })
         .collect::<Vec<_>>();
-    let mut spans = match changes.parent {
-        Some(parent) if parent.total > 1 => vec![Span::styled(
+    let mut spans = match (changes.range, changes.parent) {
+        (Some(range), _) => vec![Span::styled(
+            format!("{}..{} · ", range.base.to_hex_with_len(7), range.tip.to_hex_with_len(7)),
+            color(COMPARED_PARENT_COLOR),
+        )],
+        (None, Some(parent)) if parent.total > 1 => vec![Span::styled(
             format!(
                 "vs parent {}/{} {} · ",
                 parent.index + 1,
@@ -1221,11 +1235,11 @@ pub(crate) fn commit_diff_summary(
             ),
             color(COMPARED_PARENT_COLOR),
         )],
-        Some(parent) => vec![Span::styled(
+        (None, Some(parent)) => vec![Span::styled(
             format!("vs parent {} · ", parent.id.to_hex_with_len(7)),
             color(COMPARED_PARENT_COLOR),
         )],
-        None => vec![Span::styled("root · ", color(COMPARED_PARENT_COLOR))],
+        (None, None) => vec![Span::styled("root · ", color(COMPARED_PARENT_COLOR))],
     };
     if changes.paths.is_empty() {
         spans.push(Span::styled("No changes", Style::default().add_modifier(Modifier::DIM)));
@@ -1245,11 +1259,15 @@ pub(crate) fn commit_diff_summary(
 fn changes_summary(pane: ChangePane, app: &App, changes: &Changes) -> Line<'static> {
     let mut spans = match pane {
         ChangePane::Tree => {
-            let id = app
-                .selected
-                .and_then(|index| app.rows.get(index))
-                .map_or_else(|| "-------".into(), |row| row.id.to_hex_with_len(7).to_string());
-            vec![Span::raw(format!("─ Tree {id} ── "))]
+            let label = changes.range.map_or_else(
+                || {
+                    app.selected
+                        .and_then(|index| app.rows.get(index))
+                        .map_or_else(|| "-------".into(), |row| row.id.to_hex_with_len(7).to_string())
+                },
+                |range| format!("{}..{}", range.base.to_hex_with_len(7), range.tip.to_hex_with_len(7)),
+            );
+            vec![Span::raw(format!("─ Tree {label} ── "))]
         }
         ChangePane::Worktree if changes.paths.is_empty() => vec![
             Span::raw("─ Worktree "),
@@ -2691,7 +2709,7 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "view (date · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · copy · [ align")),
+            footer.starts_with(&format!("0 commits · {view} · copy · refs · [ align")),
             "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
@@ -2708,7 +2726,7 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · [ align"),
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · refs · [ align"),
             "the edit prefix follows the view prefix even when no action is available"
         );
         Ok(())
@@ -3528,6 +3546,7 @@ mod tests {
         complete(&mut app);
         let changes = Changes {
             parent: None,
+            range: None,
             paths: vec![
                 crate::app::PathChange {
                     kind: ChangeKind::Added,
@@ -4401,15 +4420,44 @@ mod tests {
         app.extend_commits(vec![commit(1)]);
         app.extend_hidden_commits(vec![commit(2)]);
         complete(&mut app);
+        app.select_commit(gix::ObjectId::Sha1([2; 20]));
         app.set_hidden_branch_behind(std::collections::HashMap::from([(gix::ObjectId::Sha1([2; 20]), 2)]));
         app.set_lane(0, "● ");
         app.set_lane(1, "● ");
-        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
+        let changes = Changes {
+            range: Some(crate::app::ComparedRange {
+                base: gix::ObjectId::Sha1([2; 20]),
+                tip: gix::ObjectId::Sha1([1; 20]),
+            }),
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group: ChangeGroup::Tree,
+                source: None,
+                path: "changed".into(),
+                lines: Some((3, 1)),
+            }],
+            lines_added: 3,
+            lines_removed: 1,
+            ..Changes::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 8))?;
 
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &Default::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
 
         let line = rendered_line(&terminal, 1);
-        assert!(line.contains("subject 2"), "the hidden commit keeps its normal content");
+        assert!(
+            line.contains("subject 2"),
+            "the hidden commit keeps its normal content: {line:?}"
+        );
         let visible = rendered_line(&terminal, 0);
         let visible_hash = visible.find("0101010").expect("the visible hash is present") as u16;
         assert_ne!(terminal.backend().buffer()[(visible_hash, 0)].fg, Color::Reset);
@@ -4420,13 +4468,22 @@ mod tests {
         );
         let marker_byte = line.find("⇣2").expect("the behind count is visible");
         let marker = line[..marker_byte].chars().count() as u16;
+        let added_byte = line.find("+3").expect("the branch additions are visible");
+        let added = line[..added_byte].chars().count() as u16;
+        let removed_byte = line.find("-1").expect("the branch removals are visible");
+        let removed = line[..removed_byte].chars().count() as u16;
         assert_eq!(&line[marker_byte - 1..marker_byte], " ", "the marker has a left margin");
         assert_eq!(
             terminal.backend().buffer()[(marker + 2, 1)].symbol(),
             " ",
             "the marker has a right margin"
         );
-        assert!(line.contains("subject 2 ⇣2 "), "the marker naturally follows the title");
+        assert!(
+            line.find("subject 2") < line.find("+3")
+                && line.find("+3") < line.find("-1")
+                && line.find("-1") < line.find("⇣2"),
+            "the branch diff-stat and behind marker follow the title: {line:?}"
+        );
         for x in 0..terminal.backend().buffer().area.width {
             let cell = &terminal.backend().buffer()[(x, 1)];
             if (marker..marker + 2).contains(&x) {
@@ -4434,14 +4491,21 @@ mod tests {
                 assert!(!cell.modifier.contains(Modifier::DIM));
                 continue;
             }
+            if (added..added + 2).contains(&x) || (removed..removed + 2).contains(&x) {
+                assert!(
+                    !cell.modifier.contains(Modifier::DIM),
+                    "branch diff-stat remains prominent"
+                );
+                continue;
+            }
             assert_eq!(cell.fg, Color::Reset, "the hidden row has no foreground colors");
             assert_eq!(cell.bg, Color::Reset, "the hidden row has no background colors");
             assert!(cell.modifier.contains(Modifier::DIM), "the hidden row is dimmed");
         }
-        assert_ne!(
+        assert_eq!(
             terminal.backend().buffer()[(0, 1)].symbol(),
             ">",
-            "the hidden row is not selected"
+            "the hidden base is selectable"
         );
 
         let mut narrow = Terminal::new(TestBackend::new(28, 3))?;

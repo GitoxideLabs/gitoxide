@@ -374,7 +374,7 @@ impl MotionState {
 }
 
 const TREE_CHANGES_CACHE_SIZE: usize = 8;
-type TreeChangesEntry = (gix::ObjectId, usize, Changes);
+type TreeChangesEntry = (app::TreeDiffTarget, Changes);
 
 #[derive(Default)]
 struct TreeChangesCache(VecDeque<TreeChangesEntry>);
@@ -384,12 +384,8 @@ impl TreeChangesCache {
         self.0.front()
     }
 
-    fn activate(&mut self, id: gix::ObjectId, parent: usize) -> bool {
-        let Some(position) = self
-            .0
-            .iter()
-            .position(|(cached_id, cached_parent, _)| *cached_id == id && *cached_parent == parent)
-        else {
+    fn activate(&mut self, target: app::TreeDiffTarget) -> bool {
+        let Some(position) = self.0.iter().position(|(cached, _)| *cached == target) else {
             return false;
         };
         if position != 0 {
@@ -1659,7 +1655,7 @@ fn event_loop(
         let action = copy_selected_path_action(
             action,
             &app,
-            tree_changes.as_ref().map(|(_, _, changes)| changes),
+            tree_changes.as_ref().map(|(_, changes)| changes),
             worktree_changes.as_ref().map(|(_, changes)| changes),
         );
         dirty = true;
@@ -1736,7 +1732,7 @@ fn event_loop(
                 }
                 Effect::OpenDiff(pane, index) => {
                     let changes = match pane {
-                        ChangePane::Tree => tree_changes.as_ref().map(|(_, _, changes)| changes),
+                        ChangePane::Tree => tree_changes.as_ref().map(|(_, changes)| changes),
                         ChangePane::Worktree => worktree_changes.as_ref().map(|(_, changes)| changes),
                     };
                     let result = changes
@@ -1752,19 +1748,25 @@ fn event_loop(
                         Ok(false) => {}
                     }
                 }
-                Effect::OpenCommitDiff(id) => {
-                    let title = app
-                        .rows
-                        .iter()
-                        .find(|row| row.id == id)
-                        .map(|row| {
-                            ui::commit_diff_title(row, app.title(row), &mailmap, app.use_mailmap, app.show_emails)
-                        })
-                        .context("selected commit is no longer available")?;
-                    let cached = tree_changes.as_ref().filter(|(cached_id, _, _)| *cached_id == id);
-                    let parent = cached.map_or(0, |(_, parent, _)| *parent);
-                    let cached = cached.map(|(_, _, changes)| changes);
-                    let result = prepare_commit_diff(&repository_path, repository_is_bare, id, parent, cached, title)
+                Effect::OpenCommitDiff(target) => {
+                    let title = match target {
+                        app::TreeDiffTarget::Commit { id, .. } => app
+                            .rows
+                            .iter()
+                            .find(|row| row.id == id)
+                            .map(|row| {
+                                ui::commit_diff_title(row, app.title(row), &mailmap, app.use_mailmap, app.show_emails)
+                            })
+                            .context("selected commit is no longer available")?,
+                        app::TreeDiffTarget::Branch { base, tip } => {
+                            format!("{}..{}", base.to_hex_with_len(7), tip.to_hex_with_len(7)).into()
+                        }
+                    };
+                    let cached = tree_changes
+                        .as_ref()
+                        .filter(|(cached_target, _)| *cached_target == target)
+                        .map(|(_, changes)| changes);
+                    let result = prepare_commit_diff(&repository_path, repository_is_bare, target, cached, title)
                         .and_then(|diff| show_commit_diff(terminal, diff, enhanced_keyboard));
                     match result {
                         Ok(true) => app.focus_history(),
@@ -1865,8 +1867,8 @@ fn event_loop(
                         .then(|| {
                             tree_changes
                                 .as_ref()
-                                .filter(|(cached_id, _, _)| *cached_id == id)
-                                .and_then(|(_, _, changes)| {
+                                .filter(|(target, _)| target.selected() == id)
+                                .and_then(|(_, changes)| {
                                     changes
                                         .paths
                                         .get(app.tree_changes.selected)
@@ -2320,27 +2322,21 @@ fn draw(
     if message_to_load.is_some() {
         app.reset_commit_view();
     }
-    if changes_visible && selected.is_some() && tree_changes.as_ref().map(|(cached, _, _)| *cached) != selected {
+    if changes_visible && selected.is_some() && tree_changes.as_ref().map(|(target, _)| target.selected()) != selected {
         app.changes_parent = 0;
     }
     let desired_tree_changes = (changes_visible && app.changes_mode.is_some())
-        .then_some(selected)
-        .flatten()
-        .map(|id| (id, app.changes_parent));
-    let tree_changes_changed = desired_tree_changes.is_some_and(|(id, parent)| {
-        tree_changes
-            .as_ref()
-            .is_none_or(|(cached, cached_parent, _)| *cached != id || *cached_parent != parent)
-    });
-    let tree_selection = tree_changes_changed
-        .then(|| remembered_change_selection(&app.tree_changes, tree_changes.as_ref().map(|(_, _, changes)| changes)))
+        .then(|| app.selected_tree_diff_target())
         .flatten();
-    let tree_changes_to_load = desired_tree_changes
-        .filter(|(id, parent)| !tree_changes.activate(*id, *parent))
-        .map(|(id, _)| id);
+    let tree_changes_changed =
+        desired_tree_changes.is_some_and(|target| tree_changes.as_ref().is_none_or(|(cached, _)| *cached != target));
+    let tree_selection = tree_changes_changed
+        .then(|| remembered_change_selection(&app.tree_changes, tree_changes.as_ref().map(|(_, changes)| changes)))
+        .flatten();
+    let tree_changes_to_load = desired_tree_changes.filter(|target| !tree_changes.activate(*target));
     if tree_changes_changed
         && tree_changes_to_load.is_none()
-        && let Some(changes) = tree_changes.as_ref().map(|(_, _, changes)| changes)
+        && let Some(changes) = tree_changes.as_ref().map(|(_, changes)| changes)
     {
         restore_change_selection(&mut app.tree_changes, changes, tree_selection.clone());
     }
@@ -2418,12 +2414,11 @@ fn draw(
         if let Some(id) = message_to_load {
             *commit_message = Some((id, load_commit_message(repository, id)?));
         }
-        if let Some(id) = tree_changes_to_load {
+        if let Some(target) = tree_changes_to_load {
             repository.object_cache_size(OBJECT_CACHE_SIZE);
             let loaded = load_changes(
                 repository,
-                id,
-                app.changes_parent,
+                target,
                 line_diff_pool
                     .as_mut()
                     .context("line diff pool is missing while the changes pane is visible")?,
@@ -2432,7 +2427,7 @@ fn draw(
             let loaded = loaded?;
             app.changes_parent = loaded.parent.map_or(0, |parent| parent.index);
             restore_change_selection(&mut app.tree_changes, &loaded, tree_selection);
-            tree_changes.insert((id, app.changes_parent, loaded));
+            tree_changes.insert((target, loaded));
         }
         if worktree_changes_to_load {
             let started = Instant::now();
@@ -2475,7 +2470,7 @@ fn draw(
         }
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
-    let tree_changes = tree_changes.as_ref().map(|(_, _, changes)| changes);
+    let tree_changes = tree_changes.as_ref().map(|(_, changes)| changes);
     let worktree_changes = worktree_changes.as_ref().map(|(_, changes)| changes);
     terminal
         .autoresize()
@@ -2654,27 +2649,25 @@ fn prepare_file_diff(repository_path: &Path, bare: bool, change: &FileChange, pa
 fn prepare_commit_diff(
     repository_path: &Path,
     bare: bool,
-    id: gix::ObjectId,
-    requested_parent: usize,
+    target: app::TreeDiffTarget,
     cached: Option<&Changes>,
     title: BString,
 ) -> Result<CommitDiff> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for commit diff")?;
     repository.object_cache_size(OBJECT_CACHE_SIZE);
-    prepare_commit_diff_with_repository(&repository, id, requested_parent, cached, title)
+    prepare_commit_diff_with_repository(&repository, target, cached, title)
 }
 
 fn prepare_commit_diff_with_repository(
     repository: &gix::Repository,
-    id: gix::ObjectId,
-    requested_parent: usize,
+    target: app::TreeDiffTarget,
     cached: Option<&Changes>,
     title: BString,
 ) -> Result<CommitDiff> {
     let loaded = cached
         .is_none()
-        .then(|| load_changes_without_lines(repository, id, requested_parent))
+        .then(|| load_changes_without_lines(repository, target))
         .transpose()?;
     let changes = cached
         .or(loaded.as_ref())
@@ -3201,11 +3194,10 @@ fn load_commit_message(repository: &gix::Repository, id: gix::ObjectId) -> Resul
 
 fn load_changes(
     repository: &gix::Repository,
-    id: gix::ObjectId,
-    requested_parent: usize,
+    target: app::TreeDiffTarget,
     line_diff_pool: &mut LineDiffPool,
 ) -> Result<Changes> {
-    let mut out = load_changes_without_lines(repository, id, requested_parent)?;
+    let mut out = load_changes_without_lines(repository, target)?;
     let diffs = std::mem::take(&mut out.diffs);
     for (path, (change, lines)) in out.paths.iter_mut().zip(line_diff_pool.line_counts(diffs)?) {
         path.lines = lines;
@@ -3218,11 +3210,29 @@ fn load_changes(
     Ok(out)
 }
 
-fn load_changes_without_lines(
-    repository: &gix::Repository,
-    id: gix::ObjectId,
-    requested_parent: usize,
-) -> Result<Changes> {
+fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDiffTarget) -> Result<Changes> {
+    let app::TreeDiffTarget::Commit {
+        id,
+        parent: requested_parent,
+    } = target
+    else {
+        let app::TreeDiffTarget::Branch { base, tip } = target else {
+            unreachable!("all tree diff targets are covered")
+        };
+        let old_tree = repository
+            .find_commit(base)
+            .context("could not load branch base")?
+            .tree()
+            .context("could not load branch base tree")?;
+        let new_tree = repository
+            .find_commit(tip)
+            .context("could not load branch tip")?
+            .tree()
+            .context("could not load branch tip tree")?;
+        let mut changes = load_tree_changes_without_lines(repository, Some(&old_tree), &new_tree, None)?;
+        changes.range = Some(app::ComparedRange { base, tip });
+        return Ok(changes);
+    };
     let commit = repository.find_commit(id).context("could not load changed paths")?;
     let parents: Vec<_> = commit.parent_ids().collect();
     let parent_index = requested_parent.checked_rem(parents.len()).unwrap_or_default();
@@ -3896,29 +3906,52 @@ mod tests {
             gix::ObjectId::Sha1(bytes)
         };
         let mut cache = TreeChangesCache::default();
-        cache.insert((id(42), 0, Changes::default()));
         cache.insert((
-            id(42),
-            1,
+            app::TreeDiffTarget::Commit { id: id(42), parent: 0 },
+            Changes::default(),
+        ));
+        cache.insert((
+            app::TreeDiffTarget::Commit { id: id(42), parent: 1 },
             Changes {
                 lines_added: 42,
                 ..Changes::default()
             },
         ));
-        assert!(cache.activate(id(42), 0));
-        assert_eq!(cache.as_ref().map(|(_, parent, _)| *parent), Some(0));
-        assert!(cache.activate(id(42), 1));
+        assert!(cache.activate(app::TreeDiffTarget::Commit { id: id(42), parent: 0 }));
         assert_eq!(
-            cache.as_ref().map(|(_, _, changes)| changes.lines_added),
+            cache.as_ref().map(|(target, _)| *target),
+            Some(app::TreeDiffTarget::Commit { id: id(42), parent: 0 })
+        );
+        assert!(cache.activate(app::TreeDiffTarget::Commit { id: id(42), parent: 1 }));
+        assert_eq!(
+            cache.as_ref().map(|(_, changes)| changes.lines_added),
             Some(42),
             "each merge parent retains its own diff result"
+        );
+        cache.insert((
+            app::TreeDiffTarget::Branch {
+                base: id(42),
+                tip: id(43),
+            },
+            Changes {
+                lines_removed: 43,
+                ..Changes::default()
+            },
+        ));
+        assert!(cache.activate(app::TreeDiffTarget::Commit { id: id(42), parent: 1 }));
+        assert_eq!(
+            cache.as_ref().map(|(_, changes)| changes.lines_added),
+            Some(42),
+            "a branch range cannot replace the base commit's ordinary diff"
         );
         cache.clear();
 
         for value in 0..=TREE_CHANGES_CACHE_SIZE as u8 {
             cache.insert((
-                id(value),
-                usize::from(value),
+                app::TreeDiffTarget::Commit {
+                    id: id(value),
+                    parent: usize::from(value),
+                },
                 Changes {
                     lines_added: u64::from(value),
                     ..Changes::default()
@@ -3927,11 +3960,14 @@ mod tests {
         }
 
         assert!(
-            cache.activate(id(1), 1),
+            cache.activate(app::TreeDiffTarget::Commit { id: id(1), parent: 1 }),
             "a recently viewed commit and parent restores its computed diff"
         );
-        assert_eq!(cache.as_ref().map(|(_, _, changes)| changes.lines_added), Some(1));
-        assert!(!cache.activate(id(0), 0), "the oldest entry is evicted at the bound");
+        assert_eq!(cache.as_ref().map(|(_, changes)| changes.lines_added), Some(1));
+        assert!(
+            !cache.activate(app::TreeDiffTarget::Commit { id: id(0), parent: 0 }),
+            "the oldest entry is evicted at the bound"
+        );
         cache.clear();
         assert!(
             cache.as_ref().is_none(),
@@ -4116,8 +4152,10 @@ mod tests {
 
         let root = load_changes(
             &repository,
-            repository.rev_parse_single("v1^{}")?.detach(),
-            0,
+            app::TreeDiffTarget::Commit {
+                id: repository.rev_parse_single("v1^{}")?.detach(),
+                parent: 0,
+            },
             line_diff_pool,
         )?;
         assert_eq!(
@@ -4191,7 +4229,11 @@ mod tests {
         }
 
         let topic_id = repository.rev_parse_single("topic")?.detach();
-        let topic = load_changes(&repository, topic_id, 0, line_diff_pool)?;
+        let topic_target = app::TreeDiffTarget::Commit {
+            id: topic_id,
+            parent: 0,
+        };
+        let topic = load_changes(&repository, topic_target, line_diff_pool)?;
         assert_eq!(
             topic.paths,
             [
@@ -4214,7 +4256,7 @@ mod tests {
         );
         assert_eq!((topic.lines_added, topic.lines_removed), (2, 0));
         let title: BString = format!("{} author topic", topic_id.to_hex_with_len(7)).into();
-        let commit_diff = prepare_commit_diff_with_repository(&repository, topic_id, 0, None, title.clone())?;
+        let commit_diff = prepare_commit_diff_with_repository(&repository, topic_target, None, title.clone())?;
         assert!(commit_diff.external.is_empty());
         let FileDiff::BuiltIn(diff) = commit_diff.internal else {
             unreachable!("an isolated repository uses the built-in commit viewer")
@@ -4248,8 +4290,36 @@ mod tests {
             topic_position < extra_position,
             "whole-commit patches retain tree-diff order"
         );
+        let base = repository.rev_parse_single("v1^{}")?.detach();
+        let branch_target = app::TreeDiffTarget::Branch { base, tip: topic_id };
+        let branch = load_changes(&repository, branch_target, line_diff_pool)?;
+        assert_eq!(branch.range, Some(app::ComparedRange { base, tip: topic_id }));
+        assert_eq!(
+            branch
+                .paths
+                .iter()
+                .map(|change| change.path.as_bstr())
+                .collect::<Vec<_>>(),
+            ["main", "topic", "topic-extra"],
+            "branch diffs compare the boundary tree directly to its unique leaf"
+        );
+        let branch_diff =
+            prepare_commit_diff_with_repository(&repository, branch_target, Some(&branch), "branch".into())?;
+        let FileDiff::BuiltIn(branch_diff) = branch_diff.internal else {
+            unreachable!("an isolated repository uses the built-in branch viewer")
+        };
+        assert!(
+            branch_diff
+                .summary
+                .expect("branch diffs have a summary")
+                .last()
+                .expect("the branch aggregate follows path statistics")
+                .to_string()
+                .contains(&format!("{}..{}", base.to_hex_with_len(7), topic_id.to_hex_with_len(7))),
+            "the whole-diff viewer identifies the compared range"
+        );
         let empty =
-            prepare_commit_diff_with_repository(&repository, topic_id, 0, Some(&Changes::default()), title.clone())?;
+            prepare_commit_diff_with_repository(&repository, topic_target, Some(&Changes::default()), title.clone())?;
         let FileDiff::BuiltIn(empty) = empty.internal else {
             unreachable!("empty commits retain the built-in viewer")
         };
@@ -4265,7 +4335,7 @@ mod tests {
         );
 
         let pager_diff =
-            prepare_commit_diff_with_repository(&pager_repository, topic_id, 0, Some(&topic), title.clone())?;
+            prepare_commit_diff_with_repository(&pager_repository, topic_target, Some(&topic), title.clone())?;
         assert!(pager_diff.external.is_empty());
         let FileDiff::Pager { diff, .. } = pager_diff.internal else {
             unreachable!("one configured pager receives the aggregate commit patch")
@@ -4279,7 +4349,7 @@ mod tests {
             "the pager receives path statistics and the aggregate before the patch"
         );
         let external_diff =
-            prepare_commit_diff_with_repository(&external_repository, topic_id, 0, Some(&topic), title.clone())?;
+            prepare_commit_diff_with_repository(&external_repository, topic_target, Some(&topic), title.clone())?;
         assert_eq!(
             external_diff.external.len(),
             2,
@@ -4294,7 +4364,8 @@ mod tests {
         );
 
         let merge = repository.rev_parse_single("main")?.detach();
-        let first_parent = load_changes(&repository, merge, 0, line_diff_pool)?;
+        let first_parent_target = app::TreeDiffTarget::Commit { id: merge, parent: 0 };
+        let first_parent = load_changes(&repository, first_parent_target, line_diff_pool)?;
         assert_eq!(
             first_parent.parent,
             Some(ComparedParent {
@@ -4315,7 +4386,8 @@ mod tests {
             "the default merge diff compares the result to its first parent"
         );
 
-        let second_parent = load_changes(&repository, merge, 1, line_diff_pool)?;
+        let second_parent_target = app::TreeDiffTarget::Commit { id: merge, parent: 1 };
+        let second_parent = load_changes(&repository, second_parent_target, line_diff_pool)?;
         assert_eq!(
             second_parent.parent,
             Some(ComparedParent {
@@ -4335,8 +4407,12 @@ mod tests {
             }],
             "later parents can be selected independently"
         );
-        let second_parent_diff =
-            prepare_commit_diff_with_repository(&repository, merge, 1, Some(&second_parent), "merge title".into())?;
+        let second_parent_diff = prepare_commit_diff_with_repository(
+            &repository,
+            second_parent_target,
+            Some(&second_parent),
+            "merge title".into(),
+        )?;
         let FileDiff::BuiltIn(diff) = second_parent_diff.internal else {
             unreachable!("an isolated repository uses the built-in commit viewer")
         };
@@ -4349,7 +4425,12 @@ mod tests {
             "the commit viewer identifies the selected merge parent"
         );
         assert_eq!(
-            load_changes(&repository, merge, 2, line_diff_pool)?.parent,
+            load_changes(
+                &repository,
+                app::TreeDiffTarget::Commit { id: merge, parent: 2 },
+                line_diff_pool,
+            )?
+            .parent,
             first_parent.parent,
             "parent selection wraps around"
         );
