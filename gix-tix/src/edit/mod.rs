@@ -2,9 +2,51 @@ use std::{ffi::OsStr, io::Write, process::Command};
 
 use anyhow::{Context, Result};
 
+#[cfg(test)]
+pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
+    use std::sync::atomic::AtomicBool;
+
+    if repo.head_id().is_err() {
+        return Ok(crate::history::HistoryGraph::default());
+    }
+    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+        crate::history::Authors::default(),
+    ));
+    let mut revisions = Vec::new();
+    for reference in repo.references()?.all()? {
+        let reference = reference.map_err(|err| anyhow::anyhow!("could not read test reference: {err}"))?;
+        if reference.name().as_bstr() != b"HEAD" && reference.try_id().is_some() {
+            revisions.push(
+                gix::path::from_bstr(reference.name().as_bstr())
+                    .into_owned()
+                    .into_os_string(),
+            );
+        }
+    }
+    if repo.head().is_ok_and(|head| head.referent_name().is_none()) {
+        revisions.push("HEAD".into());
+    }
+    let mut graph = None;
+    crate::history::load(
+        repo,
+        &revisions,
+        &[],
+        false,
+        &authors,
+        &AtomicBool::new(false),
+        |event| {
+            if let crate::history::Event::Complete(value) = event {
+                graph = Some(value);
+            }
+            true
+        },
+    )?;
+    graph.context("history traversal did not produce a graph")
+}
+
 pub(crate) mod create;
 pub(crate) mod forget;
-pub(crate) mod refs;
+pub(crate) mod rebase;
 pub(crate) mod reword;
 pub(crate) mod time_travel;
 

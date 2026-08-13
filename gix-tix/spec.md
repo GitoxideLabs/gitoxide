@@ -288,8 +288,8 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Reword
 
-- `e`, then `r`, is available only after history completion and only when the
-  selected commit has no descendants in tix's complete cached graph.
+- `e`, then `r`, is available after history completion when no known descendant
+  of the selected commit is a merge commit.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
@@ -302,9 +302,9 @@ space first; changes blocks adapt within the remaining history width.
   opt-ins. A case-insensitive existing trailer key suppresses its suggestion,
   regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
-  signs it when commit-signing configuration is enabled, and atomically retargets
-  mutable local refs that pointed directly at the old commit. Tags and
-  remote-tracking refs remain unchanged; a detached `HEAD` is retargeted.
+  signs it when commit-signing configuration is enabled, and rewrites every
+  linear descendant with unchanged trees and corrected parentage. Mutable refs
+  follow every rewritten commit; tags and remote-tracking refs remain unchanged.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
   the main status line and do not leave a repository retained by the UI.
 
@@ -312,9 +312,9 @@ space first; changes blocks adapt within the remaining history width.
 
 - `e`, then `n`, creates a child of the selected commit, or a root commit for an
   unborn `HEAD`. It is available only with a live worktree, after history
-  completion, and when the selected parent has no known descendants.
+  completion, and when the selected parent has no known merge descendant.
 - Before launching the editor, tix resolves identities, signing configuration,
-  every mutable direct ref, linked-worktree safety, index conflicts, filters,
+  index conflicts, filters,
   candidate tree, per-path diffstat, and a provisional commit entirely through an
   in-memory object database. Cancellation and preflight failure write no object,
   reference, index, or worktree state.
@@ -327,23 +327,22 @@ space first; changes blocks adapt within the remaining history width.
   title, a `why` body, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.
 - After editing, tix revalidates the destination, applies configured signing,
-  persists the already-prepared objects, and atomically advances every mutable
-  direct ref pointing at the parent. This includes local branches, custom refs,
-  direct tix pins, and a detached `HEAD`, while excluding tags and remote-tracking
-  refs. An attached `HEAD` remains attached; an unrelated worktree `HEAD` is left
-  untouched. A ref changed by another process or a branch checked out in another
-  worktree aborts safely.
+  rebases linear descendants, persists the prepared objects, and atomically
+  advances mutable refs throughout the rewritten stack. This includes local
+  branches, custom refs, direct tix pins, and a detached `HEAD`, while excluding
+  tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
+  inaccessible or conflicting affected worktrees abort safely.
 
 ### Forget commits
 
 - `e`, then `d`, is available after history completion for a selected non-merge
-  commit with no descendants in the complete cached graph. The first `d` arms a
+  commit with no known merge descendant. The first `d` arms a
   `d again forget` confirmation; the second performs it. Navigation, refresh,
   cancellation, selection changes, and other commands disarm confirmation.
-- Forgetting does not require a worktree. Every mutable direct ref pointing at
-  the commit is atomically retargeted to its parent, or deleted for a root.
-  Tags and remote-tracking refs remain unchanged. A branch checked out in another
-  worktree aborts before mutation.
+- Forgetting does not require a worktree. Linear descendants are cherry-picked
+  onto the selected commit's parent, and mutable refs throughout the rewritten
+  stack move atomically. Empty commits only need parent rewriting. Tags and
+  remote-tracking refs remain unchanged.
 - When the selected commit is the current worktree `HEAD`, Git preflights and
   applies a two-tree index/worktree transition which discards only that commit's
   tracked delta. Conflicting staged, tracked, or untracked state refuses the
@@ -352,6 +351,28 @@ space first; changes blocks adapt within the remaining history width.
 - Forgetting an attached root deletes the branch and leaves symbolic `HEAD`
   unborn. A selected detached root is rejected because it cannot produce a valid
   unborn `HEAD`. Success refreshes history and selects the parent when present.
+
+### Transactional rebases
+
+- Reword, new-commit, and forget edits share one in-memory rebase primitive.
+  Forks are preserved, descendant merges are rejected, and all commit/tree
+  preparation—including cherry-pick conflict detection—finishes before objects
+  become reachable through refs.
+- `Tree::LeaveAsIs` rewrites parentage without changing trees;
+  `LeaveAsIsAndMark` additionally writes `tix-rebase: pending`; and `CherryPick`
+  transplants each tree delta, aborting the entire edit on unresolved conflicts.
+  A marked operation can be repeated from its marked base and clears all markers
+  after a successful cherry-pick.
+- `Signature::RedoIfNeeded` signs every rewritten commit when signing is
+  configured and otherwise removes stale signature headers.
+  `InvalidateExisting` empties existing signature values when signing is
+  configured, or removes them when it is not. Automatically rebased descendants
+  retain their author and receive one configured current committer identity and
+  timestamp for the operation.
+- All mutable local refs pointing anywhere into the rewritten set are changed in
+  one compare-and-swap transaction. A checkout failure rolls back already-applied
+  worktree transitions and the ref transaction; newly written unreachable objects
+  may remain for normal Git garbage collection.
 
 ### Editing shortcuts
 

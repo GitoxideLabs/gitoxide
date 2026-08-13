@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gix::bstr::{BString, ByteSlice};
 
-use super::refs::MutableRefs;
+use super::rebase;
 
 const AUTHOR: &[u8] = b"Author: ";
 const AUTHOR_DATE: &[u8] = b"AuthorDate: ";
@@ -67,17 +67,16 @@ pub(super) fn missing_agent_trailers(message: &[u8]) -> [Option<&'static [u8]>; 
     ]
 }
 
-pub(crate) fn apply(repo: &gix::Repository, old_id: gix::ObjectId, edited: &[u8]) -> Result<Option<gix::ObjectId>> {
+pub(crate) fn apply(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    edited: &[u8],
+) -> Result<Option<gix::ObjectId>> {
     let edit = parse(edited)?;
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
     }
-
-    let refs = MutableRefs::pointing_to(repo, old_id)?;
-    if refs.is_empty() {
-        anyhow::bail!("no mutable reference points to the commit anymore");
-    }
-    refs.ensure_not_checked_out_elsewhere(repo)?;
 
     let mut commit = repo
         .find_commit(old_id)
@@ -89,34 +88,14 @@ pub(crate) fn apply(repo: &gix::Repository, old_id: gix::ObjectId, edited: &[u8]
     commit.author = actor(edit.author, edit.author_time, "author")?;
     commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
     commit.message = edit.message;
-    commit.extra_headers.retain(|(name, _)| {
-        name.as_slice() != gix::objs::commit::SIGNATURE_FIELD_NAME.as_bytes()
-            && name.as_slice() != gix::objs::commit::SIGNATURE_FIELD_NAME_SHA256.as_bytes()
-    });
-    if let Some(options) = repo
-        .commit_signing_options_if_enabled()
-        .context("could not resolve commit signing configuration")?
-    {
-        commit = commit.sign(options).context("could not sign reworded commit")?;
-    }
-    let new_id = repo
-        .write_object(&commit)
-        .context("could not write reworded commit")?
-        .detach();
-    if new_id == old_id {
-        return Ok(None);
-    }
-
-    let log_message = gix::reference::log::message("commit", commit.message.as_bstr(), commit.parents.len());
-    let mut time_buf = gix::date::parse::TimeBuf::default();
-    refs.update(
+    let outcome = rebase::perform(
         repo,
-        new_id,
-        log_message.as_ref(),
-        Some(commit.committer.to_ref(&mut time_buf)),
-    )
-    .context("could not update references to the reworded commit")?;
-    Ok(Some(new_id))
+        graph,
+        rebase::Edit::Replace { target: old_id, commit },
+        rebase::Signature::RedoIfNeeded,
+        rebase::Tree::LeaveAsIs,
+    )?;
+    Ok(outcome.selected.filter(|new_id| *new_id != old_id))
 }
 
 pub(super) fn write_headers(
@@ -366,7 +345,8 @@ mod tests {
                        CommentChar: ;\n\
                        \n\
                        rewritten title\n\nrewritten body\n\nAssisted-by: GPT 5.6\n;Co-authored-by: GPT 5.6 <codex@openai.com>\n";
-        let new_id = apply(&repository, old_id, edited)?.expect("the edited commit differs");
+        let graph = super::super::loaded_graph(&repository)?;
+        let new_id = apply(repository.clone(), &graph, old_id, edited)?.expect("the edited commit differs");
         let commit = repository.find_commit(new_id)?;
         let decoded = commit.decode()?;
         assert_eq!(

@@ -1236,6 +1236,7 @@ fn event_loop(
             match result {
                 Ok((graph, result)) => {
                     app.set_known_descendants(graph.commits_with_descendants());
+                    app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     history_graph = Some(graph);
                     let result = result?;
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
@@ -1399,6 +1400,7 @@ fn event_loop(
                 Event::Complete(graph) => {
                     history_finished = true;
                     app.set_known_descendants(graph.commits_with_descendants());
+                    app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     history_graph = Some(graph);
                     selection_relation = None;
                     app.selection_relation = None;
@@ -1689,7 +1691,20 @@ fn event_loop(
                     }
                 }
                 Effect::Reword(id) => {
-                    match reword_commit(terminal, &repository_path, repository_is_bare, id, enhanced_keyboard) {
+                    let result = history_graph
+                        .as_ref()
+                        .context("reword requires a completed history graph")
+                        .and_then(|graph| {
+                            reword_commit(
+                                terminal,
+                                &repository_path,
+                                repository_is_bare,
+                                graph,
+                                id,
+                                enhanced_keyboard,
+                            )
+                        });
+                    match result {
                         Ok(Some(new_id)) => {
                             app.leave_message(format!(
                                 "reworded {} as {}",
@@ -1704,13 +1719,20 @@ fn event_loop(
                     }
                 }
                 Effect::NewCommit(parent) => {
-                    match create_commit(
-                        terminal,
-                        &repository_path,
-                        repository_is_bare,
-                        parent,
-                        enhanced_keyboard,
-                    ) {
+                    let result = history_graph
+                        .as_ref()
+                        .context("creating a commit requires a completed history graph")
+                        .and_then(|graph| {
+                            create_commit(
+                                terminal,
+                                &repository_path,
+                                repository_is_bare,
+                                graph,
+                                parent,
+                                enhanced_keyboard,
+                            )
+                        });
+                    match result {
                         Ok(Some(new_id)) => {
                             app.leave_message(format!("created {}", new_id.to_hex_with_len(7)));
                             refresh_select_top_requested = true;
@@ -1723,7 +1745,11 @@ fn event_loop(
                 Effect::Forget(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
-                    match forget_commit(&repository_path, repository_is_bare, id) {
+                    let result = history_graph
+                        .as_ref()
+                        .context("forget requires a completed history graph")
+                        .and_then(|graph| forget_commit(&repository_path, repository_is_bare, graph, id));
+                    match result {
                         Ok(parent) => {
                             app.leave_message(format!("forgot {}", id.to_hex_with_len(7)));
                             if let Some(parent) = parent {
@@ -2709,6 +2735,7 @@ fn reword_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
+    graph: &HistoryGraph,
     id: gix::ObjectId,
     enhanced_keyboard: bool,
 ) -> Result<Option<gix::ObjectId>> {
@@ -2732,13 +2759,14 @@ fn reword_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    edit::reword::apply(&repository, id, &edited)
+    edit::reword::apply(repository, graph, id, &edited)
 }
 
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
+    graph: &HistoryGraph,
     parent: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
 ) -> Result<Option<gix::ObjectId>> {
@@ -2759,14 +2787,19 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    edit::create::apply(repository, prepared, &edited).map(Some)
+    edit::create::apply(repository, graph, prepared, &edited).map(Some)
 }
 
-fn forget_commit(repository_path: &Path, bare: bool, id: gix::ObjectId) -> Result<Option<gix::ObjectId>> {
+fn forget_commit(
+    repository_path: &Path,
+    bare: bool,
+    graph: &HistoryGraph,
+    id: gix::ObjectId,
+) -> Result<Option<gix::ObjectId>> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before forgetting commit")?;
     repository.object_cache_size(None);
-    edit::forget::perform(&repository, id)
+    edit::forget::perform(repository, graph, id)
 }
 
 fn run_external_diff(

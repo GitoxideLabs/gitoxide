@@ -380,6 +380,7 @@ pub(crate) struct App {
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
     known_descendants: HashSet<ObjectId>,
+    known_merge_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
     pub(crate) signature_failures: usize,
     signature_verification_running: bool,
@@ -454,6 +455,7 @@ impl App {
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
             known_descendants: HashSet::new(),
+            known_merge_descendants: HashSet::new(),
             select_top_after_refresh: false,
             signature_failures: 0,
             signature_verification_running: false,
@@ -490,6 +492,10 @@ impl App {
     pub(crate) fn set_known_descendants(&mut self, ids: HashSet<ObjectId>) {
         self.known_descendants = ids;
         self.update_worktree_head_descendants();
+    }
+
+    pub(crate) fn set_known_merge_descendants(&mut self, ids: HashSet<ObjectId>) {
+        self.known_merge_descendants = ids;
     }
 
     pub(crate) fn worktree_head_has_descendants(&self, id: ObjectId) -> bool {
@@ -1322,7 +1328,7 @@ impl App {
             && self
                 .selected
                 .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| !self.has_known_descendant(row.id))
+                .is_some_and(|row| !self.known_merge_descendants.contains(&row.id))
     }
 
     pub(crate) fn can_create_commit(&self) -> bool {
@@ -1331,7 +1337,7 @@ impl App {
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
             && match self.selected.and_then(|index| self.rows.get(index)) {
-                Some(row) => !self.has_known_descendant(row.id),
+                Some(row) => !self.known_merge_descendants.contains(&row.id),
                 None => self.worktree_head_unborn,
             }
     }
@@ -1343,7 +1349,7 @@ impl App {
             && self
                 .selected
                 .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| row.parent_ids.len() <= 1 && !self.has_known_descendant(row.id))
+                .is_some_and(|row| row.parent_ids.len() <= 1 && !self.known_merge_descendants.contains(&row.id))
     }
 
     pub(crate) fn forget_confirmation_visible(&self) -> bool {
@@ -2013,7 +2019,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_completed_history_row_without_descendants_can_be_reworded() {
+    fn completed_non_merge_stacks_can_be_reworded_from_any_row() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         assert!(!app.can_reword(), "loading history cannot be reworded");
@@ -2021,11 +2027,8 @@ mod tests {
         assert_eq!(app.update(Action::Reword), vec![Effect::Reword(id(2))]);
 
         app.update(Action::MoveDown);
-        assert!(
-            !app.can_reword(),
-            "a commit with a visible descendant cannot be reworded"
-        );
-        assert!(app.update(Action::Reword).is_empty());
+        assert!(app.can_reword(), "linear descendants can be rebased after rewording");
+        assert_eq!(app.update(Action::Reword), vec![Effect::Reword(id(1))]);
     }
 
     #[test]
@@ -2042,7 +2045,7 @@ mod tests {
         assert!(app.forget_confirmation_visible());
         app.update(Action::MoveDown);
         assert!(!app.forget_confirmation_visible(), "navigation cancels confirmation");
-        assert!(!app.can_forget(), "a commit with a descendant cannot be forgotten");
+        assert!(app.can_forget(), "a commit with linear descendants can be forgotten");
         app.update(Action::MoveUp);
         assert!(app.update(Action::Forget).is_empty());
         assert_eq!(app.update(Action::Forget), vec![Effect::Forget(id(2))]);
@@ -2054,18 +2057,19 @@ mod tests {
     }
 
     #[test]
-    fn editing_requires_no_known_descendants_and_new_commits_support_unborn_head() {
+    fn editing_rejects_merge_descendants_and_new_commits_support_unborn_head() {
         let mut app = App::new(10);
         app.extend_commits(vec![row(2)]);
         complete(&mut app);
         app.set_known_descendants(HashSet::from([id(2)]));
+        app.set_known_merge_descendants(HashSet::from([id(2)]));
         assert!(
             !app.can_reword(),
-            "a descendant outside the visible projection still prevents rewording"
+            "a merge descendant outside the visible projection prevents rewording"
         );
         assert!(
             !app.can_create_commit(),
-            "a descendant outside the visible projection still prevents a child"
+            "a merge descendant outside the visible projection prevents a child"
         );
 
         let mut unborn = App::new(10);
