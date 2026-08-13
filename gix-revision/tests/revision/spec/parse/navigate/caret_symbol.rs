@@ -250,7 +250,7 @@ fn empty_regex_is_passed_to_the_delegate() {
     assert_eq!(
         rec.patterns,
         vec![("".into(), false)],
-        "empty regexes match everything, so Git finds the anchor itself, peeled to a commit"
+        "empty regexes (will) match everything, so Git finds the anchor itself, peeled to a commit"
     );
     assert_eq!(rec.calls, 2);
 
@@ -259,7 +259,7 @@ fn empty_regex_is_passed_to_the_delegate() {
     assert_eq!(
         rec.patterns,
         vec![("".into(), true)],
-        "negated empty regexes match nothing, causing the lookup to fail like in Git"
+        "negated empty regexes (will) match nothing"
     );
     assert_eq!(rec.calls, 2);
 }

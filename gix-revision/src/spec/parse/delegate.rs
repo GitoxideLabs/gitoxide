@@ -61,7 +61,7 @@ pub trait Navigate {
     fn peel_until(&mut self, kind: PeelTo<'_>) -> Result<(), Exn>;
 
     /// Find the first revision/commit whose message matches the given `regex`.
-    /// An empty `regex` matches every message, which mirrors how Git resolves `<rev>^{/}`
+    /// An empty `regex` matches every message, and `<rev>^{/}` resolves
     /// to the first commit reachable from `<rev>`, i.e. `<rev>` peeled to a commit.
     /// If `negated` is `true`, the first non-match will be a match.
     ///
