@@ -56,6 +56,7 @@ pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
 }
 
+#[tracing::instrument(skip_all, fields(signature = ?signature, tree = ?tree_mode))]
 pub(crate) fn perform(
     mut repo: gix::Repository,
     graph: &HistoryGraph,

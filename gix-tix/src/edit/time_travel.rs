@@ -12,6 +12,7 @@ use gix::{
 
 use crate::{history, open_repository};
 
+#[tracing::instrument(skip_all, fields(commit_id = %selected))]
 pub(crate) fn perform(
     repository_path: &Path,
     bare: bool,

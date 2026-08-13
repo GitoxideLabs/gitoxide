@@ -50,6 +50,7 @@ pub(crate) mod rebase;
 pub(crate) mod reword;
 pub(crate) mod time_travel;
 
+#[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
     terminal: &mut ratatui::DefaultTerminal,
     editor: &OsStr,
