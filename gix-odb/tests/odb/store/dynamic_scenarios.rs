@@ -104,6 +104,135 @@ fn contended_lookup(
 
 #[cfg(feature = "parallel")]
 #[test]
+fn an_index_load_is_registered_before_its_slot_is_reserved() -> Result {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
+
+    use gix_odb::store::init::debug::{LoadOutcome, Point};
+
+    let mut fixture = OdbFixture::from_script()?;
+    fixture.install_pack(Database::Primary, Pack::A)?;
+    let id = fixture.manifest.pack(Pack::A).object_ids[0];
+    let (point_tx, point_rx) = crossbeam_channel::unbounded();
+    let (resume_loader_tx, resume_loader_rx) = crossbeam_channel::bounded(0);
+    let (resume_waiter_tx, resume_waiter_rx) = crossbeam_channel::bounded(0);
+    let pause_loader = Arc::new(AtomicBool::new(true));
+    let pause_waiter = Arc::new(AtomicBool::new(true));
+    let debug = gix_odb::store::init::debug::Options::new({
+        let pause_loader = Arc::clone(&pause_loader);
+        let pause_waiter = Arc::clone(&pause_waiter);
+        move |point| {
+            point_tx
+                .send(point)
+                .expect("the test receives every synchronization point");
+            if matches!(point, Point::IndexLoadClaimed { .. }) && pause_loader.swap(false, Ordering::SeqCst) {
+                resume_loader_rx.recv().expect("the test releases the index loader");
+            } else if matches!(point, Point::IndexLoadWaiting | Point::SnapshotWaitingForIndexLoad)
+                && pause_waiter.swap(false, Ordering::SeqCst)
+            {
+                resume_waiter_rx.recv().expect("the test releases the waiting lookup");
+            }
+        }
+    });
+    let first = gix_odb::at_opts(
+        fixture.objects_dir(Database::Primary),
+        fixture.manifest.object_hash,
+        Vec::new(),
+        gix_odb::store::init::Options {
+            slots: gix_odb::store::init::Slots::Limit(1),
+            debug: Some(debug),
+            ..Default::default()
+        },
+    )?
+    .into_arc()?;
+    let second = first.clone();
+
+    let lookup = move |handle: gix_odb::HandleArc| {
+        std::thread::spawn(move || {
+            handle
+                .try_header(&id)
+                .map(|header| header.is_some())
+                .map_err(|err| err.to_string())
+        })
+    };
+    let first_thread = lookup(first);
+    let mut observed = Vec::new();
+    let active_loads = loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first handle reserves the index slot");
+        observed.push(point);
+        if let Point::IndexLoadClaimed { active_loads, .. } = point {
+            break active_loads;
+        }
+    };
+
+    let second_thread = lookup(second);
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second handle waits for the reserved index");
+        observed.push(point);
+        if matches!(point, Point::IndexLoadWaiting | Point::SnapshotWaitingForIndexLoad) {
+            break;
+        }
+    }
+    resume_loader_tx
+        .send(())
+        .expect("the first loader is waiting for its release");
+    loop {
+        let point = point_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first handle locks its claimed index slot");
+        observed.push(point);
+        if matches!(point, Point::IndexSlotLocked { .. }) {
+            break;
+        }
+    }
+    resume_waiter_tx
+        .send(())
+        .expect("the second lookup is waiting for its release");
+
+    let first_found = first_thread
+        .join()
+        .expect("the first lookup does not panic")
+        .expect("the first lookup succeeds");
+    let second_found = second_thread
+        .join()
+        .expect("the second lookup does not panic")
+        .expect("the waiting lookup succeeds");
+    observed.extend(point_rx.try_iter());
+
+    assert_eq!(
+        active_loads, 1,
+        "a reserved slot is already registered as an active load"
+    );
+    assert!(first_found, "the loading handle finds the packed object");
+    assert!(second_found, "the waiting handle finds the packed object");
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|point| matches!(
+                point,
+                Point::IndexLoadCompleted {
+                    outcome: LoadOutcome::Success,
+                    ..
+                }
+            ))
+            .count(),
+        1,
+        "the contending lookups load the index once"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "parallel")]
+#[test]
 fn debug_hooks_coordinate_contending_failed_index_loaders() -> Result {
     use std::{
         sync::{
