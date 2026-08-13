@@ -667,9 +667,8 @@ pub(crate) fn draw_with_worktree(
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
                     Span::raw("PgUp/C-b up page · PgDn/C-f down page · "),
-                    Span::raw("cl"),
-                    Span::styled("o", Style::default().add_modifier(Modifier::UNDERLINED)),
-                    Span::raw("se"),
+                    Span::styled("m", Style::default().add_modifier(Modifier::UNDERLINED)),
+                    Span::raw(" close"),
                 ]))
                 .style(Style::default().bg(PANE_STATUS_BACKGROUND)),
                 Rect::new(
@@ -772,8 +771,8 @@ pub(crate) fn draw_with_worktree(
     }
     if app.tree_changes_visible || app.worktree_changes_visible {
         footer_spans.push(match app.focus_feedback.take() {
-            Some(destination) => Span::raw(format!(" · Tab → {destination}")),
-            None => Span::raw(" · Tab switch"),
+            Some(destination) => Span::raw(format!(" · <tab> → {destination}")),
+            None => Span::raw(" · <tab> switch"),
         });
     }
     if app.changes_focus.is_some() {
@@ -781,17 +780,9 @@ pub(crate) fn draw_with_worktree(
     }
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     footer_spans.push(Span::raw(" · "));
-    footer_spans.extend(shortcut(
-        if app.show_commit {
-            "close message"
-        } else {
-            "open message"
-        },
-        'o',
-        app.show_commit,
-    ));
+    footer_spans.extend(shortcut("message", 'm', app.show_commit));
     footer_spans.push(Span::raw(" · "));
-    footer_spans.extend(shortcut("cycle changes", 'c', app.changes_mode.is_some()));
+    footer_spans.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
     let mut view_prefix_spans = Vec::new();
     if app.history_display_expanded {
         view_prefix_spans.push(Span::raw(" · "));
@@ -835,22 +826,24 @@ pub(crate) fn draw_with_worktree(
     let mut ordered = vec![Span::raw(history_position(app))];
     ordered.append(&mut view_prefix_spans);
     ordered.append(&mut edit_prefix_spans);
+    ordered.push(Span::raw(" · "));
+    ordered.extend(if app.preview_author_copy {
+        shortcut("copY author", 'Y', true)
+    } else {
+        shortcut("copy", 'y', true)
+    });
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
+    footer_spans.push(Span::raw(" · "));
     if app.preview_author_copy && app.manual_refresh {
-        footer_spans.push(Span::raw(" · "));
         footer_spans.extend(shortcut(
             "Refresh",
             'R',
             matches!(history_state, State::Complete | State::Cancelled),
         ));
-    }
-    footer_spans.push(Span::raw(" · "));
-    footer_spans.extend(if app.preview_author_copy {
-        shortcut("copY author", 'Y', true)
     } else {
-        shortcut("copy", 'y', true)
-    });
+        footer_spans.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
+    }
     if app.signature_failures > 0 {
         footer_spans.extend([
             Span::raw(format!(" · s {} ", app.signature_failures)),
@@ -864,16 +857,14 @@ pub(crate) fn draw_with_worktree(
             Span::styled("●", color(Color::Green)),
         ]);
     }
-    if app.changes_focus.is_none() {
-        if history_state == State::Loading {
-            footer_spans.push(Span::raw(" · Esc cancel"));
-        }
-        footer_spans.push(Span::raw(" · "));
-        footer_spans.extend(shortcut("quit", 'q', true));
+    if app.changes_focus.is_none() && history_state == State::Loading {
+        footer_spans.push(Span::raw(" · Esc cancel"));
     }
     footer_spans.push(Span::raw(" · ↑↓/jk move · h/l pan"));
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · <enter> diff"));
+        footer_spans.push(Span::raw(" · "));
+        footer_spans.extend(shortcut("quit", 'q', true));
     }
     if let Some(message) = app.message() {
         footer_spans = vec![Span::raw(message)];
@@ -1911,7 +1902,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · view · edit · computing"),
+            computing.contains("1 commits · view · edit · copy") && computing.contains("computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -2397,7 +2388,8 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · view · edit · [ align · open message · cycle changes · copy · quit · ↑↓/jk move · h/l pan · <enter> diff";
+        let footer_text =
+            "#1 · view · edit · copy · [ align · message · changes · refs · ↑↓/jk move · h/l pan · <enter> diff · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2421,18 +2413,19 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
-        let message = footer_text[..footer_text.find("open message").expect("the message toggle is present")]
+        let message = footer_text[..footer_text.find("message").expect("the message toggle is present")]
             .chars()
             .count();
-        for x in message..message + "open message".len() {
+        for x in message..message + "message".len() {
             expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
         }
         for (label, key) in [
             ("view", 'v'),
             ("edit", 'e'),
-            ("open message", 'o'),
-            ("cycle changes", 'c'),
             ("copy", 'y'),
+            ("message", 'm'),
+            ("changes", 'c'),
+            ("refs", 'r'),
             ("quit", 'q'),
         ] {
             let label_start = footer_text[..footer_text.find(label).expect("shortcut label is present")]
@@ -2542,7 +2535,7 @@ mod tests {
             "the restored name mode is not dimmed"
         );
 
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(!rendered_row(&terminal).contains("HEAD"), "no refs hides regular refs");
         assert!(
@@ -2555,7 +2548,7 @@ mod tests {
         );
         assert!(footer_is_dim(&terminal, "no refs"), "no refs is dimmed");
 
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             !rendered_row(&terminal).contains("HEAD"),
@@ -2567,7 +2560,7 @@ mod tests {
         );
         assert!(!footer_is_dim(&terminal, "all refs"), "all refs is not dimmed");
 
-        app.update(Action::ToggleRefs);
+        app.update(Action::CycleRefs);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         assert!(
             !rendered_row(&terminal).contains("HEAD"),
@@ -2686,7 +2679,7 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "view (date · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · [ align")),
+            footer.starts_with(&format!("0 commits · {view} · copy · [ align")),
             "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
@@ -2703,7 +2696,7 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · [ align"),
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · [ align"),
             "the edit prefix follows the view prefix even when no action is available"
         );
         Ok(())
@@ -3185,10 +3178,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(
-            footer_is_dim(&terminal, "open message"),
-            "the closed commit pane is dimmed"
-        );
+        assert!(footer_is_dim(&terminal, "message"), "the closed commit pane is dimmed");
 
         app.update(Action::ToggleCommit);
         terminal.draw(|frame| {
@@ -3232,7 +3222,7 @@ mod tests {
             "the commit body remains separated from its title"
         );
         assert!(
-            !footer_is_dim(&terminal, "close message"),
+            !footer_is_dim(&terminal, "message"),
             "the open commit pane is not dimmed"
         );
 
@@ -3612,7 +3602,7 @@ mod tests {
             Color::Reset,
             "the main status keeps its original background"
         );
-        assert!(rendered_line(&terminal, 15).contains("Tab switch"));
+        assert!(rendered_line(&terminal, 15).contains("<tab> switch"));
 
         app.changes_suppressed = true;
         terminal.draw(|frame| {
@@ -3630,7 +3620,7 @@ mod tests {
             "repeated history navigation temporarily hides the changes pane"
         );
         assert!(
-            app.changes_mode.is_some() && !footer_is_dim(&terminal, "cycle changes"),
+            app.changes_mode.is_some() && !footer_is_dim(&terminal, "changes"),
             "temporary suppression leaves the persistent changes setting enabled"
         );
         app.changes_suppressed = false;
@@ -3665,7 +3655,7 @@ mod tests {
                 && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
             "the inactive history is dimmed without dimming the main status"
         );
-        assert!(rendered_line(&terminal, 15).contains("Tab → tree changes"));
+        assert!(rendered_line(&terminal, 15).contains("<tab> → tree changes"));
         assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
         terminal.draw(|frame| {
             super::draw(
@@ -3678,7 +3668,7 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&terminal, 15).contains("Tab switch"),
+            rendered_line(&terminal, 15).contains("<tab> switch"),
             "focus feedback lasts for one redraw"
         );
         assert!(
