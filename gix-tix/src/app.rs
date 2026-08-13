@@ -2070,7 +2070,7 @@ mod tests {
     }
 
     #[test]
-    fn filesystem_refresh_selects_the_first_selectable_row() {
+    fn filesystem_refresh_retains_selection_or_uses_the_first_selectable_row() {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
         complete(&mut app);
@@ -2079,13 +2079,30 @@ mod tests {
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
 
         let rows = app
-            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], true)
+            .start_refresh(vec![row_with_parents(4, &[3])].into(), &[id(4)], &[], false)
             .expect("a filesystem refresh computes lanes");
         let (rows, graph, time) = compute_lanes(rows);
         app.finish_lane_computation(rows, graph, time);
 
-        assert_eq!(app.selected, app.first_selectable());
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(1)),
+            "a still-visible selection survives new commits"
+        );
+
+        app.update(Action::First);
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(4)));
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(3)], &[], false)
+            .expect("a filesystem rewind computes lanes");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(app.selected, app.first_selectable());
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(3)),
+            "a removed selection falls back to the first selectable row"
+        );
     }
 
     #[test]

@@ -1343,7 +1343,7 @@ fn event_loop(
                 hidden_changed,
                 "compared reference snapshot"
             );
-            let select_top = std::mem::take(&mut refresh_select_top_requested) || from_filesystem && tips_changed;
+            let select_top = std::mem::take(&mut refresh_select_top_requested);
             ref_snapshot = next;
             refresh_pending = false;
             let hidden = if app.show_hidden { Vec::new() } else { hide.clone() };
