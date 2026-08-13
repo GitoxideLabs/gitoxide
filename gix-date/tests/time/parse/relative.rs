@@ -16,6 +16,15 @@ fn large_offsets_do_not_panic() {
             .to_string(),
         "Couldn't parse span from 'week 9999999999'"
     );
+    assert_eq!(
+        gix_date::parse(
+            "2027 years 9223372036854775807 months ago",
+            Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_774_958_400)),
+        )
+        .expect_err("month subtraction beyond i64::MIN must fail")
+        .to_string(),
+        "Couldn't parse span from 'month 9223372036854775807'"
+    );
 }
 
 #[test]
@@ -127,6 +136,10 @@ fn months_and_years_roll_over_month_ends_like_git() {
         (1780228800, "1 month ago", 1777636800),
         // 2026-08-31T12:00:00Z minus six months is February 31st again.
         (1788177600, "6 months ago", 1772539200),
+        // February's leap day changes how far an invalid February 30th or 31st rolls over.
+        (1774872000, "1 month ago", 1772452800), // 2026-03-30 -> 2026-03-02
+        (1711800000, "1 month ago", 1709294400), // 2024-03-30 -> 2024-03-01
+        (1711886400, "1 month ago", 1709380800), // 2024-03-31 -> 2024-03-02
         // A leap day, 2024-02-29T12:00:00Z, minus one year is February 29th 2023, normalized
         // to March 1st.
         (1709208000, "1 year ago", 1677672000),
@@ -138,9 +151,18 @@ fn months_and_years_roll_over_month_ends_like_git() {
         // February has no 31st, unlike going back a month first and landing on March 1st.
         (1775044800, "1 day 1 month ago", 1772539200),
         (1775044800, "1 month 1 day ago", 1772280000),
+        // Month and year pairs are likewise order-dependent when only one order crosses February.
+        (1711886400, "1 month 1 year ago", 1677758400),
+        (1711886400, "1 year 1 month ago", 1677844800),
         // Each month-pair normalizes what came before it: 2026-03-31T12:00:00Z minus a month
         // rolls over to March 3rd, and only then goes back another month, to February 3rd.
         (1774958400, "1 month 1 month ago", 1770120000),
+        // Crossing multiple years must still use the leap-year length of the target February.
+        (1769860800, "23 months ago", 1709380800),
+        // A seconds-based pair forces the preceding invalid month-end to normalize before the next
+        // month pair. Moving that day to the end produces a different result.
+        (1780228800, "1 month 1 day 1 month ago", 1774872000),
+        (1780228800, "1 month 1 month 1 day ago", 1774958400),
         // Repeated units accumulate instead of replacing one another.
         (1774958400, "1 day 1 day ago", 1774785600),
     ];

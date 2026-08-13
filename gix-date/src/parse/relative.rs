@@ -1,7 +1,7 @@
 use std::{str::FromStr, time::SystemTime};
 
 use crate::Error;
-use gix_error::{Exn, ResultExt, ValidationError, ensure};
+use gix_error::{Exn, ResultExt, ValidationError};
 use jiff::{SignedDuration, Span, Timestamp, Zoned, civil, tz::TimeZone};
 
 pub fn parse(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn<Error>>> {
@@ -63,7 +63,7 @@ fn parse_ago(input: &str) -> Option<Vec<Pair<'_>>> {
     }
     pairs
         .into_iter()
-        .map(|(period, units)| unit(period, ago).map(|(period, unit)| Pair { period, units, unit }))
+        .map(|(period, count)| unit(period, ago).map(|(period, unit)| Pair { period, count, unit }))
         .collect()
 }
 
@@ -89,7 +89,7 @@ struct Pair<'a> {
     /// The unit name, in singular form, for error messages.
     period: &'a str,
     /// The count in front of the unit.
-    units: i64,
+    count: i64,
     /// How the pair is subtracted.
     unit: Unit,
 }
@@ -138,83 +138,74 @@ fn unit(period: &str, ago: bool) -> Option<(&str, Unit)> {
 /// Subtract all `pairs` from `now`, in input order, like Git's `approxidate()` applies them.
 ///
 /// Seconds-based units subtract from the timestamp, while months and years only step down the
-/// year and month fields and normalize later, so that repeated units accumulate and a day beyond
-/// the end of the target month rolls over, both just like in Git.
+/// respective fields and normalize later, so that repeated units accumulate and a day beyond
+/// the end of the target month rolls over.
 fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<Error>> {
-    // This was an error case in a previous version of this code, where
-    // it would fail when converting from a negative signed integer
-    // to an unsigned integer. This preserves that failure case even
-    // though the code below handles it okay.
-    ensure!(pairs.iter().all(|pair| pair.units >= 0), ValidationError::new(""));
+    /// The calendar and clock fields for subtraction.
+    struct Fields {
+        year: i16,
+        month: i8,
+        day: i8,
+        time: civil::Time,
+    }
+
+    impl From<Zoned> for Fields {
+        fn from(zdt: Zoned) -> Self {
+            Fields {
+                year: zdt.year(),
+                month: zdt.month(),
+                day: zdt.day(),
+                time: zdt.time(),
+            }
+        }
+    }
+
+    impl Fields {
+        /// Turn the fields back into a point in time: a day beyond the end of the month rolls over into the
+        /// following month. One month before May 31st is thus May 1st, a day after April 30th.
+        fn normalize(&self) -> Result<Zoned, Exn<Error>> {
+            let first_of_month = civil::Date::new(self.year, self.month, 1)
+                .or_raise(|| Error::new(format!("Date lies out of range: {}-{:02}", self.year, self.month)))?
+                .to_datetime(self.time)
+                .to_zoned(TimeZone::UTC)
+                .or_raise(|| Error::new("Could not convert date to a point in time"))?;
+            let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
+            let ts = first_of_month
+                .timestamp()
+                .checked_add(days_beyond_first)
+                .or_raise(|| Error::new(format!("Day {} lies out of range", self.day)))?;
+            Ok(ts.to_zoned(TimeZone::UTC))
+        }
+    }
+
     let now = now.ok_or(ValidationError::new("Missing current time"))?;
     let ts: Timestamp = Timestamp::try_from(now).or_raise(|| Error::new("Could not convert current time"))?;
     // N.B. Git does all of this in the local time zone, while we stay in UTC just like this code
     // always did. Since UTC has no DST, a day is in practice always 24 hours. ---AG
     let mut fields = Fields::from(ts.to_zoned(TimeZone::UTC));
-    for Pair { period, units, unit } in pairs {
-        let err = || Error::new(format!("Couldn't parse span from '{period} {units}'"));
+    for Pair { period, count, unit } in pairs {
+        let err = || Error::new(format!("Couldn't parse span from '{period} {count}'"));
         match unit {
             Unit::Seconds(factor) => {
-                let seconds = units
+                let seconds = count
                     .checked_mul(*factor)
                     .map(SignedDuration::from_secs)
                     .ok_or_else(err)?;
                 let ts = fields.normalize()?.timestamp().checked_sub(seconds).or_raise(err)?;
-                fields = Fields::from(ts.to_zoned(TimeZone::UTC));
+                fields = ts.to_zoned(TimeZone::UTC).into();
             }
             Unit::Months(factor) => {
-                let months = units.checked_mul(*factor).ok_or_else(err)?;
-                // Like Git, which calls `update_tm(&tm, &now, 0)` here, roll over anything a
-                // previous pair may have left beyond the end of a month.
-                fields = Fields::from(fields.normalize()?);
-                let total = i64::from(fields.year) * 12 + i64::from(fields.month) - 1 - months;
+                let months = count.checked_mul(*factor).ok_or_else(err)?;
+                fields = fields.normalize()?.into();
+                let total = (i64::from(fields.year) * 12 + i64::from(fields.month) - 1)
+                    .checked_sub(months)
+                    .ok_or_else(err)?;
                 fields.year = i16::try_from(total.div_euclid(12)).ok().ok_or_else(err)?;
                 fields.month = i8::try_from(total.rem_euclid(12) + 1).expect("a value in 1..=12");
             }
         }
     }
     fields.normalize()
-}
-
-/// The calendar and clock fields of Git's `struct tm`, in UTC.
-///
-/// `day` may point beyond the end of the month, just like `tm_mday` does between a month
-/// adjustment and the `mktime(3)` call that normalizes it.
-struct Fields {
-    year: i16,
-    month: i8,
-    day: i8,
-    time: civil::Time,
-}
-
-impl From<Zoned> for Fields {
-    fn from(zdt: Zoned) -> Self {
-        Fields {
-            year: zdt.year(),
-            month: zdt.month(),
-            day: zdt.day(),
-            time: zdt.time(),
-        }
-    }
-}
-
-impl Fields {
-    /// Turn the fields back into a point in time, the way `mktime(3)` does: a day beyond the end
-    /// of the month rolls over into the following month. One month before May 31st is thus
-    /// May 1st, a day after April 30th, just like in Git.
-    fn normalize(&self) -> Result<Zoned, Exn<Error>> {
-        let first_of_month = civil::Date::new(self.year, self.month, 1)
-            .or_raise(|| Error::new(format!("Date lies out of range: {}-{:02}", self.year, self.month)))?
-            .to_datetime(self.time)
-            .to_zoned(TimeZone::UTC)
-            .or_raise(|| Error::new("Could not convert date to a point in time"))?;
-        let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
-        let ts = first_of_month
-            .timestamp()
-            .checked_add(days_beyond_first)
-            .or_raise(|| Error::new(format!("Day {} lies out of range", self.day)))?;
-        Ok(ts.to_zoned(TimeZone::UTC))
-    }
 }
 
 fn subtract_span(now: Option<SystemTime>, span: Span) -> Result<Zoned, Exn<ValidationError>> {
