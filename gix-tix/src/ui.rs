@@ -635,10 +635,8 @@ pub(crate) fn draw_with_worktree(
         State::Complete => "",
         State::Cancelled => " · cancelled",
     };
-    let mut footer_spans = vec![Span::raw(format!(
-        "{}{status} · ↑↓/jk move · h/l pan",
-        history_position(app)
-    ))];
+    let mut footer_spans = vec![Span::raw(format!("{status} · ↑↓/jk move · h/l pan"))];
+    let mut edit_prefix_spans = Vec::new();
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · Enter diff"));
         let time_travel = if app.time_travel_shortcut_visible()
@@ -687,24 +685,24 @@ pub(crate) fn draw_with_worktree(
             if let Some(label) = time_travel {
                 options.push(label);
             }
-            footer_spans.push(Span::raw(" · "));
-            footer_spans.push(Span::styled(
+            edit_prefix_spans.push(Span::raw(" · "));
+            edit_prefix_spans.push(Span::styled(
                 "e active (",
                 Style::default().add_modifier(Modifier::BOLD),
             ));
             if options.is_empty() {
-                footer_spans.push(Span::raw("no actions"));
+                edit_prefix_spans.push(Span::raw("no actions"));
             } else {
                 for (index, option) in options.into_iter().enumerate() {
                     if index > 0 {
-                        footer_spans.push(Span::raw(" · "));
+                        edit_prefix_spans.push(Span::raw(" · "));
                     }
-                    footer_spans.push(Span::raw(option));
+                    edit_prefix_spans.push(Span::raw(option));
                 }
             }
-            footer_spans.push(Span::raw(")"));
+            edit_prefix_spans.push(Span::raw(")"));
         } else if !app.history_display_expanded {
-            footer_spans.push(Span::raw(" · e edit"));
+            edit_prefix_spans.push(Span::raw(" · e edit"));
         }
     }
     if app.tree_changes_visible || app.worktree_changes_visible {
@@ -719,31 +717,32 @@ pub(crate) fn draw_with_worktree(
     footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
     footer_spans.extend([Span::raw(" · "), toggle("o commit", app.show_commit)]);
     footer_spans.extend([Span::raw(" · "), toggle("c changes", app.changes_mode.is_some())]);
+    let mut view_prefix_spans = Vec::new();
     if app.history_display_expanded {
-        footer_spans.push(Span::raw(" · "));
-        footer_spans.push(Span::styled(
+        view_prefix_spans.push(Span::raw(" · "));
+        view_prefix_spans.push(Span::styled(
             "v active (",
             Style::default().add_modifier(Modifier::BOLD),
         ));
-        footer_spans.push(toggle("d date", app.show_committer_date));
-        footer_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
+        view_prefix_spans.push(toggle("d date", app.show_committer_date));
+        view_prefix_spans.extend([Span::raw(" · "), toggle("e emails", app.show_emails)]);
         let (name_label, names_visible) = match app.name_mode {
             NameMode::All => ("n names", true),
             NameMode::Author => ("n name", true),
             NameMode::None => ("n name", false),
         };
-        footer_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
+        view_prefix_spans.extend([Span::raw(" · "), toggle(name_label, names_visible)]);
         for (label, enabled) in [("m mailmap", app.use_mailmap), ("t trailers", app.show_trailers)] {
-            footer_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
+            view_prefix_spans.extend([Span::raw(" · "), toggle(label, enabled)]);
         }
         let ref_label = match app.ref_mode {
             RefMode::All => "r all refs",
             RefMode::Default => "r refs",
             RefMode::None => "r no refs",
         };
-        footer_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
+        view_prefix_spans.extend([Span::raw(" · "), toggle(ref_label, app.ref_mode != RefMode::None)]);
         if app.has_hidden_filter {
-            footer_spans.extend([
+            view_prefix_spans.extend([
                 Span::raw(" · "),
                 toggle(
                     if app.show_hidden {
@@ -755,10 +754,15 @@ pub(crate) fn draw_with_worktree(
                 ),
             ]);
         }
-        footer_spans.push(Span::raw(")"));
+        view_prefix_spans.push(Span::raw(")"));
     } else {
-        footer_spans.push(Span::raw(" · v view"));
+        view_prefix_spans.push(Span::raw(" · v view"));
     }
+    let mut ordered = vec![Span::raw(history_position(app))];
+    ordered.append(&mut view_prefix_spans);
+    ordered.append(&mut edit_prefix_spans);
+    ordered.append(&mut footer_spans);
+    footer_spans = ordered;
     if app.preview_author_copy && app.manual_refresh {
         footer_spans.extend([
             Span::raw(" · "),
@@ -1801,7 +1805,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let computing = rendered_line(&terminal, 1);
         assert!(
-            computing.contains("1 commits · computing"),
+            computing.contains("1 commits · v view · e edit · computing"),
             "expired deferral reveals computation progress"
         );
         assert_ne!(computing, completed, "visible progress changes the footer");
@@ -2287,7 +2291,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text = "#1 · ↑↓/jk move · h/l pan · Enter diff · e edit · [ align · o commit · c changes · v view · y copy · q quit";
+        let footer_text = "#1 · v view · e edit · ↑↓/jk move · h/l pan · Enter diff · [ align · o commit · c changes · y copy · q quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2558,8 +2562,8 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "v active (d date · e emails · n names · m mailmap · t trailers · r no refs · h show hidden)";
         assert!(
-            footer.contains(view),
-            "the view prefix encloses all of its applicable options"
+            footer.starts_with(&format!("0 commits · {view} · ↑↓/jk move")),
+            "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("v active").expect("the active view prefix is visible")]
             .chars()
@@ -2575,8 +2579,8 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).contains("e active (no actions)"),
-            "an active prefix remains explicit when the current context offers no actions"
+            rendered_line(&terminal, 1).starts_with("0 commits · v view · e active (no actions) · ↑↓/jk move"),
+            "the edit prefix follows the view prefix even when no action is available"
         );
         Ok(())
     }
@@ -4390,7 +4394,10 @@ mod tests {
             !rendered_row(&terminal).contains("0101010"),
             "[ restores natural post-graph placement"
         );
-        assert!(footer_is_dim(&terminal, "[ align"), "disabled alignment is dimmed");
+        assert!(
+            !app.align_metadata,
+            "alignment is disabled even when its later footer hint is clipped"
+        );
 
         app.update(Action::ScrollRight);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;

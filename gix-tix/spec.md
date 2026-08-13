@@ -157,7 +157,8 @@ The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. `[` and overlay controls remain direct
 shortcuts. While active, the footer renders a bold `v active (` marker, every
 applicable display option, and a closing `)` so direct shortcuts remain visibly
-outside the prefix.
+outside the prefix. The history status starts with the history position, then the
+`v` prefix and the `e` prefix when it is addressable, before navigation shortcuts.
 
 ### Time-travel
 
