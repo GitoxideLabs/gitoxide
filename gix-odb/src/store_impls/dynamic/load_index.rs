@@ -238,6 +238,8 @@ impl super::Store {
             if !Option::as_ref(&slot.files.load()).is_some_and(IndexAndPacks::index_is_failed) {
                 continue;
             }
+            #[cfg(feature = "test-support")]
+            self.debug(crate::store::init::debug::Point::IndexRetrySlotLocking { slot: slot_id });
             let _lock = slot.write.lock();
             if slot.generation.load(Ordering::SeqCst) > index.generation {
                 continue;
