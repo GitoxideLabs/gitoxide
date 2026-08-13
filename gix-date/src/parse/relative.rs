@@ -1,12 +1,12 @@
-use std::{str::FromStr, time::SystemTime};
+use std::str::FromStr;
 
 use crate::Error;
 use gix_error::{Exn, ResultExt, ValidationError};
-use jiff::{SignedDuration, Span, Timestamp, Zoned, civil, tz::TimeZone};
+use jiff::{SignedDuration, Zoned, civil, tz::TimeZone};
 
-pub fn parse(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn<Error>>> {
+pub fn parse(input: &str, now: Option<Zoned>) -> Option<Result<Zoned, Exn<Error>>> {
     // First try named dates
-    if let Some(result) = parse_named(input, now) {
+    if let Some(result) = parse_named(input, now.as_ref()) {
         return Some(result);
     }
 
@@ -15,20 +15,20 @@ pub fn parse(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn<E
 }
 
 /// Parse named relative dates like "now", "today", "yesterday".
-fn parse_named(input: &str, now: Option<SystemTime>) -> Option<Result<Zoned, Exn<Error>>> {
+fn parse_named(input: &str, now: Option<&Zoned>) -> Option<Result<Zoned, Exn<Error>>> {
     let input = input.trim();
-    let span = if input.eq_ignore_ascii_case("now") {
-        Span::new()
+    let duration = if input.eq_ignore_ascii_case("now") {
+        SignedDuration::ZERO
     } else if input.eq_ignore_ascii_case("today") {
         // "today" is treated the same as "now" (current time) for simplicity
-        Span::new()
+        SignedDuration::ZERO
     } else if input.eq_ignore_ascii_case("yesterday") {
-        Span::new().try_days(1).ok()?
+        SignedDuration::from_hours(24)
     } else {
         return None;
     };
 
-    Some(subtract_span(now, span))
+    Some(subtract_duration(now, duration))
 }
 
 /// Parse Git-style relative count-unit pairs, in input order.
@@ -140,13 +140,14 @@ fn unit(period: &str, ago: bool) -> Option<(&str, Unit)> {
 /// Seconds-based units subtract from the timestamp, while months and years only step down the
 /// respective fields and normalize later, so that repeated units accumulate and a day beyond
 /// the end of the target month rolls over.
-fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<Error>> {
+fn subtract_pairs(now: Option<Zoned>, pairs: &[Pair<'_>]) -> Result<Zoned, Exn<Error>> {
     /// The calendar and clock fields for subtraction.
     struct Fields {
         year: i16,
         month: i8,
         day: i8,
         time: civil::Time,
+        timezone: TimeZone,
     }
 
     impl From<Zoned> for Fields {
@@ -156,6 +157,7 @@ fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, 
                 month: zdt.month(),
                 day: zdt.day(),
                 time: zdt.time(),
+                timezone: zdt.time_zone().clone(),
             }
         }
     }
@@ -165,24 +167,19 @@ fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, 
         /// following month. One month before May 31st is thus May 1st, a day after April 30th.
         fn normalize(&self) -> Result<Zoned, Exn<Error>> {
             let first_of_month = civil::Date::new(self.year, self.month, 1)
-                .or_raise(|| Error::new(format!("Date lies out of range: {}-{:02}", self.year, self.month)))?
-                .to_datetime(self.time)
-                .to_zoned(TimeZone::UTC)
-                .or_raise(|| Error::new("Could not convert date to a point in time"))?;
+                .or_raise(|| Error::new(format!("Date lies out of range: {}-{:02}", self.year, self.month)))?;
             let days_beyond_first = SignedDuration::from_secs((i64::from(self.day) - 1) * 24 * 60 * 60);
-            let ts = first_of_month
-                .timestamp()
+            first_of_month
                 .checked_add(days_beyond_first)
-                .or_raise(|| Error::new(format!("Day {} lies out of range", self.day)))?;
-            Ok(ts.to_zoned(TimeZone::UTC))
+                .or_raise(|| Error::new(format!("Day {} lies out of range", self.day)))?
+                .to_datetime(self.time)
+                .to_zoned(self.timezone.clone())
+                .or_raise(|| Error::new("Could not convert date to a point in time"))
         }
     }
 
     let now = now.ok_or(ValidationError::new("Missing current time"))?;
-    let ts: Timestamp = Timestamp::try_from(now).or_raise(|| Error::new("Could not convert current time"))?;
-    // N.B. Git does all of this in the local time zone, while we stay in UTC just like this code
-    // always did. Since UTC has no DST, a day is in practice always 24 hours. ---AG
-    let mut fields = Fields::from(ts.to_zoned(TimeZone::UTC));
+    let mut fields = Fields::from(now);
     for Pair { period, count, unit } in pairs {
         let err = || Error::new(format!("Couldn't parse span from '{period} {count}'"));
         match unit {
@@ -192,7 +189,7 @@ fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, 
                     .map(SignedDuration::from_secs)
                     .ok_or_else(err)?;
                 let ts = fields.normalize()?.timestamp().checked_sub(seconds).or_raise(err)?;
-                fields = ts.to_zoned(TimeZone::UTC).into();
+                fields = ts.to_zoned(fields.timezone.clone()).into();
             }
             Unit::Months(factor) => {
                 let months = count.checked_mul(*factor).ok_or_else(err)?;
@@ -208,16 +205,10 @@ fn subtract_pairs(now: Option<SystemTime>, pairs: &[Pair<'_>]) -> Result<Zoned, 
     fields.normalize()
 }
 
-fn subtract_span(now: Option<SystemTime>, span: Span) -> Result<Zoned, Exn<ValidationError>> {
+fn subtract_duration(now: Option<&Zoned>, duration: SignedDuration) -> Result<Zoned, Exn<ValidationError>> {
     let now = now.ok_or(ValidationError::new("Missing current time"))?;
-    let ts: Timestamp = Timestamp::try_from(now).or_raise(|| Error::new("Could not convert current time"))?;
-    // N.B. This matches the behavior of this code when it was
-    // written with `time`, but we might consider using the system
-    // time zone here. If we did, then it would implement "1 day
-    // ago" correctly, even when it crosses DST transitions. Since
-    // we're in the UTC time zone here, which has no DST, 1 day is
-    // in practice always 24 hours. ---AG
-    let zdt = ts.to_zoned(TimeZone::UTC);
-    zdt.checked_sub(span)
-        .or_raise(|| Error::new(format!("Failed to subtract {zdt} from {span}")))
+    now.timestamp()
+        .checked_sub(duration)
+        .map(|timestamp| timestamp.to_zoned(now.time_zone().clone()))
+        .or_raise(|| Error::new(format!("Failed to subtract {duration} from {now}")))
 }

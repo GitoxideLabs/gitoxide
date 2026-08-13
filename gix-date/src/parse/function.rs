@@ -1,4 +1,4 @@
-use std::{str::FromStr, time::SystemTime};
+use std::str::FromStr;
 
 use jiff::{Zoned, civil::Date, fmt::rfc2822, tz::TimeZone};
 
@@ -71,7 +71,8 @@ use gix_error::{Exn, ResultExt};
 ///
 /// ### 10. Relative Dates (e.g., "2 minutes ago")
 ///
-/// These dates are parsed *relative to a `now` timestamp*. The examples depend entirely on the value of `now`.
+/// These dates are parsed relative to `now`, whose time zone controls calendar arithmetic.
+/// The examples depend entirely on the value of `now`.
 /// If `now` is October 27, 2023 at 10:00:00 UTC:
 ///     *   `2 minutes ago` (October 27, 2023 at 09:58:00 UTC)
 ///     *   `3 hours ago` (October 27, 2023 at 07:00:00 UTC)
@@ -89,7 +90,7 @@ use gix_error::{Exn, ResultExt};
 ///
 /// Note that there is no way to name a time in the future: Git has none either, so `1 hour from
 /// now` is an hour in the past to it, and to this function.
-pub fn parse(input: &str, now: Option<SystemTime>) -> Result<Time, Exn<Error>> {
+pub fn parse(input: &str, now: Option<Zoned>) -> Result<Time, Exn<Error>> {
     // Git accepts a leading `@` before a commit-header date: `match_object_header_date()` in
     // `date.c` takes `<seconds> ±HHMM`, while an offsetless `@<seconds>` arrives at the same
     // result through the generic loop, which skips the `@` and reads the digits as an epoch.

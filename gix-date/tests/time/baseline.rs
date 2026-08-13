@@ -1,5 +1,3 @@
-use std::time::{Duration, SystemTime};
-
 use gix_date::{
     SecondsSinceUnixEpoch,
     time::{Format, format},
@@ -11,7 +9,7 @@ struct Sample {
     format_name: Option<String>,
     exit_code: usize,
     seconds: SecondsSinceUnixEpoch,
-    now: Option<SystemTime>,
+    now: Option<gix_date::Zoned>,
 }
 
 static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
@@ -31,7 +29,7 @@ static BASELINE: LazyLock<Vec<(String, Sample)>> = LazyLock::new(|| {
                 .expect("valid epoch value");
             let now = match lines.next().expect("five lines per baseline") {
                 "" => None,
-                seconds => Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds.parse()?)),
+                seconds => Some(jiff::Timestamp::from_second(seconds.parse()?)?.to_zoned(jiff::tz::TimeZone::UTC)),
             };
             samples.push((
                 date_str.into(),
@@ -60,7 +58,7 @@ fn parse_compare_format() {
         },
     ) in BASELINE.iter()
     {
-        let res = gix_date::parse(pattern.as_str(), *now);
+        let res = gix_date::parse(pattern.as_str(), now.clone());
         assert_eq!(
             res.is_ok(),
             *exit_code == 0,

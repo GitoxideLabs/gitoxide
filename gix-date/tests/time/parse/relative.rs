@@ -1,17 +1,21 @@
 use std::time::SystemTime;
 
-use jiff::{ToSpan, Zoned};
+use jiff::{ToSpan, Zoned, tz::TimeZone};
 use pretty_assertions::assert_eq;
+
+fn utc(time: SystemTime) -> Zoned {
+    Zoned::new(time.try_into().expect("system time is representable"), TimeZone::UTC)
+}
 
 #[test]
 fn large_offsets() {
-    gix_date::parse("999999999999999 weeks ago", Some(std::time::UNIX_EPOCH)).ok();
+    gix_date::parse("999999999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH))).ok();
 }
 
 #[test]
 fn large_offsets_do_not_panic() {
     assert_eq!(
-        gix_date::parse("9999999999 weeks ago", Some(std::time::UNIX_EPOCH))
+        gix_date::parse("9999999999 weeks ago", Some(utc(SystemTime::UNIX_EPOCH)))
             .unwrap_err()
             .to_string(),
         "Couldn't parse span from 'week 9999999999'"
@@ -19,7 +23,9 @@ fn large_offsets_do_not_panic() {
     assert_eq!(
         gix_date::parse(
             "2027 years 9223372036854775807 months ago",
-            Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_774_958_400)),
+            Some(utc(
+                SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_774_958_400)
+            )),
         )
         .expect_err("month subtraction beyond i64::MIN must fail")
         .to_string(),
@@ -29,8 +35,21 @@ fn large_offsets_do_not_panic() {
 
 #[test]
 fn offset_leading_to_before_unix_epoch_can_be_represented() {
-    let date = gix_date::parse("1 second ago", Some(std::time::UNIX_EPOCH)).unwrap();
+    let date = gix_date::parse("1 second ago", Some(utc(SystemTime::UNIX_EPOCH))).unwrap();
     assert_eq!(date.seconds, -1);
+}
+
+#[test]
+fn the_timezone_of_now_controls_calendar_arithmetic() {
+    let now = jiff::Timestamp::from_second(1_772_325_000)
+        .expect("valid timestamp")
+        .to_zoned(TimeZone::fixed(jiff::tz::Offset::from_hours(-5).expect("valid offset")));
+    let actual = gix_date::parse("1 month ago", Some(now)).expect("relative date parses");
+    assert_eq!(
+        actual.seconds, 1_769_646_600,
+        "local February 28th becomes January 28th"
+    );
+    assert_eq!(actual.offset, -5 * 60 * 60, "the timezone offset is retained");
 }
 
 #[test]
@@ -86,7 +105,7 @@ fn various() {
     ];
 
     let cases_with_times = cases.map(|(input, _)| {
-        let time = gix_date::parse(input, Some(now)).expect("relative time string should parse to a Time");
+        let time = gix_date::parse(input, Some(utc(now))).expect("relative time string should parse to a Time");
         (input, time)
     });
     assert_eq!(
@@ -96,21 +115,16 @@ fn various() {
     );
 
     let expected = cases.map(|(input, span)| {
-        let expected = Zoned::new(
-            now.try_into().expect("system time is representable"),
-            // As relative dates are always UTC in Git, we do the same, and must
-            // compare to UTC as well or else time might be off due to daylight savings, etc.
-            jiff::tz::TimeZone::UTC,
-        )
-        // account for the loss of precision when creating `Time` with seconds
-        .round(
-            jiff::ZonedRound::new()
-                .smallest(jiff::Unit::Second)
-                .mode(jiff::RoundMode::Trunc),
-        )
-        .expect("test needs to truncate current timestamp to seconds")
-        .saturating_sub(span)
-        .timestamp();
+        let expected = utc(now)
+            // account for the loss of precision when creating `Time` with seconds
+            .round(
+                jiff::ZonedRound::new()
+                    .smallest(jiff::Unit::Second)
+                    .mode(jiff::RoundMode::Trunc),
+            )
+            .expect("test needs to truncate current timestamp to seconds")
+            .saturating_sub(span)
+            .timestamp();
 
         (input, expected)
     });
@@ -168,7 +182,7 @@ fn months_and_years_roll_over_month_ends_like_git() {
     ];
     for (now, input, expected) in cases {
         let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(now);
-        let actual = gix_date::parse(input, Some(now))
+        let actual = gix_date::parse(input, Some(utc(now)))
             .expect("these relative dates parse")
             .seconds;
         assert_eq!(
@@ -229,17 +243,19 @@ fn various_examples() {
 mod named {
     use std::time::{Duration, SystemTime};
 
+    use super::utc;
+
     #[test]
     fn now() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse("now", Some(now)).unwrap();
+        let actual = gix_date::parse("now", Some(utc(now))).unwrap();
         assert_eq!(actual.seconds, 1_000_000);
     }
 
     #[test]
     fn today() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse(" today ", Some(now)).unwrap();
+        let actual = gix_date::parse(" today ", Some(utc(now))).unwrap();
         assert_eq!(
             actual.seconds, 1_000_000,
             "the input is independent of surrounding whitespace as well"
@@ -249,7 +265,7 @@ mod named {
     #[test]
     fn yesterday() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse("yesterday", Some(now)).unwrap();
+        let actual = gix_date::parse("yesterday", Some(utc(now))).unwrap();
         assert_eq!(
             actual.seconds,
             1_000_000 - 86400,
@@ -260,7 +276,7 @@ mod named {
     #[test]
     fn now_case_insensitive() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        let actual = gix_date::parse("NOW", Some(now)).unwrap();
+        let actual = gix_date::parse("NOW", Some(utc(now))).unwrap();
         assert_eq!(actual.seconds, 1_000_000);
     }
 }
