@@ -20,8 +20,9 @@ without trading responsiveness for metadata that is not visible.
   revisions. Hidden revisions still exclude matching ancestry.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
-- Revisions must resolve and peel to commits. Invalid or non-commit revisions are
-  errors.
+- Revisions must resolve and peel to commits. Invalid or non-commit visible
+  revisions are errors. An unavailable hidden revision emits a warning and is
+  ignored when another hidden revision resolves; if none resolve, startup fails.
 - The UI always owns the alternate screen. Raw mode, focus reporting, mouse
   capture, and enhanced keyboard reporting are restored on every exit path.
 - `Ctrl-C` exits immediately from any normal tix focus. `q` quits from history;
@@ -57,11 +58,16 @@ without trading responsiveness for metadata that is not visible.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and cannot be selected, paged to, copied, signature-verified, restored as a
   selection, or entered by Shift navigation.
-- When hidden revisions are configured, references are hidden by default so
-  metadata remains aligned.
+- Hidden revisions do not change the default reference display mode.
 - `v`, then `h`, toggles the full hidden projection. Toggling preserves the
   selected commit when it still exists and otherwise selects the newest
   selectable row.
+- When a hidden revspec names a local branch, its best common base with the
+  visible tips permanently shows `⇣N` after the commit title when that branch has
+  `N` commits not reachable from the view. The terminal edge pushes the marker
+  left over a clipped title when necessary. A blank margin remains on each side.
+  The cached history graph supplies the base and count; unrelated refs and
+  zero-count relations add no marker.
 
 ### Row content and visual states
 
