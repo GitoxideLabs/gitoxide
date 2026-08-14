@@ -572,14 +572,18 @@ space first; changes blocks adapt within the remaining history width.
   invalidate old signatures for later time travel. With no `@`, the entire edit
   is lazy. The existing suspended-conflict acceptance path handles eager
   conflicts; bare repositories reject a conflict without persisting it.
-- Mutable refs captured before the editor opened follow retained or dropped
-  commits through one compare-and-swap transaction. Tags and remote-tracking refs
-  remain untouched. Every resulting leaf without a surviving mutable ref gets a
-  direct `refs/worktree/tix/pins/*` ref, except the checked-out leaf. Concurrent
-  ref edits win by making the transaction fail; the editor result is not rebuilt
-  against a later graph snapshot. Leaving the document unchanged is a no-op unless
-  its scope contains pending commits or rebase-update selected a newer base; then
-  the unchanged plan runs with the same eager `@` ancestry and lazy-fork rules.
+- Mutable refs captured on original leaves stay tips: after their commit is
+  rewritten or dropped, they follow the first continuation in todo order to its
+  resulting leaf. Other mutable refs remain bound to their rewritten commit.
+  All moves use one compare-and-swap transaction; tags and remote-tracking refs
+  remain untouched. Every other resulting leaf gets a direct
+  `refs/worktree/tix/pins/*` ref, except the checked-out leaf. When `@` moves below
+  a referenced leaf, the existing time-travel checkout detaches `HEAD` there while
+  the ref stays at the leaf. Concurrent ref edits win by making the transaction
+  fail; the editor result is not rebuilt against a later graph snapshot. Leaving
+  the document unchanged is a no-op unless its scope contains pending commits or
+  rebase-update selected a newer base; then the unchanged plan runs with the same
+  eager `@` ancestry and lazy-fork rules.
 
 ### Editing shortcuts
 
