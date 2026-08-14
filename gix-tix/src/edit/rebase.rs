@@ -19,7 +19,6 @@ use crate::history::HistoryGraph;
 
 const MARKER: &[u8] = b"tix-rebase";
 const ORIGINAL_PARENT: &[u8] = b"tix-rebase-parent";
-const PENDING: &[u8] = b"pending";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Signature {
@@ -360,16 +359,12 @@ fn perform_inner(
         if Some(old_id) != root || repeat {
             commit.committer = committer.clone();
         }
-        let original_parent = repeat.then(|| marked_parent(&commit)).transpose()?.flatten();
-        let original_parents = original_parent.into_iter().collect::<Vec<_>>();
+        let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        let original_parents = recorded_parent.flatten().into_iter().collect::<Vec<_>>();
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
-            if original_parents.is_empty() {
-                &old_parents
-            } else {
-                &original_parents
-            },
+            if !repeat { &old_parents } else { &original_parents },
             &new_parents,
             if conflict.is_some() {
                 Tree::LeaveAsIsAndMark
@@ -392,7 +387,7 @@ fn perform_inner(
         marker(
             &mut commit,
             pending,
-            original_parent.or_else(|| old_parents.first().copied()),
+            recorded_parent.flatten().or_else(|| old_parents.first().copied()),
         );
         let is_conflicting_commit = new_conflict.is_some();
         let new_id = write_commit(
@@ -651,17 +646,22 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
                 extra_headers: Vec::new(),
             },
         };
-        let old_parents = match step.commit {
+        let graph_parents = match step.commit {
             PlanCommit::Pick(id) => graph.parents_of(id).context("a picked commit is incomplete")?,
             PlanCommit::Empty(_) => vec![parent],
         };
+        let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        let replay_parents = recorded_parent.map_or_else(
+            || graph_parents.clone(),
+            |parent| parent.into_iter().collect::<Vec<_>>(),
+        );
         let mode = if eager {
             Tree::CherryPick
         } else {
             Tree::LeaveAsIsAndMark
         };
         let mut new_conflict = None;
-        commit.tree = match rewritten_tree(&repo, &commit, &old_parents, &[parent], mode)? {
+        commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict { tree, conflicts } => {
                 new_conflict = Some((tree, conflicts));
@@ -673,7 +673,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         marker(
             &mut commit,
             !eager || new_conflict.is_some(),
-            old_parents.first().copied(),
+            recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
         );
         let signature = if eager && new_conflict.is_none() {
             Signature::RedoIfNeeded
@@ -1041,16 +1041,14 @@ fn parent_tree(repo: &gix::Repository, parent: Option<ObjectId>) -> Result<Objec
 }
 
 fn marker(commit: &mut gix::objs::Commit, add: bool, original_parent: Option<ObjectId>) {
-    commit.extra_headers.retain(|(name, value)| {
-        !(name.as_slice() == MARKER && value.as_slice() == PENDING) && name.as_slice() != ORIGINAL_PARENT
-    });
+    commit
+        .extra_headers
+        .retain(|(name, _)| name.as_slice() != ORIGINAL_PARENT);
     if add {
-        commit.extra_headers.push((MARKER.into(), PENDING.into()));
-        if let Some(parent) = original_parent {
-            commit
-                .extra_headers
-                .push((ORIGINAL_PARENT.into(), parent.to_hex().to_string().into()));
-        }
+        let parent = original_parent.unwrap_or_else(|| ObjectId::null(commit.tree.kind()));
+        commit
+            .extra_headers
+            .push((ORIGINAL_PARENT.into(), parent.to_hex().to_string().into()));
     }
 }
 
@@ -1059,15 +1057,20 @@ fn marked_parent(commit: &gix::objs::Commit) -> Result<Option<ObjectId>> {
         .extra_headers
         .iter()
         .find(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
-        .map(|(_, value)| ObjectId::from_hex(value).context("pending rebase has an invalid original parent"))
+        .map(|(_, value)| {
+            ObjectId::from_hex(value)
+                .context("pending rebase has an invalid original parent")
+                .map(|id| (!id.is_null()).then_some(id))
+        })
         .transpose()
+        .map(Option::flatten)
 }
 
 pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
     commit
         .extra_headers
         .iter()
-        .any(|(name, value)| name.as_slice() == MARKER && value.as_slice() == PENDING)
+        .any(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
 }
 
 fn write_commit(
@@ -1518,6 +1521,33 @@ mod tests {
             files.stdout, b"base\ntip\n",
             "repeat cherry-picks the descendant against its recorded original parent"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_roots_use_a_null_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let root = repo.rev_parse_single("HEAD~2")?.detach();
+        let commit = repo.find_commit(root)?.decode()?.into_owned()?;
+        let marked = perform(
+            &repo,
+            &graph,
+            Edit::Replace { target: root, commit },
+            Signature::InvalidateExisting,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?
+        .selected
+        .expect("the pending replacement selects its rewritten root");
+        let commit = repo.find_commit(marked)?.decode()?.into_owned()?;
+        assert!(has_marker(&commit));
+        assert_eq!(marked_parent(&commit)?, None);
+        assert!(commit.extra_headers.iter().any(|(name, value)| {
+            name.as_slice() == ORIGINAL_PARENT
+                && ObjectId::from_hex(value).is_ok_and(|id| id == ObjectId::null(repo.object_hash()))
+        }));
         Ok(())
     }
 

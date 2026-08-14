@@ -6,7 +6,7 @@ HEAD detached C1
 
 [refs]
 refs/heads/main = C2
-refs/worktree/tix/pins/6a06a74d = -> refs/heads/main
+refs/worktree/tix/pins/06e842b0 = -> refs/heads/main
 
 [commits]
 C0
@@ -29,7 +29,6 @@ C2
   parent C1
   author author <author@example.com> 946944000 +0000
   committer author <author@example.com> 978307200 +0000
-  tix-rebase pending
   tix-rebase-parent 76ca9987dd431a8b8be20a52aeed5066cd1058fe
 
   after
@@ -44,9 +43,9 @@ tree = conflicted
 100644 file "file" = "<<<<<<< rebased parent\nbase\n=======\ntip\n>>>>>>> commit\n"
 
 [objects]
+C2 = 06e842b07e26ecf14fa3af38af83313e25b407dc
 T0 = 0f42ecffc297189265600788215c8b0055d862b8
 C1 = 54b039307b71caeb5f620a9ad9c965d10db1f598
-C2 = 6a06a74d441ff8640e0951400beff9498ded5814
 T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
 T2 = 6f2762b571ef9a93001cc607058818aa5d0d055c
 B0 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d

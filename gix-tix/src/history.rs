@@ -1435,7 +1435,7 @@ fn decode_metadata<'a>(
                     }
                 }
             }
-            Token::ExtraHeader((name, value)) if name == "tix-rebase" && value.as_ref() == b"pending" => {
+            Token::ExtraHeader((name, _)) if name == "tix-rebase-parent" => {
                 signature = SignatureState::PendingRebase;
             }
             Token::ExtraHeader((name, value))
