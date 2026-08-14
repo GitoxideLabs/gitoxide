@@ -76,7 +76,9 @@ without trading responsiveness for metadata that is not visible.
   `N` commits not reachable from the view. The terminal edge pushes the marker
   left over a clipped title when necessary. A blank margin remains on each side.
   The cached history graph supplies the base and count; unrelated refs and
-  zero-count relations add no marker.
+  zero-count relations add no marker. If multiple hidden branches share a base,
+  the largest count is shown and its tip is retained as the update target; equal
+  counts choose a deterministic object ID.
 
 ### Row content and visual states
 
@@ -463,6 +465,11 @@ space first; changes blocks adapt within the remaining history width.
   lists its commits oldest-to-newest as `` `pick <short-id>` <displayed metadata> ``.
   IDs are shortened through repository configuration; metadata repeats the
   information visible in history and always includes the subject.
+- When that boundary shows `⇣N`, `e u` opens the same editor with each base-level
+  stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
+  `## fork <id>` heading additionally includes the Markdown-escaped title exactly
+  as shown in history, including `[A]` and `[N]`; ordinary and internal fork
+  headings remain unchanged. The hidden branch itself is not moved.
 - Pick lines may be reordered or removed. Fork headings may target an earlier
   pick or any existing commit, so adding and removing headings creates and joins
   branches. `empty <title>` inserts an empty commit. Markdown code spans and
@@ -485,7 +492,8 @@ space first; changes blocks adapt within the remaining history width.
 
 ### Editing shortcuts
 
-- `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base,
+- `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base and
+  `e u` rebases it onto the newer hidden branch tip when available,
   `e r` rewords, `e n` creates a rebased child, `e f` forks an independent child,
   `e a` amends `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
   `e d d` confirms forgetting a top commit, and `e t` enters or returns from

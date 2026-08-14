@@ -407,13 +407,13 @@ impl HistoryGraph {
             .map(|(visible, _)| crate::app::SelectionRelation::Visible(visible))
     }
 
-    pub(crate) fn hidden_branch_behind(
+    pub(crate) fn hidden_branch_updates(
         &self,
         view_tips: &[ObjectId],
         hidden_tips: impl IntoIterator<Item = ObjectId>,
-    ) -> HashMap<ObjectId, usize> {
+    ) -> HashMap<ObjectId, (usize, ObjectId)> {
         let hidden_tips: HashSet<_> = hidden_tips.into_iter().collect();
-        let mut out: HashMap<ObjectId, usize> = HashMap::new();
+        let mut out: HashMap<ObjectId, (usize, ObjectId)> = HashMap::new();
         for tip in hidden_tips {
             let Some((ahead, _, bases)) = self.paint_with_bases(tip, view_tips) else {
                 continue;
@@ -423,8 +423,8 @@ impl HistoryGraph {
             }
             for base in bases {
                 out.entry(base)
-                    .and_modify(|previous| *previous = (*previous).max(ahead))
-                    .or_insert(ahead);
+                    .and_modify(|previous| *previous = (*previous).max((ahead, tip)))
+                    .or_insert((ahead, tip));
             }
         }
         out
@@ -1735,9 +1735,17 @@ mod tests {
         }
 
         assert_eq!(
-            graph.hidden_branch_behind(&[id(2), id(5)], [id(4)]),
-            HashMap::from([(id(1), 2)]),
+            graph.hidden_branch_updates(&[id(2), id(5)], [id(4)]),
+            HashMap::from([(id(1), (2, id(4)))]),
             "only the fork point in the hidden branch's past reports its missing commits"
+        );
+
+        insert_commit(&mut graph, 7, &[1], 2);
+        insert_commit(&mut graph, 6, &[7], 3);
+        assert_eq!(
+            graph.hidden_branch_updates(&[id(2), id(5)], [id(4), id(6)]),
+            HashMap::from([(id(1), (2, id(6)))]),
+            "equal distances choose a deterministic hidden tip"
         );
     }
 

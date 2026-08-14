@@ -300,6 +300,7 @@ pub(crate) enum Action {
     Split,
     Forget,
     Rebase,
+    RebaseUpdate,
     TimeTravel,
     VerifySignatures,
     Cancel,
@@ -329,6 +330,7 @@ pub(crate) enum Effect {
     Forget(ObjectId),
     Rebase {
         base: ObjectId,
+        onto: ObjectId,
         commits: Vec<ObjectId>,
         head: Option<ObjectId>,
     },
@@ -433,7 +435,7 @@ pub(crate) struct App {
     signature_verification_running: bool,
     pub(crate) manual_refresh: bool,
     pub(crate) selection_relation: Option<SelectionRelation>,
-    hidden_branch_behind: HashMap<ObjectId, usize>,
+    hidden_branch_updates: HashMap<ObjectId, (usize, ObjectId)>,
 }
 
 impl App {
@@ -518,7 +520,7 @@ impl App {
             signature_verification_running: false,
             manual_refresh: false,
             selection_relation: None,
-            hidden_branch_behind: HashMap::new(),
+            hidden_branch_updates: HashMap::new(),
         }
     }
 
@@ -770,6 +772,8 @@ impl App {
                 | Action::Spill
                 | Action::Split
                 | Action::Forget
+                | Action::Rebase
+                | Action::RebaseUpdate
                 | Action::TimeTravel
         ) {
             self.edit_expanded = false;
@@ -977,6 +981,16 @@ impl App {
                 let base = self.rows[self.selected.expect("rebase requires a selection")].id;
                 return vec![Effect::Rebase {
                     base,
+                    onto: base,
+                    commits: self.hidden_descendants(base),
+                    head: self.worktree_head,
+                }];
+            }
+            Action::RebaseUpdate if self.can_rebase_update() => {
+                let base = self.rows[self.selected.expect("rebase-update requires a selection")].id;
+                return vec![Effect::Rebase {
+                    base,
+                    onto: self.hidden_branch_updates[&base].1,
                     commits: self.hidden_descendants(base),
                     head: self.worktree_head,
                 }];
@@ -1074,12 +1088,16 @@ impl App {
         self.hidden_rows.clone()
     }
 
-    pub(crate) fn set_hidden_branch_behind(&mut self, markers: HashMap<ObjectId, usize>) {
-        self.hidden_branch_behind = markers;
+    pub(crate) fn set_hidden_branch_updates(&mut self, updates: HashMap<ObjectId, (usize, ObjectId)>) {
+        self.hidden_branch_updates = updates;
     }
 
     pub(crate) fn hidden_branch_behind(&self, id: ObjectId) -> Option<usize> {
-        self.hidden_branch_behind.get(&id).copied()
+        self.hidden_branch_updates.get(&id).map(|(behind, _)| *behind)
+    }
+
+    pub(crate) fn commit(&self, id: ObjectId) -> Option<&CommitRow> {
+        self.all_rows.get(&id).map(AsRef::as_ref)
     }
 
     pub(crate) fn selected_tree_diff_target(&self) -> Option<TreeDiffTarget> {
@@ -1286,7 +1304,7 @@ impl App {
         self.hidden_rows.clear();
         self.hidden_branch_targets.clear();
         self.hidden_rebase_bases.clear();
-        self.hidden_branch_behind.clear();
+        self.hidden_branch_updates.clear();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
@@ -1594,6 +1612,14 @@ impl App {
                 .selected
                 .and_then(|index| self.rows.get(index))
                 .is_some_and(|row| self.hidden_rebase_bases.contains(&row.id))
+    }
+
+    pub(crate) fn can_rebase_update(&self) -> bool {
+        self.can_rebase()
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| self.hidden_branch_updates.contains_key(&row.id))
     }
 
     fn can_edit_head(&self) -> bool {
@@ -2862,10 +2888,27 @@ mod tests {
             fork.update(Action::Rebase),
             vec![Effect::Rebase {
                 base: id(1),
+                onto: id(1),
                 commits: vec![id(3), id(2)],
                 head: None,
             }],
             "the todo receives all visible descendants"
+        );
+        assert!(!fork.can_rebase_update(), "there is no newer hidden branch tip yet");
+        fork.set_hidden_branch_updates(HashMap::from([(id(1), (2, id(4)))]));
+        assert!(
+            fork.can_rebase_update(),
+            "a hidden branch ahead of the base can be used"
+        );
+        assert_eq!(
+            fork.update(Action::RebaseUpdate),
+            vec![Effect::Rebase {
+                base: id(1),
+                onto: id(4),
+                commits: vec![id(3), id(2)],
+                head: None,
+            }],
+            "rebase-update retains the editable scope but changes its root"
         );
 
         let merged = eligible(vec![
@@ -3076,6 +3119,8 @@ mod tests {
         app.update(Action::Reword);
         app.update(Action::NewCommit);
         app.update(Action::Forget);
+        app.update(Action::Rebase);
+        app.update(Action::RebaseUpdate);
         assert!(app.edit_expanded, "grouped edit commands keep the group open");
 
         app.update(Action::MoveDown);
