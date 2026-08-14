@@ -55,6 +55,7 @@ pub(crate) mod create;
 pub(crate) mod forget;
 pub(crate) mod head;
 pub(crate) mod rebase;
+pub(crate) mod review;
 pub(crate) mod reword;
 pub(crate) mod split;
 pub(crate) mod time_travel;

@@ -11,17 +11,30 @@ pub(crate) fn perform(
     graph: &crate::history::HistoryGraph,
     id: ObjectId,
 ) -> Result<Option<ObjectId>> {
-    let commit = repo.find_commit(id).context("could not find the commit to forget")?;
-    drop(commit);
-    Ok(rebase::perform(
-        &repo,
-        graph,
-        rebase::Edit::Remove { target: id },
-        rebase::Signature::RedoIfNeeded,
-        rebase::Tree::LeaveAsIsAndMark,
-    )?
-    .complete()?
-    .selected)
+    let commit = repo
+        .find_commit(id)
+        .context("could not find the commit to forget")?
+        .decode()?
+        .into_owned()?;
+    let deletion = super::review::deletion(&repo, &commit)?;
+    let result = match deletion {
+        Some(deletion) => rebase::perform_deleting_ref(
+            &repo,
+            graph,
+            rebase::Edit::Remove { target: id },
+            rebase::Signature::RedoIfNeeded,
+            rebase::Tree::LeaveAsIsAndMark,
+            deletion,
+        ),
+        None => rebase::perform(
+            &repo,
+            graph,
+            rebase::Edit::Remove { target: id },
+            rebase::Signature::RedoIfNeeded,
+            rebase::Tree::LeaveAsIsAndMark,
+        ),
+    }?;
+    Ok(result.complete()?.selected)
 }
 
 pub(super) fn preflight_tree_transition(

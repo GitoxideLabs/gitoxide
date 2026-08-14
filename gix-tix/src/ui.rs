@@ -256,8 +256,20 @@ pub(crate) fn draw_with_worktree(
             .get(&row.id)
             .is_some_and(|refs| refs.iter().any(|r| r.kind == DecorationKind::Head))
     });
+    let selected_is_review = app
+        .selected
+        .and_then(|index| app.rows.get(index))
+        .is_some_and(|row| row.is_review);
     app.set_head_edit_availability(
-        selected_is_head && worktree_changes.is_some_and(|changes| !changes.paths.is_empty()),
+        selected_is_head
+            && worktree_changes.is_some_and(|changes| {
+                if selected_is_review {
+                    changes.paths.iter().any(|change| change.group == ChangeGroup::Staged)
+                } else {
+                    !changes.paths.is_empty()
+                }
+            }),
+        selected_is_head && selected_is_review && worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         selected_is_head
             && worktree_changes.is_some_and(|changes| {
@@ -470,7 +482,7 @@ pub(crate) fn draw_with_worktree(
                 lane,
                 graph_offset,
                 highlight,
-                visible_rows[index].signature,
+                (visible_rows[index].signature, visible_rows[index].is_review),
                 head_state,
             );
             let aligned = Rect::new(
@@ -495,7 +507,7 @@ pub(crate) fn draw_with_worktree(
                 lane,
                 horizontal_offset,
                 highlight,
-                visible_rows[index].signature,
+                (visible_rows[index].signature, visible_rows[index].is_review),
                 head_state,
             );
         }
@@ -717,6 +729,12 @@ pub(crate) fn draw_with_worktree(
         State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(status)];
+    if app.review_selection_active() {
+        footer_spans.push(Span::styled(
+            " · review base (<enter> start · Esc cancel)",
+            Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+        ));
+    }
     let mut edit_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) {
         let time_travel = if app.time_travel_shortcut_visible()
@@ -754,6 +772,11 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_rebase_update() {
                 options.push(("rebase-update", 'u'));
+            }
+            if app.can_finish_review() {
+                options.push(("finish-review", 'v'));
+            } else if app.can_review() {
+                options.push(("review", 'v'));
             }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'r'));
@@ -1612,6 +1635,7 @@ fn metadata_line<'a>(
         .iter()
         .filter(|decoration| match ref_mode {
             _ if decoration.kind == DecorationKind::Head => false,
+            _ if decoration.kind == DecorationKind::Review => true,
             RefMode::All => true,
             RefMode::Default => decoration.kind != DecorationKind::Special,
             RefMode::None => {
@@ -1828,6 +1852,7 @@ fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => Style::default().fg(Color::LightBlue),
         DecorationKind::Local => Style::default().fg(Color::Cyan),
         DecorationKind::Remote => Style::default().fg(Color::Yellow),
@@ -1847,9 +1872,10 @@ fn color_graph(
     graph: &str,
     offset: usize,
     highlight: Option<Color>,
-    signature: SignatureState,
+    marker: (SignatureState, bool),
     head: Option<bool>,
 ) {
+    let (signature, review) = marker;
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
             continue;
@@ -1865,7 +1891,9 @@ fn color_graph(
             style = style.add_modifier(Modifier::BOLD);
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
-        if head.is_some() && symbol == '●' {
+        if review && symbol == '●' {
+            cell.set_symbol("★");
+        } else if head.is_some() && symbol == '●' {
             cell.set_symbol("@");
         }
         cell.set_style(style);
@@ -1952,6 +1980,7 @@ mod tests {
                     title: "subject".into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -1984,6 +2013,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -2032,6 +2062,7 @@ mod tests {
             title: "a subject which is deliberately too long".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -2160,6 +2191,7 @@ mod tests {
             title: 0..0,
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         };
         let mailmap =
@@ -2272,6 +2304,7 @@ mod tests {
                 title: "subject".into(),
                 metadata_loaded: true,
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             }],
             attributions: vec![
@@ -2400,6 +2433,7 @@ mod tests {
             title: "unique comment".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         app.selected = None;
@@ -2430,6 +2464,7 @@ mod tests {
                 title: "subject".into(),
                 metadata_loaded: true,
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             }],
             attributions: vec![Attribution {
@@ -2468,6 +2503,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -2733,6 +2769,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);
@@ -2817,6 +2854,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         app.set_worktree_head(Some(id), false);
@@ -2874,6 +2912,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(2);
@@ -2935,6 +2974,7 @@ mod tests {
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3016,7 +3056,7 @@ mod tests {
                         "●─",
                         0,
                         Some(signature_color(*state)),
-                        *state,
+                        (*state, false),
                         head.then_some(false),
                     );
                 }
@@ -3036,6 +3076,26 @@ mod tests {
     }
 
     #[test]
+    fn review_commit_uses_a_star_instead_of_the_signature_disc() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
+        terminal.draw(|frame| {
+            frame.render_widget(Paragraph::new("●─"), Rect::new(0, 0, 2, 1));
+            color_graph(
+                frame,
+                Rect::new(0, 0, 2, 1),
+                "●─",
+                0,
+                None,
+                (SignatureState::Unsigned, true),
+                Some(true),
+            );
+        })?;
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "★");
+        assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
+        Ok(())
+    }
+
+    #[test]
     fn underlines_an_unselected_non_tip_head_and_bolds_its_marker() -> Result<(), Box<dyn std::error::Error>> {
         let head = gix::ObjectId::Sha1([1; 20]);
         let child = gix::ObjectId::Sha1([2; 20]);
@@ -3048,6 +3108,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(2);
@@ -3137,6 +3198,7 @@ mod tests {
                     title: "subject".into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3276,6 +3338,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unverified,
         }]);
         complete(&mut app);
@@ -3321,6 +3384,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
@@ -3438,6 +3502,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         app.update(Action::ToggleCommit);
@@ -3518,6 +3583,7 @@ mod tests {
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -3601,6 +3667,7 @@ mod tests {
                 title: "merge".into(),
                 metadata_loaded: true,
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             },
             Commit {
@@ -3612,6 +3679,7 @@ mod tests {
                 title: "parent".into(),
                 metadata_loaded: true,
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             },
         ]);
@@ -4333,6 +4401,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: true,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         app.set_notes(id, vec!["review note".into()]);
@@ -4395,6 +4464,7 @@ mod tests {
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -4461,6 +4531,7 @@ mod tests {
                     title: format!("subject {n}").into(),
                     metadata_loaded: true,
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 })
                 .collect::<Vec<_>>(),
@@ -4492,6 +4563,7 @@ mod tests {
             title: format!("subject {n}").into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unverified,
         };
         let mut app = App::new(2);
@@ -4621,6 +4693,7 @@ mod tests {
             title: format!("subject {n}").into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(4);
@@ -4667,6 +4740,7 @@ mod tests {
             title: "subject".into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         };
         let decorations = Decorations::from([(
@@ -4773,6 +4847,7 @@ mod tests {
             title: format!("{} subject-tail", "a".repeat(50)).into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }]);
         complete(&mut app);

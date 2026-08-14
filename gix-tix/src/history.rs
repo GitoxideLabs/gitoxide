@@ -30,6 +30,7 @@ pub(crate) struct Decoration {
 pub(crate) enum DecorationKind {
     Head,
     Pin,
+    Review,
     WorktreeBranch,
     WorktreeDetached,
     Local,
@@ -42,6 +43,7 @@ pub(crate) enum DecorationKind {
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
+pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Pin {
@@ -655,6 +657,7 @@ impl HistoryGraph {
                     attributions: row_attributions,
                     title,
                     has_agent_marker,
+                    is_review,
                     signature,
                 } = metadata.unwrap_or_else(|| Metadata {
                     committer_time: Default::default(),
@@ -662,6 +665,7 @@ impl HistoryGraph {
                     attributions: 0..0,
                     title: BString::default(),
                     has_agent_marker: false,
+                    is_review: false,
                     signature: SignatureState::Unsigned,
                 });
                 rows.push(Commit {
@@ -673,6 +677,7 @@ impl HistoryGraph {
                     title,
                     metadata_loaded,
                     has_agent_marker,
+                    is_review,
                     signature,
                 });
                 self.commits[index.as_usize()].state |= NODE_STORED;
@@ -1002,6 +1007,7 @@ pub(crate) fn load(
                 attributions: row_attributions,
                 title,
                 has_agent_marker,
+                is_review,
                 signature,
             } = metadata.unwrap_or_else(|| Metadata {
                 committer_time: Default::default(),
@@ -1009,6 +1015,7 @@ pub(crate) fn load(
                 attributions: 0..0,
                 title: BString::default(),
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             });
             if !hidden_revisions.is_empty() {
@@ -1023,6 +1030,7 @@ pub(crate) fn load(
                 title,
                 metadata_loaded,
                 has_agent_marker,
+                is_review,
                 signature,
             });
             graph.commits[index.as_usize()].state |= NODE_STORED;
@@ -1084,6 +1092,7 @@ pub(crate) fn load(
                 attributions: row_attributions,
                 title,
                 has_agent_marker,
+                is_review,
                 signature,
             } = decode_metadata(object.iter(), &mut authors, &mut attributions)?;
             rows.push(Commit {
@@ -1095,6 +1104,7 @@ pub(crate) fn load(
                 title,
                 metadata_loaded: true,
                 has_agent_marker,
+                is_review,
                 signature,
             });
             let index = graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, id, &mut buf)?;
@@ -1133,13 +1143,18 @@ pub(crate) fn snapshot_ignoring_pin(
         .into_iter()
         .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
         .collect::<Vec<_>>();
+    let reviews = all_reviews(repo)?;
     let worktrees = worktree_checkouts(repo);
     let mut view = referenced_refs(repo, revisions)?;
     for pin in &pins {
         insert_ref_chain(repo, pin.name.as_bstr(), &mut view)?;
     }
+    for review in &reviews {
+        insert_ref_chain(repo, review.name.as_bstr(), &mut view)?;
+    }
     let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
     view_tips.extend(pins.iter().map(|pin| pin.id));
+    view_tips.extend(reviews.iter().map(|review| review.id));
     if include_worktrees {
         view_tips.extend(worktrees.iter().map(|worktree| worktree.id));
     }
@@ -1244,20 +1259,33 @@ fn worktree_basename(path: &std::path::Path) -> Option<BString> {
 }
 
 pub(crate) fn all_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    refs_with_commit_targets(repo, PIN_PREFIX, "pin")
+}
+
+pub(crate) fn all_reviews(repo: &gix::Repository) -> Result<Vec<Pin>> {
+    refs_with_commit_targets(repo, REVIEW_PREFIX, "review")
+}
+
+fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) -> Result<Vec<Pin>> {
     let mut out = Vec::new();
     let references = repo.references().context("could not open references")?;
     for reference in references
-        .prefixed(PIN_PREFIX.as_bstr())
-        .context("could not iterate tix pins")?
+        .prefixed(prefix.as_bstr())
+        .with_context(|| format!("could not iterate tix {label}s"))?
     {
         let mut reference = match reference {
             Ok(reference) => reference,
             Err(err) if is_missing_ref(&*err) => continue,
-            Err(err) => return Err(anyhow::anyhow!("could not read tix pin: {err}")),
+            Err(err) => return Err(anyhow::anyhow!("could not read tix {label}: {err}")),
         };
-        let suffix = reference.name().as_bstr().strip_prefix(PIN_PREFIX).unwrap_or_default();
-        if suffix.len() < 4 || !suffix.iter().all(u8::is_ascii_alphanumeric) {
-            tracing::warn!(name = %reference.name(), "ignoring malformed tix pin");
+        let suffix = reference.name().as_bstr().strip_prefix(prefix).unwrap_or_default();
+        let valid_suffix = if prefix == REVIEW_PREFIX {
+            suffix.first().is_some_and(|digit| matches!(digit, b'1'..=b'9')) && suffix.iter().all(u8::is_ascii_digit)
+        } else {
+            suffix.len() >= 4 && suffix.iter().all(u8::is_ascii_alphanumeric)
+        };
+        if !valid_suffix {
+            tracing::warn!(name = %reference.name(), %label, "ignoring malformed tix reference");
             continue;
         }
         let name = reference.name().to_owned();
@@ -1265,18 +1293,18 @@ pub(crate) fn all_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
         let id = match reference.peel_to_id() {
             Ok(id) => id.detach(),
             Err(err) => {
-                tracing::warn!(name = %name, error = %err, "ignoring unresolved tix pin");
+                tracing::warn!(name = %name, error = %err, %label, "ignoring unresolved tix reference");
                 continue;
             }
         };
         match repo.find_header(id) {
             Ok(header) if header.kind() == gix::object::Kind::Commit => {}
             Ok(_) => {
-                tracing::warn!(name = %name, "ignoring tix pin that does not resolve to a commit");
+                tracing::warn!(name = %name, %label, "ignoring tix reference that does not resolve to a commit");
                 continue;
             }
             Err(err) => {
-                tracing::warn!(name = %name, error = %err, "ignoring unreadable tix pin target");
+                tracing::warn!(name = %name, error = %err, %label, "ignoring unreadable tix reference target");
                 continue;
             }
         }
@@ -1362,6 +1390,7 @@ fn decode_metadata<'a>(
     let attribution_start = attributions.len();
     let mut title = None;
     let mut has_agent_marker = false;
+    let mut is_review = false;
     let mut signature = SignatureState::Unsigned;
     for token in tokens {
         match token.context("could not decode commit")? {
@@ -1402,6 +1431,11 @@ fn decode_metadata<'a>(
             Token::ExtraHeader((name, value)) if name == "tix-rebase" && value.as_ref() == b"pending" => {
                 signature = SignatureState::PendingRebase;
             }
+            Token::ExtraHeader((name, value))
+                if name == "tix-rebase" && value.as_ref().starts_with(b"onto refs/worktree/tix/review/") =>
+            {
+                is_review = true;
+            }
             Token::ExtraHeader((name, _))
                 if (name == "gpgsig" || name == "gpgsig-sha256") && signature != SignatureState::PendingRebase =>
             {
@@ -1416,6 +1450,7 @@ fn decode_metadata<'a>(
         attributions: attribution_start..attributions.len(),
         title: title.context("commit has no message")?,
         has_agent_marker,
+        is_review,
         signature,
     })
 }
@@ -1526,6 +1561,7 @@ impl Authors {
 pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[WorktreeCheckout]) -> Result<Decorations> {
     let mut out = Decorations::new();
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
+    let review_count = all_reviews(repo)?.len();
     for reference in repo
         .references()
         .context("could not open references")?
@@ -1539,6 +1575,7 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
         };
         let full_name = reference.name().to_owned();
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
+        let review_suffix = full_name.as_bstr().strip_prefix(REVIEW_PREFIX).map(BString::from);
         if pin_suffix.is_some() && !pins.contains(full_name.as_bstr()) {
             continue;
         }
@@ -1562,7 +1599,18 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             kind = DecorationKind::WorktreeBranch;
         }
         let mut name = pin_suffix.map_or_else(
-            || full_name.shorten().to_owned(),
+            || {
+                review_suffix.as_ref().map_or_else(
+                    || full_name.shorten().to_owned(),
+                    |suffix| {
+                        if review_count == 1 {
+                            "review".into()
+                        } else {
+                            format!("review:{}", suffix.to_str_lossy()).into()
+                        }
+                    },
+                )
+            },
             |suffix| format!("pin:{}", suffix.to_str_lossy()).into(),
         );
         if matches!(kind, DecorationKind::Tag | DecorationKind::AnnotatedTag) {
@@ -1617,6 +1665,8 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
 fn decoration_kind(name: &[u8]) -> DecorationKind {
     if name.starts_with(PIN_PREFIX) {
         DecorationKind::Pin
+    } else if name.starts_with(REVIEW_PREFIX) {
+        DecorationKind::Review
     } else if name.starts_with(b"refs/heads/") {
         DecorationKind::Local
     } else if name.starts_with(b"refs/tags/") {
@@ -2311,6 +2361,7 @@ mod tests {
     #[test]
     fn classifies_reference_kinds() {
         assert_eq!(decoration_kind(b"refs/worktree/tix/pins/abcd"), DecorationKind::Pin);
+        assert_eq!(decoration_kind(b"refs/worktree/tix/review/1"), DecorationKind::Review);
         assert_eq!(decoration_kind(b"refs/heads/main"), DecorationKind::Local);
         assert_eq!(decoration_kind(b"refs/tags/v1"), DecorationKind::Tag);
         assert_eq!(decoration_kind(b"refs/remotes/origin/main"), DecorationKind::Remote);
