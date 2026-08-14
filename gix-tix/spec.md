@@ -426,7 +426,9 @@ space first; changes blocks adapt within the remaining history width.
   objects without changing the repository. The conflicting row shows a blinking
   red `C`; `<enter>` persists the prepared rebase, leaves later descendants lazy,
   and checks out the conflict tree with an unmerged index. Any other key discards
-  the suspended operation.
+  the suspended operation; key-release events are not actions and leave it armed.
+  Diagnostics warn when a conflict suspends the rebase and record whether it is
+  accepted, discarded, or fails during checkout.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
