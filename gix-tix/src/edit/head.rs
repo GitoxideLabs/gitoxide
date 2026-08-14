@@ -54,15 +54,25 @@ pub fn perform(
             {
                 anyhow::bail!("cannot amend with unresolved index conflicts");
             }
-            let index_tree = create::index_tree(&repo, &index)?;
-            drop(index);
-            if index_tree != old_tree {
-                index_tree
+            if let Some((path, _)) = selected_path {
+                if review && path.group != crate::ChangeGroup::Staged {
+                    anyhow::bail!("review commits can amend only staged paths");
+                }
+                amend_path_tree(&repo, old_tree, path, &index)?
             } else if review {
-                return Ok(None);
+                let index_tree = create::index_tree(&repo, &index)?;
+                if index_tree == old_tree {
+                    return Ok(None);
+                }
+                index_tree
             } else {
-                let baseline = repo.find_tree(old_tree)?;
-                create::worktree_tree(&repo, &baseline)?
+                let index_tree = create::index_tree(&repo, &index)?;
+                if index_tree != old_tree {
+                    index_tree
+                } else {
+                    let baseline = repo.find_tree(old_tree)?;
+                    create::worktree_tree(&repo, &baseline)?
+                }
             }
         }
     };
@@ -70,23 +80,85 @@ pub fn perform(
         return Ok(None);
     }
     commit.tree = tree;
-    Ok(rebase::perform(
-        &repo,
-        graph,
-        rebase::Edit::Replace { target: head, commit },
-        if review {
-            rebase::Signature::Remove
-        } else {
-            rebase::Signature::InvalidateExisting
-        },
-        if review {
-            rebase::Tree::LeaveAsIsAndMarkDescendants
-        } else {
-            rebase::Tree::LeaveAsIsAndMark
-        },
-    )?
-    .complete()?
-    .selected)
+    let edit = rebase::Edit::Replace { target: head, commit };
+    let signature = if review {
+        rebase::Signature::Remove
+    } else {
+        rebase::Signature::InvalidateExisting
+    };
+    let tree_mode = if review {
+        rebase::Tree::LeaveAsIsAndMarkDescendants
+    } else {
+        rebase::Tree::LeaveAsIsAndMark
+    };
+    let performed = match selected_path {
+        Some((path, _)) if kind == Kind::Amend => {
+            let mut paths = vec![path.path.clone()];
+            if path.kind == ChangeKind::Renamed
+                && let Some(source) = &path.source
+            {
+                paths.push(source.clone());
+            }
+            rebase::perform_resetting_index_paths(&repo, graph, edit, signature, tree_mode, paths)?
+        }
+        _ => rebase::perform(&repo, graph, edit, signature, tree_mode)?,
+    };
+    Ok(performed.complete()?.selected)
+}
+
+fn amend_path_tree(
+    repo: &gix::Repository,
+    commit_tree: ObjectId,
+    change: &PathChange,
+    index: &gix::index::File,
+) -> Result<ObjectId> {
+    match change.group {
+        crate::ChangeGroup::Staged => {
+            let index_tree = create::index_tree(repo, index)?;
+            apply_path_from_tree(repo, commit_tree, index_tree, change)
+        }
+        crate::ChangeGroup::Unstaged => {
+            let baseline = repo.find_tree(commit_tree)?;
+            create::worktree_tree_with_changes(
+                repo,
+                &baseline,
+                &crate::Changes {
+                    paths: vec![change.clone()],
+                    ..crate::Changes::default()
+                },
+            )
+        }
+        crate::ChangeGroup::Tree => anyhow::bail!("a tree change cannot be amended from the worktree"),
+    }
+}
+
+fn apply_path_from_tree(
+    repo: &gix::Repository,
+    commit_tree: ObjectId,
+    source_tree: ObjectId,
+    change: &PathChange,
+) -> Result<ObjectId> {
+    let mut editor = repo.find_tree(commit_tree)?.edit()?;
+    if change.kind == ChangeKind::Renamed
+        && let Some(source) = &change.source
+    {
+        editor.remove(source)?;
+    }
+    if change.kind == ChangeKind::Deleted {
+        editor.remove(&change.path)?;
+    } else {
+        let source = repo.find_tree(source_tree)?;
+        let entry = source
+            .lookup_entry(
+                change
+                    .path
+                    .split(|byte| *byte == b'/')
+                    .map(|component| BStr::new(component).to_owned()),
+            )?
+            .context("the selected path is absent from its source tree")?;
+        editor.upsert(&change.path, entry.mode().kind(), entry.object_id())?;
+    }
+    Ok(editor.write()?.detach())
 }
 
 fn spill_path_tree(
@@ -189,6 +261,145 @@ mod tests {
         );
         let commit = open(fixture.path())?.find_commit(new)?.decode()?.into_owned()?;
         assert!(super::super::rebase::has_marker(&commit), "lazy descendants are marked");
+        Ok(())
+    }
+
+    #[test]
+    fn amending_one_worktree_path_preserves_unrelated_staging() -> gix_testtools::Result {
+        for (group, expected) in [
+            (crate::ChangeGroup::Staged, b"staged\n".as_slice()),
+            (crate::ChangeGroup::Unstaged, b"unstaged\n".as_slice()),
+        ] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+            std::fs::write(fixture.path().join("other"), "other\n")?;
+            git(fixture.path(), &["add", "other"])?;
+            let repo = open(fixture.path())?;
+            let graph = super::super::loaded_graph(&repo)?;
+            let selected = PathChange {
+                kind: ChangeKind::Modified,
+                group,
+                source: None,
+                path: "tracked".into(),
+                lines: None,
+            };
+            let new =
+                perform(repo, &graph, Kind::Amend, Some((&selected, None)))?.expect("the selected path changes HEAD");
+            assert_eq!(git(fixture.path(), &["show", &format!("{new}:tracked")])?, expected);
+            assert_eq!(
+                git(fixture.path(), &["diff", "--cached", "--name-only"])?,
+                b"other\n",
+                "an unrelated addition remains staged"
+            );
+            assert_eq!(std::fs::read(fixture.path().join("tracked"))?, b"unstaged\n");
+            let unstaged = git(fixture.path(), &["diff", "--name-only"])?;
+            if group == crate::ChangeGroup::Staged {
+                assert_eq!(unstaged, b"tracked\n", "the worktree-only delta remains");
+            } else {
+                assert!(unstaged.is_empty(), "the amended worktree version becomes clean");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_amend_rolls_back_if_the_index_cannot_be_locked() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let repo = open(fixture.path())?;
+        let old = repo.head_id()?.detach();
+        let index_before = std::fs::read(repo.index_path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let selected = PathChange {
+            kind: ChangeKind::Modified,
+            group: crate::ChangeGroup::Staged,
+            source: None,
+            path: "tracked".into(),
+            lines: None,
+        };
+        std::fs::write(fixture.path().join(".git/index.lock"), "locked")?;
+        let err =
+            perform(repo, &graph, Kind::Amend, Some((&selected, None))).expect_err("an index lock prevents the amend");
+        assert!(format!("{err:#}").contains("selected index paths"));
+        let repo = open(fixture.path())?;
+        assert_eq!(repo.head_id()?.detach(), old, "the rewritten ref is rolled back");
+        assert_eq!(
+            std::fs::read(repo.index_path())?,
+            index_before,
+            "the original index is restored"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_amend_synchronizes_changed_index_paths() -> gix_testtools::Result {
+        for kind in [
+            ChangeKind::Added,
+            ChangeKind::Deleted,
+            ChangeKind::Renamed,
+            ChangeKind::Copied,
+        ] {
+            let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+            git(
+                fixture.path(),
+                &["restore", "--source=HEAD", "--staged", "--worktree", "tracked"],
+            )?;
+            std::fs::write(fixture.path().join("other"), "other\n")?;
+            git(fixture.path(), &["add", "other"])?;
+            let (path, source) = match kind {
+                ChangeKind::Added => {
+                    std::fs::write(fixture.path().join("added"), "added\n")?;
+                    git(fixture.path(), &["add", "added"])?;
+                    ("added", None)
+                }
+                ChangeKind::Deleted => {
+                    std::fs::remove_file(fixture.path().join("tracked"))?;
+                    git(fixture.path(), &["add", "-u", "tracked"])?;
+                    ("tracked", None)
+                }
+                ChangeKind::Renamed => {
+                    git(fixture.path(), &["mv", "tracked", "renamed"])?;
+                    ("renamed", Some("tracked"))
+                }
+                ChangeKind::Copied => {
+                    std::fs::copy(fixture.path().join("tracked"), fixture.path().join("copied"))?;
+                    git(fixture.path(), &["add", "copied"])?;
+                    ("copied", Some("tracked"))
+                }
+                _ => unreachable!("the test lists only path-shape changes"),
+            };
+            let repo = open(fixture.path())?;
+            let graph = super::super::loaded_graph(&repo)?;
+            let selected = PathChange {
+                kind,
+                group: crate::ChangeGroup::Staged,
+                source: source.map(Into::into),
+                path: path.into(),
+                lines: None,
+            };
+            let new =
+                perform(repo, &graph, Kind::Amend, Some((&selected, None)))?.expect("the selected path changes HEAD");
+            let repo = open(fixture.path())?;
+            let tree = repo.find_commit(new)?.tree()?;
+            assert_eq!(
+                tree.lookup_entry([path])?.is_some(),
+                kind != ChangeKind::Deleted,
+                "the destination follows the selected change"
+            );
+            if kind == ChangeKind::Renamed
+                && let Some(source) = source
+            {
+                assert!(tree.lookup_entry([source])?.is_none(), "the renamed source is removed");
+            } else if kind == ChangeKind::Copied {
+                assert!(
+                    tree.lookup_entry(["tracked"])?.is_some(),
+                    "the copied source is retained"
+                );
+            }
+            assert_eq!(
+                git(fixture.path(), &["diff", "--cached", "--name-only"])?,
+                b"other\n",
+                "the unrelated addition remains staged"
+            );
+        }
         Ok(())
     }
 

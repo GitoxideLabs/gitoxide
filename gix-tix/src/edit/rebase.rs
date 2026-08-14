@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use gix::{
     ObjectId,
-    bstr::{BStr, BString},
+    bstr::{BStr, BString, ByteSlice},
     objs::Write,
     refs::{
         Category, Target,
@@ -177,6 +177,7 @@ struct Prepared {
     repo: gix::Repository,
     root: Option<ObjectId>,
     reset_index: bool,
+    reset_index_paths: Option<Vec<BString>>,
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
@@ -233,7 +234,18 @@ pub(crate) fn perform(
     signature: Signature,
     tree_mode: Tree,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new())
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), None)
+}
+
+pub(super) fn perform_resetting_index_paths(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    paths: Vec<BString>,
+) -> Result<Perform> {
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new(), Some(paths))
 }
 
 pub(super) fn perform_deleting_refs(
@@ -244,7 +256,7 @@ pub(super) fn perform_deleting_refs(
     tree_mode: Tree,
     deletions: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, deletions)
+    perform_inner(repo, graph, edit, signature, tree_mode, deletions, None)
 }
 
 fn perform_inner(
@@ -254,6 +266,7 @@ fn perform_inner(
     signature: Signature,
     mut tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
+    reset_index_paths: Option<Vec<BString>>,
 ) -> Result<Perform> {
     let mut repo = repo.clone();
     let (root, replacement, inserted, reset_index, forked, removed, repeat, mut split_upper) = match edit {
@@ -423,6 +436,7 @@ fn perform_inner(
         repo,
         root,
         reset_index: if inserted { reset_index } else { marked },
+        reset_index_paths,
         skip_worktree_transitions: inserted
             || forked
             || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
@@ -560,6 +574,7 @@ pub(super) fn finish_review(
         repo,
         root: Some(review),
         reset_index: false,
+        reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(finished_review),
         rewritten,
@@ -749,6 +764,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         repo,
         root: Some(plan.base),
         reset_index: marked,
+        reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
         rewritten,
@@ -816,9 +832,9 @@ impl Prepared {
                 );
             }
         }
-        let index_resets = index_resets.unwrap_or_default();
-        for (index, reset) in index_resets.iter().enumerate() {
-            if let Err(mut err) = reset_index(&reset.workdir, reset.new) {
+        let mut index_resets = index_resets.unwrap_or_default();
+        for index in 0..index_resets.len() {
+            if let Err(mut err) = reset_index(&mut index_resets[index], self.reset_index_paths.as_deref()) {
                 for applied in index_resets[..=index].iter().rev() {
                     if let Err(restore) = std::fs::write(&applied.index, &applied.before) {
                         err = err.context(format!("index rollback failed: {restore}"));
@@ -891,12 +907,15 @@ fn index_resets(
         let Some(Some(new)) = rewritten.get(&old).copied() else {
             continue;
         };
-        if let Some(workdir) = worktree_repo.workdir().filter(|path| path.is_dir()) {
+        if let Some(workdir) = worktree_repo.workdir().filter(|path| path.is_dir()).map(PathBuf::from) {
             let index = worktree_repo.index_path();
+            let index_path = index.to_owned();
+            let before = std::fs::read(index).context("could not preserve an affected index")?;
             out.push(IndexReset {
-                workdir: workdir.to_owned(),
-                index: index.to_owned(),
-                before: std::fs::read(index).context("could not preserve an affected index")?,
+                repo: worktree_repo,
+                workdir,
+                index: index_path,
+                before,
                 new,
             });
         }
@@ -905,18 +924,22 @@ fn index_resets(
 }
 
 struct IndexReset {
+    repo: gix::Repository,
     workdir: PathBuf,
     index: PathBuf,
     before: Vec<u8>,
     new: ObjectId,
 }
 
-fn reset_index(workdir: &std::path::Path, id: ObjectId) -> Result<()> {
+fn reset_index(reset: &mut IndexReset, paths: Option<&[BString]>) -> Result<()> {
+    if let Some(paths) = paths {
+        return reset_index_paths(&reset.repo, reset.new, paths);
+    }
     let output = Command::new("git")
         .arg("-C")
-        .arg(workdir)
+        .arg(&reset.workdir)
         .args(["reset", "--mixed", "--quiet"])
-        .arg(id.to_string())
+        .arg(reset.new.to_string())
         .output()
         .context("could not update the index after inserting a commit")?;
     if output.status.success() {
@@ -924,6 +947,38 @@ fn reset_index(workdir: &std::path::Path, id: ObjectId) -> Result<()> {
     } else {
         anyhow::bail!("git reset failed: {}", String::from_utf8_lossy(&output.stderr).trim())
     }
+}
+
+fn reset_index_paths(repo: &gix::Repository, id: ObjectId, paths: &[BString]) -> Result<()> {
+    let tree = repo.find_commit(id)?.tree()?;
+    let mut index = repo
+        .open_index()
+        .context("could not load the index to update selected paths")?;
+    for path in paths {
+        let previous = index
+            .entry_by_path(path.as_bstr())
+            .map(|entry| (entry.stat, entry.flags));
+        index.remove_entries(|_, candidate, _| candidate == path.as_bstr());
+        if let Some(entry) = tree.lookup_entry(
+            path.split(|byte| *byte == b'/')
+                .map(|component| BStr::new(component).to_owned()),
+        )? {
+            let (stat, flags) =
+                previous.unwrap_or((gix::index::entry::Stat::default(), gix::index::entry::Flags::empty()));
+            index.dangerously_push_entry(
+                stat,
+                entry.object_id(),
+                flags,
+                entry.mode().kind().into(),
+                path.as_bstr(),
+            );
+        }
+    }
+    index.sort_entries();
+    index.remove_tree();
+    index
+        .write(gix::index::write::Options::default())
+        .context("could not update selected index paths")
 }
 
 fn validate(

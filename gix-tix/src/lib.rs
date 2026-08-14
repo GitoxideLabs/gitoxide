@@ -1942,8 +1942,8 @@ fn event_loop(
                     } else {
                         "spill"
                     };
-                    let path = (kind == edit::head::Kind::Spill && app.changes_focus == Some(ChangePane::Tree))
-                        .then(|| {
+                    let path = match (kind, app.changes_focus) {
+                        (edit::head::Kind::Spill, Some(ChangePane::Tree)) => Some(
                             tree_changes
                                 .as_ref()
                                 .filter(|(target, _)| target.selected() == id)
@@ -1954,9 +1954,19 @@ fn event_loop(
                                         .cloned()
                                         .map(|path| (path, changes.parent.map(|parent| parent.id)))
                                 })
-                                .context("selected tree path is no longer available")
-                        })
-                        .transpose();
+                                .context("selected tree path is no longer available"),
+                        ),
+                        (edit::head::Kind::Amend, Some(ChangePane::Worktree)) => Some(
+                            worktree_changes
+                                .as_ref()
+                                .and_then(|(_, changes)| changes.paths.get(app.worktree_changes.selected))
+                                .cloned()
+                                .map(|path| (path, None))
+                                .context("selected worktree path is no longer available"),
+                        ),
+                        _ => None,
+                    }
+                    .transpose();
                     let result = history_graph
                         .as_ref()
                         .context("editing HEAD requires a completed history graph")
