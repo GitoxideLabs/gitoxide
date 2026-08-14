@@ -343,8 +343,9 @@ space first; changes blocks adapt within the remaining history width.
   regardless of value.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
-  linear descendant with unchanged trees and corrected parentage. The rewritten
-  region is marked with `tix-rebase-parent` for cherry-pick replay during time travel.
+  linear descendant with unchanged trees and corrected parentage. Descendants
+  whose parent changed retain that original parent for cherry-pick replay during
+  time travel; the edited commit itself needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
@@ -425,18 +426,23 @@ space first; changes blocks adapt within the remaining history width.
   changes abort without writing objects or changing refs, the index, or files.
 - A successful split leaves the worktree bytes untouched and resets the index to
   the new upper commit. The rewritten source retains its message and ancestry;
-  the upper commit receives the edited message. Both commits are marked for the
-  same lazy signature-aware rebase used by amend and spill.
+  the upper commit receives the edited message. Their final trees and ancestry
+  need no replay marker; rewritten descendants use the same lazy rebase as amend
+  and spill.
 - All three operations leave worktree files untouched and cheaply rewrite linear
   descendants with their trees unchanged. Whole-commit edits reset the affected
   worktree's index to the rewritten commit; selected-path amend synchronizes only
-  its destination and renamed source. Rewritten commits carry `tix-rebase-parent`, invalidate
-  existing signatures, retain the original parent needed for later replay, and
-  use a bright-cyan commit marker.
+  its destination and renamed source. A directly amended or spilled commit already
+  has its final tree and unchanged parent, so an empty signature field alone keeps
+  a formerly signed commit pending. Reparented descendants additionally carry
+  `tix-rebase-parent`, retaining the original parent needed for later replay. Both
+  pending forms use a bright-cyan commit marker.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
-- Time travel from either endpoint of a pending region completes the marked
-  rebase with cherry-picking and configured signing before checkout. A conflict
+- Time travel toward a pending destination cherry-picks and signs only the pending
+  ancestry through that destination. Pending descendants are reparented but remain
+  lazy and unsigned; traveling toward a non-pending ancestor leaves the entire
+  pending region untouched. A conflict
   retains the exact merge tree, conflict stages, prepared commits, and in-memory
   objects without changing the repository. The conflicting row shows a blinking
   red `C`; `<enter>` persists the prepared rebase, leaves later descendants lazy,
@@ -507,16 +513,17 @@ space first; changes blocks adapt within the remaining history width.
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
-  `LeaveAsIsAndMark` additionally writes the original first parent to
-  `tix-rebase-parent`, using the repository hash kind's null ID for a root; and
-  `CherryPick` transplants each tree delta. User edits use `LeaveAsIsAndMark`;
-  time travel is the only eager `CherryPick` caller. A successful repeated rebase
-  clears the marker. On conflict, `tix-rebase-parent` identifies the original
-  base and later descendants remain marked instead of being cherry-picked.
+  `LeaveAsIsAndMark` writes the original first parent to `tix-rebase-parent` only
+  when later replay needs it; and `CherryPick` transplants each tree delta. User
+  edits use `LeaveAsIsAndMark`; time travel is the only eager `CherryPick` caller.
+  A successful repeated rebase clears the marker through its checkout destination.
+  On conflict, `tix-rebase-parent` identifies the original base and later descendants
+  remain marked instead of being cherry-picked.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is
-  configured, or removes them when it is not. Automatically rebased descendants
+  configured, making the empty field a pending-signature signal, or removes them
+  when it is not. Automatically rebased descendants
   retain their author and receive one configured current committer identity and
   timestamp for the operation.
 - All mutable local refs pointing anywhere into the rewritten set are changed in

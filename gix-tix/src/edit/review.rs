@@ -100,7 +100,7 @@ pub(crate) fn start(
             .with_context(|| format!("could not find {label}"))?
             .decode()?
             .into_owned()?;
-        if super::rebase::has_marker(&commit) {
+        if super::rebase::is_pending(&commit) {
             anyhow::bail!("{label} has a pending rebase");
         }
     }
@@ -189,7 +189,7 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
     let delete_refs = resources(&repo, review_ref.clone())?;
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
-        if super::rebase::has_marker(&endpoint) {
+        if super::rebase::is_pending(&endpoint) {
             anyhow::bail!("{label} has a pending rebase");
         }
     }
