@@ -33,6 +33,8 @@ pub enum Error {
         "Expected not more than {expected} entries to be reachable from the top-level, but actual count was {actual}"
     )]
     EntriesCount { actual: u32, expected: u32 },
+    #[error("The combined TREE entry count exceeds the supported maximum")]
+    EntriesCountOverflow,
     #[error("TREE entry '{name}' declared {actual} entries, but the index only contains {expected} entries")]
     EntriesCountExceedsIndex {
         name: BString,
@@ -61,10 +63,12 @@ impl Tree {
             if children.is_empty() {
                 return Ok(None);
             }
-            let mut entries = 0;
+            let mut entries = 0u32;
             let mut prev = None::<&Tree>;
             for child in children {
-                entries += child.num_entries.unwrap_or(0);
+                entries = entries
+                    .checked_add(child.num_entries.unwrap_or(0))
+                    .ok_or(Error::EntriesCountOverflow)?;
                 if let Some(prev) = prev {
                     if prev.name.cmp(&child.name) != Ordering::Less {
                         return Err(Error::OutOfOrder {
