@@ -1660,6 +1660,8 @@ fn metadata_line<'a>(
                     DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
                 ) {
                     format!("{name}@").into()
+                } else if decoration.kind == DecorationKind::CurrentWorktreeBranch {
+                    format!("@{name}").into()
                 } else {
                     name
                 },
@@ -1853,6 +1855,7 @@ fn decoration_style(kind: DecorationKind) -> Style {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+        DecorationKind::CurrentWorktreeBranch => Style::default().fg(Color::Cyan),
         DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => Style::default().fg(Color::LightBlue),
         DecorationKind::Local => Style::default().fg(Color::Cyan),
         DecorationKind::Remote => Style::default().fg(Color::Yellow),
@@ -2922,6 +2925,10 @@ mod tests {
             checked_out,
             vec![
                 Decoration {
+                    name: "current".into(),
+                    kind: DecorationKind::CurrentWorktreeBranch,
+                },
+                Decoration {
                     name: "main".into(),
                     kind: DecorationKind::WorktreeBranch,
                 },
@@ -2938,17 +2945,24 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(140, 3))?;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
+        assert!(row.contains("@current"));
         assert!(row.contains("main@"));
         assert!(row.contains("detached@"));
         assert!(!row.contains("HEAD"), "a worktree label replaces textual HEAD");
         let x = row.find("main@").expect("the worktree label is visible") as u16;
         assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::LightBlue);
+        let x = row.find("@current").expect("the current branch label is visible") as u16;
+        assert_eq!(terminal.backend().buffer()[(x, 0)].fg, Color::Cyan);
 
         app.update(Action::ToggleRefs);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(
             rendered_row(&terminal).contains("main@"),
             "the selected row retains worktrees"
+        );
+        assert!(
+            !rendered_row(&terminal).contains("@current"),
+            "the current branch follows ordinary reference visibility"
         );
         app.update(Action::MoveDown);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
