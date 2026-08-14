@@ -5,6 +5,23 @@ use gix::{ObjectId, bstr::BString, prelude::ObjectIdExt};
 
 use super::rebase;
 
+const HELP: &[u8] = br#"
+
+<!--
+# Rebase todo help
+
+- Each fork section lists a stack from its oldest commit to its newest. Blank lines are ignored.
+- `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
+- `## fork <id>` starts a stack at an existing commit or an earlier picked commit. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
+- `empty <title>` creates an empty commit with the text after the command as its title.
+- Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
+- Prefix `pick` or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
+- Saving an unchanged document is a no-op. Otherwise, the ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
+- Mutable refs follow rewritten and dropped commits, except tags and remote-tracking refs. New unreferenced leaves are pinned.
+- A checkout conflict uses tix's standard suspended-conflict flow; concurrent ref changes abort the update.
+-->
+"#;
+
 pub(crate) struct Commit {
     pub id: ObjectId,
     pub parents: Vec<ObjectId>,
@@ -70,15 +87,14 @@ pub(crate) fn prepare(
     }
 
     let source = short(repo, base)?;
-    let mut document = if base == onto {
+    let title = if base == onto {
         format!("# Rebase from `{source}`")
     } else {
         format!("# Rebase from `{source}` onto `{}`", short(repo, onto)?)
-    }
-    .into_bytes();
-    document.extend_from_slice(
-        b"\n\n<!-- Reorder or delete pick lines. Add `## fork <id>` headings or `empty <title>` commits. Move `@` to choose the checkout. -->\n\n",
-    );
+    };
+    let mut document = b"<!-- Rebase help is at the bottom of this file. -->\n\n".to_vec();
+    document.extend_from_slice(title.as_bytes());
+    document.extend_from_slice(b"\n\n");
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             document.push(b'\n');
@@ -105,6 +121,7 @@ pub(crate) fn prepare(
             (onto != base).then_some(onto_title).flatten(),
         )?;
     }
+    document.extend_from_slice(HELP);
     Ok(Prepared {
         editor,
         document,
@@ -346,7 +363,8 @@ mod tests {
         let (base, _middle, tip, commits) = commits(&repo)?;
         let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document.clone())?;
-        assert!(document.starts_with(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
+        assert!(document.starts_with("<!-- Rebase help is at the bottom of this file. -->"));
+        assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
         assert!(document.contains(&format!("## fork {}", base.to_hex_with_len(7))));
         let middle = document.find("`pick ").expect("the oldest pick is shown");
         let tip = document.find("`@pick ").expect("HEAD is marked");
@@ -355,6 +373,11 @@ mod tests {
             document.contains("middle \\* markdown"),
             "metadata is escaped for Markdown"
         );
+        assert!(
+            document.find("# Rebase todo help").expect("help is present") > tip,
+            "complete instructions follow the editable todo"
+        );
+        assert!(document.ends_with("-->\n"), "all trailing help is one Markdown comment");
         Ok(())
     }
 
@@ -377,7 +400,7 @@ mod tests {
         )?;
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(
-            document.starts_with(&format!(
+            document.contains(&format!(
                 "# Rebase from `{}` onto `{}`",
                 base.to_hex_with_len(7),
                 onto.to_hex_with_len(7)
