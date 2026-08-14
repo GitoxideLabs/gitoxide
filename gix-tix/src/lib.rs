@@ -4081,6 +4081,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('s') => Some(Action::VerifySignatures),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
+        KeyCode::Char('?') => Some(Action::ToggleInformation),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
@@ -5032,6 +5033,10 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)),
             Some(Action::ToggleHistoryDisplay)
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)),
+            Some(Action::ToggleInformation)
         );
         for (key, expected) in [
             ('d', Action::ToggleDate),

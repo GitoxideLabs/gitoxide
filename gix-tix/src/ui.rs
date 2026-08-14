@@ -848,11 +848,6 @@ pub(crate) fn draw_with_worktree(
     if app.changes_focus.is_some() {
         footer_spans.push(Span::raw(" · q/Esc history"));
     }
-    footer_spans.extend([Span::raw(" · "), toggle("[ align", app.align_metadata)]);
-    footer_spans.push(Span::raw(" · "));
-    footer_spans.extend(shortcut("message", 'm', app.show_commit));
-    footer_spans.push(Span::raw(" · "));
-    footer_spans.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
     let mut view_prefix_spans = Vec::new();
     if app.history_display_expanded {
         view_prefix_spans.push(Span::raw(" · "));
@@ -912,18 +907,31 @@ pub(crate) fn draw_with_worktree(
     } else {
         ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     }
-    if app.signature_failures > 0 {
-        ordered.extend([
-            Span::raw(format!(" · s {} ", app.signature_failures)),
-            Span::styled("●", color(Color::LightRed)),
-        ]);
-    } else if has_verifiable_signatures {
-        ordered.extend([
-            Span::raw(" · s "),
-            Span::styled("●", color(Color::Rgb(255, 165, 0))),
-            Span::raw(" -> "),
-            Span::styled("●", color(Color::Green)),
-        ]);
+    ordered.push(Span::raw(" · "));
+    ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
+    if app.information_expanded {
+        ordered.push(Span::raw(" ("));
+        if app.signature_failures > 0 {
+            ordered.extend([
+                Span::raw(format!("s {} ", app.signature_failures)),
+                Span::styled("●", color(Color::LightRed)),
+                Span::raw(" · "),
+            ]);
+        } else if has_verifiable_signatures {
+            ordered.extend([
+                Span::raw("s "),
+                Span::styled("●", color(Color::Rgb(255, 165, 0))),
+                Span::raw(" -> "),
+                Span::styled("●", color(Color::Green)),
+                Span::raw(" · "),
+            ]);
+        }
+        ordered.push(toggle("[ align", app.align_metadata));
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("message", 'm', app.show_commit));
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
+        ordered.push(Span::raw(")"));
     }
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
@@ -2537,8 +2545,7 @@ mod tests {
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
 
-        let footer_text =
-            "#1 · view · edit · copy · refs · [ align · message · changes · ↑↓/jk move · h/l pan · <enter> diff · quit";
+        let footer_text = "#1 · view · edit · copy · refs · ? · ↑↓/jk move · h/l pan · <enter> diff · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -2562,18 +2569,10 @@ mod tests {
         }
         expected[(selected_line.chars().count() as u16 + 2, 0)]
             .set_style(Style::default().fg(Color::Blue).add_modifier(Modifier::REVERSED));
-        let message = footer_text[..footer_text.find("message").expect("the message toggle is present")]
-            .chars()
-            .count();
-        for x in message..message + "message".len() {
-            expected[(x as u16, 1)].set_style(Style::default().add_modifier(Modifier::DIM));
-        }
         for (label, key) in [
             ("view", 'v'),
             ("edit", 'e'),
             ("copy", 'y'),
-            ("message", 'm'),
-            ("changes", 'c'),
             ("refs", 'r'),
             ("quit", 'q'),
         ] {
@@ -2587,6 +2586,10 @@ mod tests {
                 .modifier
                 .insert(Modifier::UNDERLINED);
         }
+        let information = footer_text[..footer_text.find('?').expect("the information prefix is present")]
+            .chars()
+            .count();
+        expected[(information as u16, 1)].modifier.insert(Modifier::UNDERLINED);
         terminal.backend().assert_buffer(&expected);
 
         let row = terminal.backend().buffer();
@@ -2829,7 +2832,7 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         let view = "view (date · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
-            footer.starts_with(&format!("0 commits · {view} · copy · refs · [ align")),
+            footer.starts_with(&format!("0 commits · {view} · copy · refs · ?")),
             "the active view prefix follows the history position"
         );
         let active = footer[..footer.find("view (").expect("the active view prefix is visible")]
@@ -2846,8 +2849,17 @@ mod tests {
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · refs · [ align"),
+            rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · refs · ?"),
             "the edit prefix follows the view prefix even when no action is available"
+        );
+
+        app.edit_expanded = false;
+        app.information_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 1)
+                .starts_with("0 commits · view · edit · copy · refs · ? ([ align · message · changes)"),
+            "the information prefix contains the post-reference view actions"
         );
         Ok(())
     }
@@ -3434,11 +3446,16 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(160, 2))?;
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("copy · refs · s ● -> ●"));
+        assert!(rendered_line(&terminal, 1).contains("copy · refs · ? ·"));
+        assert!(!rendered_line(&terminal, 1).contains("s ● -> ●"));
+
+        app.information_expanded = true;
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(rendered_line(&terminal, 1).contains("copy · refs · ? (s ● -> ● · [ align"));
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("s 1 ●"));
+        assert!(rendered_line(&terminal, 1).contains("? (s 1 ● · [ align"));
         Ok(())
     }
 
@@ -3478,6 +3495,7 @@ mod tests {
         }]);
         let mut terminal = Terminal::new(TestBackend::new(120, 6))?;
 
+        app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(footer_is_dim(&terminal, "message"), "the closed commit pane is dimmed");
 
@@ -3912,6 +3930,7 @@ mod tests {
         assert!(rendered_line(&terminal, 15).contains("<tab> switch"));
 
         app.changes_suppressed = true;
+        app.information_expanded = true;
         terminal.draw(|frame| {
             super::draw(
                 frame,
