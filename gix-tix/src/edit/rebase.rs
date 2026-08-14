@@ -91,6 +91,8 @@ pub(crate) struct PlanStep {
 pub(crate) struct ExpectedRef {
     pub name: gix::refs::FullName,
     pub old: ObjectId,
+    new: ObjectId,
+    follows_tip: bool,
 }
 
 #[derive(Debug)]
@@ -193,8 +195,9 @@ struct Prepared {
     delete_refs: Vec<(gix::refs::FullName, Target)>,
 }
 
-pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
+pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
     let scope: HashSet<_> = scope.iter().copied().collect();
+    let tips: HashSet<_> = tips.iter().copied().collect();
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for reference in repo.references()?.all()? {
@@ -216,6 +219,8 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId]) -> Result
             out.push(ExpectedRef {
                 name: reference.name().to_owned(),
                 old,
+                new: old,
+                follows_tip: tips.contains(&old),
             });
         }
     }
@@ -227,6 +232,8 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId]) -> Result
         out.push(ExpectedRef {
             name: head.name().to_owned(),
             old,
+            new: old,
+            follows_tip: tips.contains(&old),
         });
     }
     Ok(out)
@@ -618,7 +625,7 @@ pub(super) fn finish_review(
 }
 
 #[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
-pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: Plan) -> Result<Perform> {
+pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut plan: Plan) -> Result<Perform> {
     let mut repo = repo.clone();
     let signing = repo
         .commit_signing_options_if_enabled()
@@ -765,6 +772,28 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         rewritten.insert(dropped, ancestor.or(Some(plan.base)));
     }
 
+    let mut primary_children = HashMap::new();
+    for (index, step) in plan.steps.iter().enumerate() {
+        let parent = match step.parent {
+            PlanParent::Existing(id) => id,
+            PlanParent::Step(parent) => produced[parent],
+        };
+        primary_children.entry(parent).or_insert(produced[index]);
+    }
+    for expected in &mut plan.expected_refs {
+        let mut target = rewritten
+            .get(&expected.old)
+            .copied()
+            .flatten()
+            .context("a captured reference target disappeared from the rebase plan")?;
+        if expected.follows_tip {
+            while let Some(child) = primary_children.get(&target) {
+                target = *child;
+            }
+        }
+        expected.new = target;
+    }
+
     let planned_non_leaves: HashSet<_> = plan
         .steps
         .iter()
@@ -778,10 +807,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         if planned_non_leaves.contains(&index) || plan.checkout == Some(index) {
             continue;
         }
-        let referenced = plan
-            .expected_refs
-            .iter()
-            .any(|expected| rewritten.get(&expected.old).copied().flatten() == Some(id));
+        let referenced = plan.expected_refs.iter().any(|expected| expected.new == id);
         if !referenced {
             pins.push(id);
         }
@@ -1283,13 +1309,12 @@ fn update_refs(
     let mut edits = Vec::new();
     let mut rollback = Vec::new();
     if let Some(expected_refs) = expected_refs {
-        for ExpectedRef { name, old } in expected_refs {
+        for ExpectedRef { name, old, new, .. } in expected_refs {
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
                 continue;
             }
-            let Some(new) = rewritten.get(&old) else { continue };
-            edits.push(ref_edit(name.clone(), old, *new));
-            rollback.push(reverse_ref_edit(name, old, *new));
+            edits.push(ref_edit(name.clone(), old, Some(new)));
+            rollback.push(reverse_ref_edit(name, old, Some(new)));
         }
     } else {
         for reference in repo.references()?.all()? {
@@ -1851,7 +1876,8 @@ mod tests {
     }
 
     #[test]
-    fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_pins_a_new_leaf() -> gix_testtools::Result {
+    fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_keeps_the_branch_at_the_leaf()
+    -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -1859,7 +1885,7 @@ mod tests {
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
         let old_middle_tree = repo.find_commit(middle)?.tree_id()?.detach();
-        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+        let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
 
         let outcome = perform_plan(
             &repo,
@@ -1889,9 +1915,9 @@ mod tests {
         let new_tip = outcome.map(tip).context("the picked tip is retained")?;
         let new_middle = outcome.map(middle).context("the picked middle is retained")?;
         assert_eq!(
-            repo.head_id()?.detach(),
-            new_tip,
-            "the branch follows its rewritten commit"
+            outcome.selected,
+            Some(new_tip),
+            "the checkout still follows its picked commit"
         );
         let tip_commit = repo.find_commit(new_tip)?.decode()?.into_owned()?;
         assert!(!has_marker(&tip_commit), "the checkout ancestry is eagerly replayed");
@@ -1907,9 +1933,7 @@ mod tests {
         );
         assert_eq!(middle_commit.parents.first().copied(), Some(new_tip));
 
-        let pins = crate::history::all_pins(&repo)?;
-        assert_eq!(pins.len(), 1, "the unreferenced new empty leaf receives one pin");
-        let empty_id = pins[0].id;
+        let empty_id = repo.head_id()?.detach();
         let empty = repo.find_commit(empty_id)?.decode()?.into_owned()?;
         assert_eq!(
             empty.message, b"checkpoint",
@@ -1921,27 +1945,134 @@ mod tests {
             empty.tree, middle_commit.tree,
             "the empty commit reuses its parent tree"
         );
-        let mut unrelated = repo.find_commit(base)?.decode()?.into_owned()?;
-        unrelated.parents.clear();
-        unrelated.message = "unrelated".into();
-        let unrelated = repo.write_object(&unrelated)?.detach();
-        repo.reference(
-            "refs/worktree/tix/pins/side",
-            unrelated,
-            PreviousValue::MustNotExist,
-            "test unrelated pin",
-        )?;
         assert!(
             !repo.head()?.is_detached(),
             "the branch remains checked out after rebasing"
         );
+        assert!(
+            crate::history::all_pins(&repo)?.is_empty(),
+            "the referenced leaf needs no pin"
+        );
+        let repository_path = repo.git_dir().to_owned();
+        drop(repo);
+        super::super::time_travel::checkout_without_replay(&repository_path, false, new_tip, &[], false)?;
+        let repo = open(fixture.path())?;
+        assert!(
+            repo.head()?.is_detached(),
+            "moving @ below the branch tip detaches HEAD"
+        );
+        assert_eq!(repo.head_id()?.detach(), new_tip, "HEAD follows the checkout marker");
         assert_eq!(
-            crate::history::applicable_pins(&repo)?
-                .into_iter()
-                .map(|pin| pin.id)
-                .collect::<Vec<_>>(),
-            [empty_id],
-            "only the pinned descendant keeps the rewritten stack visible"
+            repo.find_reference("refs/heads/main")?.id().detach(),
+            empty_id,
+            "the branch remains at the resulting leaf"
+        );
+        let pins = crate::history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "the detached view retains the branch through a pin");
+        assert_eq!(
+            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(b"refs/heads/main".as_bstr()),
+            "the visibility pin follows the branch symbolically"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tip_refs_follow_the_primary_continuation_and_other_leaves_are_pinned() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        repo.reference(
+            "refs/custom/tip",
+            tip,
+            PreviousValue::MustNotExist,
+            "test custom tip reference",
+        )?;
+
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(base),
+                        commit: PlanCommit::Pick(tip),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Pick(middle),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Empty("side".into()),
+                    },
+                ],
+                checkout: Some(0),
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        .complete()?;
+        let primary = outcome.map(middle).context("the primary leaf is retained")?;
+        for name in ["refs/heads/main", "refs/custom/tip"] {
+            assert_eq!(
+                repo.find_reference(name)?.id().detach(),
+                primary,
+                "{name} follows the first continuation"
+            );
+        }
+        let pins = crate::history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "the secondary leaf receives one pin");
+        assert_eq!(
+            repo.find_commit(pins[0].id)?.parent_ids().next().map(gix::Id::detach),
+            outcome.map(tip),
+            "the pin retains the secondary fork"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_referenced_tip_advances_its_refs_to_the_primary_leaf() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+
+        perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(base),
+                        commit: PlanCommit::Pick(middle),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Empty("replacement tip".into()),
+                    },
+                ],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        .complete()?;
+        assert_eq!(
+            repo.find_commit(repo.head_id()?)?.message_raw()?,
+            b"replacement tip",
+            "the branch advances past the retained ancestor"
+        );
+        assert!(
+            crate::history::all_pins(&repo)?.is_empty(),
+            "the referenced replacement leaf needs no pin"
         );
         Ok(())
     }
@@ -1982,7 +2113,7 @@ mod tests {
                     },
                 ],
                 checkout: Some(1),
-                expected_refs: capture_refs(&repo, &[middle, tip])?,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
         .complete()?;
@@ -2008,7 +2139,7 @@ mod tests {
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let tip = repo.head_id()?.detach();
-        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+        let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
         assert!(
             Command::new("git")
                 .arg("-C")
@@ -2062,7 +2193,7 @@ mod tests {
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test reference",
         )?;
-        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+        let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
 
         perform_plan(
             &repo,
@@ -2133,7 +2264,7 @@ mod tests {
                     commit: PlanCommit::Pick(tip),
                 }],
                 checkout: None,
-                expected_refs: capture_refs(&repo, &[middle, tip])?,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
         .complete()?;

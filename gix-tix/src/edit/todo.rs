@@ -21,7 +21,7 @@ const HELP: &[u8] = br#"
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
 - Prefix `pick` or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
 - Saving an unchanged document is a no-op unless listed commits have a pending rebase. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
-- Mutable refs follow rewritten and dropped commits, except tags and remote-tracking refs. New unreferenced leaves are pinned.
+- Mutable refs on original leaves stay on the primary resulting leaf; the first continuation in todo order is primary. Other mutable refs follow their commits. Tags and remote-tracking refs stay unchanged, and new unreferenced leaves are pinned.
 - A checkout conflict uses tix's standard suspended-conflict flow; concurrent ref changes abort the update.
 -->
 "#;
@@ -63,7 +63,14 @@ pub(crate) fn prepare(
     let scope: Vec<_> = commits.iter().map(|commit| commit.id).collect();
     let scope_set: HashSet<_> = scope.iter().copied().collect();
     let marker_required = head.is_some_and(|head| scope_set.contains(&head));
-    let expected_refs = rebase::capture_refs(repo, &scope)?;
+    let mut tips = scope_set.clone();
+    for commit in commits {
+        for parent in &commit.parents {
+            tips.remove(parent);
+        }
+    }
+    let tips = tips.into_iter().collect::<Vec<_>>();
+    let expected_refs = rebase::capture_refs(repo, &scope, &tips)?;
     let has_pending = commits.iter().try_fold(false, |pending, commit| {
         Ok::<_, anyhow::Error>(pending || rebase::is_pending(&repo.find_commit(commit.id)?.decode()?.into_owned()?))
     })?;
