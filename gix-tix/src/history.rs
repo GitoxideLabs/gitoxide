@@ -31,6 +31,7 @@ pub(crate) enum DecorationKind {
     Head,
     Pin,
     Review,
+    CurrentWorktreeBranch,
     WorktreeBranch,
     WorktreeDetached,
     Local,
@@ -364,7 +365,10 @@ impl HistoryGraph {
             .into_iter()
             .flatten()
             .map(|decoration| {
-                let upstream = if matches!(decoration.kind, DecorationKind::Local | DecorationKind::WorktreeBranch) {
+                let upstream = if matches!(
+                    decoration.kind,
+                    DecorationKind::Local | DecorationKind::CurrentWorktreeBranch | DecorationKind::WorktreeBranch
+                ) {
                     tracked
                         .into_iter()
                         .flatten()
@@ -1603,7 +1607,12 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             continue;
         };
         let id = id.detach();
-        if worktrees.iter().any(|worktree| {
+        if worktrees
+            .iter()
+            .any(|worktree| worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name))
+        {
+            kind = DecorationKind::CurrentWorktreeBranch;
+        } else if worktrees.iter().any(|worktree| {
             !worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name)
         }) {
             kind = DecorationKind::WorktreeBranch;
@@ -1971,11 +1980,9 @@ mod tests {
 
         let main_repo_decorations = decorations(&repo, &[], &worktrees)?;
         let main_decorations = main_repo_decorations.get(&main).expect("main is decorated");
-        assert!(
-            main_decorations
-                .iter()
-                .any(|decoration| { decoration.kind == DecorationKind::Local && decoration.name == "main" })
-        );
+        assert!(main_decorations.iter().any(|decoration| {
+            decoration.kind == DecorationKind::CurrentWorktreeBranch && decoration.name == "main"
+        }));
         assert!(
             !main_decorations
                 .iter()
@@ -2010,12 +2017,11 @@ mod tests {
         );
         let linked_decorations = decorations(&linked_repo, &[], &linked_worktrees)?;
         assert!(linked_decorations.get(&topic).is_some_and(|decorations| {
-            decorations
+            decorations.iter().any(|decoration| {
+                decoration.kind == DecorationKind::CurrentWorktreeBranch && decoration.name == "topic"
+            }) && !decorations
                 .iter()
-                .any(|decoration| decoration.kind == DecorationKind::Local && decoration.name == "topic")
-                && !decorations
-                    .iter()
-                    .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "topic")
+                .any(|decoration| decoration.kind == DecorationKind::WorktreeBranch && decoration.name == "topic")
         }));
         assert!(linked_decorations.get(&main).is_some_and(|decorations| {
             decorations
