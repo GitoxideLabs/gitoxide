@@ -1795,7 +1795,8 @@ mod tests {
 
         let pins = crate::history::all_pins(&repo)?;
         assert_eq!(pins.len(), 1, "the unreferenced new empty leaf receives one pin");
-        let empty = repo.find_commit(pins[0].id)?.decode()?.into_owned()?;
+        let empty_id = pins[0].id;
+        let empty = repo.find_commit(empty_id)?.decode()?.into_owned()?;
         assert_eq!(
             empty.message, b"checkpoint",
             "the complete empty-commit title becomes its message"
@@ -1805,6 +1806,28 @@ mod tests {
         assert_eq!(
             empty.tree, middle_commit.tree,
             "the empty commit reuses its parent tree"
+        );
+        let mut unrelated = repo.find_commit(base)?.decode()?.into_owned()?;
+        unrelated.parents.clear();
+        unrelated.message = "unrelated".into();
+        let unrelated = repo.write_object(&unrelated)?.detach();
+        repo.reference(
+            "refs/worktree/tix/pins/side",
+            unrelated,
+            PreviousValue::MustNotExist,
+            "test unrelated pin",
+        )?;
+        assert!(
+            !repo.head()?.is_detached(),
+            "the branch remains checked out after rebasing"
+        );
+        assert_eq!(
+            crate::history::applicable_pins(&repo)?
+                .into_iter()
+                .map(|pin| pin.id)
+                .collect::<Vec<_>>(),
+            [empty_id],
+            "only the pinned descendant keeps the rewritten stack visible"
         );
         Ok(())
     }

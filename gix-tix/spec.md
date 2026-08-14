@@ -203,9 +203,11 @@ The Enter key is written as `<enter>` throughout.
 - A pin is symbolic when the previous `HEAD` named a local branch, so later branch
   advances move the pinned tip. An already detached `HEAD` receives a direct pin.
 - While `HEAD` is detached, every valid pin from the current worktree augments
-  implicit and explicit revision tips. Pins from other worktrees, legacy shared
-  `refs/tix/pins/*` refs, dangling, malformed, and non-commit pins do not enter the
-  view or its decorations. Normal hidden-revision exclusions still apply.
+  implicit and explicit revision tips. While it is attached, only pins at strict
+  descendants of `HEAD` do so, preserving rewritten leaves after a history rebase
+  moves the checked-out branch down its stack. Pins from other worktrees, legacy
+  shared `refs/tix/pins/*` refs, dangling, malformed, and non-commit pins do not
+  enter the view or its decorations. Normal hidden-revision exclusions still apply.
 - Worktree pins are shown as blue `pin:<suffix>` decorations. `t` on a pinned
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
