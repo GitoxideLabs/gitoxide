@@ -57,8 +57,9 @@ without trading responsiveness for metadata that is not visible.
   that connect visible history to hidden history remain as boundary rows.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
-  They cannot be reworded, forgotten, signature-verified, or used for time travel,
-  and Shift navigation continues to skip them. A boundary whose visible
+  They cannot be reworded, forgotten, or signature-verified, and Shift navigation
+  continues to skip them. They may be used for time travel or as the parent of an
+  independent fork commit. A boundary whose visible
   descendants contain no merge commit offers the history-rebase editor, including
   when those descendants fork into multiple linear stacks.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
@@ -187,9 +188,10 @@ The Enter key is written as `<enter>` throughout.
 
 - On a completed, focused history in a worktree repository, `t` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
-- If the selected commit is known to be an ancestor of the previous `HEAD`, tix
-  retains descendants that would otherwise leave the view with a
-  `refs/tix/pins/<suffix>` ref. Pins use at least four alphanumeric characters;
+- Before every move, tix provisionally retains the previous `HEAD` with a
+  `refs/tix/pins/<suffix>` ref. After a successful checkout it removes that pin
+  when the old `HEAD` remains reachable from another view tip, and retains it
+  otherwise. Pins use at least four alphanumeric characters;
   generated pins start with eight hexadecimal characters from the saved commit.
 - A pin is symbolic when the previous `HEAD` named a local branch, so later branch
   advances move the pinned tip. An already detached `HEAD` receives a direct pin.
@@ -201,9 +203,12 @@ The Enter key is written as `<enter>` throughout.
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.
-- Checkout failures retain the original `HEAD` and remove any newly created
-  provisional pin. Successful travel preserves the selected row, refreshes
-  history directly, and invalidates worktree status.
+- Checkout failures retain the original `HEAD`, remove only a newly created
+  source pin, and leave destination pins intact. Successful travel consumes a
+  destination pin and applies the same source-pin reconciliation for ancestor,
+  descendant, and sideways moves. Conflict acceptance, history-rebase checkout,
+  and automatic fork travel use this same primitive. Successful travel preserves
+  the selected row, refreshes history directly, and invalidates worktree status.
 
 ### Held Shift ancestry mode
 
@@ -354,6 +359,20 @@ space first; changes blocks adapt within the remaining history width.
   tags and remote-tracking refs. Checked-out affected worktrees are preflighted;
   inaccessible or conflicting affected worktrees abort safely.
 
+### Fork commits
+
+- `e f` creates an independent child of any selected commit, including a hidden
+  boundary or merge commit. It requires completed history and a live,
+  conflict-free worktree, but unlike `e n` it is not restricted by descendants
+  because it rewrites none of them. It is unavailable for unborn history.
+- Fork preparation reuses the new-commit editor, candidate-tree, identity, and
+  signing rules. Saving writes only the new commit and a temporary direct
+  `refs/tix/pins/*` ref; existing refs, descendants, indexes, and worktrees do not
+  move during creation.
+- Tix immediately time-travels to the new fork. A successful checkout consumes
+  its temporary pin and reconciles the departed `HEAD` through the standard pin
+  primitive. If checkout fails, the fork remains pinned and visible.
+
 ### Amend, spill, and split
 
 - `e a` amends the current worktree's `@` commit with the changed index, or
@@ -466,7 +485,7 @@ space first; changes blocks adapt within the remaining history width.
 ### Editing shortcuts
 
 - `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base,
-  `e r` rewords, `e n` creates a commit,
+  `e r` rewords, `e n` creates a rebased child, `e f` forks an independent child,
   `e a` amends `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
   `e d d` confirms forgetting a top commit, and `e t` enters or returns from
   time travel when each action is available.
