@@ -294,6 +294,7 @@ pub(crate) enum Action {
     OpenDiff,
     Reword,
     NewCommit,
+    ForkCommit,
     Amend,
     Spill,
     Split,
@@ -321,6 +322,7 @@ pub(crate) enum Effect {
     OpenCommitDiff(TreeDiffTarget),
     Reword(ObjectId),
     NewCommit(Option<ObjectId>),
+    ForkCommit(ObjectId),
     Amend(ObjectId),
     Spill(ObjectId),
     Split(ObjectId),
@@ -763,6 +765,7 @@ impl App {
             Action::ToggleEdit
                 | Action::Reword
                 | Action::NewCommit
+                | Action::ForkCommit
                 | Action::Amend
                 | Action::Spill
                 | Action::Split
@@ -940,6 +943,11 @@ impl App {
             Action::NewCommit if self.can_create_commit() => {
                 return vec![Effect::NewCommit(
                     self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
+                )];
+            }
+            Action::ForkCommit if self.can_fork_commit() => {
+                return vec![Effect::ForkCommit(
+                    self.rows[self.selected.expect("fork requires a selection")].id,
                 )];
             }
             Action::Amend if self.can_amend() => {
@@ -1557,6 +1565,16 @@ impl App {
             }
     }
 
+    pub(crate) fn can_fork_commit(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.and_then(|index| self.rows.get(index)).is_some()
+    }
+
     pub(crate) fn can_forget(&self) -> bool {
         self.state == State::Complete
             && self.changes_focus.is_none()
@@ -1629,10 +1647,7 @@ impl App {
             && !self.worktree_conflicted
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self
-                .selected
-                .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| !self.hidden_rows.contains(&row.id))
+            && self.selected.and_then(|index| self.rows.get(index)).is_some()
     }
 
     fn last_selectable(&self) -> Option<usize> {
@@ -2426,6 +2441,8 @@ mod tests {
             !app.can_create_commit(),
             "a merge descendant outside the visible projection prevents a child"
         );
+        assert!(app.can_fork_commit(), "a fork does not rewrite merge descendants");
+        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(2))]);
 
         let mut unborn = App::new(10);
         unborn.set_worktree_head_unborn(true);
@@ -2435,6 +2452,7 @@ mod tests {
             "an unborn worktree can create its root commit"
         );
         assert_eq!(unborn.update(Action::NewCommit), vec![Effect::NewCommit(None)]);
+        assert!(!unborn.can_fork_commit(), "a fork requires a selected parent");
     }
 
     #[test]
@@ -2767,7 +2785,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_boundary_rows_are_selectable_for_inspection_only() {
+    fn hidden_boundary_rows_are_selectable_for_inspection_and_independent_edits() {
         let mut app = App::new(4);
         app.extend_commits(vec![row(1), row(2), row(3)]);
         app.extend_hidden_commits(vec![row(4)]);
@@ -2780,6 +2798,9 @@ mod tests {
         assert_eq!(app.update(Action::Copy), vec![Effect::CopyId(id(4))]);
         assert!(!app.can_reword());
         assert!(!app.can_forget());
+        assert!(app.can_fork_commit());
+        assert_eq!(app.update(Action::ForkCommit), vec![Effect::ForkCommit(id(4))]);
+        assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(4))]);
         assert!(
             app.update(Action::VerifySignatures).is_empty(),
             "hidden signatures are not actionable"

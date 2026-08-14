@@ -44,6 +44,10 @@ pub(crate) enum Edit {
         anchor: Option<ObjectId>,
         commit: gix::objs::Commit,
     },
+    Fork {
+        anchor: ObjectId,
+        commit: gix::objs::Commit,
+    },
     Remove {
         target: ObjectId,
     },
@@ -129,10 +133,9 @@ impl Conflict {
     }
 
     pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
-        let outcome = self.prepared.finish()?;
+        self.prepared.finish()?;
         Ok(PersistedConflict {
             repo: self.prepared.repo,
-            outcome,
             conflicts: self.conflicts,
             tree: self.tree,
             commit: self.commit,
@@ -142,7 +145,6 @@ impl Conflict {
 
 pub(crate) struct PersistedConflict {
     repo: gix::Repository,
-    pub(crate) outcome: Outcome,
     conflicts: Vec<gix::merge::tree::Conflict>,
     tree: ObjectId,
     pub(crate) commit: ObjectId,
@@ -230,18 +232,19 @@ pub(crate) fn perform(
     mut tree_mode: Tree,
 ) -> Result<Perform> {
     let mut repo = repo.clone();
-    let (root, replacement, inserted, removed, repeat, mut split_upper) = match edit {
-        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, None),
-        Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false, None),
-        Edit::Remove { target } => (Some(target), None, false, true, false, None),
-        Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, Some(upper)),
-        Edit::Repeat { base } => (Some(base), None, false, false, true, None),
+    let (root, replacement, inserted, forked, removed, repeat, mut split_upper) = match edit {
+        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, None),
+        Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false, false, None),
+        Edit::Fork { anchor, commit } => (Some(anchor), Some(commit), false, true, false, false, None),
+        Edit::Remove { target } => (Some(target), None, false, false, true, false, None),
+        Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, false, Some(upper)),
+        Edit::Repeat { base } => (Some(base), None, false, false, false, true, None),
     };
     if repeat {
         tree_mode = Tree::CherryPick;
     }
 
-    let affected = match root {
+    let affected = match root.filter(|_| !forked) {
         Some(root) => graph
             .descendants_in_parent_order(root)
             .context("the edited commit is not in the loaded history")?,
@@ -263,16 +266,18 @@ pub(crate) fn perform(
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut selected = None;
     let mut conflict = None;
-    if inserted {
+    if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        marker(&mut commit, tree_mode == Tree::LeaveAsIsAndMark, root);
+        marker(&mut commit, inserted && tree_mode == Tree::LeaveAsIsAndMark, root);
         let id = write_commit(&repo, commit, signature, signing.clone())?;
         selected = Some(id);
-        if let Some(root) = root {
-            rewritten.insert(root, Some(id));
-        } else {
-            rewritten.insert(id, Some(id));
+        if inserted {
+            if let Some(root) = root {
+                rewritten.insert(root, Some(id));
+            } else {
+                rewritten.insert(id, Some(id));
+            }
         }
     } else if removed {
         let root = root.context("a removed commit is required")?;
@@ -381,13 +386,17 @@ pub(crate) fn perform(
         repo,
         root,
         inserted,
-        marked: tree_mode == Tree::LeaveAsIsAndMark || conflict.is_some(),
-        skip_worktree_transitions: inserted || (tree_mode == Tree::LeaveAsIsAndMark && !removed),
+        marked: (!forked && tree_mode == Tree::LeaveAsIsAndMark) || conflict.is_some(),
+        skip_worktree_transitions: inserted || forked || (tree_mode == Tree::LeaveAsIsAndMark && !removed),
         selected,
         rewritten,
         committer,
         expected_refs: None,
-        pins: Vec::new(),
+        pins: if forked {
+            selected.into_iter().collect()
+        } else {
+            Vec::new()
+        },
     };
     match conflict {
         Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {

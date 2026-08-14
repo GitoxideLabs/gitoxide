@@ -1813,6 +1813,7 @@ fn event_loop(
                                 repository_is_bare,
                                 graph,
                                 parent,
+                                CreateMode::Insert,
                                 enhanced_keyboard,
                             )
                         });
@@ -1824,6 +1825,67 @@ fn event_loop(
                         }
                         Ok(None) => app.leave_message("no commit created: no input was provided"),
                         Err(err) => app.leave_message(format!("new commit: {err:#}")),
+                    }
+                }
+                Effect::ForkCommit(parent) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let created = history_graph
+                        .as_ref()
+                        .context("creating a fork requires a completed history graph")
+                        .and_then(|graph| {
+                            create_commit(
+                                terminal,
+                                &repository_path,
+                                repository_is_bare,
+                                graph,
+                                Some(parent),
+                                CreateMode::Fork,
+                                enhanced_keyboard,
+                            )
+                        });
+                    match created {
+                        Ok(Some(new_id)) => {
+                            let travel = open_repository(&repository_path, repository_is_bare, false)
+                                .context("could not reopen repository before travelling to fork")
+                                .and_then(|repository| edit::loaded_graph(&repository))
+                                .and_then(|graph| {
+                                    edit::time_travel::perform(
+                                        &repository_path,
+                                        repository_is_bare,
+                                        new_id,
+                                        &graph,
+                                        &revisions,
+                                        worktrees,
+                                    )
+                                });
+                            match travel {
+                                Ok(edit::time_travel::Perform::Complete(notice)) => {
+                                    app.leave_message(notice.map_or_else(
+                                        || format!("created fork {}", new_id.to_hex_with_len(7)),
+                                        |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
+                                    ));
+                                    app.select_commit_after_refresh(new_id);
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                                Ok(edit::time_travel::Perform::Conflict(conflict)) => {
+                                    let original = conflict.original();
+                                    app.arm_rebase_conflict(original);
+                                    app.select_commit(original);
+                                    pending_rebase_conflict = Some(conflict);
+                                }
+                                Err(err) => {
+                                    app.leave_message(format!(
+                                        "created fork {}, but checkout failed: {err:#}",
+                                        new_id.to_hex_with_len(7)
+                                    ));
+                                    refresh_pending = true;
+                                }
+                            }
+                        }
+                        Ok(None) => app.leave_message("no fork created: no input was provided"),
+                        Err(err) => app.leave_message(format!("fork: {err:#}")),
                     }
                 }
                 Effect::Split(id) => {
@@ -1993,6 +2055,8 @@ fn event_loop(
                                 &repository_path,
                                 repository_is_bare,
                                 conflict,
+                                &revisions,
+                                worktrees,
                             ) {
                                 Ok(conflict) => {
                                     let original = conflict.original();
@@ -3078,13 +3142,20 @@ fn rebase_history(
     edit::rebase::perform_plan(&repository, graph, plan).map(Some)
 }
 
-#[tracing::instrument(skip_all, fields(parent = ?parent))]
+#[derive(Clone, Copy)]
+enum CreateMode {
+    Insert,
+    Fork,
+}
+
+#[tracing::instrument(skip_all, fields(parent = ?parent, fork = matches!(mode, CreateMode::Fork)))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
     repository_path: &Path,
     bare: bool,
     graph: &HistoryGraph,
     parent: Option<gix::ObjectId>,
+    mode: CreateMode,
     enhanced_keyboard: bool,
 ) -> Result<Option<gix::ObjectId>> {
     let mut repository =
@@ -3104,7 +3175,11 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    edit::create::apply(repository, graph, prepared, &edited).map(Some)
+    match mode {
+        CreateMode::Insert => edit::create::apply(repository, graph, prepared, &edited),
+        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited),
+    }
+    .map(Some)
 }
 
 #[tracing::instrument(skip_all)]
@@ -3851,6 +3926,9 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('c') => Some(Action::ToggleChanges),
         KeyCode::Char('p') if edit_expanded => Some(Action::Split),
         KeyCode::Char('b') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
+        KeyCode::Char('f') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::ForkCommit)
+        }
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -4859,6 +4937,7 @@ mod tests {
             ('b', Action::Rebase),
             ('r', Action::Reword),
             ('n', Action::NewCommit),
+            ('f', Action::ForkCommit),
             ('a', Action::Amend),
             ('s', Action::Spill),
             ('p', Action::Split),
