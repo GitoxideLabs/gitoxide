@@ -424,6 +424,8 @@ space first; changes blocks adapt within the remaining history width.
   commit from the staged delta using the standard Markdown editor buffer. Both
   deltas are three-way applied in memory before the editor opens, so overlapping
   changes abort without writing objects or changing refs, the index, or files.
+- `tix split` performs the same split at `HEAD`: worktree changes are amended
+  into the source commit and staged index changes become the new commit on top.
 - A successful split leaves the worktree bytes untouched and resets the index to
   the new upper commit. The rewritten source retains its message and ancestry;
   the upper commit receives the edited message. Their final trees and ancestry
