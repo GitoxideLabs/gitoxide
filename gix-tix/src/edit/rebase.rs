@@ -60,6 +60,7 @@ pub(crate) enum Edit {
     },
     Repeat {
         base: ObjectId,
+        checkout: ObjectId,
     },
 }
 
@@ -264,11 +265,15 @@ fn perform_inner(
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
-    mut tree_mode: Tree,
+    tree_mode: Tree,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
     reset_index_paths: Option<Vec<BString>>,
 ) -> Result<Perform> {
     let mut repo = repo.clone();
+    let repeat_checkout = match &edit {
+        Edit::Repeat { checkout, .. } => Some(*checkout),
+        _ => None,
+    };
     let (root, replacement, inserted, reset_index, forked, removed, repeat, mut split_upper) = match edit {
         Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, false, None),
         Edit::Insert {
@@ -288,11 +293,8 @@ fn perform_inner(
             false,
             Some(upper),
         ),
-        Edit::Repeat { base } => (Some(base), None, false, false, false, false, true, None),
+        Edit::Repeat { base, .. } => (Some(base), None, false, false, false, false, true, None),
     };
-    if repeat {
-        tree_mode = Tree::CherryPick;
-    }
 
     let affected = match root.filter(|_| !forked) {
         Some(root) => graph
@@ -319,7 +321,7 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        marker(&mut commit, inserted && tree_mode == Tree::LeaveAsIsAndMark, root);
+        marker(&mut commit, false, None);
         let id = write_commit(&repo, commit, signature, signing.clone())?;
         selected = Some(id);
         if inserted {
@@ -373,17 +375,27 @@ fn perform_inner(
             commit.committer = committer.clone();
         }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
-        let original_parents = recorded_parent.flatten().into_iter().collect::<Vec<_>>();
+        let original_parents =
+            recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
+        let eager =
+            repeat && repeat_checkout.is_some_and(|checkout| graph.is_ancestor(old_id, checkout)) && conflict.is_none();
+        let commit_tree_mode = if repeat {
+            if eager {
+                Tree::CherryPick
+            } else {
+                Tree::LeaveAsIsAndMark
+            }
+        } else if conflict.is_some() {
+            Tree::LeaveAsIsAndMark
+        } else {
+            tree_mode
+        };
         let rewritten_tree = rewritten_tree(
             &repo,
             &commit,
             if !repeat { &old_parents } else { &original_parents },
             &new_parents,
-            if conflict.is_some() {
-                Tree::LeaveAsIsAndMark
-            } else {
-                tree_mode
-            },
+            commit_tree_mode,
         )?;
         let mut new_conflict = None;
         commit.tree = match rewritten_tree {
@@ -394,20 +406,23 @@ fn perform_inner(
             }
         };
         commit.parents = new_parents.into_iter().collect();
-        let pending = tree_mode == Tree::LeaveAsIsAndMark
-            || (tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
-            || conflict.is_some();
+        let pending = commit_tree_mode == Tree::LeaveAsIsAndMark
+            || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
+            || conflict.is_some()
+            || new_conflict.is_some();
         marker(
             &mut commit,
-            pending,
+            pending && (repeat || Some(old_id) != root),
             recorded_parent.flatten().or_else(|| old_parents.first().copied()),
         );
         let is_conflicting_commit = new_conflict.is_some();
         let new_id = write_commit(
             &repo,
             commit,
-            if conflict.is_some() || is_conflicting_commit {
+            if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
                 Signature::InvalidateExisting
+            } else if repeat {
+                Signature::RedoIfNeeded
             } else {
                 signature
             },
@@ -420,7 +435,7 @@ fn perform_inner(
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
                 upper.parents = [new_id].into_iter().collect();
-                marker(&mut upper, true, Some(new_id));
+                marker(&mut upper, false, None);
                 let upper_id = write_commit(&repo, upper, Signature::RedoIfNeeded, signing.clone())?;
                 rewritten.insert(old_id, Some(upper_id));
                 selected = Some(upper_id);
@@ -996,17 +1011,17 @@ fn validate(
         }
         if repeat {
             let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
-            if !has_marker(&commit) {
-                anyhow::bail!("all repeated rebase commits must carry the pending marker");
+            if !is_pending(&commit) {
+                anyhow::bail!("all repeated rebase commits must be pending");
             }
         }
     }
     if repeat
         && let Some(base) = affected.first()
         && let Some(parent) = graph.parents_of(*base).and_then(|parents| parents.first().copied())
-        && has_marker(&repo.find_commit(parent)?.decode()?.into_owned()?)
+        && is_pending(&repo.find_commit(parent)?.decode()?.into_owned()?)
     {
-        anyhow::bail!("the parent of a repeated rebase must not carry the pending marker");
+        anyhow::bail!("the parent of a repeated rebase must not be pending");
     }
     Ok(())
 }
@@ -1126,6 +1141,14 @@ pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {
         .extra_headers
         .iter()
         .any(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
+}
+
+pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
+    has_marker(commit)
+        || commit
+            .extra_headers
+            .iter()
+            .any(|(name, value)| is_signature(name) && value.is_empty())
 }
 
 fn write_commit(
@@ -1540,7 +1563,7 @@ mod tests {
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
         let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
         commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~2")?)?.tree_id()?.detach();
-        let marked = perform(
+        perform(
             &repo,
             &graph,
             Edit::Replace { target: middle, commit },
@@ -1552,10 +1575,14 @@ mod tests {
         .expect("marking rewrites the selected commit");
 
         let graph = super::super::loaded_graph(&repo)?;
+        let tip = repo.head_id()?.detach();
         perform(
             &repo,
             &graph,
-            Edit::Repeat { base: marked },
+            Edit::Repeat {
+                base: tip,
+                checkout: tip,
+            },
             Signature::RedoIfNeeded,
             Tree::CherryPick,
         )?
@@ -1580,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_roots_use_a_null_parent() -> gix_testtools::Result {
+    fn authoritative_replacements_do_not_record_an_original_parent() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -1595,14 +1622,12 @@ mod tests {
         )?
         .complete()?
         .selected
-        .expect("the pending replacement selects its rewritten root");
+        .expect("the replacement selects its rewritten root");
         let commit = repo.find_commit(marked)?.decode()?.into_owned()?;
-        assert!(has_marker(&commit));
-        assert_eq!(marked_parent(&commit)?, None);
-        assert!(commit.extra_headers.iter().any(|(name, value)| {
-            name.as_slice() == ORIGINAL_PARENT
-                && ObjectId::from_hex(value).is_ok_and(|id| id == ObjectId::null(repo.object_hash()))
-        }));
+        assert!(
+            !has_marker(&commit),
+            "the replacement tree and unchanged parent need no later cherry-pick"
+        );
         Ok(())
     }
 

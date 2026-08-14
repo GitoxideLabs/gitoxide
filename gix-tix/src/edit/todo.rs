@@ -65,7 +65,7 @@ pub(crate) fn prepare(
     let marker_required = head.is_some_and(|head| scope_set.contains(&head));
     let expected_refs = rebase::capture_refs(repo, &scope)?;
     let has_pending = commits.iter().try_fold(false, |pending, commit| {
-        Ok::<_, anyhow::Error>(pending || rebase::has_marker(&repo.find_commit(commit.id)?.decode()?.into_owned()?))
+        Ok::<_, anyhow::Error>(pending || rebase::is_pending(&repo.find_commit(commit.id)?.decode()?.into_owned()?))
     })?;
     let apply_unchanged = base != onto || has_pending;
 
