@@ -189,17 +189,18 @@ The Enter key is written as `<enter>` throughout.
 - On a completed, focused history in a worktree repository, `t` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
 - Before every move, tix provisionally retains the previous `HEAD` with a
-  `refs/tix/pins/<suffix>` ref. After a successful checkout it removes that pin
+  `refs/worktree/tix/pins/<suffix>` ref. Git stores these refs privately for the
+  current worktree. After a successful checkout it removes that pin
   when the old `HEAD` remains reachable from another view tip, and retains it
   otherwise. Pins use at least four alphanumeric characters;
   generated pins start with eight hexadecimal characters from the saved commit.
 - A pin is symbolic when the previous `HEAD` named a local branch, so later branch
   advances move the pinned tip. An already detached `HEAD` receives a direct pin.
-- While `HEAD` is detached, applicable pins augment implicit and explicit revision
-  tips when their ancestry contains `HEAD`. Unrelated, dangling, malformed, and
-  non-commit pins do not enter the view or its decorations. Normal hidden-revision
-  exclusions still apply.
-- Applicable pins are shown as blue `pin:<suffix>` decorations. `t` on a pinned
+- While `HEAD` is detached, every valid pin from the current worktree augments
+  implicit and explicit revision tips. Pins from other worktrees, legacy shared
+  `refs/tix/pins/*` refs, dangling, malformed, and non-commit pins do not enter the
+  view or its decorations. Normal hidden-revision exclusions still apply.
+- Worktree pins are shown as blue `pin:<suffix>` decorations. `t` on a pinned
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.
@@ -367,8 +368,8 @@ space first; changes blocks adapt within the remaining history width.
   because it rewrites none of them. It is unavailable for unborn history.
 - Fork preparation reuses the new-commit editor, candidate-tree, identity, and
   signing rules. Saving writes only the new commit and a temporary direct
-  `refs/tix/pins/*` ref; existing refs, descendants, indexes, and worktrees do not
-  move during creation.
+  `refs/worktree/tix/pins/*` ref; existing refs, descendants, indexes, and
+  worktrees do not move during creation.
 - Tix immediately time-travels to the new fork. A successful checkout consumes
   its temporary pin and reconciles the departed `HEAD` through the standard pin
   primitive. If checkout fails, the fork remains pinned and visible.
@@ -478,9 +479,9 @@ space first; changes blocks adapt within the remaining history width.
 - Mutable refs captured before the editor opened follow retained or dropped
   commits through one compare-and-swap transaction. Tags and remote-tracking refs
   remain untouched. Every resulting leaf without a surviving mutable ref gets a
-  direct `refs/tix/pins/*` ref, except the checked-out leaf. Concurrent ref edits
-  win by making the transaction fail; the editor result is not rebuilt against a
-  later graph snapshot. Leaving the document unchanged is a no-op.
+  direct `refs/worktree/tix/pins/*` ref, except the checked-out leaf. Concurrent
+  ref edits win by making the transaction fail; the editor result is not rebuilt
+  against a later graph snapshot. Leaving the document unchanged is a no-op.
 
 ### Editing shortcuts
 

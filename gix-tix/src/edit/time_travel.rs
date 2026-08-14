@@ -309,39 +309,33 @@ fn create_or_reuse_pin(repository: &gix::Repository, target: Target, id: ObjectI
         }
     };
     repository
-        .edit_references_as(
-            [RefEdit {
-                change: Change::Update {
-                    log: LogChange {
-                        mode: RefLog::AndReference,
-                        force_create_reflog: false,
-                        message: "tix time-travel".into(),
-                    },
-                    expected: PreviousValue::MustNotExist,
-                    new: target.clone(),
+        .edit_references([RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "tix time-travel".into(),
                 },
-                name: name.clone(),
-                deref: false,
-            }],
-            None,
-        )
+                expected: PreviousValue::MustNotExist,
+                new: target.clone(),
+            },
+            name: name.clone(),
+            deref: false,
+        }])
         .context("could not create tix pin")?;
     Ok((history::Pin { name, target, id }, true))
 }
 
 fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
     repository
-        .edit_references_as(
-            [RefEdit {
-                change: Change::Delete {
-                    expected: PreviousValue::MustExistAndMatch(pin.target.clone()),
-                    log: RefLog::AndReference,
-                },
-                name: pin.name.clone(),
-                deref: false,
-            }],
-            None,
-        )
+        .edit_references([RefEdit {
+            change: Change::Delete {
+                expected: PreviousValue::MustExistAndMatch(pin.target.clone()),
+                log: RefLog::AndReference,
+            },
+            name: pin.name.clone(),
+            deref: false,
+        }])
         .context("could not remove tix pin")?;
     Ok(())
 }
@@ -579,7 +573,7 @@ mod tests {
             Command::new("git")
                 .arg("-C")
                 .arg(fixture.path())
-                .args(["update-ref", "refs/tix/pins/destination", &root.to_string()])
+                .args(["update-ref", "refs/worktree/tix/pins/destination", &root.to_string(),])
                 .status()?
                 .success()
         );
