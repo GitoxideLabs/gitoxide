@@ -440,6 +440,7 @@ pub(crate) struct App {
     pending_rebase_conflict: Option<ObjectId>,
     worktree_conflicted: bool,
     amend_available: bool,
+    worktree_path_amend_available: bool,
     finish_review_available: bool,
     spill_available: bool,
     split_available: bool,
@@ -529,6 +530,7 @@ impl App {
             pending_rebase_conflict: None,
             worktree_conflicted: false,
             amend_available: false,
+            worktree_path_amend_available: false,
             finish_review_available: false,
             spill_available: false,
             split_available: false,
@@ -1774,7 +1776,13 @@ impl App {
     }
 
     pub(crate) fn can_amend(&self) -> bool {
-        self.can_edit_head() && self.changes_focus.is_none() && self.amend_available
+        self.can_edit_head()
+            && self.amend_available
+            && match self.changes_focus {
+                None => true,
+                Some(ChangePane::Worktree) => self.worktree_path_amend_available,
+                Some(ChangePane::Tree) => false,
+            }
     }
 
     pub(crate) fn can_spill(&self) -> bool {
@@ -1785,8 +1793,16 @@ impl App {
         self.can_edit_head() && self.changes_focus.is_none() && self.split_available
     }
 
-    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, finish_review: bool, spill: bool, split: bool) {
+    pub(crate) fn set_head_edit_availability(
+        &mut self,
+        amend: bool,
+        worktree_path_amend: bool,
+        finish_review: bool,
+        spill: bool,
+        split: bool,
+    ) {
         self.amend_available = amend;
+        self.worktree_path_amend_available = worktree_path_amend;
         self.finish_review_available = finish_review;
         self.spill_available = spill;
         self.split_available = split;
@@ -2543,7 +2559,7 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_head_edit_availability(true, false, true, false);
+        app.set_head_edit_availability(true, true, false, true, false);
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
         assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
@@ -2551,7 +2567,7 @@ mod tests {
             app.update(Action::Split).is_empty(),
             "split needs both kinds of changes"
         );
-        app.set_head_edit_availability(true, false, true, true);
+        app.set_head_edit_availability(true, true, false, true, true);
         assert_eq!(app.update(Action::Split), vec![Effect::Split(id(2))]);
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!app.can_amend(), "a tree path cannot be amended");
@@ -2563,6 +2579,11 @@ mod tests {
         );
         app.changes_focus = Some(ChangePane::Worktree);
         assert!(!app.can_spill(), "worktree paths cannot be spilled from a commit");
+        assert_eq!(
+            app.update(Action::Amend),
+            vec![Effect::Amend(id(2))],
+            "worktree focus scopes amend to its selected path"
+        );
         app.changes_focus = None;
         app.update(Action::MoveDown);
         assert!(!app.can_amend());

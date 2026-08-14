@@ -260,6 +260,13 @@ pub(crate) fn draw_with_worktree(
         .selected
         .and_then(|index| app.rows.get(index))
         .is_some_and(|row| row.is_review);
+    let worktree_path_amend = worktree_changes.is_some_and(|changes| {
+        !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
+            && changes
+                .paths
+                .get(app.worktree_changes.selected)
+                .is_some_and(|change| !selected_is_review || change.group == ChangeGroup::Staged)
+    });
     app.set_head_edit_availability(
         selected_is_head
             && worktree_changes.is_some_and(|changes| {
@@ -269,6 +276,7 @@ pub(crate) fn draw_with_worktree(
                     !changes.paths.is_empty()
                 }
             }),
+        selected_is_head && worktree_path_amend,
         selected_is_head && selected_is_review && worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         selected_is_head
@@ -736,7 +744,7 @@ pub(crate) fn draw_with_worktree(
         ));
     }
     let mut edit_prefix_spans = Vec::new();
-    if app.changes_focus != Some(ChangePane::Worktree) {
+    if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
         let time_travel = if app.time_travel_shortcut_visible()
             && decorations
                 .values()
@@ -2845,7 +2853,7 @@ mod tests {
     }
 
     #[test]
-    fn focused_tree_path_offers_only_spill_in_the_main_edit_prefix() -> Result<(), Box<dyn std::error::Error>> {
+    fn focused_paths_offer_only_their_scoped_edit_in_the_main_prefix() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(4);
         app.extend_commits(vec![Commit {
@@ -2898,6 +2906,73 @@ mod tests {
             "tree focus keeps the scoped edit visible: {footer}"
         );
         assert!(!footer.contains("amend"), "tree paths cannot be amended");
+
+        app.changes_focus = Some(ChangePane::Worktree);
+        let mut worktree = Changes {
+            paths: vec![crate::app::PathChange {
+                kind: ChangeKind::Modified,
+                group: ChangeGroup::Unstaged,
+                source: None,
+                path: "file".into(),
+                lines: None,
+            }],
+            ..Changes::default()
+        };
+        app.set_head_edit_availability(true, true, false, false, false);
+        assert!(app.can_amend(), "the focused worktree path is amendable");
+        assert!(app.edit_expanded, "the edit prefix remains expanded");
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        assert!(app.can_amend(), "drawing retains scoped amend availability");
+        assert!(app.edit_expanded, "drawing retains the expanded edit prefix");
+        let footer = rendered_line(&terminal, 7);
+        assert!(
+            footer.contains("edit (amend)"),
+            "worktree focus keeps the scoped edit visible: {footer}"
+        );
+        assert!(!footer.contains("spill"), "worktree paths cannot be spilled");
+
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        assert!(
+            !rendered_line(&terminal, 7).contains("amend"),
+            "a review cannot amend an unstaged selected path"
+        );
+        worktree.paths[0].group = ChangeGroup::Staged;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 7).contains("edit (amend)"),
+            "a review may amend its selected staged path"
+        );
         Ok(())
     }
 
