@@ -753,6 +753,9 @@ pub(crate) fn draw_with_worktree(
             if app.changes_focus.is_none() && app.can_create_commit() {
                 options.push(("new", 'n'));
             }
+            if app.can_fork_commit() {
+                options.push(("fork", 'f'));
+            }
             if app.can_amend() {
                 options.push(("amend", 'a'));
             }
@@ -2731,7 +2734,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
         assert!(
-            rendered_line(&terminal, 1).contains("edit (reword · new · d forget · return)"),
+            rendered_line(&terminal, 1).contains("edit (reword · new · fork · d forget · return)"),
             "the active edit prefix contains exactly its actionable commands"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
@@ -4562,9 +4565,12 @@ mod tests {
             rendered_line(&narrow, 1).ends_with(" ⇣2 "),
             "the terminal edge pushes the marker over clipped title text"
         );
+        let mut actions = Terminal::new(TestBackend::new(120, 3))?;
+        actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&narrow, 2).contains("edit (rebase)"),
-            "the selected hidden base offers only its rebase edit"
+            rendered_line(&actions, 2).contains("edit (rebase · fork)"),
+            "the selected hidden base offers independent edits: {:?}",
+            rendered_line(&actions, 2)
         );
         Ok(())
     }

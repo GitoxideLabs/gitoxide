@@ -23,7 +23,7 @@ pub(crate) enum Perform {
 
 impl Perform {
     #[cfg(test)]
-    fn complete(self) -> Result<Option<String>> {
+    pub(crate) fn complete(self) -> Result<Option<String>> {
         match self {
             Perform::Complete(notice) => Ok(notice),
             Perform::Conflict(_) => anyhow::bail!("time-travel unexpectedly suspended on a conflict"),
@@ -35,37 +35,27 @@ pub(crate) struct Conflict {
     rebase: super::rebase::Conflict,
     repository_path: PathBuf,
     bare: bool,
-    workdir: PathBuf,
-    saved_target: Target,
-    head: ObjectId,
+    revisions: Vec<OsString>,
+    include_worktrees: bool,
 }
 
 impl Conflict {
-    pub(crate) fn from_rebase(repository_path: &Path, bare: bool, rebase: super::rebase::Conflict) -> Result<Self> {
-        let repository = open_repository(repository_path, bare, false)
-            .context("could not open a worktree for conflict resolution")?;
-        let workdir = repository
+    pub(crate) fn from_rebase(
+        repository_path: &Path,
+        bare: bool,
+        rebase: super::rebase::Conflict,
+        revisions: &[OsString],
+        include_worktrees: bool,
+    ) -> Result<Self> {
+        open_repository(repository_path, bare, false)?
             .workdir()
-            .context("a conflicting rebase requires a worktree")?
-            .to_owned();
-        let head = repository
-            .head()
-            .context("could not read HEAD before conflict resolution")?;
-        let head_id = head
-            .id()
-            .map(gix::Id::detach)
-            .context("conflict resolution requires a born HEAD")?;
-        let saved_target = head
-            .referent_name()
-            .map(ToOwned::to_owned)
-            .map_or(Target::Object(head_id), Target::Symbolic);
+            .context("a conflicting rebase requires a worktree")?;
         Ok(Conflict {
             rebase,
             repository_path: repository_path.to_owned(),
             bare,
-            workdir,
-            saved_target,
-            head: head_id,
+            revisions: revisions.to_vec(),
+            include_worktrees,
         })
     }
 
@@ -76,39 +66,16 @@ impl Conflict {
     #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
     pub(crate) fn accept(self) -> Result<(String, ObjectId)> {
         let mut conflict = self.rebase.persist()?;
-        let head = conflict
-            .outcome
-            .map(self.head)
-            .context("HEAD disappeared while preparing conflict resolution")?;
-        let repository = open_repository(&self.repository_path, self.bare, false)
-            .context("could not reopen repository before conflict checkout")?;
-        let provisional = contains(&repository, conflict.commit, head)
-            .then(|| create_or_reuse_pin(&repository, self.saved_target, head))
-            .transpose()?;
-        drop(repository);
-        if let Err(checkout) = checkout_detached(&self.workdir, conflict.commit) {
-            if let Some((pin, true)) = &provisional {
-                let cleanup = open_repository(&self.repository_path, self.bare, false)
-                    .context("could not reopen repository to remove a provisional pin")
-                    .and_then(|repository| delete_pin(&repository, pin));
-                if let Err(cleanup) = cleanup {
-                    return Err(checkout.context(format!(
-                        "checkout failed and {} could not be removed: {cleanup:#}",
-                        pin_label(pin)
-                    )));
-                }
-            }
-            return Err(checkout);
-        }
+        let notice = move_head(
+            &self.repository_path,
+            self.bare,
+            conflict.commit,
+            &self.revisions,
+            self.include_worktrees,
+        )?
+        .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
         conflict.write_index()?;
-        let mut notice = format!(
-            "checked out conflicting {} for resolution",
-            conflict.commit.to_hex_with_len(7)
-        );
-        if let Some((pin, true)) = provisional {
-            notice = format!("{notice}; saved {}", pin_label(&pin));
-        }
-        Ok((notice, conflict.commit))
+        Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
     }
 }
 
@@ -119,71 +86,84 @@ pub(crate) fn checkout_without_replay(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
-    let repository =
-        open_repository(repository_path, bare, false).context("could not open repository for rebase checkout")?;
+    move_head(repository_path, bare, selected, revisions, include_worktrees)
+}
+
+fn move_head(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Option<String>> {
+    let repository = open_repository(repository_path, bare, false).context("could not open repository for checkout")?;
     let workdir = repository
         .workdir()
-        .context("the rebase todo selected a checkout without a worktree")?
+        .context("time-travel requires a worktree")?
         .to_owned();
-    let head = repository
-        .head()
-        .context("could not read HEAD before rebase checkout")?;
+    let head = repository.head().context("could not read HEAD before time-travel")?;
     let head_id = head
         .id()
         .map(gix::Id::detach)
-        .context("cannot move an unborn HEAD after rebasing")?;
-    let head_referent = head.referent_name().map(ToOwned::to_owned);
+        .context("cannot time-travel from an unborn HEAD")?;
+    let saved_target = head
+        .referent_name()
+        .map(ToOwned::to_owned)
+        .map_or(Target::Object(head_id), Target::Symbolic);
     drop(head);
     if selected == head_id {
         return Ok(None);
     }
-    if let Some(pin) = selected_pin(&repository, selected)? {
-        drop(repository);
-        checkout_pin(&workdir, &pin)?;
-        let repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after returning through a pin")?;
-        return Ok(Some(match delete_pin(&repository, &pin) {
-            Ok(()) => format!("returned from {}", pin_label(&pin)),
-            Err(err) => format!("returned from {}; pin remains: {err:#}", pin_label(&pin)),
-        }));
-    }
-    let saved_target = head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id));
-    let provisional = contains(&repository, selected, head_id)
-        .then(|| create_or_reuse_pin(&repository, saved_target, head_id))
-        .transpose()?;
+    let destination_pin = selected_pin(&repository, selected)?;
+    let provisional = create_or_reuse_pin(&repository, saved_target, head_id)?;
     drop(repository);
-    if let Err(checkout) = checkout_detached(&workdir, selected) {
-        if let Some((pin, true)) = &provisional {
+    let checkout = match &destination_pin {
+        Some(pin) => checkout_pin(&workdir, pin),
+        None => checkout_detached(&workdir, selected),
+    };
+    if let Err(checkout) = checkout {
+        if provisional.1 {
             let cleanup = open_repository(repository_path, bare, false)
                 .context("could not reopen repository to remove a provisional pin")
-                .and_then(|repository| delete_pin(&repository, pin));
+                .and_then(|repository| delete_pin(&repository, &provisional.0));
             if let Err(cleanup) = cleanup {
                 return Err(checkout.context(format!(
                     "checkout failed and {} could not be removed: {cleanup:#}",
-                    pin_label(pin)
+                    pin_label(&provisional.0)
                 )));
             }
         }
         return Err(checkout);
     }
-    let mut notice = format!("time-travelled to {}", selected.to_hex_with_len(7));
-    if let Some((pin, true)) = provisional {
-        let repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after rebase time-travel")?;
-        let snapshot =
-            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()))?;
-        if snapshot
-            .view_tips
-            .iter()
-            .copied()
-            .any(|tip| contains(&repository, head_id, tip))
-        {
-            if let Err(err) = delete_pin(&repository, &pin) {
-                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin));
-            }
-        } else {
-            notice = format!("{notice}; saved {}", pin_label(&pin));
+    let mut notice = destination_pin.as_ref().map_or_else(
+        || format!("time-travelled to {}", selected.to_hex_with_len(7)),
+        |pin| format!("returned from {}", pin_label(pin)),
+    );
+    let repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after time-travel")?;
+    if let Some(pin) = destination_pin
+        && let Err(err) = delete_pin(&repository, &pin)
+    {
+        notice = format!("{notice}; destination pin remains: {err:#}");
+    }
+    let snapshot = history::snapshot_ignoring_pin(
+        &repository,
+        revisions,
+        &[],
+        include_worktrees,
+        Some(provisional.0.name.as_bstr()),
+    )?;
+    if snapshot
+        .view_tips
+        .iter()
+        .copied()
+        .any(|tip| contains(&repository, head_id, tip))
+    {
+        if let Err(err) = delete_pin(&repository, &provisional.0) {
+            notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&provisional.0));
         }
+    } else {
+        notice = format!("{notice}; saved {}", pin_label(&provisional.0));
     }
     Ok(Some(notice))
 }
@@ -199,15 +179,11 @@ pub(crate) fn perform(
 ) -> Result<Perform> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository for time-travel")?;
-    let workdir = repository
-        .workdir()
-        .context("time-travel requires a worktree")?
-        .to_owned();
+    repository.workdir().context("time-travel requires a worktree")?;
     let head = repository.head().context("could not read HEAD before time-travel")?;
     let Some(mut head_id) = head.id().map(gix::Id::detach) else {
         anyhow::bail!("cannot time-travel from an unborn HEAD");
     };
-    let head_referent = head.referent_name().map(ToOwned::to_owned);
     drop(head);
     if repository
         .index_or_empty()
@@ -234,9 +210,8 @@ pub(crate) fn perform(
                     rebase,
                     repository_path: repository_path.to_owned(),
                     bare,
-                    workdir,
-                    saved_target: head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id)),
-                    head: head_id,
+                    revisions: revisions.to_vec(),
+                    include_worktrees,
                 }));
             }
         };
@@ -250,62 +225,14 @@ pub(crate) fn perform(
             .context("could not reopen repository after completing a pending rebase")?;
         completed_graph = Some(super::loaded_graph(&repository)?);
     }
-    let graph = completed_graph.as_ref().unwrap_or(graph);
-    if selected == head_id {
-        return Ok(Perform::Complete(None));
-    }
-    if let Some(pin) = selected_pin(&repository, selected)? {
-        drop(repository);
-        checkout_pin(&workdir, &pin)?;
-        let repository = open_repository(repository_path, bare, false)
-            .context("could not reopen repository after returning from time-travel")?;
-        return Ok(Perform::Complete(Some(match delete_pin(&repository, &pin) {
-            Ok(()) => format!("returned from {}", pin_label(&pin)),
-            Err(err) => format!("returned from {}; pin remains: {err:#}", pin_label(&pin)),
-        })));
-    }
-    let saved_target = head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id));
-    let provisional = graph
-        .is_ancestor(selected, head_id)
-        .then(|| create_or_reuse_pin(&repository, saved_target, head_id))
-        .transpose()?;
     drop(repository);
-
-    if let Err(checkout) = checkout_detached(&workdir, selected) {
-        if let Some((pin, true)) = &provisional {
-            let cleanup = open_repository(repository_path, bare, false)
-                .context("could not reopen repository to remove a provisional pin")
-                .and_then(|repository| delete_pin(&repository, pin));
-            if let Err(cleanup) = cleanup {
-                return Err(checkout.context(format!(
-                    "checkout failed and {} could not be removed: {cleanup:#}",
-                    pin_label(pin)
-                )));
-            }
-        }
-        return Err(checkout);
-    }
-
-    let mut notice = format!("time-travelled to {}", selected.to_hex_with_len(7));
-    if let Some((pin, true)) = provisional {
-        let repository =
-            open_repository(repository_path, bare, false).context("could not reopen repository after time-travel")?;
-        let snapshot =
-            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()))?;
-        if snapshot
-            .view_tips
-            .iter()
-            .copied()
-            .any(|tip| contains(&repository, head_id, tip))
-        {
-            if let Err(err) = delete_pin(&repository, &pin) {
-                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin));
-            }
-        } else {
-            notice = format!("{notice}; saved {}", pin_label(&pin));
-        }
-    }
-    Ok(Perform::Complete(Some(notice)))
+    Ok(Perform::Complete(move_head(
+        repository_path,
+        bare,
+        selected,
+        revisions,
+        include_worktrees,
+    )?))
 }
 
 fn pending_base(repository: &gix::Repository, head: ObjectId, selected: ObjectId) -> Result<Option<ObjectId>> {
@@ -335,7 +262,7 @@ fn pending_base(repository: &gix::Repository, head: ObjectId, selected: ObjectId
 }
 
 fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Option<history::Pin>> {
-    let mut pins: Vec<_> = history::applicable_pins(repository)?
+    let mut pins: Vec<_> = history::all_pins(repository)?
         .into_iter()
         .filter(|pin| pin.id == selected)
         .collect();
@@ -587,6 +514,45 @@ mod tests {
     }
 
     #[test]
+    fn sideways_travel_preserves_an_unreferenced_departure() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let main = repository.rev_parse_single("main")?.detach();
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "--detach", &main.to_string()])
+                .status()?
+                .success()
+        );
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["branch", "-D", "main"])
+                .status()?
+                .success()
+        );
+
+        perform(&repository_path, false, topic, &graph, &[], false)?.complete()?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        assert_eq!(repository.head_id()?.detach(), topic);
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "sideways travel retains the otherwise lost departure");
+        assert_eq!(pins[0].id, main);
+        assert!(
+            pins[0].target.try_name().is_none(),
+            "the detached departure gets a direct pin"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn explicit_tips_avoid_redundant_pins_and_failed_checkouts_clean_up() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = crate::open_test_repository(fixture.path())?;
@@ -609,6 +575,14 @@ mod tests {
             .args(["checkout", "--no-guess", "main"])
             .status()?;
         assert!(checkout.success());
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["update-ref", "refs/tix/pins/destination", &root.to_string()])
+                .status()?
+                .success()
+        );
         std::fs::write(fixture.path().join("main"), "dirty\n")?;
         let err = perform(&repository_path, false, root, &graph, &[], false)
             .and_then(Perform::complete)
@@ -616,10 +590,9 @@ mod tests {
         assert!(format!("{err:#}").contains("git checkout failed"));
         let repository = crate::open_test_repository(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
-        assert!(
-            history::all_pins(&repository)?.is_empty(),
-            "the provisional pin is removed"
-        );
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "the destination pin survives a failed checkout");
+        assert_eq!(pins[0].id, root);
         Ok(())
     }
 
