@@ -336,6 +336,52 @@ mod tests {
     }
 
     #[test]
+    fn signed_rewords_leave_pending_descendants_unsigned() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repository = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ]),
+        )?;
+        let middle = repository.rev_parse_single("HEAD~1")?.detach();
+        let (_, document) = document(&repository, middle)?;
+        let edited = document.replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
+        let graph = super::super::loaded_graph(&repository)?;
+        let rewritten = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
+        assert!(
+            repository
+                .find_commit(rewritten)?
+                .verify_signature()?
+                .expect("the edited commit is signed")
+                .is_valid(),
+            "the final edited commit receives its configured signature"
+        );
+
+        let descendant = repository.find_commit(repository.head_id()?)?.decode()?.into_owned()?;
+        assert!(rebase::has_marker(&descendant), "the descendant remains pending");
+        assert!(
+            descendant
+                .extra_headers
+                .iter()
+                .filter(|(name, _)| name == "gpgsig" || name == "gpgsig-sha256")
+                .all(|(_, value)| value.is_empty()),
+            "a pending descendant never carries a usable signature"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rewrites_direct_refs_except_tags_and_remotes_and_signs_when_enabled() -> gix_testtools::Result {
         if !gix_testtools::signature::program_available("ssh-keygen") {
             return Ok(());

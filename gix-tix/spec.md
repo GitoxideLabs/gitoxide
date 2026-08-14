@@ -527,7 +527,8 @@ space first; changes blocks adapt within the remaining history width.
   configured and otherwise removes stale signature headers.
   `InvalidateExisting` empties existing signature values when signing is
   configured, making the empty field a pending-signature signal, or removes them
-  when it is not. Automatically rebased descendants
+  when it is not. A pending-rebase commit can only use the invalidation policy,
+  so it never carries a usable signature. Automatically rebased descendants
   retain their author and receive one configured current committer identity and
   timestamp for the operation.
 - All mutable local refs pointing anywhere into the rewritten set are changed in
