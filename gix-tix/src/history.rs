@@ -1466,7 +1466,7 @@ fn decode_metadata<'a>(
     })
 }
 
-fn contains_agent_marker(message: &[u8]) -> bool {
+pub(crate) fn contains_agent_marker(message: &[u8]) -> bool {
     [b"--- agent".as_slice(), b"<!-- agent -->".as_slice()]
         .iter()
         .any(|marker| message.windows(marker.len()).any(|window| window == *marker))

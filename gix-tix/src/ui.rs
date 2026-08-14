@@ -1830,18 +1830,6 @@ pub(crate) fn todo_metadata(
     out
 }
 
-pub(crate) fn todo_title(app: &App, row: &CommitRow) -> String {
-    let mut out = String::new();
-    if row.has_agent_marker {
-        out.push_str("[A] ");
-    }
-    if !app.notes(row.id).is_empty() {
-        out.push_str("[N] ");
-    }
-    out.push_str(&app.title(row).to_str_lossy());
-    out
-}
-
 fn author_label(
     author: &crate::app::Author,
     mailmap: &gix::mailmap::Snapshot,
@@ -4522,11 +4510,6 @@ mod tests {
         assert!(
             row.contains("[A] [N] subject"),
             "agent and note markers precede the title"
-        );
-        assert_eq!(
-            todo_title(&app, &app.rows[0]),
-            "[A] [N] subject",
-            "rebase headings reuse the title exactly as shown in history"
         );
         assert_eq!(history.backend().buffer()[(agent_x, 0)].fg, Color::LightMagenta);
         assert_eq!(history.backend().buffer()[(note_x, 0)].fg, Color::LightMagenta);

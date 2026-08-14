@@ -562,8 +562,8 @@ space first; changes blocks adapt within the remaining history width.
   direct `refs/worktree/tix/pins/*` ref, except the checked-out leaf. Concurrent
   ref edits win by making the transaction fail; the editor result is not rebuilt
   against a later graph snapshot. Leaving the document unchanged is a no-op unless
-  its scope contains pending commits; then the unchanged plan runs with the same
-  eager `@` ancestry and lazy-fork rules.
+  its scope contains pending commits or rebase-update selected a newer base; then
+  the unchanged plan runs with the same eager `@` ancestry and lazy-fork rules.
 
 ### Editing shortcuts
 

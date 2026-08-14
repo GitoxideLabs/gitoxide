@@ -1173,10 +1173,6 @@ impl App {
         self.hidden_branch_updates.get(&id).map(|(behind, _)| *behind)
     }
 
-    pub(crate) fn commit(&self, id: ObjectId) -> Option<&CommitRow> {
-        self.all_rows.get(&id).map(AsRef::as_ref)
-    }
-
     pub(crate) fn selected_tree_diff_target(&self) -> Option<TreeDiffTarget> {
         let id = self.selected.and_then(|index| self.rows.get(index))?.id;
         Some(match self.hidden_branch_targets.get(&id) {
