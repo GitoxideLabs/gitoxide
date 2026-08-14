@@ -484,6 +484,9 @@ space first; changes blocks adapt within the remaining history width.
   branches. `empty <title>` inserts an empty commit. Markdown code spans and
   equivalent plain commands are accepted; display text after a pick ID is
   informational.
+- The first line points to complete self-documenting help at the bottom. All
+  instructions are enclosed in Markdown comments so only headings and command
+  lines participate in the editable plan.
 - `@pick` or `@empty` chooses the post-rebase checkout. When the current worktree
   `HEAD` is in the editable region, exactly one generated `@` must remain; without
   one, zero or one may be added. A checkout marker is invalid without a worktree.
