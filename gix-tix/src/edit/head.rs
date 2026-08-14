@@ -260,7 +260,10 @@ mod tests {
             "the index follows the amended commit"
         );
         let commit = open(fixture.path())?.find_commit(new)?.decode()?.into_owned()?;
-        assert!(super::super::rebase::has_marker(&commit), "lazy descendants are marked");
+        assert!(
+            !super::super::rebase::is_pending(&commit),
+            "an unsigned amended commit already has its final tree and parent"
+        );
         Ok(())
     }
 

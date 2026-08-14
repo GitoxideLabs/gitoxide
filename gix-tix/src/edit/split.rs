@@ -189,12 +189,14 @@ mod tests {
             repository.find_commit(upper)?.message_raw()?,
             b"upper\n\nreason\n".as_bstr()
         );
-        assert!(super::super::rebase::has_marker(
-            &repository.find_commit(source)?.decode()?.into_owned()?
-        ));
-        assert!(super::super::rebase::has_marker(
-            &repository.find_commit(upper)?.decode()?.into_owned()?
-        ));
+        assert!(
+            !super::super::rebase::is_pending(&repository.find_commit(source)?.decode()?.into_owned()?),
+            "the unsigned source already has its final tree and parent"
+        );
+        assert!(
+            !super::super::rebase::is_pending(&repository.find_commit(upper)?.decode()?.into_owned()?),
+            "the new upper commit already has its final tree and parent"
+        );
         assert_eq!(git(fixture.path(), &["status", "--short"])?, b"");
         for name in ["refs/heads/main", "refs/patches/split"] {
             assert_eq!(

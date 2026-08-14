@@ -1447,10 +1447,12 @@ fn decode_metadata<'a>(
             {
                 is_review = true;
             }
-            Token::ExtraHeader((name, _))
-                if (name == "gpgsig" || name == "gpgsig-sha256") && signature != SignatureState::PendingRebase =>
-            {
-                signature = SignatureState::Unverified;
+            Token::ExtraHeader((name, value)) if name == "gpgsig" || name == "gpgsig-sha256" => {
+                if value.is_empty() {
+                    signature = SignatureState::PendingRebase;
+                } else if signature != SignatureState::PendingRebase {
+                    signature = SignatureState::Unverified;
+                }
             }
             _ => {}
         }

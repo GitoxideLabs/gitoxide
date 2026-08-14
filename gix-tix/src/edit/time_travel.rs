@@ -198,11 +198,14 @@ pub(crate) fn perform(
     }
     let mut completed_graph = None;
     let mut review_roots = review_roots.to_vec();
-    while let Some(base) = pending_base(&repository, head_id, selected)? {
+    while let Some(base) = pending_base(&repository, selected)? {
         let outcome = super::rebase::perform(
             &repository,
             completed_graph.as_ref().unwrap_or(graph),
-            super::rebase::Edit::Repeat { base },
+            super::rebase::Edit::Repeat {
+                base,
+                checkout: selected,
+            },
             super::rebase::Signature::RedoIfNeeded,
             super::rebase::Tree::CherryPick,
         )?;
@@ -468,30 +471,25 @@ fn append_notice(notice: &mut Option<String>, addition: String) {
     }
 }
 
-fn pending_base(repository: &gix::Repository, head: ObjectId, selected: ObjectId) -> Result<Option<ObjectId>> {
-    for endpoint in [head, selected] {
-        let mut current = endpoint;
-        let mut base = None;
-        loop {
-            let commit = repository
-                .find_commit(current)
-                .context("could not inspect a time-travel endpoint for a pending rebase")?
-                .decode()?
-                .into_owned()?;
-            if !super::rebase::has_marker(&commit) {
-                break;
-            }
-            base = Some(current);
-            let Some(parent) = commit.parents.first().copied() else {
-                break;
-            };
-            current = parent;
+fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Option<ObjectId>> {
+    let mut current = selected;
+    let mut base = None;
+    loop {
+        let commit = repository
+            .find_commit(current)
+            .context("could not inspect a time-travel destination for a pending rebase")?
+            .decode()?
+            .into_owned()?;
+        if !super::rebase::is_pending(&commit) {
+            break;
         }
-        if base.is_some() {
-            return Ok(base);
-        }
+        base = Some(current);
+        let Some(parent) = commit.parents.first().copied() else {
+            break;
+        };
+        current = parent;
     }
-    Ok(None)
+    Ok(base)
 }
 
 fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Option<history::Pin>> {
@@ -1093,9 +1091,14 @@ mod tests {
         .complete()?;
         let graph = super::super::loaded_graph(&repository)?;
         let root = repository.rev_parse_single("HEAD~2")?.detach();
+        let tip = repository.find_reference("refs/heads/main")?.id().detach();
+        drop(repository);
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
-        let Perform::Conflict(conflict) = perform(&repository_path, false, root, &graph, &[], &[], false)? else {
+        let Perform::Conflict(conflict) = perform(&repository_path, false, tip, &graph, &[], &[], false)? else {
             return Err("the pending rebase should suspend at its conflicting cherry-pick".into());
         };
         assert_eq!(
@@ -1149,34 +1152,124 @@ mod tests {
     }
 
     #[test]
-    fn travelling_completes_the_whole_pending_rebase() -> gix_testtools::Result {
+    fn time_travel_materializes_only_the_pending_path_to_the_destination() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let allowed_signers = gix_testtools::signature::fixture("ssh-allowed-signers");
+        git(fixture.path(), &["config", "commit.gpgSign", "true"])?;
+        git(fixture.path(), &["config", "gpg.format", "ssh"])?;
+        git(
+            fixture.path(),
+            &["config", "user.signingKey", key.to_string_lossy().as_ref()],
+        )?;
+        git(
+            fixture.path(),
+            &[
+                "config",
+                "gpg.ssh.allowedSignersFile",
+                allowed_signers.to_string_lossy().as_ref(),
+            ],
+        )?;
         let repository = crate::open_test_repository(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         let root = repository.rev_parse_single("HEAD~2")?.detach();
-        let graph = loaded_graph(&repository, &[])?;
+        let graph = super::super::loaded_graph(&repository)?;
         let commit = repository.find_commit(middle)?.decode()?.into_owned()?;
-        super::super::rebase::perform(
+        let signed_middle = super::super::rebase::perform(
             &repository,
             &graph,
             super::super::rebase::Edit::Replace { target: middle, commit },
-            super::super::rebase::Signature::InvalidateExisting,
-            super::super::rebase::Tree::LeaveAsIsAndMark,
+            super::super::rebase::Signature::RedoIfNeeded,
+            super::super::rebase::Tree::LeaveAsIs,
+        )?
+        .complete()?
+        .selected
+        .expect("signing rewrites the middle commit");
+        drop(repository);
+        git(
+            fixture.path(),
+            &["checkout", "-q", "--detach", &signed_middle.to_string()],
         )?;
-        let graph = loaded_graph(&repository, &[])?;
-        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
 
         let repository = crate::open_test_repository(fixture.path())?;
-        let mut current = Some(repository.find_reference("refs/heads/main")?.id().detach());
-        while let Some(id) = current {
-            let commit = repository.find_commit(id)?.decode()?.into_owned()?;
-            assert!(
-                !super::super::rebase::has_marker(&commit),
-                "time travel clears the complete pending region"
-            );
-            current = commit.parents.first().copied();
-        }
+        let graph = super::super::loaded_graph(&repository)?;
+        let pending_middle =
+            super::super::head::perform(repository.clone(), &graph, super::super::head::Kind::Spill, None)?
+                .expect("spilling changes the middle commit");
+        let pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
+        let middle_commit = repository.find_commit(pending_middle)?.decode()?.into_owned()?;
+        let tip_commit = repository.find_commit(pending_tip)?.decode()?.into_owned()?;
+        assert!(super::super::rebase::is_pending(&middle_commit));
+        assert!(
+            !super::super::rebase::has_marker(&middle_commit),
+            "the authoritative spilled tree needs no original-parent marker"
+        );
+        let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+            history::Authors::default(),
+        ));
+        assert_eq!(
+            history::load_metadata(&repository, pending_middle, &authors)?
+                .0
+                .signature,
+            crate::app::SignatureState::PendingRebase,
+            "an empty signature keeps the authoritative commit visibly pending"
+        );
+        assert!(super::super::rebase::has_marker(&tip_commit));
+        drop(repository);
+
+        let repository = crate::open_test_repository(fixture.path())?;
+        let graph = super::super::loaded_graph(&repository)?;
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), pending_tip);
+        assert!(super::super::rebase::is_pending(
+            &repository.find_commit(pending_middle)?.decode()?.into_owned()?
+        ));
+        assert!(super::super::rebase::is_pending(
+            &repository.find_commit(pending_tip)?.decode()?.into_owned()?
+        ));
+        let graph = super::super::loaded_graph(&repository)?;
+        drop(repository);
+
+        perform(&repository_path, false, pending_middle, &graph, &[], &[], false)?.complete()?;
+
+        let repository = crate::open_test_repository(fixture.path())?;
+        let materialized_middle = repository.head_id()?.detach();
+        let still_pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
+        assert_ne!(materialized_middle, pending_middle);
+        assert_ne!(still_pending_tip, pending_tip);
+        let middle_commit = repository.find_commit(materialized_middle)?;
+        assert!(!super::super::rebase::is_pending(
+            &middle_commit.decode()?.into_owned()?
+        ));
+        assert!(
+            middle_commit
+                .verify_signature()?
+                .expect("returning to the spilled commit adds its configured signature")
+                .is_valid()
+        );
+        drop(middle_commit);
+        let tip_commit = repository.find_commit(still_pending_tip)?.decode()?.into_owned()?;
+        assert_eq!(tip_commit.parents.first().copied(), Some(materialized_middle));
+        assert!(super::super::rebase::is_pending(&tip_commit));
+        assert!(super::super::rebase::has_marker(&tip_commit));
+        let graph = super::super::loaded_graph(&repository)?;
+        drop(repository);
+
+        perform(&repository_path, false, still_pending_tip, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let tip_commit = repository.find_commit(repository.head_id()?)?;
+        assert!(!super::super::rebase::is_pending(&tip_commit.decode()?.into_owned()?));
+        assert!(
+            tip_commit
+                .verify_signature()?
+                .expect("travelling to the remaining descendant signs it")
+                .is_valid()
+        );
         Ok(())
     }
 }

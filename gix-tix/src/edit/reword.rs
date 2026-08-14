@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_the_reworded_commit_and_its_linear_descendants_for_lazy_replay() -> gix_testtools::Result {
+    fn marks_only_reworded_descendants_for_lazy_replay() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = gix::open_opts(
             fixture.path(),
@@ -324,12 +324,14 @@ mod tests {
         let graph = super::super::loaded_graph(&repository)?;
         let new_middle = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
         let new_tip = repository.head_id()?.detach();
-        for id in [new_middle, new_tip] {
-            assert!(
-                rebase::has_marker(&repository.find_commit(id)?.decode()?.into_owned()?),
-                "every rewritten commit is marked for lazy replay"
-            );
-        }
+        assert!(
+            !rebase::is_pending(&repository.find_commit(new_middle)?.decode()?.into_owned()?),
+            "the reworded commit already has its final tree, parent, and signature"
+        );
+        assert!(
+            rebase::has_marker(&repository.find_commit(new_tip)?.decode()?.into_owned()?),
+            "the reparented descendant retains its original parent for lazy replay"
+        );
         Ok(())
     }
 
@@ -380,8 +382,8 @@ mod tests {
         );
         assert_eq!(decoded.author()?.name, b"New Author".as_bstr());
         assert!(
-            rebase::has_marker(&decoded.into_owned()?),
-            "the reword is marked for lazy replay"
+            !rebase::is_pending(&decoded.into_owned()?),
+            "a signed reword with unchanged ancestry needs no later replay"
         );
         assert!(
             commit
