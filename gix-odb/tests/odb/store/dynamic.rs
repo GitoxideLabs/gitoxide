@@ -185,10 +185,11 @@ fn multi_index_alloc_limit_bytes_falls_back_to_plain_indices() -> crate::Result 
     let expected = expected_pack_metrics(dir.path())?;
     let handle = gix_odb::at_opts(
         dir.path().join(".git/objects"),
+        gix_testtools::object_hash(),
         Vec::new(),
         gix_odb::store::init::Options {
             alloc_limit_bytes: Some(1),
-            ..crate::fixture_options()
+            ..Default::default()
         },
     )?;
 
@@ -414,8 +415,9 @@ fn object_replacement() -> crate::Result {
 
     let mut handle = gix_odb::at_opts(
         dir.join(".git/objects"),
+        gix_testtools::object_hash(),
         vec![(short_history_link, long_history_tip), unrelated_mapping],
-        crate::fixture_options(),
+        Default::default(),
     )?;
     drop(orphan);
 

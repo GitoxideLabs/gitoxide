@@ -177,15 +177,18 @@ pub struct Store {
 
 /// Create a new cached handle to the object store with support for additional options.
 ///
+/// `object_hash` is the hash of contained objects and the hash used when writing objects.
 /// `replacements` is an iterator over pairs of old and new object ids for replacement support.
 /// This means that when asking for object `X`, one will receive object `X-replaced` given an iterator like `Some((X, X-replaced))`.
 pub fn at_opts(
     objects_dir: impl Into<PathBuf>,
+    object_hash: gix_hash::Kind,
     replacements: impl IntoIterator<Item = (gix_hash::ObjectId, gix_hash::ObjectId)>,
     options: store::init::Options,
 ) -> std::io::Result<Handle> {
     let handle = OwnShared::new(Store::at_opts(
         objects_dir.into(),
+        object_hash,
         &mut replacements.into_iter(),
         options,
     )?)
@@ -196,12 +199,5 @@ pub fn at_opts(
 /// Create a new cached handle to the object store with `.git/objects` provided in `objects_dir`,
 /// with `object_hash` as the hash of contained objects to write.
 pub fn at(objects_dir: impl Into<PathBuf>, object_hash: gix_hash::Kind) -> std::io::Result<Handle> {
-    at_opts(
-        objects_dir,
-        None,
-        store::init::Options {
-            object_hash,
-            ..Default::default()
-        },
-    )
+    at_opts(objects_dir, object_hash, None, store::init::Options::default())
 }

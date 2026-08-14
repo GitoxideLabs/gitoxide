@@ -481,10 +481,10 @@ impl ThreadSafeRepository {
         Ok(ThreadSafeRepository {
             objects: OwnShared::new(gix_odb::Store::at_opts(
                 common_dir_ref.join("objects"),
+                config.object_hash,
                 &mut replacements.into_iter(),
                 gix_odb::store::init::Options {
                     slots: object_store_slots,
-                    object_hash: config.object_hash,
                     use_multi_pack_index: config.use_multi_pack_index,
                     alloc_limit_bytes: config.alloc_limit_bytes,
                     loose_compression: config.loose_compression,

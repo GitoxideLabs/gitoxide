@@ -12,8 +12,6 @@ use crate::{
 pub struct Options {
     /// How to obtain a size for the slot map.
     pub slots: Slots,
-    /// The kind of hash we expect in our packs and would use for loose object iteration and object writing.
-    pub object_hash: gix_hash::Kind,
     /// If false, no multi-pack indices will be used. If true, they will be used if their hash matches `object_hash`.
     pub use_multi_pack_index: bool,
     /// The maximum size of a single allocation caused by user-controlled on-disk pack data.
@@ -34,7 +32,6 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             slots: Default::default(),
-            object_hash: Default::default(),
             use_multi_pack_index: true,
             alloc_limit_bytes: None,
             current_dir: None,
@@ -78,14 +75,15 @@ impl Store {
     /// Note that the `slots` isn't used for packs, these are included with their multi-index or index respectively.
     /// For example, In a repository with 250m objects and geometric packing one would expect 27 index/pack pairs,
     /// or a single multi-pack index.
+    /// `object_hash` is the hash expected in packs and used for loose object iteration and object writing.
     /// `replacements` is an iterator over pairs of old and new object ids for replacement support.
     /// This means that when asking for object `X`, one will receive object `X-replaced` given an iterator like `Some((X, X-replaced))`.
     pub fn at_opts(
         objects_dir: PathBuf,
+        object_hash: gix_hash::Kind,
         replacements: &mut dyn Iterator<Item = (gix_hash::ObjectId, gix_hash::ObjectId)>,
         Options {
             slots,
-            object_hash,
             use_multi_pack_index,
             alloc_limit_bytes,
             current_dir,

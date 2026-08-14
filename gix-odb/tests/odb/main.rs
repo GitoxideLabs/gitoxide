@@ -16,15 +16,6 @@ pub fn hex_to_id_for_hash(sha1: &str, sha256: &str) -> ObjectId {
 
 pub type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-/// [`init::Options`](gix_odb::store::init::Options) respecting [`gix_testtools::object_hash()`]
-/// that regenerate under `GIX_TEST_FIXTURE_HASH` are opened with a matching object hash.
-pub fn fixture_options() -> gix_odb::store::init::Options {
-    gix_odb::store::init::Options {
-        object_hash: gix_testtools::object_hash(),
-        ..Default::default()
-    }
-}
-
 /// Open an object store at `objects_dir`.
 /// The static SHA-1 fixtures keep using [`db()`]/[`db_small_packs()`] instead.
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {
