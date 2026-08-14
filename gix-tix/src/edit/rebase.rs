@@ -25,6 +25,7 @@ const PENDING: &[u8] = b"pending";
 pub(crate) enum Signature {
     InvalidateExisting,
     RedoIfNeeded,
+    Remove,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32,6 +33,7 @@ pub(crate) enum Tree {
     #[cfg_attr(not(test), allow(dead_code))]
     LeaveAsIs,
     LeaveAsIsAndMark,
+    LeaveAsIsAndMarkDescendants,
     CherryPick,
 }
 
@@ -182,6 +184,7 @@ struct Prepared {
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<ExpectedRef>>,
     pins: Vec<ObjectId>,
+    delete_refs: Vec<(gix::refs::FullName, Target)>,
 }
 
 pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
@@ -229,7 +232,29 @@ pub(crate) fn perform(
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
+    tree_mode: Tree,
+) -> Result<Perform> {
+    perform_inner(repo, graph, edit, signature, tree_mode, Vec::new())
+}
+
+pub(super) fn perform_deleting_ref(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
+    tree_mode: Tree,
+    deletion: (gix::refs::FullName, Target),
+) -> Result<Perform> {
+    perform_inner(repo, graph, edit, signature, tree_mode, vec![deletion])
+}
+
+fn perform_inner(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    edit: Edit,
+    signature: Signature,
     mut tree_mode: Tree,
+    delete_refs: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Perform> {
     let mut repo = repo.clone();
     let (root, replacement, inserted, reset_index, forked, removed, repeat, mut split_upper) = match edit {
@@ -361,7 +386,9 @@ pub(crate) fn perform(
             }
         };
         commit.parents = new_parents.into_iter().collect();
-        let pending = tree_mode == Tree::LeaveAsIsAndMark || conflict.is_some();
+        let pending = tree_mode == Tree::LeaveAsIsAndMark
+            || (tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
+            || conflict.is_some();
         marker(
             &mut commit,
             pending,
@@ -395,12 +422,15 @@ pub(crate) fn perform(
         }
     }
 
-    let marked = (!forked && tree_mode == Tree::LeaveAsIsAndMark) || conflict.is_some();
+    let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
+        || conflict.is_some();
     let mut prepared = Prepared {
         repo,
         root,
         reset_index: if inserted { reset_index } else { marked },
-        skip_worktree_transitions: inserted || forked || (tree_mode == Tree::LeaveAsIsAndMark && !removed),
+        skip_worktree_transitions: inserted
+            || forked
+            || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
         selected,
         rewritten,
         committer,
@@ -410,6 +440,7 @@ pub(crate) fn perform(
         } else {
             Vec::new()
         },
+        delete_refs,
     };
     match conflict {
         Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -421,6 +452,128 @@ pub(crate) fn perform(
         })),
         None => Ok(Perform::Complete(prepared.finish()?)),
     }
+}
+
+#[tracing::instrument(skip_all, fields(%review, %tip))]
+pub(super) fn finish_review(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    review: ObjectId,
+    tip: ObjectId,
+    review_ref: gix::refs::FullName,
+    review_target: Target,
+) -> Result<Outcome> {
+    let mut repo = repo.clone();
+    let signing = repo
+        .commit_signing_options_if_enabled()
+        .context("could not resolve commit signing configuration")?;
+    let committer = repo
+        .committer()
+        .context("no Git committer is configured")?
+        .context("could not resolve the Git committer")?
+        .to_owned()?;
+    repo = repo.with_object_memory();
+
+    let review_ids = graph
+        .descendants_in_parent_order(review)
+        .context("the review commit is not in the loaded history")?;
+    let review_set: HashSet<_> = review_ids.iter().copied().collect();
+    let natural_ids: Vec<_> = graph
+        .descendants_in_parent_order(tip)
+        .context("the reviewed commit is not in the loaded history")?
+        .into_iter()
+        .filter(|id| *id != tip && !review_set.contains(id))
+        .collect();
+    for id in review_ids.iter().chain(&natural_ids) {
+        if graph
+            .parents_of(*id)
+            .context("a review descendant is incomplete")?
+            .len()
+            > 1
+        {
+            anyhow::bail!("review finish cannot rewrite merge descendants");
+        }
+    }
+
+    let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut finished_review = None;
+    for old in &review_ids {
+        let old_parents = graph.parents_of(*old).context("a review descendant is incomplete")?;
+        let mut commit = repo.find_commit(*old)?.decode()?.into_owned()?;
+        let new_parents = if *old == review {
+            vec![tip]
+        } else {
+            old_parents
+                .iter()
+                .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
+                .collect()
+        };
+        commit.parents = new_parents.into_iter().collect();
+        commit.committer = committer.clone();
+        if *old == review {
+            commit.extra_headers.retain(|(name, value)| {
+                !(name.as_slice() == MARKER
+                    && value.as_slice().strip_prefix(b"onto ") == Some(review_ref.as_bstr().as_ref()))
+            });
+        }
+        marker(&mut commit, false, None);
+        let new = write_commit(&repo, commit, Signature::RedoIfNeeded, signing.clone())?;
+        rewritten.insert(*old, Some(new));
+        if *old == review {
+            finished_review = Some(new);
+        }
+    }
+    let finished_review = finished_review.context("the review commit was not rewritten")?;
+    let non_leaves: HashSet<_> = review_ids
+        .iter()
+        .flat_map(|id| graph.parents_of(*id).unwrap_or_default())
+        .filter(|parent| review_set.contains(parent))
+        .collect();
+    let leaves: Vec<_> = review_ids
+        .iter()
+        .filter(|id| !non_leaves.contains(*id))
+        .copied()
+        .collect();
+    let insertion = if leaves.len() == 1 {
+        rewritten[&leaves[0]].context("the review leaf disappeared")?
+    } else {
+        finished_review
+    };
+
+    rewritten.insert(tip, Some(finished_review));
+    for old in natural_ids {
+        let old_parents = graph.parents_of(old).context("a reviewed descendant is incomplete")?;
+        let mut commit = repo.find_commit(old)?.decode()?.into_owned()?;
+        let new_parents: Vec<_> = old_parents
+            .iter()
+            .filter_map(|parent| {
+                if *parent == tip {
+                    Some(insertion)
+                } else {
+                    rewritten.get(parent).copied().unwrap_or(Some(*parent))
+                }
+            })
+            .collect();
+        commit.parents = new_parents.into_iter().collect();
+        commit.committer = committer.clone();
+        marker(&mut commit, true, old_parents.first().copied());
+        let new = write_commit(&repo, commit, Signature::InvalidateExisting, signing.clone())?;
+        rewritten.insert(old, Some(new));
+    }
+
+    let mut prepared = Prepared {
+        repo,
+        root: Some(review),
+        reset_index: false,
+        skip_worktree_transitions: false,
+        selected: Some(finished_review),
+        rewritten,
+        committer,
+        expected_refs: None,
+        pins: Vec::new(),
+        delete_refs: vec![(review_ref, review_target)],
+    };
+    prepared.finish()
 }
 
 #[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
@@ -540,7 +693,15 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         }
     }
 
-    for dropped in plan.scope.iter().copied().filter(|id| !picked.contains(id)) {
+    let dropped: Vec<_> = plan.scope.iter().copied().filter(|id| !picked.contains(id)).collect();
+    let mut delete_refs = Vec::new();
+    for id in &dropped {
+        let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
+        if let Some(deletion) = super::review::deletion(&repo, &commit)? {
+            delete_refs.push(deletion);
+        }
+    }
+    for dropped in dropped {
         let mut ancestor = graph
             .parents_of(dropped)
             .context("a dropped commit is incomplete")?
@@ -596,6 +757,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         committer,
         expected_refs: Some(plan.expected_refs),
         pins,
+        delete_refs,
     };
     match conflict {
         Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -642,7 +804,7 @@ impl Prepared {
             self.selected,
             &self.committer,
             self.expected_refs.take(),
-            &self.pins,
+            (&self.pins, &self.delete_refs),
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -881,9 +1043,9 @@ fn parent_tree(repo: &gix::Repository, parent: Option<ObjectId>) -> Result<Objec
 }
 
 fn marker(commit: &mut gix::objs::Commit, add: bool, original_parent: Option<ObjectId>) {
-    commit
-        .extra_headers
-        .retain(|(name, _)| name.as_slice() != MARKER && name.as_slice() != ORIGINAL_PARENT);
+    commit.extra_headers.retain(|(name, value)| {
+        !(name.as_slice() == MARKER && value.as_slice() == PENDING) && name.as_slice() != ORIGINAL_PARENT
+    });
     if add {
         commit.extra_headers.push((MARKER.into(), PENDING.into()));
         if let Some(parent) = original_parent {
@@ -925,6 +1087,7 @@ fn write_commit(
             commit.extra_headers.push((field.into(), BString::default()));
             commit
         }
+        (Signature::Remove, _) => commit,
         _ => commit,
     };
     Ok(repo
@@ -1012,12 +1175,16 @@ fn update_refs(
     inserted: Option<ObjectId>,
     committer: &gix::actor::Signature,
     expected_refs: Option<Vec<ExpectedRef>>,
-    pins: &[ObjectId],
+    resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
 ) -> Result<Vec<RefEdit>> {
+    let (pins, delete_refs) = resources;
     let mut edits = Vec::new();
     let mut rollback = Vec::new();
     if let Some(expected_refs) = expected_refs {
         for ExpectedRef { name, old } in expected_refs {
+            if delete_refs.iter().any(|(delete, _)| delete == &name) {
+                continue;
+            }
             let Some(new) = rewritten.get(&old) else { continue };
             edits.push(ref_edit(name.clone(), old, *new));
             rollback.push(reverse_ref_edit(name, old, *new));
@@ -1040,6 +1207,9 @@ fn update_refs(
             };
             let Some(new) = rewritten.get(&old) else { continue };
             let name = reference.name().to_owned();
+            if delete_refs.iter().any(|(delete, _)| delete == &name) {
+                continue;
+            }
             edits.push(ref_edit(name.clone(), old, *new));
             rollback.push(reverse_ref_edit(name, old, *new));
         }
@@ -1096,6 +1266,25 @@ fn update_refs(
             change: Change::Delete {
                 expected: PreviousValue::MustExistAndMatch(Target::Object(*id)),
                 log: RefLog::AndReference,
+            },
+        });
+    }
+    for (name, target) in delete_refs {
+        edits.push(RefEdit {
+            name: name.clone(),
+            deref: false,
+            change: Change::Delete {
+                expected: PreviousValue::MustExistAndMatch(target.clone()),
+                log: RefLog::AndReference,
+            },
+        });
+        rollback.push(RefEdit {
+            name: name.clone(),
+            deref: false,
+            change: Change::Update {
+                log: log_change(),
+                expected: PreviousValue::MustNotExist,
+                new: target.clone(),
             },
         });
     }
@@ -1649,6 +1838,57 @@ mod tests {
             repo.find_reference("refs/patches/example")?.id().detach(),
             base,
             "the dropped commit's ref does not keep the old history alive"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_review_commit_removes_its_review_reference() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let old_middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
+        let mut middle = repo.find_commit(old_middle)?.decode()?.into_owned()?;
+        middle
+            .extra_headers
+            .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        let middle = repo.write_object(&middle)?.detach();
+        let mut tip = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip.parents = [middle].into_iter().collect();
+        let tip = repo.write_object(&tip)?.detach();
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            old_middle,
+            PreviousValue::MustNotExist,
+            "test review resource",
+        )?;
+        repo.reference(
+            "refs/heads/main",
+            tip,
+            PreviousValue::ExistingMustMatch(Target::Object(old_tip)),
+            "prepare review history",
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                }],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip])?,
+            },
+        )?
+        .complete()?;
+        assert!(
+            repo.try_find_reference("refs/worktree/tix/review/1")?.is_none(),
+            "dropping the review commit removes its associated resource"
         );
         Ok(())
     }

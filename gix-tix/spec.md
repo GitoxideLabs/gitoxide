@@ -422,6 +422,38 @@ space first; changes blocks adapt within the remaining history width.
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
 
+### Reviews
+
+- `e v` starts a review from any non-boundary commit without merge descendants.
+  It limits navigation to the selected commit's ancestry; the connected hidden
+  base remains selectable, `<enter>` confirms it, and Escape cancels before any
+  repository change.
+- Starting requires a completely clean index and worktree, including no untracked
+  files, and non-pending reviewed-tip and base commits. Only after confirmation,
+  tix creates the first unused `refs/worktree/tix/review/N` ref at the reviewed
+  tip and an unsigned ordinary `review` commit at the base with
+  `tix-rebase: onto refs/worktree/tix/review/N`. HEAD is detached at that commit,
+  its base tree fills the index, and the reviewed tip tree remains in the worktree
+  as unstaged changes.
+- Review refs are always traversal tips and remain visible in every ref mode. One
+  active ref is shown as `review`; multiple refs are shown as `review:N`. Review
+  commits replace the signature disc with a star while retaining independent
+  signature state. Ordinary edits preserve the review header and otherwise keep
+  their normal signing and lazy-rebase behavior.
+- At a checked-out review commit, amend is offered only for staged changes and
+  consumes only the index tree. It leaves worktree bytes and the review header
+  intact, removes signatures, and marks only affected descendants for lazy replay.
+- `e v` finishes a checked-out review only when status is completely clean. The
+  review commit is inserted after its reviewed tip with its exact tree, review
+  header removed, updated committer, and configured signature. Review-side
+  descendants retain exact trees and are signed without pending markers. With one
+  review-side leaf, the reviewed tip's prior descendants are lazily reparented
+  after it; with multiple leaves they branch directly after the finished review.
+  The review ref is deleted in the same atomic ref/worktree transaction.
+- Forget is unavailable for a review commit with descendants. Forgetting a review
+  leaf, or dropping a review commit through a rebase todo, also deletes its review
+  ref atomically; reordering or rewriting it preserves the header and resource.
+
 ### Forget commits
 
 - `e`, then `d`, is available after history completion for a selected non-merge

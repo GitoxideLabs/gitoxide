@@ -2091,6 +2091,49 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("rebase: {err:#}")),
                     }
                 }
+                Effect::StartReview { tip, base } => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = history_graph
+                        .as_ref()
+                        .context("review requires a completed history graph")
+                        .and_then(|graph| edit::review::start(&repository_path, repository_is_bare, graph, tip, base));
+                    match result {
+                        Ok(started) => {
+                            app.leave_message(format!(
+                                "started review {} at {}",
+                                started.reference.shorten(),
+                                started.commit.to_hex_with_len(7)
+                            ));
+                            app.select_commit_after_refresh(started.commit);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_message(format!("review: {err:#}")),
+                    }
+                }
+                Effect::FinishReview(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let result = history_graph
+                        .as_ref()
+                        .context("finishing review requires a completed history graph")
+                        .and_then(|graph| {
+                            let mut repo = open_repository(&repository_path, repository_is_bare, false)
+                                .context("could not open repository to finish review")?;
+                            repo.object_cache_size(None);
+                            edit::review::finish(repo, graph, id)
+                        });
+                    match result {
+                        Ok(new_id) => {
+                            app.leave_message(format!("finished review as {}", new_id.to_hex_with_len(7)));
+                            app.select_commit_after_refresh(new_id);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_message(format!("finish review: {err:#}")),
+                    }
+                }
                 Effect::TimeTravel(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -4005,6 +4048,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
+        KeyCode::Char('v') if edit_expanded => Some(Action::Review),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
