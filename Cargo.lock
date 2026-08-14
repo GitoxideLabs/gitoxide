@@ -2595,6 +2595,7 @@ name = "gix-tix"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "crossterm",
  "directories",
  "gix",

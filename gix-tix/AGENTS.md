@@ -1,5 +1,11 @@
 # gix-tix invariants
 
+## Compatibility
+
+- Tix is experimental. Implement requested command-line and behavioral changes
+  without compatibility aliases or migration shims unless compatibility is
+  explicitly requested.
+
 ## Behavioral specification
 
 - Keep `spec.md` synchronized with every user-visible, lifecycle, performance,
