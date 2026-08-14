@@ -1926,6 +1926,87 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("forget: {err:#}")),
                     }
                 }
+                Effect::Rebase { base, commits, head } => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    let todo_commits = commits
+                        .iter()
+                        .map(|id| {
+                            let row = app
+                                .rows
+                                .iter()
+                                .find(|row| row.id == *id)
+                                .context("an editable commit disappeared from the view")?;
+                            Ok(edit::todo::Commit {
+                                id: *id,
+                                parents: row.parent_ids.to_vec(),
+                                info: ui::todo_metadata(&app, row, &decorations, &mailmap),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>();
+                    let result = history_graph
+                        .as_ref()
+                        .context("rebasing requires a completed history graph")
+                        .and_then(|graph| {
+                            rebase_history(
+                                terminal,
+                                &repository_path,
+                                repository_is_bare,
+                                graph,
+                                base,
+                                todo_commits?,
+                                head,
+                                enhanced_keyboard,
+                            )
+                        });
+                    match result {
+                        Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
+                            let checkout = outcome.selected;
+                            let notice = checkout
+                                .map(|selected| {
+                                    edit::time_travel::checkout_without_replay(
+                                        &repository_path,
+                                        repository_is_bare,
+                                        selected,
+                                        &revisions,
+                                        worktrees,
+                                    )
+                                })
+                                .transpose()
+                                .map(Option::flatten);
+                            match notice {
+                                Ok(notice) => {
+                                    app.leave_message(notice.unwrap_or_else(|| "rebased history".to_owned()));
+                                    app.select_commit_after_refresh(base);
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                                Err(err) => {
+                                    app.leave_message(format!("rebase applied, checkout failed: {err:#}"));
+                                    invalidate_worktree_changes(&mut worktree_changes);
+                                    refresh_pending = true;
+                                }
+                            }
+                        }
+                        Ok(Some(edit::rebase::Perform::Conflict(conflict))) => {
+                            match edit::time_travel::Conflict::from_rebase(
+                                &repository_path,
+                                repository_is_bare,
+                                conflict,
+                            ) {
+                                Ok(conflict) => {
+                                    let original = conflict.original();
+                                    app.arm_rebase_conflict(original);
+                                    app.select_commit(original);
+                                    pending_rebase_conflict = Some(conflict);
+                                }
+                                Err(err) => app.leave_message(format!("rebase conflict: {err:#}")),
+                            }
+                        }
+                        Ok(None) => app.leave_message("no rebase performed: the todo was unchanged"),
+                        Err(err) => app.leave_message(format!("rebase: {err:#}")),
+                    }
+                }
                 Effect::TimeTravel(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -2959,6 +3040,44 @@ fn reword_commit(
     edit::reword::apply(repository, graph, id, &edited)
 }
 
+#[tracing::instrument(skip_all, fields(base = %base, commits = commits.len()))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the editor bridges terminal, repository, and selected view state"
+)]
+fn rebase_history(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository_path: &Path,
+    bare: bool,
+    graph: &HistoryGraph,
+    base: gix::ObjectId,
+    commits: Vec<edit::todo::Commit>,
+    head: Option<gix::ObjectId>,
+    enhanced_keyboard: bool,
+) -> Result<Option<edit::rebase::Perform>> {
+    let prepared = {
+        let mut repository =
+            open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
+        repository.object_cache_size(None);
+        edit::todo::prepare(&repository, base, &commits, head)?
+    };
+    let Some(edited) = edit::edit_document(
+        terminal,
+        &prepared.editor,
+        &prepared.document,
+        &format!("tix-rebase-{}.md", std::process::id()),
+        enhanced_keyboard,
+    )?
+    else {
+        return Ok(None);
+    };
+    let mut repository =
+        open_repository(repository_path, bare, false).context("could not reopen repository after editing rebase")?;
+    repository.object_cache_size(None);
+    let plan = edit::todo::parse(&repository, prepared, &edited)?;
+    edit::rebase::perform_plan(&repository, graph, plan).map(Some)
+}
+
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 fn create_commit(
     terminal: &mut ratatui::DefaultTerminal,
@@ -3731,6 +3850,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
         KeyCode::Char('c') => Some(Action::ToggleChanges),
         KeyCode::Char('p') if edit_expanded => Some(Action::Split),
+        KeyCode::Char('b') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
         KeyCode::Char('p') => Some(Action::CycleChangesParent),
         KeyCode::Char('q') => Some(Action::Quit),
         KeyCode::Esc => Some(Action::Cancel),
@@ -4736,6 +4856,7 @@ mod tests {
             "v closes the view shortcut group"
         );
         for (key, expected) in [
+            ('b', Action::Rebase),
             ('r', Action::Reword),
             ('n', Action::NewCommit),
             ('a', Action::Amend),
@@ -4750,6 +4871,11 @@ mod tests {
                 "{key} is available after the edit prefix"
             );
         }
+        assert_eq!(
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL), false, true,),
+            Some(Action::PageUp),
+            "navigation keeps priority over the edit shortcut"
+        );
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE), false, true),
             Some(Action::ToggleEdit),
