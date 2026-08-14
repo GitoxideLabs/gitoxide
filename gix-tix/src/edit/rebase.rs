@@ -1500,6 +1500,60 @@ mod tests {
     }
 
     #[test]
+    fn a_todo_rebase_can_update_onto_a_hidden_branch_without_moving_it() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let mut hidden = repo.find_commit(base)?.decode()?.into_owned()?;
+        hidden.parents = [base].into_iter().collect();
+        hidden.message = "updated hidden base".into();
+        let onto = repo.write_object(&hidden)?.detach();
+        repo.reference(
+            "refs/heads/hidden",
+            onto,
+            PreviousValue::MustNotExist,
+            "test hidden update target",
+        )?;
+
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base: onto,
+                scope: vec![middle, tip],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(onto),
+                        commit: PlanCommit::Pick(middle),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Pick(tip),
+                    },
+                ],
+                checkout: Some(1),
+                expected_refs: capture_refs(&repo, &[middle, tip])?,
+            },
+        )?
+        .complete()?;
+        let new_middle = outcome.map(middle).context("the middle commit is retained")?;
+        assert_eq!(
+            repo.find_commit(new_middle)?.parent_ids().next().map(gix::Id::detach),
+            Some(onto),
+            "the visible stack starts at the latest hidden branch tip"
+        );
+        assert_eq!(
+            repo.find_reference("refs/heads/hidden")?.id().detach(),
+            onto,
+            "the hidden branch itself remains untouched"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_todo_rebase_uses_the_reference_snapshot_from_before_editing() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;

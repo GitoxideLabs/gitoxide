@@ -1243,7 +1243,7 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
-                    update_hidden_branch_behind(&mut app, history_graph.as_ref(), &ref_snapshot);
+                    update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "lane-computation-completed");
                     filesystem_responses.queue_frame(&response_ids, "lane-computation-completed");
@@ -1434,7 +1434,7 @@ fn event_loop(
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     history_graph = Some(graph);
-                    update_hidden_branch_behind(&mut app, history_graph.as_ref(), &ref_snapshot);
+                    update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
                     app.selection_relation = None;
                 }
@@ -1988,7 +1988,12 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("forget: {err:#}")),
                     }
                 }
-                Effect::Rebase { base, commits, head } => {
+                Effect::Rebase {
+                    base,
+                    onto,
+                    commits,
+                    head,
+                } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let todo_commits = commits
@@ -2010,12 +2015,23 @@ fn event_loop(
                         .as_ref()
                         .context("rebasing requires a completed history graph")
                         .and_then(|graph| {
+                            let onto_title = if onto == base {
+                                None
+                            } else {
+                                Some(ui::todo_title(
+                                    &app,
+                                    app.commit(onto)
+                                        .context("the hidden rebase target disappeared from the view")?,
+                                ))
+                            };
                             rebase_history(
                                 terminal,
                                 &repository_path,
                                 repository_is_bare,
                                 graph,
                                 base,
+                                onto,
+                                onto_title,
                                 todo_commits?,
                                 head,
                                 enhanced_keyboard,
@@ -2387,9 +2403,9 @@ fn decoration_successor(selected: gix::ObjectId, current: &Decorations, next: &D
     matches.all(|candidate| candidate == successor).then_some(successor)
 }
 
-fn update_hidden_branch_behind(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
-    let markers = graph.map_or_else(HashMap::new, |graph| {
-        graph.hidden_branch_behind(
+fn update_hidden_branch_updates(app: &mut App, graph: Option<&HistoryGraph>, refs: &history::RefSnapshot) {
+    let updates = graph.map_or_else(HashMap::new, |graph| {
+        graph.hidden_branch_updates(
             &refs.view_tips,
             refs.hidden
                 .iter()
@@ -2397,7 +2413,7 @@ fn update_hidden_branch_behind(app: &mut App, graph: Option<&HistoryGraph>, refs
                 .filter_map(|(_, target)| target.try_id().map(ToOwned::to_owned)),
         )
     });
-    app.set_hidden_branch_behind(markers);
+    app.set_hidden_branch_updates(updates);
 }
 
 fn restore_change_selection(view: &mut app::ChangesView, changes: &Changes, remembered: Option<(BString, usize)>) {
@@ -3115,6 +3131,8 @@ fn rebase_history(
     bare: bool,
     graph: &HistoryGraph,
     base: gix::ObjectId,
+    onto: gix::ObjectId,
+    onto_title: Option<String>,
     commits: Vec<edit::todo::Commit>,
     head: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
@@ -3123,7 +3141,7 @@ fn rebase_history(
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
         repository.object_cache_size(None);
-        edit::todo::prepare(&repository, base, &commits, head)?
+        edit::todo::prepare(&repository, base, onto, onto_title.as_deref(), &commits, head)?
     };
     let Some(edited) = edit::edit_document(
         terminal,
@@ -3926,6 +3944,9 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('c') => Some(Action::ToggleChanges),
         KeyCode::Char('p') if edit_expanded => Some(Action::Split),
         KeyCode::Char('b') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::Rebase),
+        KeyCode::Char('u') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Action::RebaseUpdate)
+        }
         KeyCode::Char('f') if edit_expanded && !key.modifiers.contains(KeyModifiers::CONTROL) => {
             Some(Action::ForkCommit)
         }
@@ -4935,6 +4956,7 @@ mod tests {
         );
         for (key, expected) in [
             ('b', Action::Rebase),
+            ('u', Action::RebaseUpdate),
             ('r', Action::Reword),
             ('n', Action::NewCommit),
             ('f', Action::ForkCommit),
