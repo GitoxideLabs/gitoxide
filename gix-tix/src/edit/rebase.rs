@@ -43,6 +43,7 @@ pub(crate) enum Edit {
     Insert {
         anchor: Option<ObjectId>,
         commit: gix::objs::Commit,
+        reset_index: bool,
     },
     Fork {
         anchor: ObjectId,
@@ -174,8 +175,7 @@ impl PersistedConflict {
 struct Prepared {
     repo: gix::Repository,
     root: Option<ObjectId>,
-    inserted: bool,
-    marked: bool,
+    reset_index: bool,
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
@@ -232,13 +232,26 @@ pub(crate) fn perform(
     mut tree_mode: Tree,
 ) -> Result<Perform> {
     let mut repo = repo.clone();
-    let (root, replacement, inserted, forked, removed, repeat, mut split_upper) = match edit {
-        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, None),
-        Edit::Insert { anchor, commit } => (anchor, Some(commit), true, false, false, false, None),
-        Edit::Fork { anchor, commit } => (Some(anchor), Some(commit), false, true, false, false, None),
-        Edit::Remove { target } => (Some(target), None, false, false, true, false, None),
-        Edit::Split { target, source, upper } => (Some(target), Some(source), false, false, false, false, Some(upper)),
-        Edit::Repeat { base } => (Some(base), None, false, false, false, true, None),
+    let (root, replacement, inserted, reset_index, forked, removed, repeat, mut split_upper) = match edit {
+        Edit::Replace { target, commit } => (Some(target), Some(commit), false, false, false, false, false, None),
+        Edit::Insert {
+            anchor,
+            commit,
+            reset_index,
+        } => (anchor, Some(commit), true, reset_index, false, false, false, None),
+        Edit::Fork { anchor, commit } => (Some(anchor), Some(commit), false, false, true, false, false, None),
+        Edit::Remove { target } => (Some(target), None, false, false, false, true, false, None),
+        Edit::Split { target, source, upper } => (
+            Some(target),
+            Some(source),
+            false,
+            false,
+            false,
+            false,
+            false,
+            Some(upper),
+        ),
+        Edit::Repeat { base } => (Some(base), None, false, false, false, false, true, None),
     };
     if repeat {
         tree_mode = Tree::CherryPick;
@@ -382,11 +395,11 @@ pub(crate) fn perform(
         }
     }
 
+    let marked = (!forked && tree_mode == Tree::LeaveAsIsAndMark) || conflict.is_some();
     let mut prepared = Prepared {
         repo,
         root,
-        inserted,
-        marked: (!forked && tree_mode == Tree::LeaveAsIsAndMark) || conflict.is_some(),
+        reset_index: if inserted { reset_index } else { marked },
         skip_worktree_transitions: inserted || forked || (tree_mode == Tree::LeaveAsIsAndMark && !removed),
         selected,
         rewritten,
@@ -572,11 +585,11 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         }
     }
     let selected = plan.checkout.map(|index| produced[index]);
+    let marked = plan.steps.iter().enumerate().any(|(index, _)| !eager.contains(&index)) || conflict.is_some();
     let mut prepared = Prepared {
         repo,
         root: Some(plan.base),
-        inserted: false,
-        marked: plan.steps.iter().enumerate().any(|(index, _)| !eager.contains(&index)) || conflict.is_some(),
+        reset_index: marked,
         skip_worktree_transitions: false,
         selected,
         rewritten,
@@ -610,7 +623,7 @@ impl Prepared {
         }
 
         let transitions = worktree_transitions(&self.repo, &self.rewritten, self.skip_worktree_transitions)?;
-        let index_reset_from = if self.inserted || self.marked { self.root } else { None };
+        let index_reset_from = if self.reset_index { self.root } else { None };
         let index_resets = index_reset_from
             .map(|old| index_resets(&self.repo, &self.rewritten, old))
             .transpose()?;
