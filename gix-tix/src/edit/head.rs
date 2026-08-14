@@ -33,6 +33,7 @@ pub fn perform(
         .context("could not resolve commit signing configuration")?;
     repo = repo.with_object_memory();
     let old_tree = commit.tree;
+    let review = super::review::is_review(&commit);
     let parent_tree = match commit.parents.first().copied() {
         Some(parent) => repo.find_commit(parent)?.tree_id()?.detach(),
         None => repo.empty_tree().id,
@@ -57,6 +58,8 @@ pub fn perform(
             drop(index);
             if index_tree != old_tree {
                 index_tree
+            } else if review {
+                return Ok(None);
             } else {
                 let baseline = repo.find_tree(old_tree)?;
                 create::worktree_tree(&repo, &baseline)?
@@ -71,8 +74,16 @@ pub fn perform(
         &repo,
         graph,
         rebase::Edit::Replace { target: head, commit },
-        rebase::Signature::InvalidateExisting,
-        rebase::Tree::LeaveAsIsAndMark,
+        if review {
+            rebase::Signature::Remove
+        } else {
+            rebase::Signature::InvalidateExisting
+        },
+        if review {
+            rebase::Tree::LeaveAsIsAndMarkDescendants
+        } else {
+            rebase::Tree::LeaveAsIsAndMark
+        },
     )?
     .complete()?
     .selected)

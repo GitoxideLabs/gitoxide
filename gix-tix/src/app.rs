@@ -21,6 +21,7 @@ pub(crate) struct Commit<T> {
     pub title: T,
     pub metadata_loaded: bool,
     pub has_agent_marker: bool,
+    pub is_review: bool,
     pub signature: SignatureState,
 }
 
@@ -31,6 +32,7 @@ pub(crate) struct Metadata<T> {
     pub attributions: Range<usize>,
     pub title: T,
     pub has_agent_marker: bool,
+    pub is_review: bool,
     pub signature: SignatureState,
 }
 
@@ -303,6 +305,7 @@ pub(crate) enum Action {
     Forget,
     Rebase,
     RebaseUpdate,
+    Review,
     TimeTravel,
     VerifySignatures,
     Cancel,
@@ -339,6 +342,11 @@ pub(crate) enum Effect {
         commits: Vec<ObjectId>,
         head: Option<ObjectId>,
     },
+    StartReview {
+        tip: ObjectId,
+        base: ObjectId,
+    },
+    FinishReview(ObjectId),
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
@@ -408,6 +416,7 @@ pub(crate) struct App {
     pub(crate) show_selection_tail: bool,
     pub preview_author_copy: bool,
     reachability_anchor: Option<ObjectId>,
+    review_tip: Option<ObjectId>,
     junction_parent: Option<usize>,
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
@@ -431,6 +440,7 @@ pub(crate) struct App {
     pending_rebase_conflict: Option<ObjectId>,
     worktree_conflicted: bool,
     amend_available: bool,
+    finish_review_available: bool,
     spill_available: bool,
     split_available: bool,
     new_commit_available: bool,
@@ -495,6 +505,7 @@ impl App {
             show_selection_tail: true,
             preview_author_copy: false,
             reachability_anchor: None,
+            review_tip: None,
             junction_parent: None,
             reachable_rows: None,
             copy_feedback: None,
@@ -518,6 +529,7 @@ impl App {
             pending_rebase_conflict: None,
             worktree_conflicted: false,
             amend_available: false,
+            finish_review_available: false,
             spill_available: false,
             split_available: false,
             new_commit_available: true,
@@ -662,6 +674,7 @@ impl App {
                     title: start..self.titles.len(),
                     metadata_loaded: row.metadata_loaded,
                     has_agent_marker: row.has_agent_marker,
+                    is_review: row.is_review,
                     signature: row.signature,
                 };
                 let row = Arc::new(row);
@@ -702,6 +715,7 @@ impl App {
             attributions,
             title,
             has_agent_marker,
+            is_review,
             signature,
         } = metadata;
         let title_start = self.titles.len();
@@ -714,6 +728,7 @@ impl App {
         row.title = title_start..self.titles.len();
         row.metadata_loaded = true;
         row.has_agent_marker = has_agent_marker;
+        row.is_review = is_review;
         row.signature = signature;
         self.all_rows.insert(row.id, Arc::clone(&self.rows[index]));
     }
@@ -784,6 +799,7 @@ impl App {
                 | Action::Forget
                 | Action::Rebase
                 | Action::RebaseUpdate
+                | Action::Review
                 | Action::TimeTravel
         ) {
             self.edit_expanded = false;
@@ -944,6 +960,16 @@ impl App {
                 changes.error = None;
                 return vec![Effect::OpenDiff(pane, changes.selected)];
             }
+            Action::OpenDiff if self.review_tip.is_some() => {
+                let tip = self.review_tip.expect("review selection has a tip");
+                let Some(base) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) else {
+                    return Vec::new();
+                };
+                if base != tip && self.selected.is_some_and(|index| self.is_row_reachable(index)) {
+                    self.clear_review_selection();
+                    return vec![Effect::StartReview { tip, base }];
+                }
+            }
             Action::OpenDiff => {
                 if let Some(target) = self.selected_tree_diff_target() {
                     return vec![Effect::OpenCommitDiff(target)];
@@ -1012,6 +1038,19 @@ impl App {
                     head: self.worktree_head,
                 }];
             }
+            Action::Review if self.can_finish_review() => {
+                return vec![Effect::FinishReview(
+                    self.rows[self.selected.expect("finishing review requires a selection")].id,
+                )];
+            }
+            Action::Review if self.can_review() => {
+                let tip = self.rows[self.selected.expect("review requires a selection")].id;
+                self.review_tip = Some(tip);
+                self.reachability_anchor = Some(tip);
+                self.junction_parent = None;
+                self.compute_reachable_rows();
+                self.leave_message("review base · j/k select ancestor · <enter> start · Esc cancel");
+            }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
@@ -1038,8 +1077,9 @@ impl App {
                 }
             }
             Action::ForceQuit => return vec![Effect::Quit],
+            Action::Cancel if self.review_tip.is_some() => self.clear_review_selection(),
             Action::Cancel | Action::Quit if self.changes_focus.is_some() => self.focus_history(),
-            Action::PreviewAuthorCopy(_) if self.changes_focus.is_some() => {}
+            Action::PreviewAuthorCopy(_) if self.review_tip.is_some() || self.changes_focus.is_some() => {}
             Action::PreviewAuthorCopy(value) => {
                 if value && !self.preview_author_copy {
                     self.reachability_anchor = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id);
@@ -1273,6 +1313,7 @@ impl App {
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
                             has_agent_marker: row.has_agent_marker,
+                            is_review: row.is_review,
                             signature: row.signature,
                         },
                     )
@@ -1386,6 +1427,13 @@ impl App {
         self.reachable_rows = None;
     }
 
+    fn clear_review_selection(&mut self) {
+        self.review_tip = None;
+        self.reachability_anchor = None;
+        self.junction_parent = None;
+        self.reachable_rows = None;
+    }
+
     pub(crate) fn focus_history(&mut self) {
         self.changes_focus = None;
         self.focus_feedback = None;
@@ -1456,12 +1504,12 @@ impl App {
         let distance = distance.max(1);
         let next = if down {
             (selected + 1..self.rows.len())
-                .filter(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .filter(|index| self.reachable_row_selectable(*index) && reachable.get(*index) == Some(&true))
                 .nth(distance - 1)
         } else {
             (0..selected)
                 .rev()
-                .filter(|index| !self.is_row_hidden(*index) && reachable.get(*index) == Some(&true))
+                .filter(|index| self.reachable_row_selectable(*index) && reachable.get(*index) == Some(&true))
                 .nth(distance - 1)
         };
         if let Some(next) = next {
@@ -1470,7 +1518,7 @@ impl App {
     }
 
     fn cycle_junction_parent(&mut self, forward: bool) -> bool {
-        if self.state != State::Complete {
+        if self.state != State::Complete || self.review_tip.is_some() {
             return false;
         }
         let Some(parent_count) = self
@@ -1505,7 +1553,10 @@ impl App {
             return;
         };
         let parent_count = self.rows[anchor_index].parent_ids.len();
-        let start = if parent_count > 1 {
+        let start = if self.review_tip.is_some() {
+            self.junction_parent = None;
+            anchor
+        } else if parent_count > 1 {
             let parent = self.junction_parent.get_or_insert(1);
             if *parent >= parent_count {
                 *parent = 1;
@@ -1550,6 +1601,15 @@ impl App {
         self.reachable_rows
             .as_ref()
             .is_none_or(|reachable| reachable.get(index).copied().unwrap_or(false))
+    }
+
+    fn reachable_row_selectable(&self, index: usize) -> bool {
+        !self.is_row_hidden(index)
+            || (self.review_tip.is_some()
+                && self
+                    .rows
+                    .get(index)
+                    .is_some_and(|row| self.hidden_rebase_bases.contains(&row.id)))
     }
 
     fn select(&mut self, selected: usize) {
@@ -1646,6 +1706,7 @@ impl App {
                 !self.hidden_rows.contains(&row.id)
                     && row.parent_ids.len() <= 1
                     && !self.known_merge_descendants.contains(&row.id)
+                    && (!row.is_review || !self.has_known_descendant(row.id))
             })
     }
 
@@ -1665,6 +1726,36 @@ impl App {
                 .selected
                 .and_then(|index| self.rows.get(index))
                 .is_some_and(|row| self.hidden_branch_updates.contains_key(&row.id))
+    }
+
+    pub(crate) fn can_review(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                !self.hidden_rows.contains(&row.id)
+                    && !row.parent_ids.is_empty()
+                    && !self.known_merge_descendants.contains(&row.id)
+                    && !row.is_review
+            })
+    }
+
+    pub(crate) fn can_finish_review(&self) -> bool {
+        self.state == State::Complete
+            && self.finish_review_available
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| row.is_review && Some(row.id) == self.worktree_head)
+    }
+
+    pub(crate) fn review_selection_active(&self) -> bool {
+        self.review_tip.is_some()
     }
 
     fn can_edit_head(&self) -> bool {
@@ -1690,8 +1781,9 @@ impl App {
         self.can_edit_head() && self.changes_focus.is_none() && self.split_available
     }
 
-    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, spill: bool, split: bool) {
+    pub(crate) fn set_head_edit_availability(&mut self, amend: bool, finish_review: bool, spill: bool, split: bool) {
         self.amend_available = amend;
+        self.finish_review_available = finish_review;
         self.spill_available = spill;
         self.split_available = split;
     }
@@ -2189,6 +2281,7 @@ mod tests {
             title: format!("commit {n}").into(),
             metadata_loaded: true,
             has_agent_marker: false,
+            is_review: false,
             signature: SignatureState::Unsigned,
         }
     }
@@ -2446,7 +2539,7 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_head_edit_availability(true, true, false);
+        app.set_head_edit_availability(true, false, true, false);
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
         assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
@@ -2454,7 +2547,7 @@ mod tests {
             app.update(Action::Split).is_empty(),
             "split needs both kinds of changes"
         );
-        app.set_head_edit_availability(true, true, true);
+        app.set_head_edit_availability(true, false, true, true);
         assert_eq!(app.update(Action::Split), vec![Effect::Split(id(2))]);
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!app.can_amend(), "a tree path cannot be amended");
@@ -2649,6 +2742,7 @@ mod tests {
                 attributions: 0..0,
                 title: "loaded".into(),
                 has_agent_marker: false,
+                is_review: false,
                 signature: SignatureState::Unsigned,
             },
             Vec::new(),
@@ -2771,6 +2865,48 @@ mod tests {
         app.update(Action::PreviewAuthorCopy(false));
         app.update(Action::MoveUp);
         assert_eq!(app.rows[app.selected.expect("normal navigation is restored")].id, id(2));
+    }
+
+    #[test]
+    fn review_selects_only_a_strict_ancestor_before_starting() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(5, &[3]),
+            row_with_parents(4, &[2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+            row(1),
+        ]);
+        complete(&mut app);
+        app.selected = app.rows.iter().position(|row| row.id == id(5));
+        app.hidden_rows.insert(id(1));
+        app.hidden_rebase_bases.insert(id(1));
+
+        assert!(app.can_review());
+        assert!(app.update(Action::Review).is_empty());
+        let tip_index = app.rows.iter().position(|row| row.id == id(5)).expect("tip is present");
+        let unrelated = app
+            .rows
+            .iter()
+            .position(|row| row.id == id(4))
+            .expect("unrelated row is present");
+        assert!(app.is_row_reachable(tip_index));
+        assert!(!app.is_row_reachable(unrelated));
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(3)));
+        app.update(Action::MoveDown);
+        assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
+        assert_eq!(
+            app.update(Action::OpenDiff),
+            vec![Effect::StartReview {
+                tip: id(5),
+                base: id(1),
+            }]
+        );
+        assert!(
+            app.is_row_reachable(unrelated),
+            "confirming restores ordinary navigation"
+        );
     }
 
     #[test]
