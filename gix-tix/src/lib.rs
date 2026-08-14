@@ -4,6 +4,7 @@
 
 mod animation;
 mod app;
+pub mod command;
 mod edit;
 mod history;
 mod logging;
@@ -739,31 +740,6 @@ pub struct Options {
     pub hide: Vec<OsString>,
     /// Add every successfully resolved worktree HEAD as a visible traversal tip.
     pub worktrees: bool,
-}
-
-/// An edit applied to the commit checked out by the current worktree.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum HeadEdit {
-    /// Add staged changes, or worktree changes when nothing is staged, to `HEAD`.
-    Amend,
-    /// Move the changes introduced by `HEAD` into the worktree.
-    Spill,
-}
-
-/// Apply `edit` to the current worktree's `HEAD` without starting the terminal UI.
-pub fn edit_head(repository: gix::ThreadSafeRepository, edit: HeadEdit) -> Result<Option<gix::ObjectId>> {
-    let _log_guard = logging::init().context("could not initialize tix diagnostics")?;
-    let repository = repository.to_thread_local();
-    let graph = edit::loaded_graph(&repository)?;
-    edit::head::perform(
-        repository,
-        &graph,
-        match edit {
-            HeadEdit::Amend => edit::head::Kind::Amend,
-            HeadEdit::Spill => edit::head::Kind::Spill,
-        },
-        None,
-    )
 }
 
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {

@@ -404,7 +404,7 @@ space first; changes blocks adapt within the remaining history width.
   worktree changes when the index already matches `HEAD`. `e s` spills that
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
-  unavailable and report a no-op through `tix edit amend|spill`.
+  unavailable and report a no-op through `tix amend|spill`.
 - With a path selected in the focused tree-changes block, the main `e` prefix
   offers `spill` and `e s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
