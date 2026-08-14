@@ -444,8 +444,9 @@ space first; changes blocks adapt within the remaining history width.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
   targets are trees, blobs, or other non-commit objects.
 - Time travel toward a pending destination cherry-picks and signs only the pending
-  ancestry through that destination. Pending descendants are reparented but remain
-  lazy and unsigned; traveling toward a non-pending ancestor leaves the entire
+  ancestry through that destination. Every later descendant is reparented and
+  becomes or remains lazy and unsigned, including ordinary commits created above
+  pending history; traveling toward a non-pending ancestor leaves the entire
   pending region untouched. A conflict
   retains the exact merge tree, conflict stages, prepared commits, and in-memory
   objects without changing the repository. The conflicting row shows a blinking
