@@ -41,7 +41,7 @@ pub(crate) enum DecorationKind {
 
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
 
-pub(crate) const PIN_PREFIX: &[u8] = b"refs/tix/pins/";
+pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Pin {
@@ -1291,21 +1291,10 @@ pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     if !head.is_detached() {
         return Ok(Vec::new());
     }
-    let Some(head) = head.id().map(gix::Id::detach) else {
+    if head.id().is_none() {
         return Ok(Vec::new());
-    };
-    all_pins(repo)?
-        .into_iter()
-        .filter_map(|pin| match repo.merge_base(head, pin.id) {
-            Ok(base) => Some(Ok((base.as_ref() == head).then_some(pin))),
-            Err(gix::repository::merge_base::Error::NotFound { .. }) => None,
-            Err(err) => Some(Err(err).context("could not determine tix pin reachability")),
-        })
-        .filter_map(|result| match result {
-            Ok(pin) => pin.map(Ok),
-            Err(err) => Some(Err(err)),
-        })
-        .collect()
+    }
+    all_pins(repo)
 }
 
 fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
@@ -2313,7 +2302,7 @@ mod tests {
 
     #[test]
     fn classifies_reference_kinds() {
-        assert_eq!(decoration_kind(b"refs/tix/pins/abcd"), DecorationKind::Pin);
+        assert_eq!(decoration_kind(b"refs/worktree/tix/pins/abcd"), DecorationKind::Pin);
         assert_eq!(decoration_kind(b"refs/heads/main"), DecorationKind::Local);
         assert_eq!(decoration_kind(b"refs/tags/v1"), DecorationKind::Tag);
         assert_eq!(decoration_kind(b"refs/remotes/origin/main"), DecorationKind::Remote);
@@ -2328,19 +2317,71 @@ mod tests {
         let head = repo.head_id()?.detach();
         let blob = repo.write_blob(b"not a commit")?.detach();
         repo.reference(
-            "refs/tix/pins/a",
+            "refs/worktree/tix/pins/a",
             head,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test malformed pin",
         )?;
         repo.reference(
-            "refs/tix/pins/abcd",
+            "refs/worktree/tix/pins/abcd",
             blob,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test non-commit pin",
         )?;
 
         assert!(all_pins(&repo)?.is_empty(), "invalid pins never enter history");
+        Ok(())
+    }
+
+    #[test]
+    fn pins_are_private_to_the_current_worktree_and_legacy_pins_are_ignored() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let linked = gix_testtools::tempfile::tempdir()?;
+        let linked_path = linked.path().join("linked");
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["worktree", "add", "-q", "--detach"])
+                .arg(&linked_path)
+                .arg("topic")
+                .status()?
+                .success(),
+            "the linked-worktree fixture is created"
+        );
+        let main = crate::open_test_repository(fixture.path())?;
+        let linked = crate::open_test_repository(&linked_path)?;
+        let main_id = main.head_id()?.detach();
+        let linked_id = linked.head_id()?.detach();
+        for (repo, id) in [(&main, main_id), (&linked, linked_id)] {
+            repo.reference(
+                "refs/worktree/tix/pins/abcd",
+                id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "test private pin",
+            )?;
+        }
+        main.reference(
+            "refs/tix/pins/legacy",
+            linked_id,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test legacy pin",
+        )?;
+
+        assert_eq!(
+            all_pins(&main)?.into_iter().map(|pin| pin.id).collect::<Vec<_>>(),
+            [main_id],
+            "the main worktree sees only its private pin"
+        );
+        assert_eq!(
+            all_pins(&linked)?.into_iter().map(|pin| pin.id).collect::<Vec<_>>(),
+            [linked_id],
+            "the linked worktree sees only its private pin"
+        );
+        assert!(
+            main.try_find_reference("refs/tix/pins/legacy")?.is_some(),
+            "the ignored shared pin remains untouched"
+        );
         Ok(())
     }
 
