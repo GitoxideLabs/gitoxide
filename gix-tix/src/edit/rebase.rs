@@ -1022,10 +1022,10 @@ fn validate(
         if parents.len() > 1 && (position > 0 || removed || tree == Tree::CherryPick) {
             anyhow::bail!("descendant merge commits cannot be rebased");
         }
-        if repeat {
+        if repeat && position == 0 {
             let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
             if !is_pending(&commit) {
-                anyhow::bail!("all repeated rebase commits must be pending");
+                anyhow::bail!("the root of a repeated rebase must be pending");
             }
         }
     }
@@ -1626,6 +1626,97 @@ mod tests {
             files.stdout, b"base\ntip\n",
             "repeat cherry-picks the descendant against its recorded original parent"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_repeat_accepts_ordinary_descendants_above_legacy_signed_pending_commits() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "--allow-empty", "-q", "-m", "newer"])
+                .status()?
+                .success(),
+            "the fixture gains a second descendant"
+        );
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let middle = repo.rev_parse_single("HEAD~2")?.detach();
+        let old_tip = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_newer = repo.head_id()?.detach();
+        let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        commit.tree = repo.find_commit(repo.rev_parse_single("HEAD~3")?)?.tree_id()?.detach();
+        let marked = perform(
+            &repo,
+            &graph,
+            Edit::Replace { target: middle, commit },
+            Signature::InvalidateExisting,
+            Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?;
+        let pending_tip = marked.map(old_tip).expect("the first descendant remains");
+        let pending_newer = marked.map(old_newer).expect("the second descendant remains");
+
+        let mut legacy_tip = repo.find_commit(pending_tip)?.decode()?.into_owned()?;
+        legacy_tip
+            .extra_headers
+            .push(("gpgsig".into(), "legacy signature".into()));
+        let legacy_tip = repo.write_object(&legacy_tip)?.detach();
+        let mut legacy_newer = repo.find_commit(pending_newer)?.decode()?.into_owned()?;
+        legacy_newer.parents = [legacy_tip].into_iter().collect();
+        legacy_newer
+            .extra_headers
+            .push(("gpgsig".into(), "legacy signature".into()));
+        let legacy_newer = repo.write_object(&legacy_newer)?.detach();
+        repo.find_reference("refs/heads/main")?
+            .set_target_id(legacy_newer, "test legacy pending commits")?;
+        drop(repo);
+
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["commit", "--allow-empty", "-q", "-m", "ordinary descendant"])
+                .status()?
+                .success(),
+            "an ordinary commit can be created above pending history"
+        );
+        let repo = open(fixture.path())?;
+        let ordinary = repo.head_id()?.detach();
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = perform(
+            &repo,
+            &graph,
+            Edit::Repeat {
+                base: legacy_tip,
+                checkout: legacy_tip,
+            },
+            Signature::RedoIfNeeded,
+            Tree::CherryPick,
+        )?
+        .complete()?;
+        let selected = outcome
+            .map(legacy_tip)
+            .expect("the selected pending commit is retained");
+        assert!(!has_marker(&repo.find_commit(selected)?.decode()?.into_owned()?));
+        for id in [legacy_newer, ordinary].into_iter().map(|id| {
+            outcome
+                .map(id)
+                .expect("every descendant is retained while repeating the rebase")
+        }) {
+            let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+            assert!(has_marker(&commit), "later descendants become or remain pending");
+            assert!(
+                commit
+                    .extra_headers
+                    .iter()
+                    .filter(|(name, _)| name == "gpgsig" || name == "gpgsig-sha256")
+                    .all(|(_, value)| value.is_empty()),
+                "later pending descendants have no usable signature"
+            );
+        }
         Ok(())
     }
 
