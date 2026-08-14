@@ -16,7 +16,7 @@ const HELP: &[u8] = br#"
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
 - Prefix `pick` or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
-- Saving an unchanged document is a no-op. Otherwise, the ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
+- Saving an unchanged document is a no-op unless listed commits have a pending rebase. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Mutable refs follow rewritten and dropped commits, except tags and remote-tracking refs. New unreferenced leaves are pinned.
 - A checkout conflict uses tix's standard suspended-conflict flow; concurrent ref changes abort the update.
 -->
@@ -36,6 +36,7 @@ pub(crate) struct Prepared {
     marker_required: bool,
     checkout_allowed: bool,
     expected_refs: Vec<rebase::ExpectedRef>,
+    pub has_pending: bool,
 }
 
 struct Section {
@@ -60,6 +61,9 @@ pub(crate) fn prepare(
     let scope_set: HashSet<_> = scope.iter().copied().collect();
     let marker_required = head.is_some_and(|head| scope_set.contains(&head));
     let expected_refs = rebase::capture_refs(repo, &scope)?;
+    let has_pending = commits.iter().try_fold(false, |pending, commit| {
+        Ok::<_, anyhow::Error>(pending || rebase::has_marker(&repo.find_commit(commit.id)?.decode()?.into_owned()?))
+    })?;
 
     let mut children = HashMap::<ObjectId, Vec<ObjectId>>::new();
     let by_id: HashMap<_, _> = commits.iter().map(|commit| (commit.id, commit)).collect();
@@ -130,6 +134,7 @@ pub(crate) fn prepare(
         marker_required,
         checkout_allowed: repo.workdir().is_some(),
         expected_refs,
+        has_pending,
     })
 }
 
@@ -318,6 +323,8 @@ fn resolve_commit(repo: &gix::Repository, value: &str) -> Result<ObjectId> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     fn repo() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
@@ -362,6 +369,7 @@ mod tests {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
         let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        assert!(!prepared.has_pending);
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(document.starts_with("<!-- Rebase help is at the bottom of this file. -->"));
         assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
@@ -378,6 +386,62 @@ mod tests {
             "complete instructions follow the editable todo"
         );
         assert!(document.ends_with("-->\n"), "all trailing help is one Markdown comment");
+        Ok(())
+    }
+
+    #[test]
+    fn an_unchanged_todo_replays_pending_commits_with_normal_plan_semantics() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (base, middle, _tip, _) = commits(&repo)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        commit.tree = repo.find_commit(base)?.tree_id()?.detach();
+        let marked = rebase::perform(
+            &repo,
+            &graph,
+            rebase::Edit::Replace { target: middle, commit },
+            rebase::Signature::InvalidateExisting,
+            rebase::Tree::LeaveAsIsAndMark,
+        )?
+        .complete()?
+        .selected
+        .expect("the pending replacement selects its rewritten commit");
+        let tip = repo.head_id()?.detach();
+        let commits = vec![
+            Commit {
+                id: tip,
+                parents: vec![marked],
+                info: "tip".into(),
+            },
+            Commit {
+                id: marked,
+                parents: vec![base],
+                info: "middle".into(),
+            },
+        ];
+        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        assert!(
+            prepared.has_pending,
+            "pending commits make an unchanged todo actionable"
+        );
+        let document = prepared.document.clone();
+        let plan = parse(&repo, prepared, &document)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+
+        let mut current = Some(repo.head_id()?.detach());
+        while let Some(id) = current {
+            let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+            assert!(!rebase::has_marker(&commit), "the eager @ ancestry is replayed");
+            current = commit.parents.first().copied();
+        }
+        let files = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["ls-tree", "-r", "--name-only", "HEAD"])
+            .output()?;
+        assert!(files.status.success());
+        assert_eq!(files.stdout, b"base\ntip\n", "replay uses the recorded original parent");
         Ok(())
     }
 

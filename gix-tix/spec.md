@@ -340,7 +340,7 @@ space first; changes blocks adapt within the remaining history width.
 - An unchanged editor document is a no-op. Otherwise tix recreates the commit,
   signs it when commit-signing configuration is enabled, and rewrites every
   linear descendant with unchanged trees and corrected parentage. The rewritten
-  region is marked `tix-rebase: pending` for cherry-pick replay during time travel.
+  region is marked with `tix-rebase-parent` for cherry-pick replay during time travel.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
@@ -415,7 +415,7 @@ space first; changes blocks adapt within the remaining history width.
   same lazy signature-aware rebase used by amend and spill.
 - All three operations leave worktree files untouched, reset the affected worktree's
   index to the rewritten commit, and cheaply rewrite linear descendants with
-  their trees unchanged. Rewritten commits carry `tix-rebase: pending`, invalidate
+  their trees unchanged. Rewritten commits carry `tix-rebase-parent`, invalidate
   existing signatures, retain the original parent needed for later replay, and
   use a bright-cyan commit marker.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
@@ -492,10 +492,11 @@ space first; changes blocks adapt within the remaining history width.
   preparation—including cherry-pick conflict detection—finishes before objects
   become reachable through refs.
 - `Tree::LeaveAsIs` rewrites parentage without changing trees;
-  `LeaveAsIsAndMark` additionally writes `tix-rebase: pending`; and `CherryPick`
-  transplants each tree delta. User edits use `LeaveAsIsAndMark`; time travel is
-  the only eager `CherryPick` caller. A successful repeated rebase clears its
-  markers. On conflict, the existing `tix-rebase-parent` identifies the original
+  `LeaveAsIsAndMark` additionally writes the original first parent to
+  `tix-rebase-parent`, using the repository hash kind's null ID for a root; and
+  `CherryPick` transplants each tree delta. User edits use `LeaveAsIsAndMark`;
+  time travel is the only eager `CherryPick` caller. A successful repeated rebase
+  clears the marker. On conflict, `tix-rebase-parent` identifies the original
   base and later descendants remain marked instead of being cherry-picked.
 - `Signature::RedoIfNeeded` signs every rewritten commit when signing is
   configured and otherwise removes stale signature headers.
@@ -545,7 +546,9 @@ space first; changes blocks adapt within the remaining history width.
   remain untouched. Every resulting leaf without a surviving mutable ref gets a
   direct `refs/worktree/tix/pins/*` ref, except the checked-out leaf. Concurrent
   ref edits win by making the transaction fail; the editor result is not rebuilt
-  against a later graph snapshot. Leaving the document unchanged is a no-op.
+  against a later graph snapshot. Leaving the document unchanged is a no-op unless
+  its scope contains pending commits; then the unchanged plan runs with the same
+  eager `@` ancestry and lazy-fork rules.
 
 ### Editing shortcuts
 
