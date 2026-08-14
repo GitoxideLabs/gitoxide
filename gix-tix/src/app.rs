@@ -574,6 +574,10 @@ impl App {
     }
 
     pub(crate) fn arm_rebase_conflict(&mut self, id: ObjectId) {
+        tracing::warn!(
+            commit_id = %id,
+            "rebase suspended on conflict; press <enter> to checkout for resolution"
+        );
         self.pending_rebase_conflict = Some(id);
         self.leave_message("rebase conflict · <enter> checkout for resolution · any other key cancel");
     }

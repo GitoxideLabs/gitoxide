@@ -869,6 +869,10 @@ fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keybo
     execute!(backend, DisableMouseCapture, DisableFocusChange)
 }
 
+fn is_key_press(event: &TerminalEvent) -> bool {
+    matches!(event, TerminalEvent::Key(key) if key.kind != KeyEventKind::Release)
+}
+
 fn event_loop(
     terminal: &mut ratatui::DefaultTerminal,
     mut repository: gix::ThreadSafeRepository,
@@ -1502,7 +1506,7 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
-        let is_key_event = matches!(&terminal_event, TerminalEvent::Key(_));
+        let key_pressed = is_key_press(&terminal_event);
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
                 let action = action_with_shortcut_groups(key, app.history_display_expanded, app.edit_expanded);
@@ -1605,18 +1609,21 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
-        if is_key_event && pending_rebase_conflict.is_some() {
+        if key_pressed && pending_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
                 let conflict = pending_rebase_conflict
                     .take()
                     .expect("a pending conflict was checked before accepting it");
+                let original = conflict.original();
                 match conflict.accept() {
                     Ok((notice, id)) => {
+                        tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
                         app.leave_message(notice);
                         app.select_commit_after_refresh(id);
                     }
                     Err(err) => {
+                        tracing::warn!(commit_id = %original, error = %err, "suspended rebase conflict checkout failed");
                         app.clear_rebase_conflict();
                         app.leave_message(format!("conflict checkout: {err:#}"));
                     }
@@ -1644,7 +1651,10 @@ fn event_loop(
                 urgent = true;
                 continue;
             }
-            pending_rebase_conflict = None;
+            let conflict = pending_rebase_conflict
+                .take()
+                .expect("a pending conflict was checked before discarding it");
+            tracing::info!(commit_id = %conflict.original(), ?action, "discarded suspended rebase conflict");
             app.clear_rebase_conflict();
             dirty = true;
             urgent = true;
@@ -5144,6 +5154,14 @@ mod tests {
             Some(&Action::ToggleDate),
             false
         ));
+    }
+
+    #[test]
+    fn key_releases_do_not_cancel_suspended_operations() {
+        let key = |kind| TerminalEvent::Key(KeyEvent::new_with_kind(KeyCode::Char('t'), KeyModifiers::NONE, kind));
+        assert!(is_key_press(&key(KeyEventKind::Press)));
+        assert!(is_key_press(&key(KeyEventKind::Repeat)));
+        assert!(!is_key_press(&key(KeyEventKind::Release)));
     }
 
     #[test]
