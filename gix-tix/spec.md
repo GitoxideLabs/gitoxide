@@ -95,9 +95,10 @@ without trading responsiveness for metadata that is not visible.
   row keeps only bold `@`.
 - Local branches checked out in other worktrees are displayed as `short-name@`
   in light blue instead of their plain branch decoration. Other detached
-  worktrees use their checkout directory basename. The current worktree is
-  represented by the commit's `@` marker and ordinary local reference; identical
-  labels are deduplicated.
+  worktrees use their checkout directory basename. The current worktree's
+  symbolic branch is displayed as `@short-name` in the local-reference color;
+  if its HEAD is detached, a branch that happens to point at the same commit
+  remains an ordinary branch label. Identical labels are deduplicated.
 - When reference labels are hidden, worktree labels are visible only on the
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.
