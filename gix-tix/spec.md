@@ -156,6 +156,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
+| `?` | Toggle the view-information key group. Its actions remain direct shortcuts. |
 | `[` | Toggle graph/metadata alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Toggle committer dates. |
@@ -175,14 +176,16 @@ without trading responsiveness for metadata that is not visible.
 | `t` | Time-travel to the selected commit, or return through its tix pin. |
 
 The display group remains open for consecutive display changes and closes on
-navigation or another recognized command. `[` and overlay controls remain direct
-shortcuts. The footer underlines the `v` in `view`; while active, `view (` contains
+navigation or another recognized command. The `?` group similarly remains open
+for signature verification, alignment, message, and changes actions, but these
+actions retain their direct shortcuts while the group is closed. The footer
+underlines the `v` in `view`; while active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
 `v` prefix and the `e` prefix when it is addressable. Remaining history-level
 actions follow before movement, panning, and diff navigation shortcuts. Copy
 immediately follows the edit group; the reference toggle immediately precedes
-signature verification when verification is available; quit is always last.
+the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.
 The Enter key is written as `<enter>` throughout.
