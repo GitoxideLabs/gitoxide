@@ -3,7 +3,7 @@ use std::{path::Path, process::Command};
 use anyhow::{Context, Result};
 use gix::{
     ObjectId,
-    bstr::{BString, ByteSlice},
+    bstr::{BStr, BString, ByteSlice},
 };
 
 use crate::{history, open_repository};
@@ -27,7 +27,7 @@ pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::
                 .flatten()
         })
         .map(|name| {
-            if !name.starts_with(history::REVIEW_PREFIX) {
+            if history::review_number(name.as_bstr()).is_none() {
                 anyhow::bail!("review commit names an invalid review reference");
             }
             BString::from(name)
@@ -41,18 +41,39 @@ pub(crate) fn is_review(commit: &gix::objs::Commit) -> bool {
     reference(commit).ok().flatten().is_some()
 }
 
-pub(super) fn deletion(
+pub(super) fn deletions(
     repo: &gix::Repository,
     commit: &gix::objs::Commit,
-) -> Result<Option<(gix::refs::FullName, gix::refs::Target)>> {
+) -> Result<Vec<(gix::refs::FullName, gix::refs::Target)>> {
     let Some(name) = reference(commit)? else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
-    let Some(reference) = repo.try_find_reference(name.as_ref())? else {
-        return Ok(None);
-    };
-    let target = reference.target().into_owned();
-    Ok(Some((name, target)))
+    resources(repo, name)
+}
+
+pub(super) fn resources(
+    repo: &gix::Repository,
+    name: gix::refs::FullName,
+) -> Result<Vec<(gix::refs::FullName, gix::refs::Target)>> {
+    let stash = stash_reference(name.as_bstr())?;
+    let mut out = Vec::new();
+    for name in [name, stash] {
+        if let Some(reference) = repo.try_find_reference(name.as_ref())? {
+            out.push((name, reference.target().into_owned()));
+        }
+    }
+    Ok(out)
+}
+
+pub(super) fn stash_reference(review: &BStr) -> Result<gix::refs::FullName> {
+    let number = history::review_number(review).context("review reference has no numeric identity")?;
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(history::REVIEW_STASH_PREFIX),
+        number.to_str_lossy()
+    )
+    .try_into()
+    .context("generated an invalid review stash reference")
 }
 
 #[tracing::instrument(skip_all, fields(%tip, %base))]
@@ -161,23 +182,30 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
     let mut reference = repo
         .find_reference(review_ref.as_ref())
         .context("the review reference is missing")?;
-    let target = reference.target().into_owned();
     let tip = reference
         .peel_to_id()
         .context("the review reference does not resolve")?
         .detach();
+    let delete_refs = resources(&repo, review_ref.clone())?;
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
         if super::rebase::has_marker(&endpoint) {
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    super::rebase::finish_review(&repo, graph, review, tip, review_ref, target)?
+    super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs)?
         .selected
         .context("finishing review did not produce a commit")
 }
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
+    if is_dirty(workdir)? {
+        anyhow::bail!("review requires a clean index and worktree");
+    }
+    Ok(())
+}
+
+pub(super) fn is_dirty(workdir: &Path) -> Result<bool> {
     let output = Command::new("git")
         .arg("-C")
         .arg(workdir)
@@ -187,10 +215,7 @@ pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
     if !output.status.success() {
         anyhow::bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
     }
-    if !output.stdout.is_empty() {
-        anyhow::bail!("review requires a clean index and worktree");
-    }
-    Ok(())
+    Ok(!output.stdout.is_empty())
 }
 
 fn next_reference(repo: &gix::Repository) -> Result<gix::refs::FullName> {
@@ -357,6 +382,15 @@ mod tests {
             fixture.path(),
             &["update-ref", "refs/heads/review-child", &child.to_string()],
         )?;
+        let stash_ref = stash_reference(started.reference.as_bstr())?;
+        run(
+            fixture.path(),
+            &[
+                "update-ref",
+                stash_ref.as_bstr().to_str_lossy().as_ref(),
+                &tip.to_string(),
+            ],
+        )?;
         drop(repo);
         let repo = gix::open_opts(
             fixture.path(),
@@ -392,6 +426,10 @@ mod tests {
         assert!(
             repo.try_find_reference(started.reference.as_ref())?.is_none(),
             "finishing removes the review resource"
+        );
+        assert!(
+            repo.try_find_reference(stash_ref.as_ref())?.is_none(),
+            "finishing also removes saved review worktree state"
         );
         Ok(())
     }

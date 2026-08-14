@@ -16,23 +16,24 @@ pub(crate) fn perform(
         .context("could not find the commit to forget")?
         .decode()?
         .into_owned()?;
-    let deletion = super::review::deletion(&repo, &commit)?;
-    let result = match deletion {
-        Some(deletion) => rebase::perform_deleting_ref(
+    let deletions = super::review::deletions(&repo, &commit)?;
+    let result = if deletions.is_empty() {
+        rebase::perform(
             &repo,
             graph,
             rebase::Edit::Remove { target: id },
             rebase::Signature::RedoIfNeeded,
             rebase::Tree::LeaveAsIsAndMark,
-            deletion,
-        ),
-        None => rebase::perform(
+        )
+    } else {
+        rebase::perform_deleting_refs(
             &repo,
             graph,
             rebase::Edit::Remove { target: id },
             rebase::Signature::RedoIfNeeded,
             rebase::Tree::LeaveAsIsAndMark,
-        ),
+            deletions,
+        )
     }?;
     Ok(result.complete()?.selected)
 }

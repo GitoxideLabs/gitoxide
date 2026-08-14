@@ -237,15 +237,15 @@ pub(crate) fn perform(
     perform_inner(repo, graph, edit, signature, tree_mode, Vec::new())
 }
 
-pub(super) fn perform_deleting_ref(
+pub(super) fn perform_deleting_refs(
     repo: &gix::Repository,
     graph: &HistoryGraph,
     edit: Edit,
     signature: Signature,
     tree_mode: Tree,
-    deletion: (gix::refs::FullName, Target),
+    deletions: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Perform> {
-    perform_inner(repo, graph, edit, signature, tree_mode, vec![deletion])
+    perform_inner(repo, graph, edit, signature, tree_mode, deletions)
 }
 
 fn perform_inner(
@@ -461,7 +461,7 @@ pub(super) fn finish_review(
     review: ObjectId,
     tip: ObjectId,
     review_ref: gix::refs::FullName,
-    review_target: Target,
+    delete_refs: Vec<(gix::refs::FullName, Target)>,
 ) -> Result<Outcome> {
     let mut repo = repo.clone();
     let signing = repo
@@ -571,7 +571,7 @@ pub(super) fn finish_review(
         committer,
         expected_refs: None,
         pins: Vec::new(),
-        delete_refs: vec![(review_ref, review_target)],
+        delete_refs,
     };
     prepared.finish()
 }
@@ -697,9 +697,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
     let mut delete_refs = Vec::new();
     for id in &dropped {
         let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
-        if let Some(deletion) = super::review::deletion(&repo, &commit)? {
-            delete_refs.push(deletion);
-        }
+        delete_refs.extend(super::review::deletions(&repo, &commit)?);
     }
     for dropped in dropped {
         let mut ancestor = graph
@@ -1843,7 +1841,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_a_review_commit_removes_its_review_reference() -> gix_testtools::Result {
+    fn dropping_a_review_commit_removes_all_review_resources() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
         let base = repo.rev_parse_single("HEAD~2")?.detach();
@@ -1862,6 +1860,12 @@ mod tests {
             old_middle,
             PreviousValue::MustNotExist,
             "test review resource",
+        )?;
+        repo.reference(
+            "refs/worktree/tix/review/stashes/1",
+            old_tip,
+            PreviousValue::MustNotExist,
+            "test review stash resource",
         )?;
         repo.reference(
             "refs/heads/main",
@@ -1889,6 +1893,10 @@ mod tests {
         assert!(
             repo.try_find_reference("refs/worktree/tix/review/1")?.is_none(),
             "dropping the review commit removes its associated resource"
+        );
+        assert!(
+            repo.try_find_reference("refs/worktree/tix/review/stashes/1")?.is_none(),
+            "dropping the review commit also removes its saved worktree state"
         );
         Ok(())
     }
