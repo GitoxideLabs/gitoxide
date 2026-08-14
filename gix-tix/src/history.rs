@@ -1327,13 +1327,24 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
 
 pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     let head = repo.head().context("could not read HEAD while resolving tix pins")?;
-    if !head.is_detached() {
+    let detached = head.is_detached();
+    let Some(head_id) = head.id().map(gix::Id::detach) else {
         return Ok(Vec::new());
+    };
+    drop(head);
+    let pins = all_pins(repo)?;
+    if detached {
+        return Ok(pins);
     }
-    if head.id().is_none() {
-        return Ok(Vec::new());
-    }
-    all_pins(repo)
+    Ok(pins
+        .into_iter()
+        .filter(|pin| {
+            pin.id != head_id
+                && repo
+                    .merge_base(head_id, pin.id)
+                    .is_ok_and(|base| base.as_ref() == head_id)
+        })
+        .collect())
 }
 
 fn referenced_refs(repo: &gix::Repository, revisions: &[OsString]) -> Result<HashMap<BString, gix::refs::Target>> {
