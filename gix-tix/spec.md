@@ -339,19 +339,28 @@ space first; changes blocks adapt within the remaining history width.
 
 ### New commits
 
-- `e`, then `n`, creates a child of the selected commit, or a root commit for an
-  unborn `HEAD`. It is available only with a live worktree, after history
-  completion, and when the selected parent has no known merge descendant.
+- `e n` creates a child of the selected commit from tracked changes, or a root
+  commit for an unborn `HEAD`. A changed index wins; otherwise, tracked worktree
+  changes are used. Untracked files never enter an implicit new commit and remain
+  untracked. It is available only with a live worktree, after history completion,
+  and when the selected parent has no known merge descendant.
+- `e m` creates an explicit empty commit which reuses the selected parent's tree,
+  or the empty tree for an unborn history. Existing index and worktree state is
+  preserved exactly. Both forms reject unresolved index conflicts.
+- A current worktree-changes cache controls which actions are advertised without
+  opening a repository: tracked changes offer both `new` and `new-empty`, while a
+  clean or untracked-only worktree offers only `new-empty`. If no current cache is
+  available, both are shown and `new` validates its candidate before opening the
+  editor, directing an empty candidate to `new-empty`.
 - Before launching the editor, tix resolves identities, signing configuration,
   index conflicts, filters,
   candidate tree, per-path diffstat, and a provisional commit entirely through an
   in-memory object database. Cancellation and preflight failure write no object,
   reference, index, or worktree state.
 - A changed index supplies the complete commit tree and wins over unstaged
-  changes. Otherwise, when the worktree `HEAD` is the selected parent, worktree
-  changes are filtered into a tree. With no applicable changes—or when the
-  selected parent is not the worktree base—the parent tree is reused; an unborn
-  repository starts from the empty tree.
+  changes. Otherwise, when the worktree `HEAD` is the selected parent, tracked
+  worktree changes are filtered into a tree. A normal `new` rejects a tree equal
+  to its parent; `new-empty` deliberately reuses it.
 - The Markdown editor buffer contains editable identities and dates, a `what`
   title, a `why` body, optional attribution trailers, and a commented Git-style
   per-path diffstat with signed net line counts. Commit hooks are not run.

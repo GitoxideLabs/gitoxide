@@ -16,10 +16,21 @@ pub(crate) struct Prepared {
     pub(super) parent: Option<ObjectId>,
     pub(super) tree: ObjectId,
     pub(super) objects: gix::odb::memory::Storage,
+    pub(crate) is_empty: bool,
+    pub(super) reset_index: bool,
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
-pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
+pub(crate) fn prepare(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
+    prepare_inner(repo, parent, false)
+}
+
+#[tracing::instrument(skip_all, fields(parent = ?parent))]
+pub(crate) fn prepare_empty(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
+    prepare_inner(repo, parent, true)
+}
+
+fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: bool) -> Result<Prepared> {
     repo.workdir().context("creating a commit requires a worktree")?;
     let head = repo.head().context("could not read HEAD before creating a commit")?;
     let head_id = head.id().map(gix::Id::detach);
@@ -58,6 +69,7 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
             .context("could not load the parent tree")?,
         None => repo.empty_tree(),
     };
+    let baseline_id = baseline.id;
     let index = repo.index_or_empty().context("could not load the index")?;
     if index
         .entries()
@@ -68,10 +80,12 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
     }
     let index_tree = index_tree(&repo, &index)?;
     let based_on_parent = head_id == parent;
-    let tree = if based_on_parent && index_tree != baseline.id {
+    let tree = if empty {
+        baseline.id
+    } else if based_on_parent && index_tree != baseline.id {
         index_tree
     } else if based_on_parent {
-        worktree_tree(&repo, &baseline)?
+        worktree_tree_tracked(&repo, &baseline, &index)?
     } else {
         baseline.id
     };
@@ -118,6 +132,8 @@ pub(crate) fn prepare(mut repo: gix::Repository, parent: Option<ObjectId>) -> Re
         parent,
         tree,
         objects,
+        is_empty: tree == baseline_id,
+        reset_index: !empty,
     })
 }
 
@@ -140,13 +156,31 @@ pub(super) fn index_tree(repo: &gix::Repository, index: &gix::index::File) -> Re
 
 pub(super) fn worktree_tree(repo: &gix::Repository, baseline: &gix::Tree<'_>) -> Result<ObjectId> {
     let changes = load_worktree_changes_without_lines(repo)?;
-    worktree_tree_with_changes(repo, baseline, &changes)
+    worktree_tree_with_changes_inner(repo, baseline, &changes, None)
+}
+
+fn worktree_tree_tracked(
+    repo: &gix::Repository,
+    baseline: &gix::Tree<'_>,
+    index: &gix::index::File,
+) -> Result<ObjectId> {
+    let changes = load_worktree_changes_without_lines(repo)?;
+    worktree_tree_with_changes_inner(repo, baseline, &changes, Some(index))
 }
 
 pub(super) fn worktree_tree_with_changes(
     repo: &gix::Repository,
     baseline: &gix::Tree<'_>,
     changes: &crate::Changes,
+) -> Result<ObjectId> {
+    worktree_tree_with_changes_inner(repo, baseline, changes, None)
+}
+
+fn worktree_tree_with_changes_inner(
+    repo: &gix::Repository,
+    baseline: &gix::Tree<'_>,
+    changes: &crate::Changes,
+    tracked_by: Option<&gix::index::File>,
 ) -> Result<ObjectId> {
     if changes.paths.is_empty() {
         return Ok(baseline.id);
@@ -160,6 +194,15 @@ pub(super) fn worktree_tree_with_changes(
         .iter()
         .filter(|change| change.group == ChangeGroup::Unstaged)
     {
+        if tracked_by.is_some_and(|index| {
+            index.entry_by_path(change.path.as_bstr()).is_none()
+                && change
+                    .source
+                    .as_ref()
+                    .is_none_or(|source| index.entry_by_path(source.as_bstr()).is_none())
+        }) {
+            continue;
+        }
         if let Some(source) = &change.source {
             editor
                 .remove(source)
@@ -205,6 +248,7 @@ pub(crate) fn apply(
         rebase::Edit::Insert {
             anchor: prepared.parent,
             commit,
+            reset_index: prepared.reset_index,
         },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
@@ -531,7 +575,7 @@ mod tests {
                 .success()
         );
         let before = gix_testtools::repository::snapshot(fixture.path())?;
-        let prepared = prepare(open(fixture.path())?, None)?;
+        let prepared = prepare_empty(open(fixture.path())?, None)?;
         assert_eq!(
             gix_testtools::repository::snapshot(fixture.path())?,
             before,
@@ -553,6 +597,50 @@ mod tests {
             Some(b"refs/heads/main".into()),
             "the unborn branch is created and remains checked out"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_empty_commit_preserves_index_and_worktree_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let parent = open(fixture.path())?.head_id()?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let prepared = prepare_empty(open(fixture.path())?, Some(parent))?;
+        assert!(prepared.is_empty, "the explicit commit reuses its parent's tree");
+        let edited = prepared.document.replacen(b"what\n\nwhy", b"empty\n\nreason", 1);
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let new_id = apply(open(fixture.path())?, &graph, prepared, &edited)?;
+        let repository = open(fixture.path())?;
+        let commit = repository.find_commit(new_id)?;
+        assert_eq!(
+            commit.tree_id()?.detach(),
+            repository.find_commit(parent)?.tree_id()?.detach(),
+            "the explicit empty commit keeps the parent tree"
+        );
+        let after = gix_testtools::repository::snapshot(fixture.path())?;
+        assert_eq!(after.index, before.index, "staged changes remain staged");
+        assert_eq!(
+            after.worktree, before.worktree,
+            "worktree changes remain byte-identical"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn implicit_new_commit_ignores_untracked_files() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["reset", "--hard", "-q", "HEAD"])
+                .status()?
+                .success(),
+            "tracked files are restored while the untracked fixture remains"
+        );
+        let parent = open(fixture.path())?.head_id()?.detach();
+        let prepared = prepare(open(fixture.path())?, Some(parent))?;
+        assert!(prepared.is_empty, "untracked files do not enter an implicit new commit");
         Ok(())
     }
 

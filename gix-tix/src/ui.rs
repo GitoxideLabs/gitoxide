@@ -246,6 +246,11 @@ pub(crate) fn draw_with_worktree(
     if let Some(changes) = worktree_changes {
         app.set_worktree_conflicted(changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged));
     }
+    app.set_new_commit_availability(
+        (app.changes_mode == Some(ChangesMode::Both))
+            .then_some(worktree_changes)
+            .flatten(),
+    );
     let selected_is_head = app.selected.and_then(|index| app.rows.get(index)).is_some_and(|row| {
         decorations
             .get(&row.id)
@@ -755,6 +760,9 @@ pub(crate) fn draw_with_worktree(
             }
             if app.changes_focus.is_none() && app.can_create_commit() {
                 options.push(("new", 'n'));
+            }
+            if app.changes_focus.is_none() && app.can_create_empty_commit() {
+                options.push(("new-empty", 'm'));
             }
             if app.can_fork_commit() {
                 options.push(("fork", 'f'));
@@ -2749,7 +2757,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
         assert!(
-            rendered_line(&terminal, 1).contains("edit (reword · new · fork · d forget · return)"),
+            rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return)"),
             "the active edit prefix contains exactly its actionable commands"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
@@ -3658,6 +3666,7 @@ mod tests {
             diffs: Vec::new(),
             lines_added: 42,
             lines_removed: 17,
+            has_tracked_changes: false,
         };
         let mut terminal = Terminal::new(TestBackend::new(120, 16))?;
 
