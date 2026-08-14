@@ -1802,7 +1802,7 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("reword: {err:#}")),
                     }
                 }
-                Effect::NewCommit(parent) => {
+                Effect::NewCommit { parent, empty } => {
                     let result = history_graph
                         .as_ref()
                         .context("creating a commit requires a completed history graph")
@@ -1813,7 +1813,11 @@ fn event_loop(
                                 repository_is_bare,
                                 graph,
                                 parent,
-                                CreateMode::Insert,
+                                if empty {
+                                    CreateMode::InsertEmpty
+                                } else {
+                                    CreateMode::Insert
+                                },
                                 enhanced_keyboard,
                             )
                         });
@@ -3159,6 +3163,7 @@ fn rebase_history(
 #[derive(Clone, Copy)]
 enum CreateMode {
     Insert,
+    InsertEmpty,
     Fork,
 }
 
@@ -3175,7 +3180,14 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before creating commit")?;
     repository.object_cache_size(None);
-    let prepared = edit::create::prepare(repository, parent)?;
+    let prepared = if matches!(mode, CreateMode::InsertEmpty) {
+        edit::create::prepare_empty(repository, parent)?
+    } else {
+        edit::create::prepare(repository, parent)?
+    };
+    if matches!(mode, CreateMode::Insert) && prepared.is_empty {
+        anyhow::bail!("the new commit would be empty; use new-empty instead");
+    }
     let Some(edited) = edit::edit_document(
         terminal,
         &prepared.editor,
@@ -3190,7 +3202,7 @@ fn create_commit(
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
     match mode {
-        CreateMode::Insert => edit::create::apply(repository, graph, prepared, &edited),
+        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited),
         CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited),
     }
     .map(Some)
@@ -3686,11 +3698,11 @@ fn worktree_resource(entry: &gix::index::Entry, path: &gix::bstr::BStr) -> Resul
 fn unstaged_change(
     item: gix::status::index_worktree::Item,
     object_hash: gix::hash::Kind,
-) -> Result<Option<(PathChange, FileChange)>> {
+) -> Result<Option<(PathChange, FileChange, bool)>> {
     use gix::status::index_worktree::Item;
     use gix::status::plumbing::index_as_worktree::{Change, EntryStatus};
 
-    let (kind, source, path, diff) = match item {
+    let (kind, source, path, diff, tracked) = match item {
         Item::Modification {
             entry,
             rela_path,
@@ -3704,6 +3716,7 @@ fn unstaged_change(
                     None,
                     rela_path,
                     FileChange::Unavailable("an unmerged path has no single file diff"),
+                    true,
                 ),
                 EntryStatus::IntentToAdd => (
                     ChangeKind::Added,
@@ -3717,6 +3730,7 @@ fn unstaged_change(
                             path: rela_path,
                         }),
                     },
+                    true,
                 ),
                 EntryStatus::NeedsUpdate(_) => return Ok(None),
                 EntryStatus::Change(Change::Removed) => (
@@ -3727,6 +3741,7 @@ fn unstaged_change(
                         old: Some(old),
                         new: None,
                     },
+                    true,
                 ),
                 EntryStatus::Change(Change::Type { worktree_mode }) => {
                     let new_mode = entry_mode(worktree_mode)?;
@@ -3742,6 +3757,7 @@ fn unstaged_change(
                                 path: rela_path,
                             }),
                         },
+                        true,
                     )
                 }
                 EntryStatus::Change(Change::Modification {
@@ -3769,6 +3785,7 @@ fn unstaged_change(
                                 path: rela_path,
                             }),
                         },
+                        true,
                     )
                 }
                 EntryStatus::Change(Change::SubmoduleModification(_)) => (
@@ -3776,6 +3793,7 @@ fn unstaged_change(
                     None,
                     rela_path,
                     FileChange::Unavailable("submodule changes don't have a file diff"),
+                    true,
                 ),
             }
         }
@@ -3798,6 +3816,7 @@ fn unstaged_change(
                         path,
                     }),
                 },
+                false,
             )
         }
         Item::Rewrite {
@@ -3813,6 +3832,7 @@ fn unstaged_change(
                 Some(source),
                 path,
                 FileChange::Unavailable("unstaged rewrite diffs aren't available"),
+                true,
             )
         }
     };
@@ -3825,6 +3845,7 @@ fn unstaged_change(
             lines: None,
         },
         diff,
+        tracked,
     )))
 }
 
@@ -3840,12 +3861,17 @@ fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<C
         .context("could not start worktree status")?;
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
+    let mut has_tracked_changes = false;
     for item in status.by_ref() {
         match item.context("could not obtain worktree status")? {
-            gix::status::Item::TreeIndex(change) => staged.push(staged_change(change)?),
+            gix::status::Item::TreeIndex(change) => {
+                has_tracked_changes = true;
+                staged.push(staged_change(change)?);
+            }
             gix::status::Item::IndexWorktree(item) => {
-                if let Some(change) = unstaged_change(item, repository.object_hash())? {
-                    unstaged.push(change);
+                if let Some((path, diff, tracked)) = unstaged_change(item, repository.object_hash())? {
+                    has_tracked_changes |= tracked;
+                    unstaged.push((path, diff));
                 }
             }
         }
@@ -3859,6 +3885,7 @@ fn load_worktree_changes_without_lines(repository: &gix::Repository) -> Result<C
     Ok(Changes {
         paths,
         diffs,
+        has_tracked_changes,
         ..Changes::default()
     })
 }
@@ -3973,6 +4000,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
         KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
         KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
+        KeyCode::Char('m') if edit_expanded => Some(Action::NewEmptyCommit),
         KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
@@ -4799,6 +4827,10 @@ mod tests {
             "status is partitioned, path-sorted, includes conflicts and untracked files, and excludes ignored files"
         );
         assert!(changes.lines_added > 0, "available file diffs contribute line counts");
+        assert!(
+            changes.has_tracked_changes,
+            "staged and tracked worktree changes are classified once"
+        );
         for (path, diff) in changes.paths.iter().zip(&changes.diffs) {
             if path.kind != ChangeKind::Unmerged {
                 prepare_file_diff_with_repository(&repository, diff, path)
@@ -4955,6 +4987,7 @@ mod tests {
             ('u', Action::RebaseUpdate),
             ('r', Action::Reword),
             ('n', Action::NewCommit),
+            ('m', Action::NewEmptyCommit),
             ('f', Action::ForkCommit),
             ('a', Action::Amend),
             ('s', Action::Spill),

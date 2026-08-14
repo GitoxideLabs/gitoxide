@@ -142,6 +142,7 @@ pub(crate) struct Changes {
     pub diffs: Vec<crate::FileChange>,
     pub lines_added: u64,
     pub lines_removed: u64,
+    pub has_tracked_changes: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -294,6 +295,7 @@ pub(crate) enum Action {
     OpenDiff,
     Reword,
     NewCommit,
+    NewEmptyCommit,
     ForkCommit,
     Amend,
     Spill,
@@ -322,7 +324,10 @@ pub(crate) enum Effect {
     OpenDiff(ChangePane, usize),
     OpenCommitDiff(TreeDiffTarget),
     Reword(ObjectId),
-    NewCommit(Option<ObjectId>),
+    NewCommit {
+        parent: Option<ObjectId>,
+        empty: bool,
+    },
     ForkCommit(ObjectId),
     Amend(ObjectId),
     Spill(ObjectId),
@@ -428,6 +433,8 @@ pub(crate) struct App {
     amend_available: bool,
     spill_available: bool,
     split_available: bool,
+    new_commit_available: bool,
+    new_empty_commit_available: bool,
     known_descendants: HashSet<ObjectId>,
     known_merge_descendants: HashSet<ObjectId>,
     select_top_after_refresh: bool,
@@ -513,6 +520,8 @@ impl App {
             amend_available: false,
             spill_available: false,
             split_available: false,
+            new_commit_available: true,
+            new_empty_commit_available: true,
             known_descendants: HashSet::new(),
             known_merge_descendants: HashSet::new(),
             select_top_after_refresh: false,
@@ -767,6 +776,7 @@ impl App {
             Action::ToggleEdit
                 | Action::Reword
                 | Action::NewCommit
+                | Action::NewEmptyCommit
                 | Action::ForkCommit
                 | Action::Amend
                 | Action::Spill
@@ -945,9 +955,16 @@ impl App {
                 )];
             }
             Action::NewCommit if self.can_create_commit() => {
-                return vec![Effect::NewCommit(
-                    self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
-                )];
+                return vec![Effect::NewCommit {
+                    parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
+                    empty: false,
+                }];
+            }
+            Action::NewEmptyCommit if self.can_create_empty_commit() => {
+                return vec![Effect::NewCommit {
+                    parent: self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id),
+                    empty: true,
+                }];
             }
             Action::ForkCommit if self.can_fork_commit() => {
                 return vec![Effect::ForkCommit(
@@ -1573,6 +1590,14 @@ impl App {
     }
 
     pub(crate) fn can_create_commit(&self) -> bool {
+        self.new_commit_available && self.can_create_any_commit()
+    }
+
+    pub(crate) fn can_create_empty_commit(&self) -> bool {
+        self.new_empty_commit_available && self.can_create_any_commit()
+    }
+
+    fn can_create_any_commit(&self) -> bool {
         self.state == State::Complete
             && self.worktree_changes_available
             && self.changes_focus.is_none()
@@ -1581,6 +1606,26 @@ impl App {
                 Some(row) => !self.hidden_rows.contains(&row.id) && !self.known_merge_descendants.contains(&row.id),
                 None => self.worktree_head_unborn,
             }
+    }
+
+    pub(crate) fn set_new_commit_availability(&mut self, changes: Option<&Changes>) {
+        let selected_is_head =
+            self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) == self.worktree_head;
+        let selected_is_head = selected_is_head || (self.selected.is_none() && self.worktree_head_unborn);
+        match changes {
+            Some(changes) if changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged) => {
+                self.new_commit_available = false;
+                self.new_empty_commit_available = false;
+            }
+            Some(changes) => {
+                self.new_commit_available = selected_is_head && changes.has_tracked_changes;
+                self.new_empty_commit_available = true;
+            }
+            None => {
+                self.new_commit_available = true;
+                self.new_empty_commit_available = true;
+            }
+        }
     }
 
     pub(crate) fn can_fork_commit(&self) -> bool {
@@ -2477,8 +2522,59 @@ mod tests {
             unborn.can_create_commit(),
             "an unborn worktree can create its root commit"
         );
-        assert_eq!(unborn.update(Action::NewCommit), vec![Effect::NewCommit(None)]);
+        assert_eq!(
+            unborn.update(Action::NewCommit),
+            vec![Effect::NewCommit {
+                parent: None,
+                empty: false,
+            }]
+        );
         assert!(!unborn.can_fork_commit(), "a fork requires a selected parent");
+    }
+
+    #[test]
+    fn cached_worktree_changes_choose_new_or_new_empty_without_io() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row(1)]);
+        app.set_worktree_head(Some(id(1)), false);
+        complete(&mut app);
+
+        app.set_new_commit_availability(Some(&Changes::default()));
+        assert!(
+            !app.can_create_commit(),
+            "a known-clean worktree cannot create an implicit empty commit"
+        );
+        assert!(
+            app.can_create_empty_commit(),
+            "an explicit empty commit remains available"
+        );
+
+        let tracked = Changes {
+            has_tracked_changes: true,
+            ..Changes::default()
+        };
+        app.set_new_commit_availability(Some(&tracked));
+        assert!(app.can_create_commit());
+        assert!(app.can_create_empty_commit());
+
+        let conflicted = Changes {
+            paths: vec![PathChange {
+                kind: ChangeKind::Unmerged,
+                group: ChangeGroup::Unstaged,
+                source: None,
+                path: "conflict".into(),
+                lines: None,
+            }],
+            has_tracked_changes: true,
+            ..Changes::default()
+        };
+        app.set_new_commit_availability(Some(&conflicted));
+        assert!(!app.can_create_commit());
+        assert!(!app.can_create_empty_commit());
+
+        app.set_new_commit_availability(None);
+        assert!(app.can_create_commit(), "an absent cache leaves both choices available");
+        assert!(app.can_create_empty_commit());
     }
 
     #[test]
