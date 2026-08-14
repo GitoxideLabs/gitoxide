@@ -203,7 +203,9 @@ fn worktree_tree_with_changes_inner(
         }) {
             continue;
         }
-        if let Some(source) = &change.source {
+        if change.kind == ChangeKind::Renamed
+            && let Some(source) = &change.source
+        {
             editor
                 .remove(source)
                 .context("could not remove a renamed source path")?;

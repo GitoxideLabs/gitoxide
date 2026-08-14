@@ -405,6 +405,13 @@ space first; changes blocks adapt within the remaining history width.
 - With a path selected in the focused tree-changes block, the main `e` prefix
   offers `spill` and `e s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.
+- With a path selected in the focused worktree-changes block, the main `e`
+  prefix offers `amend` and `e a` amends only that path. A staged row uses its
+  index version; an unstaged row uses its filtered worktree version. If both
+  rows exist for one path, the selected row determines the version. Review
+  commits accept only staged rows, and unresolved indexes cannot be amended.
+  Unrelated staged entries retain their index state. The CLI intentionally
+  supports only whole-commit amending.
 - `e p` is offered at `@` only when both staged and unstaged changes exist. It
   amends the unstaged changes into the source commit, then creates a new upper
   commit from the staged delta using the standard Markdown editor buffer. Both
@@ -414,9 +421,10 @@ space first; changes blocks adapt within the remaining history width.
   the new upper commit. The rewritten source retains its message and ancestry;
   the upper commit receives the edited message. Both commits are marked for the
   same lazy signature-aware rebase used by amend and spill.
-- All three operations leave worktree files untouched, reset the affected worktree's
-  index to the rewritten commit, and cheaply rewrite linear descendants with
-  their trees unchanged. Rewritten commits carry `tix-rebase-parent`, invalidate
+- All three operations leave worktree files untouched and cheaply rewrite linear
+  descendants with their trees unchanged. Whole-commit edits reset the affected
+  worktree's index to the rewritten commit; selected-path amend synchronizes only
+  its destination and renamed source. Rewritten commits carry `tix-rebase-parent`, invalidate
   existing signatures, retain the original parent needed for later replay, and
   use a bright-cyan commit marker.
 - Edit graph discovery follows refs that point to commits and ignores refs whose
