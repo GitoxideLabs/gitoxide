@@ -78,7 +78,7 @@ impl Platform {
         };
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         let repository = repository.to_thread_local();
-        let graph = crate::edit::loaded_graph(&repository)?;
+        let graph = crate::edit::loaded_view_graph(&repository)?;
         match crate::edit::head::perform(repository, &graph, kind, None)? {
             Some(id) => println!("{}", id.to_hex_with_len(7)),
             None => println!("nothing to {verb}"),
