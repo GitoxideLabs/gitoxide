@@ -744,6 +744,9 @@ pub(crate) fn draw_with_worktree(
         };
         if app.edit_expanded {
             let mut options = Vec::new();
+            if app.can_rebase() {
+                options.push(("rebase", 'b'));
+            }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'r'));
             }
@@ -1726,6 +1729,49 @@ fn metadata_line<'a>(
         spans.push(Span::raw(title.to_str_lossy()));
     }
     Line::from(spans)
+}
+
+pub(crate) fn todo_metadata(
+    app: &App,
+    row: &CommitRow,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+) -> String {
+    let title = app.title(row);
+    let line = metadata_line(
+        row,
+        title,
+        app.attributions(row),
+        decorations,
+        mailmap,
+        MetadataOptions {
+            show_committer_date: app.show_committer_date,
+            show_author_name: app.name_mode != crate::app::NameMode::None,
+            show_emails: app.show_emails,
+            show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
+            has_notes: !app.notes(row.id).is_empty(),
+            use_mailmap: app.use_mailmap,
+            ref_mode: app.ref_mode,
+            selected: false,
+            preview_author_copy: false,
+            copy_feedback: None,
+        },
+    );
+    let mut out = line
+        .spans
+        .into_iter()
+        .skip(1)
+        .map(|span| span.content.into_owned())
+        .collect::<String>()
+        .trim()
+        .to_owned();
+    if app.show_emails {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&title.to_str_lossy());
+    }
+    out
 }
 
 fn author_label(
@@ -4418,6 +4464,7 @@ mod tests {
         };
         let mut app = App::new(2);
         app.extend_commits(vec![commit(1)]);
+        std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
         app.extend_hidden_commits(vec![commit(2)]);
         complete(&mut app);
         app.select_commit(gix::ObjectId::Sha1([2; 20]));
@@ -4509,10 +4556,15 @@ mod tests {
         );
 
         let mut narrow = Terminal::new(TestBackend::new(28, 3))?;
+        app.edit_expanded = true;
         narrow.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
             rendered_line(&narrow, 1).ends_with(" ⇣2 "),
             "the terminal edge pushes the marker over clipped title text"
+        );
+        assert!(
+            rendered_line(&narrow, 2).contains("edit (rebase)"),
+            "the selected hidden base offers only its rebase edit"
         );
         Ok(())
     }

@@ -57,6 +57,39 @@ pub(crate) enum Edit {
     },
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PlanParent {
+    Existing(ObjectId),
+    Step(usize),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PlanCommit {
+    Pick(ObjectId),
+    Empty(BString),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanStep {
+    pub parent: PlanParent,
+    pub commit: PlanCommit,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExpectedRef {
+    pub name: gix::refs::FullName,
+    pub old: ObjectId,
+}
+
+#[derive(Debug)]
+pub(crate) struct Plan {
+    pub base: ObjectId,
+    pub scope: Vec<ObjectId>,
+    pub steps: Vec<PlanStep>,
+    pub checkout: Option<usize>,
+    pub expected_refs: Vec<ExpectedRef>,
+}
+
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
@@ -145,6 +178,47 @@ struct Prepared {
     selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
     committer: gix::actor::Signature,
+    expected_refs: Option<Vec<ExpectedRef>>,
+    pins: Vec<ObjectId>,
+}
+
+pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId]) -> Result<Vec<ExpectedRef>> {
+    let scope: HashSet<_> = scope.iter().copied().collect();
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for reference in repo.references()?.all()? {
+        let reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) => anyhow::bail!("could not inspect a reference before editing: {err}"),
+        };
+        if matches!(
+            reference.name().category(),
+            Some(Category::Tag | Category::RemoteBranch)
+        ) {
+            continue;
+        }
+        let Some(old) = reference.try_id().map(gix::Id::detach) else {
+            continue;
+        };
+        if scope.contains(&old) && seen.insert(reference.name().to_owned()) {
+            out.push(ExpectedRef {
+                name: reference.name().to_owned(),
+                old,
+            });
+        }
+    }
+    if let Some(head) = repo.try_find_reference("HEAD")?
+        && let Some(old) = head.try_id().map(gix::Id::detach)
+        && scope.contains(&old)
+        && seen.insert(head.name().to_owned())
+    {
+        out.push(ExpectedRef {
+            name: head.name().to_owned(),
+            old,
+        });
+    }
+    Ok(out)
 }
 
 #[tracing::instrument(skip_all, fields(signature = ?signature, tree = ?tree_mode))]
@@ -312,6 +386,194 @@ pub(crate) fn perform(
         selected,
         rewritten,
         committer,
+        expected_refs: None,
+        pins: Vec::new(),
+    };
+    match conflict {
+        Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+            prepared,
+            conflicts,
+            tree,
+            commit,
+            original,
+        })),
+        None => Ok(Perform::Complete(prepared.finish()?)),
+    }
+}
+
+#[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
+pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: Plan) -> Result<Perform> {
+    let mut repo = repo.clone();
+    let signing = repo
+        .commit_signing_options_if_enabled()
+        .context("could not resolve commit signing configuration")?;
+    let author = repo
+        .author()
+        .context("no Git author is configured")?
+        .context("could not resolve the Git author")?
+        .to_owned()
+        .context("could not own the Git author")?;
+    let committer = repo
+        .committer()
+        .context("no Git committer is configured")?
+        .context("could not resolve the Git committer")?
+        .to_owned()
+        .context("could not own the Git committer")?;
+    repo = repo.with_object_memory();
+
+    let scope: HashSet<_> = plan.scope.iter().copied().collect();
+    let mut picked = HashSet::new();
+    for step in &plan.steps {
+        if let PlanCommit::Pick(id) = step.commit {
+            if !scope.contains(&id) || !picked.insert(id) {
+                anyhow::bail!("a rebase plan contains an invalid or duplicate pick");
+            }
+            if graph.parents_of(id).context("a picked commit is incomplete")?.len() > 1 {
+                anyhow::bail!("merge commits cannot be picked by the rebase editor");
+            }
+        }
+    }
+
+    let mut eager = HashSet::new();
+    let mut cursor = plan.checkout;
+    while let Some(index) = cursor {
+        if !eager.insert(index) {
+            anyhow::bail!("the checkout ancestry contains a cycle");
+        }
+        cursor = match plan.steps.get(index).context("the checkout step is missing")?.parent {
+            PlanParent::Step(parent) => Some(parent),
+            PlanParent::Existing(_) => None,
+        };
+    }
+
+    let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
+    let mut produced = Vec::with_capacity(plan.steps.len());
+    let mut conflict = None;
+    for (index, step) in plan.steps.iter().enumerate() {
+        let parent = match step.parent {
+            PlanParent::Existing(id) => {
+                repo.find_commit(id).context("could not find a fork target")?;
+                id
+            }
+            PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
+        };
+        let eager = eager.contains(&index) && conflict.is_none();
+        let mut commit = match &step.commit {
+            PlanCommit::Pick(id) => repo
+                .find_commit(*id)
+                .context("could not find a picked commit")?
+                .decode()
+                .context("could not decode a picked commit")?
+                .into_owned()
+                .context("could not own a picked commit")?,
+            PlanCommit::Empty(title) => gix::objs::Commit {
+                tree: parent_tree(&repo, Some(parent))?,
+                parents: [parent].into_iter().collect(),
+                author: author.clone(),
+                committer: committer.clone(),
+                encoding: None,
+                message: title.clone(),
+                extra_headers: Vec::new(),
+            },
+        };
+        let old_parents = match step.commit {
+            PlanCommit::Pick(id) => graph.parents_of(id).context("a picked commit is incomplete")?,
+            PlanCommit::Empty(_) => vec![parent],
+        };
+        let mode = if eager {
+            Tree::CherryPick
+        } else {
+            Tree::LeaveAsIsAndMark
+        };
+        let mut new_conflict = None;
+        commit.tree = match rewritten_tree(&repo, &commit, &old_parents, &[parent], mode)? {
+            TreeRewrite::Complete(tree) => tree,
+            TreeRewrite::Conflict { tree, conflicts } => {
+                new_conflict = Some((tree, conflicts));
+                tree
+            }
+        };
+        commit.parents = [parent].into_iter().collect();
+        commit.committer = committer.clone();
+        marker(
+            &mut commit,
+            !eager || new_conflict.is_some(),
+            old_parents.first().copied(),
+        );
+        let signature = if eager && new_conflict.is_none() {
+            Signature::RedoIfNeeded
+        } else {
+            Signature::InvalidateExisting
+        };
+        let new_id = write_commit(&repo, commit, signature, signing.clone())?;
+        if let PlanCommit::Pick(old_id) = step.commit {
+            rewritten.insert(old_id, Some(new_id));
+        }
+        produced.push(new_id);
+        if let Some((tree, conflicts)) = new_conflict {
+            let PlanCommit::Pick(original) = step.commit else {
+                unreachable!("empty commits cannot conflict")
+            };
+            conflict = Some((original, tree, conflicts, new_id));
+        }
+    }
+
+    for dropped in plan.scope.iter().copied().filter(|id| !picked.contains(id)) {
+        let mut ancestor = graph
+            .parents_of(dropped)
+            .context("a dropped commit is incomplete")?
+            .first()
+            .copied();
+        while let Some(id) = ancestor {
+            if let Some(new) = rewritten.get(&id).copied().flatten() {
+                ancestor = Some(new);
+                break;
+            }
+            if !scope.contains(&id) {
+                break;
+            }
+            ancestor = graph
+                .parents_of(id)
+                .context("a dropped ancestor is incomplete")?
+                .first()
+                .copied();
+        }
+        rewritten.insert(dropped, ancestor.or(Some(plan.base)));
+    }
+
+    let planned_non_leaves: HashSet<_> = plan
+        .steps
+        .iter()
+        .filter_map(|step| match step.parent {
+            PlanParent::Step(index) => Some(index),
+            PlanParent::Existing(_) => None,
+        })
+        .collect();
+    let mut pins = Vec::new();
+    for (index, id) in produced.iter().copied().enumerate() {
+        if planned_non_leaves.contains(&index) || plan.checkout == Some(index) {
+            continue;
+        }
+        let referenced = plan
+            .expected_refs
+            .iter()
+            .any(|expected| rewritten.get(&expected.old).copied().flatten() == Some(id));
+        if !referenced {
+            pins.push(id);
+        }
+    }
+    let selected = plan.checkout.map(|index| produced[index]);
+    let mut prepared = Prepared {
+        repo,
+        root: Some(plan.base),
+        inserted: false,
+        marked: plan.steps.iter().enumerate().any(|(index, _)| !eager.contains(&index)) || conflict.is_some(),
+        skip_worktree_transitions: false,
+        selected,
+        rewritten,
+        committer,
+        expected_refs: Some(plan.expected_refs),
+        pins,
     };
     match conflict {
         Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
@@ -357,6 +619,8 @@ impl Prepared {
             self.root.is_none(),
             self.selected,
             &self.committer,
+            self.expected_refs.take(),
+            &self.pins,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -725,36 +989,46 @@ fn update_refs(
     unborn: bool,
     inserted: Option<ObjectId>,
     committer: &gix::actor::Signature,
+    expected_refs: Option<Vec<ExpectedRef>>,
+    pins: &[ObjectId],
 ) -> Result<Vec<RefEdit>> {
     let mut edits = Vec::new();
     let mut rollback = Vec::new();
-    for reference in repo.references()?.all()? {
-        let reference = match reference {
-            Ok(reference) => reference,
-            Err(err) if is_missing_ref(&*err) => continue,
-            Err(err) => anyhow::bail!("could not inspect a reference before rebasing: {err}"),
-        };
-        if matches!(
-            reference.name().category(),
-            Some(Category::Tag | Category::RemoteBranch)
-        ) {
-            continue;
+    if let Some(expected_refs) = expected_refs {
+        for ExpectedRef { name, old } in expected_refs {
+            let Some(new) = rewritten.get(&old) else { continue };
+            edits.push(ref_edit(name.clone(), old, *new));
+            rollback.push(reverse_ref_edit(name, old, *new));
         }
-        let Some(old) = reference.try_id().map(gix::Id::detach) else {
-            continue;
-        };
-        let Some(new) = rewritten.get(&old) else { continue };
-        let name = reference.name().to_owned();
-        edits.push(ref_edit(name.clone(), old, *new));
-        rollback.push(reverse_ref_edit(name, old, *new));
-    }
-    if let Some(head) = repo.try_find_reference("HEAD")?
-        && let Some(old) = head.try_id().map(gix::Id::detach)
-        && let Some(new) = rewritten.get(&old)
-    {
-        let name = head.name().to_owned();
-        edits.push(ref_edit(name.clone(), old, *new));
-        rollback.push(reverse_ref_edit(name, old, *new));
+    } else {
+        for reference in repo.references()?.all()? {
+            let reference = match reference {
+                Ok(reference) => reference,
+                Err(err) if is_missing_ref(&*err) => continue,
+                Err(err) => anyhow::bail!("could not inspect a reference before rebasing: {err}"),
+            };
+            if matches!(
+                reference.name().category(),
+                Some(Category::Tag | Category::RemoteBranch)
+            ) {
+                continue;
+            }
+            let Some(old) = reference.try_id().map(gix::Id::detach) else {
+                continue;
+            };
+            let Some(new) = rewritten.get(&old) else { continue };
+            let name = reference.name().to_owned();
+            edits.push(ref_edit(name.clone(), old, *new));
+            rollback.push(reverse_ref_edit(name, old, *new));
+        }
+        if let Some(head) = repo.try_find_reference("HEAD")?
+            && let Some(old) = head.try_id().map(gix::Id::detach)
+            && let Some(new) = rewritten.get(&old)
+        {
+            let name = head.name().to_owned();
+            edits.push(ref_edit(name.clone(), old, *new));
+            rollback.push(reverse_ref_edit(name, old, *new));
+        }
     }
     if unborn {
         let name = repo
@@ -781,6 +1055,28 @@ fn update_refs(
             },
         });
     }
+    let mut reserved = HashSet::new();
+    for id in pins {
+        let name = pin_name(repo, *id, &reserved)?;
+        reserved.insert(name.clone());
+        edits.push(RefEdit {
+            name: name.clone(),
+            deref: false,
+            change: Change::Update {
+                log: log_change(),
+                expected: PreviousValue::MustNotExist,
+                new: Target::Object(*id),
+            },
+        });
+        rollback.push(RefEdit {
+            name,
+            deref: false,
+            change: Change::Delete {
+                expected: PreviousValue::MustExistAndMatch(Target::Object(*id)),
+                log: RefLog::AndReference,
+            },
+        });
+    }
     if edits.is_empty() {
         anyhow::bail!("no mutable reference points to an affected commit");
     }
@@ -788,6 +1084,36 @@ fn update_refs(
     repo.edit_references_as(edits, Some(committer.to_ref(&mut time)))
         .context("could not update references after rebasing")?;
     Ok(rollback)
+}
+
+fn pin_name(
+    repo: &gix::Repository,
+    id: ObjectId,
+    reserved: &HashSet<gix::refs::FullName>,
+) -> Result<gix::refs::FullName> {
+    let hex = id.to_hex().to_string();
+    let mut len = 8.min(hex.len());
+    let mut number = 2;
+    loop {
+        let suffix = if len <= hex.len() {
+            hex[..len].to_owned()
+        } else {
+            let suffix = format!("{hex}{number}");
+            number += 1;
+            suffix
+        };
+        let name: gix::refs::FullName = format!("{}{}", String::from_utf8_lossy(crate::history::PIN_PREFIX), suffix)
+            .try_into()
+            .context("generated an invalid tix pin name")?;
+        if !reserved.contains(&name) && repo.try_find_reference(name.as_ref())?.is_none() {
+            return Ok(name);
+        }
+        if len < hex.len() {
+            len += 1;
+        } else {
+            len = hex.len() + 1;
+        }
+    }
 }
 
 fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
@@ -1087,6 +1413,166 @@ mod tests {
                 .stdout,
             objects_before,
             "failed in-memory rebases write no objects"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_pins_a_new_leaf() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let old_middle_tree = repo.find_commit(middle)?.tree_id()?.detach();
+        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(base),
+                        commit: PlanCommit::Pick(tip),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Pick(middle),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(1),
+                        commit: PlanCommit::Empty("checkpoint".into()),
+                    },
+                ],
+                checkout: Some(0),
+                expected_refs,
+            },
+        )?
+        .complete()?;
+        let new_tip = outcome.map(tip).context("the picked tip is retained")?;
+        let new_middle = outcome.map(middle).context("the picked middle is retained")?;
+        assert_eq!(
+            repo.head_id()?.detach(),
+            new_tip,
+            "the branch follows its rewritten commit"
+        );
+        let tip_commit = repo.find_commit(new_tip)?.decode()?.into_owned()?;
+        assert!(!has_marker(&tip_commit), "the checkout ancestry is eagerly replayed");
+        assert_eq!(tip_commit.parents.first().copied(), Some(base));
+        let middle_commit = repo.find_commit(new_middle)?.decode()?.into_owned()?;
+        assert!(
+            has_marker(&middle_commit),
+            "history outside the checkout ancestry stays lazy"
+        );
+        assert_eq!(
+            middle_commit.tree, old_middle_tree,
+            "a lazy rewrite keeps its original tree"
+        );
+        assert_eq!(middle_commit.parents.first().copied(), Some(new_tip));
+
+        let pins = crate::history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "the unreferenced new empty leaf receives one pin");
+        let empty = repo.find_commit(pins[0].id)?.decode()?.into_owned()?;
+        assert_eq!(
+            empty.message, b"checkpoint",
+            "the complete empty-commit title becomes its message"
+        );
+        assert!(has_marker(&empty), "an empty commit outside @ remains lazy");
+        assert_eq!(empty.parents.first().copied(), Some(new_middle));
+        assert_eq!(
+            empty.tree, middle_commit.tree,
+            "the empty commit reuses its parent tree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_todo_rebase_uses_the_reference_snapshot_from_before_editing() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["update-ref", "refs/heads/main", &base.to_string(), &tip.to_string()])
+                .status()?
+                .success(),
+            "the branch moves while the editor is open"
+        );
+
+        let err = match perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                }],
+                checkout: None,
+                expected_refs,
+            },
+        ) {
+            Ok(_) => return Err("the stale reference snapshot must fail its compare-and-swap".into()),
+            Err(err) => err,
+        };
+        assert_eq!(
+            repo.find_reference("refs/heads/main")?.id().detach(),
+            base,
+            "a concurrent branch update wins"
+        );
+        assert!(
+            format!("{err:#}").contains("reference"),
+            "the failure identifies reference persistence: {err:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_pick_moves_its_mutable_refs_to_the_nearest_retained_ancestor() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        repo.reference(
+            "refs/patches/example",
+            middle,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test reference",
+        )?;
+        let expected_refs = capture_refs(&repo, &[middle, tip])?;
+
+        perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                }],
+                checkout: None,
+                expected_refs,
+            },
+        )?
+        .complete()?;
+        assert_eq!(
+            repo.find_reference("refs/patches/example")?.id().detach(),
+            base,
+            "the dropped commit's ref does not keep the old history alive"
         );
         Ok(())
     }

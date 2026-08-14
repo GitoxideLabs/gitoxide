@@ -298,6 +298,7 @@ pub(crate) enum Action {
     Spill,
     Split,
     Forget,
+    Rebase,
     TimeTravel,
     VerifySignatures,
     Cancel,
@@ -324,6 +325,11 @@ pub(crate) enum Effect {
     Spill(ObjectId),
     Split(ObjectId),
     Forget(ObjectId),
+    Rebase {
+        base: ObjectId,
+        commits: Vec<ObjectId>,
+        head: Option<ObjectId>,
+    },
     TimeTravel(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
@@ -351,6 +357,7 @@ pub(crate) struct App {
     all_order: Vec<ObjectId>,
     hidden_rows: HashSet<ObjectId>,
     hidden_branch_targets: HashMap<ObjectId, ObjectId>,
+    hidden_rebase_bases: HashSet<ObjectId>,
     pending_hidden_rows: Option<HashSet<ObjectId>>,
     titles: Vec<u8>,
     notes: HashMap<ObjectId, Vec<BString>>,
@@ -435,6 +442,7 @@ impl App {
             all_order: Vec::new(),
             hidden_rows: HashSet::new(),
             hidden_branch_targets: HashMap::new(),
+            hidden_rebase_bases: HashSet::new(),
             pending_hidden_rows: None,
             titles: Vec::new(),
             notes: HashMap::new(),
@@ -957,6 +965,14 @@ impl App {
                 }
                 self.forget_confirmation = Some(id);
             }
+            Action::Rebase if self.can_rebase() => {
+                let base = self.rows[self.selected.expect("rebase requires a selection")].id;
+                return vec![Effect::Rebase {
+                    base,
+                    commits: self.hidden_descendants(base),
+                    head: self.worktree_head,
+                }];
+            }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
@@ -1071,9 +1087,9 @@ impl App {
 
     fn update_hidden_branch_targets(&mut self) {
         #[derive(Clone, Copy)]
-        enum Leaves {
-            One(ObjectId),
-            Many,
+        struct State {
+            leaf: Option<ObjectId>,
+            has_merge: bool,
         }
 
         let visible_parents: HashSet<_> = self
@@ -1082,35 +1098,61 @@ impl App {
             .filter(|row| !self.hidden_rows.contains(&row.id))
             .flat_map(|row| row.parent_ids.iter().copied())
             .collect();
-        let mut leaves = HashMap::<ObjectId, Leaves>::new();
+        let mut states = HashMap::<ObjectId, State>::new();
         let mut targets = HashMap::new();
+        let mut rebase_bases = HashSet::new();
         for row in &self.rows {
             let state = if self.hidden_rows.contains(&row.id) {
-                leaves.get(&row.id).copied()
+                states.get(&row.id).copied()
             } else if !visible_parents.contains(&row.id) {
-                Some(Leaves::One(row.id))
+                Some(State {
+                    leaf: Some(row.id),
+                    has_merge: row.parent_ids.len() > 1,
+                })
             } else {
-                leaves.get(&row.id).copied()
+                states.get(&row.id).copied().map(|mut state| {
+                    state.has_merge |= row.parent_ids.len() > 1;
+                    state
+                })
             };
             let Some(state) = state else { continue };
             if self.hidden_rows.contains(&row.id) {
-                if let Leaves::One(tip) = state {
+                if let Some(tip) = state.leaf {
                     targets.insert(row.id, tip);
+                }
+                if !state.has_merge {
+                    rebase_bases.insert(row.id);
                 }
                 continue;
             }
             for parent in &row.parent_ids {
-                leaves
+                states
                     .entry(*parent)
                     .and_modify(|existing| {
-                        if !matches!((*existing, state), (Leaves::One(a), Leaves::One(b)) if a == b) {
-                            *existing = Leaves::Many;
+                        if existing.leaf != state.leaf {
+                            existing.leaf = None;
                         }
+                        existing.has_merge |= state.has_merge;
                     })
                     .or_insert(state);
             }
         }
         self.hidden_branch_targets = targets;
+        self.hidden_rebase_bases = rebase_bases;
+    }
+
+    fn hidden_descendants(&self, base: ObjectId) -> Vec<ObjectId> {
+        let mut reachable = HashSet::from([base]);
+        let mut out = Vec::new();
+        for row in self.rows.iter().rev() {
+            if self.hidden_rows.contains(&row.id) || !row.parent_ids.iter().any(|parent| reachable.contains(parent)) {
+                continue;
+            }
+            reachable.insert(row.id);
+            out.push(row.id);
+        }
+        out.reverse();
+        out
     }
 
     pub(crate) fn start_refresh(
@@ -1235,6 +1277,7 @@ impl App {
         self.all_order.clear();
         self.hidden_rows.clear();
         self.hidden_branch_targets.clear();
+        self.hidden_rebase_bases.clear();
         self.hidden_branch_behind.clear();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
@@ -1523,6 +1566,16 @@ impl App {
                     && row.parent_ids.len() <= 1
                     && !self.known_merge_descendants.contains(&row.id)
             })
+    }
+
+    pub(crate) fn can_rebase(&self) -> bool {
+        self.state == State::Complete
+            && self.changes_focus.is_none()
+            && self.deferred_history_state.unwrap_or(self.state) == State::Complete
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| self.hidden_rebase_bases.contains(&row.id))
     }
 
     fn can_edit_head(&self) -> bool {
@@ -2769,6 +2822,37 @@ mod tests {
             Some(TreeDiffTarget::Commit { id: id(1), parent: 0 }),
             "multiple leaves retain the boundary commit's ordinary diff"
         );
+    }
+
+    #[test]
+    fn hidden_boundary_rebase_accepts_forks_but_rejects_descendant_merges() {
+        let eligible = |visible: Vec<LoadedCommit>| {
+            let mut app = App::new(10);
+            app.extend_commits(visible);
+            app.extend_hidden_commits(vec![row(1)]);
+            complete(&mut app);
+            app.select_commit(id(1));
+            app
+        };
+
+        let mut fork = eligible(vec![row_with_parents(3, &[1]), row_with_parents(2, &[1])]);
+        assert!(fork.can_rebase(), "forked linear stacks can be edited together");
+        assert_eq!(
+            fork.update(Action::Rebase),
+            vec![Effect::Rebase {
+                base: id(1),
+                commits: vec![id(3), id(2)],
+                head: None,
+            }],
+            "the todo receives all visible descendants"
+        );
+
+        let merged = eligible(vec![
+            row_with_parents(4, &[3, 2]),
+            row_with_parents(3, &[1]),
+            row_with_parents(2, &[1]),
+        ]);
+        assert!(!merged.can_rebase(), "a merge across editable descendants is rejected");
     }
 
     #[test]
