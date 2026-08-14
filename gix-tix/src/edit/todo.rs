@@ -12,7 +12,7 @@ const HELP: &[u8] = br#"
 
 - Each fork section lists a stack from its oldest commit to its newest. Blank lines are ignored.
 - `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
-- `## fork <id>` starts a stack at an existing commit or an earlier picked commit. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
+- `## fork <id>` starts a stack at an existing commit or an earlier picked commit. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is labelled `(updated-base)` with its title. Other fork headings stay terse. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
 - Prefix `pick` or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
@@ -49,7 +49,7 @@ pub(crate) fn prepare(
     repo: &gix::Repository,
     base: ObjectId,
     onto: ObjectId,
-    onto_title: Option<&str>,
+    anchor_title: &str,
     commits: &[Commit],
     head: Option<ObjectId>,
 ) -> Result<Prepared> {
@@ -99,6 +99,7 @@ pub(crate) fn prepare(
     let mut document = b"<!-- Rebase help is at the bottom of this file. -->\n\n".to_vec();
     document.extend_from_slice(title.as_bytes());
     document.extend_from_slice(b"\n\n");
+    let anchor_kind = if base == onto { "base" } else { "updated-base" };
     for (section_index, section) in sections.iter().enumerate() {
         if section_index > 0 {
             document.push(b'\n');
@@ -107,7 +108,7 @@ pub(crate) fn prepare(
             &mut document,
             repo,
             section.parent,
-            (section.parent == onto && onto != base).then_some(onto_title).flatten(),
+            (section.parent == onto).then_some((anchor_kind, anchor_title)),
         )?;
         for id in &section.commits {
             let commit = by_id[id];
@@ -118,12 +119,7 @@ pub(crate) fn prepare(
         }
     }
     if sections.is_empty() {
-        write_fork_heading(
-            &mut document,
-            repo,
-            onto,
-            (onto != base).then_some(onto_title).flatten(),
-        )?;
+        write_fork_heading(&mut document, repo, onto, Some((anchor_kind, anchor_title)))?;
     }
     document.extend_from_slice(HELP);
     Ok(Prepared {
@@ -138,10 +134,15 @@ pub(crate) fn prepare(
     })
 }
 
-fn write_fork_heading(out: &mut Vec<u8>, repo: &gix::Repository, id: ObjectId, title: Option<&str>) -> Result<()> {
+fn write_fork_heading(
+    out: &mut Vec<u8>,
+    repo: &gix::Repository,
+    id: ObjectId,
+    annotation: Option<(&str, &str)>,
+) -> Result<()> {
     out.extend_from_slice(format!("## fork {}", short(repo, id)?).as_bytes());
-    if let Some(title) = title {
-        out.extend_from_slice(format!(" {}", escape_markdown(title)).as_bytes());
+    if let Some((kind, title)) = annotation {
+        out.extend_from_slice(format!(" ({kind}) {}", escape_markdown(title)).as_bytes());
     }
     out.push(b'\n');
     Ok(())
@@ -368,12 +369,15 @@ mod tests {
     fn markdown_flows_from_base_to_tip_and_uses_repository_abbreviations() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
-        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        let prepared = prepare(&repo, base, base, "[A] base * title", &commits, Some(tip))?;
         assert!(!prepared.has_pending);
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(document.starts_with("<!-- Rebase help is at the bottom of this file. -->"));
         assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
-        assert!(document.contains(&format!("## fork {}", base.to_hex_with_len(7))));
+        assert!(document.contains(&format!(
+            "## fork {} (base) \\[A\\] base \\* title",
+            base.to_hex_with_len(7)
+        )));
         let middle = document.find("`pick ").expect("the oldest pick is shown");
         let tip = document.find("`@pick ").expect("HEAD is marked");
         assert!(middle < tip, "the todo grows from the base towards the tip");
@@ -419,7 +423,7 @@ mod tests {
                 info: "middle".into(),
             },
         ];
-        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        let prepared = prepare(&repo, base, base, "base", &commits, Some(tip))?;
         assert!(
             prepared.has_pending,
             "pending commits make an unchanged todo actionable"
@@ -446,6 +450,35 @@ mod tests {
     }
 
     #[test]
+    fn descendant_forks_stay_terse() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, mut commits) = commits(&repo)?;
+        let mut sibling = repo.find_commit(tip)?.decode()?.into_owned()?;
+        sibling.parents = [middle].into_iter().collect();
+        sibling.message = "sibling".into();
+        let sibling = repo.write_object(&sibling)?.detach();
+        commits.insert(
+            0,
+            Commit {
+                id: sibling,
+                parents: vec![middle],
+                info: "sibling title".into(),
+            },
+        );
+
+        let prepared = prepare(&repo, base, base, "base title", &commits, Some(tip))?;
+        let document = String::from_utf8(prepared.document.clone())?;
+        assert!(document.contains(&format!("## fork {} (base) base title", base.to_hex_with_len(7))));
+        assert!(
+            document.contains(&format!("## fork {}\n", middle.to_hex_with_len(7))),
+            "a fork within the editable tree has no external-anchor annotation"
+        );
+        let plan = parse(&repo, prepared, document.as_bytes())?;
+        assert_eq!(plan.steps.len(), 3, "display annotations do not alter the plan");
+        Ok(())
+    }
+
+    #[test]
     fn update_todo_roots_the_stack_at_the_hidden_tip_and_labels_only_that_heading() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
@@ -454,14 +487,7 @@ mod tests {
         commit.message = "updated hidden base".into();
         let onto = repo.write_object(&commit)?.detach();
 
-        let prepared = prepare(
-            &repo,
-            base,
-            onto,
-            Some("[A] updated * hidden base"),
-            &commits,
-            Some(tip),
-        )?;
+        let prepared = prepare(&repo, base, onto, "[A] updated * hidden base", &commits, Some(tip))?;
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(
             document.contains(&format!(
@@ -473,7 +499,7 @@ mod tests {
         );
         assert!(
             document.contains(&format!(
-                "## fork {} \\[A\\] updated \\* hidden base",
+                "## fork {} (updated-base) \\[A\\] updated \\* hidden base",
                 onto.to_hex_with_len(7)
             )),
             "the unfamiliar fork target carries its escaped UI title"
@@ -494,7 +520,7 @@ mod tests {
     fn parses_reordering_forks_empty_commits_and_a_moved_checkout() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, middle, tip, commits) = commits(&repo)?;
-        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        let prepared = prepare(&repo, base, base, "base", &commits, Some(tip))?;
         let edited = format!(
             "# Rebase\n\n## fork {}\n`pick {}` ignored\n@empty a new checkpoint\n\n## fork {}\n@pick {}\n",
             base.to_hex_with_len(7),
@@ -505,7 +531,7 @@ mod tests {
         let err = parse(&repo, prepared, edited.as_bytes()).expect_err("two checkout markers are invalid");
         assert!(format!("{err:#}").contains("more than one @"));
 
-        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        let prepared = prepare(&repo, base, base, "base", &commits, Some(tip))?;
         let edited = format!(
             "## fork {}\npick {} ignored display metadata\nempty a new checkpoint\n\n## fork {}\n@pick {}\n",
             base.to_hex_with_len(7),
@@ -525,12 +551,12 @@ mod tests {
     fn unchanged_marker_cannot_be_removed_but_an_empty_plan_is_valid_without_one() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
         let (base, _middle, tip, commits) = commits(&repo)?;
-        let prepared = prepare(&repo, base, base, None, &commits, Some(tip))?;
+        let prepared = prepare(&repo, base, base, "base", &commits, Some(tip))?;
         let edited = format!("## fork {}\n", base.to_hex_with_len(7));
         let err = parse(&repo, prepared, edited.as_bytes()).expect_err("HEAD must be moved before its pick is dropped");
         assert!(format!("{err:#}").contains("checkout marker"));
 
-        let prepared = prepare(&repo, base, base, None, &commits, None)?;
+        let prepared = prepare(&repo, base, base, "base", &commits, None)?;
         let plan = parse(&repo, prepared, edited.as_bytes())?;
         assert!(
             plan.steps.is_empty(),

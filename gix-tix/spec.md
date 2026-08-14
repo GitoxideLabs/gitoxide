@@ -520,12 +520,15 @@ space first; changes blocks adapt within the remaining history width.
   `.md` todo. It grows upward like the history view: each `## fork <id>` section
   lists its commits oldest-to-newest as `` `pick <short-id>` <displayed metadata> ``.
   IDs are shortened through repository configuration; metadata repeats the
-  information visible in history and always includes the subject.
+  information visible in history and always includes the subject. Base-level
+  stacks begin with `## fork <id> (base) <title>`, using the Markdown-escaped
+  title exactly as displayed in history. Fork points within the editable tree
+  remain plain `## fork <id>` headings.
 - When that boundary shows `⇣N`, `e u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
-  `## fork <id>` heading additionally includes the Markdown-escaped title exactly
-  as shown in history, including `[A]` and `[N]`; ordinary and internal fork
-  headings remain unchanged. The hidden branch itself is not moved.
+  heading is `## fork <id> (updated-base) <title>`, with the Markdown-escaped
+  title exactly as shown in history, including `[A]` and `[N]`. The hidden branch
+  itself is not moved.
 - Pick lines may be reordered or removed. Fork headings may target an earlier
   pick or any existing commit, so adding and removing headings creates and joins
   branches. `empty <title>` inserts an empty commit. Markdown code spans and

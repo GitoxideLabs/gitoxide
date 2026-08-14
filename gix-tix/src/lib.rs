@@ -2032,15 +2032,11 @@ fn event_loop(
                         .as_ref()
                         .context("rebasing requires a completed history graph")
                         .and_then(|graph| {
-                            let onto_title = if onto == base {
-                                None
-                            } else {
-                                Some(ui::todo_title(
-                                    &app,
-                                    app.commit(onto)
-                                        .context("the hidden rebase target disappeared from the view")?,
-                                ))
-                            };
+                            let anchor_title = ui::todo_title(
+                                &app,
+                                app.commit(onto)
+                                    .context("the rebase anchor disappeared from the view")?,
+                            );
                             rebase_history(
                                 terminal,
                                 &repository_path,
@@ -2048,7 +2044,7 @@ fn event_loop(
                                 graph,
                                 base,
                                 onto,
-                                onto_title,
+                                anchor_title,
                                 todo_commits?,
                                 head,
                                 enhanced_keyboard,
@@ -3198,7 +3194,7 @@ fn rebase_history(
     graph: &HistoryGraph,
     base: gix::ObjectId,
     onto: gix::ObjectId,
-    onto_title: Option<String>,
+    anchor_title: String,
     commits: Vec<edit::todo::Commit>,
     head: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
@@ -3207,7 +3203,7 @@ fn rebase_history(
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
         repository.object_cache_size(None);
-        edit::todo::prepare(&repository, base, onto, onto_title.as_deref(), &commits, head)?
+        edit::todo::prepare(&repository, base, onto, &anchor_title, &commits, head)?
     };
     let edited = edit::edit_document(
         terminal,
