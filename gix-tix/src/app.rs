@@ -289,6 +289,7 @@ pub(crate) enum Action {
     ToggleHidden,
     ToggleHistoryDisplay,
     ToggleEdit,
+    ToggleInformation,
     ToggleAlign,
     ToggleCommit,
     ToggleChanges,
@@ -425,6 +426,7 @@ pub(crate) struct App {
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) edit_expanded: bool,
+    pub(crate) information_expanded: bool,
     forget_confirmation: Option<ObjectId>,
     pub estimated_lane_width: usize,
     pub horizontal_offset: usize,
@@ -515,6 +517,7 @@ impl App {
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             edit_expanded: false,
+            information_expanded: false,
             forget_confirmation: None,
             estimated_lane_width: 0,
             horizontal_offset: 0,
@@ -810,6 +813,16 @@ impl App {
         ) {
             self.edit_expanded = false;
         }
+        if !matches!(
+            &action,
+            Action::ToggleInformation
+                | Action::VerifySignatures
+                | Action::ToggleAlign
+                | Action::ToggleCommit
+                | Action::ToggleChanges
+        ) {
+            self.information_expanded = false;
+        }
         match action {
             Action::Cancelled if self.state == State::Cancelling => self.state = State::Cancelled,
             Action::MoveUp if self.changes_focus.is_some() => self.move_changes(1, false),
@@ -901,6 +914,7 @@ impl App {
             Action::ToggleMailmap => self.use_mailmap = !self.use_mailmap,
             Action::ToggleHistoryDisplay => self.history_display_expanded = !self.history_display_expanded,
             Action::ToggleEdit => self.edit_expanded = !self.edit_expanded,
+            Action::ToggleInformation => self.information_expanded = !self.information_expanded,
             Action::CycleRefs => {
                 self.ref_mode = match self.ref_mode {
                     RefMode::All => RefMode::Default,
@@ -3396,6 +3410,34 @@ mod tests {
         );
         app.update(Action::ToggleEdit);
         assert!(!app.edit_expanded, "the prefix key toggles the group");
+    }
+
+    #[test]
+    fn information_group_keeps_direct_actions_and_excludes_other_prefixes() {
+        let mut app = App::new(1);
+
+        app.update(Action::ToggleInformation);
+        assert!(app.information_expanded);
+        for action in [
+            Action::ToggleAlign,
+            Action::ToggleCommit,
+            Action::ToggleChanges,
+            Action::VerifySignatures,
+        ] {
+            app.update(action);
+            assert!(app.information_expanded, "information actions keep the group open");
+        }
+
+        app.update(Action::MoveDown);
+        assert!(!app.information_expanded, "navigation collapses the group");
+
+        app.update(Action::ToggleInformation);
+        app.update(Action::ToggleHistoryDisplay);
+        assert!(!app.information_expanded, "opening view closes information");
+        app.update(Action::ToggleInformation);
+        assert!(!app.history_display_expanded, "opening information closes view");
+        app.update(Action::ToggleEdit);
+        assert!(!app.information_expanded, "opening edit closes information");
     }
 
     #[test]
