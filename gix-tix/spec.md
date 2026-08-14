@@ -57,8 +57,10 @@ without trading responsiveness for metadata that is not visible.
   that connect visible history to hidden history remain as boundary rows.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
-  They cannot be edited, signature-verified, or used for time travel, and Shift
-  navigation continues to skip them.
+  They cannot be reworded, forgotten, signature-verified, or used for time travel,
+  and Shift navigation continues to skip them. A boundary whose visible
+  descendants contain no merge commit offers the history-rebase editor, including
+  when those descendants fork into multiple linear stacks.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
   uses the boundary-to-leaf tree comparison for the changes block and selection
   diff-stat. Forks which merge back into one leaf qualify; multiple surviving
@@ -434,9 +436,37 @@ space first; changes blocks adapt within the remaining history width.
   consumes the repository immediately after persisting and checking out the
   retained merge result.
 
+### History rebase editor
+
+- Selecting an eligible hidden boundary and pressing `e b` opens a Markdown
+  `.md` todo. It grows upward like the history view: each `## fork <id>` section
+  lists its commits oldest-to-newest as `` `pick <short-id>` <displayed metadata> ``.
+  IDs are shortened through repository configuration; metadata repeats the
+  information visible in history and always includes the subject.
+- Pick lines may be reordered or removed. Fork headings may target an earlier
+  pick or any existing commit, so adding and removing headings creates and joins
+  branches. `empty <title>` inserts an empty commit. Markdown code spans and
+  equivalent plain commands are accepted; display text after a pick ID is
+  informational.
+- `@pick` or `@empty` chooses the post-rebase checkout. When the current worktree
+  `HEAD` is in the editable region, exactly one generated `@` must remain; without
+  one, zero or one may be added. A checkout marker is invalid without a worktree.
+- Only the ancestry ending at `@` is eagerly cherry-picked and re-signed. Other
+  resulting stacks retain their trees, receive pending-rebase markers, and
+  invalidate old signatures for later time travel. With no `@`, the entire edit
+  is lazy. The existing suspended-conflict acceptance path handles eager
+  conflicts; bare repositories reject a conflict without persisting it.
+- Mutable refs captured before the editor opened follow retained or dropped
+  commits through one compare-and-swap transaction. Tags and remote-tracking refs
+  remain untouched. Every resulting leaf without a surviving mutable ref gets a
+  direct `refs/tix/pins/*` ref, except the checked-out leaf. Concurrent ref edits
+  win by making the transaction fail; the editor result is not rebuilt against a
+  later graph snapshot. Leaving the document unchanged is a no-op.
+
 ### Editing shortcuts
 
-- `e` toggles the edit shortcut group. `e r` rewords, `e n` creates a commit,
+- `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base,
+  `e r` rewords, `e n` creates a commit,
   `e a` amends `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
   `e d d` confirms forgetting a top commit, and `e t` enters or returns from
   time travel when each action is available.

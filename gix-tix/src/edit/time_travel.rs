@@ -41,6 +41,34 @@ pub(crate) struct Conflict {
 }
 
 impl Conflict {
+    pub(crate) fn from_rebase(repository_path: &Path, bare: bool, rebase: super::rebase::Conflict) -> Result<Self> {
+        let repository = open_repository(repository_path, bare, false)
+            .context("could not open a worktree for conflict resolution")?;
+        let workdir = repository
+            .workdir()
+            .context("a conflicting rebase requires a worktree")?
+            .to_owned();
+        let head = repository
+            .head()
+            .context("could not read HEAD before conflict resolution")?;
+        let head_id = head
+            .id()
+            .map(gix::Id::detach)
+            .context("conflict resolution requires a born HEAD")?;
+        let saved_target = head
+            .referent_name()
+            .map(ToOwned::to_owned)
+            .map_or(Target::Object(head_id), Target::Symbolic);
+        Ok(Conflict {
+            rebase,
+            repository_path: repository_path.to_owned(),
+            bare,
+            workdir,
+            saved_target,
+            head: head_id,
+        })
+    }
+
     pub(crate) fn original(&self) -> ObjectId {
         self.rebase.original()
     }
@@ -82,6 +110,82 @@ impl Conflict {
         }
         Ok((notice, conflict.commit))
     }
+}
+
+pub(crate) fn checkout_without_replay(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Option<String>> {
+    let repository =
+        open_repository(repository_path, bare, false).context("could not open repository for rebase checkout")?;
+    let workdir = repository
+        .workdir()
+        .context("the rebase todo selected a checkout without a worktree")?
+        .to_owned();
+    let head = repository
+        .head()
+        .context("could not read HEAD before rebase checkout")?;
+    let head_id = head
+        .id()
+        .map(gix::Id::detach)
+        .context("cannot move an unborn HEAD after rebasing")?;
+    let head_referent = head.referent_name().map(ToOwned::to_owned);
+    drop(head);
+    if selected == head_id {
+        return Ok(None);
+    }
+    if let Some(pin) = selected_pin(&repository, selected)? {
+        drop(repository);
+        checkout_pin(&workdir, &pin)?;
+        let repository = open_repository(repository_path, bare, false)
+            .context("could not reopen repository after returning through a pin")?;
+        return Ok(Some(match delete_pin(&repository, &pin) {
+            Ok(()) => format!("returned from {}", pin_label(&pin)),
+            Err(err) => format!("returned from {}; pin remains: {err:#}", pin_label(&pin)),
+        }));
+    }
+    let saved_target = head_referent.map(Target::Symbolic).unwrap_or(Target::Object(head_id));
+    let provisional = contains(&repository, selected, head_id)
+        .then(|| create_or_reuse_pin(&repository, saved_target, head_id))
+        .transpose()?;
+    drop(repository);
+    if let Err(checkout) = checkout_detached(&workdir, selected) {
+        if let Some((pin, true)) = &provisional {
+            let cleanup = open_repository(repository_path, bare, false)
+                .context("could not reopen repository to remove a provisional pin")
+                .and_then(|repository| delete_pin(&repository, pin));
+            if let Err(cleanup) = cleanup {
+                return Err(checkout.context(format!(
+                    "checkout failed and {} could not be removed: {cleanup:#}",
+                    pin_label(pin)
+                )));
+            }
+        }
+        return Err(checkout);
+    }
+    let mut notice = format!("time-travelled to {}", selected.to_hex_with_len(7));
+    if let Some((pin, true)) = provisional {
+        let repository = open_repository(repository_path, bare, false)
+            .context("could not reopen repository after rebase time-travel")?;
+        let snapshot =
+            history::snapshot_ignoring_pin(&repository, revisions, &[], include_worktrees, Some(pin.name.as_bstr()))?;
+        if snapshot
+            .view_tips
+            .iter()
+            .copied()
+            .any(|tip| contains(&repository, head_id, tip))
+        {
+            if let Err(err) = delete_pin(&repository, &pin) {
+                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&pin));
+            }
+        } else {
+            notice = format!("{notice}; saved {}", pin_label(&pin));
+        }
+    }
+    Ok(Some(notice))
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %selected))]

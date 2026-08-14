@@ -58,6 +58,7 @@ pub(crate) mod rebase;
 pub(crate) mod reword;
 pub(crate) mod split;
 pub(crate) mod time_travel;
+pub(crate) mod todo;
 
 #[tracing::instrument(skip_all, fields(filename))]
 pub(crate) fn edit_document(
