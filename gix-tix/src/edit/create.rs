@@ -460,6 +460,66 @@ mod tests {
     }
 
     #[test]
+    fn sibling_forks_remain_visible_as_private_pinned_tips() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        for args in [
+            ["reset", "--hard", "-q", "HEAD"].as_slice(),
+            ["clean", "-fdq"].as_slice(),
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(fixture.path())
+                    .args(args)
+                    .status()?
+                    .success(),
+                "the fork fixture is cleaned"
+            );
+        }
+        let repository = open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let base = repository.head_id()?.detach();
+        drop(repository);
+
+        let prepared = prepare(open(fixture.path())?, Some(base))?;
+        let edited = prepared.document.replacen(b"what\n\nwhy", b"first fork\n\nreason", 1);
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let first = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        super::super::time_travel::perform(&repository_path, false, first, &graph, &[], false)?.complete()?;
+
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        super::super::time_travel::perform(&repository_path, false, base, &graph, &[], false)?.complete()?;
+        let prepared = prepare(open(fixture.path())?, Some(base))?;
+        let edited = prepared.document.replacen(b"what\n\nwhy", b"second fork\n\nreason", 1);
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        let second = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
+        let graph = super::super::loaded_graph(&open(fixture.path())?)?;
+        super::super::time_travel::perform(&repository_path, false, second, &graph, &[], false)?.complete()?;
+
+        let repository = open(fixture.path())?;
+        let snapshot = crate::history::snapshot(&repository, &[], &[], false)?;
+        assert_eq!(repository.head_id()?.detach(), second);
+        assert!(
+            snapshot.view_tips.contains(&first),
+            "the first review fork remains visible"
+        );
+        assert!(
+            snapshot.view_tips.contains(&second),
+            "the current review fork remains visible"
+        );
+        assert_eq!(
+            crate::history::all_pins(&repository)?
+                .into_iter()
+                .map(|pin| pin.id)
+                .collect::<std::collections::HashSet<_>>(),
+            [first].into_iter().collect(),
+            "every non-current tip has one private pin"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn creates_an_empty_root_commit_for_an_unborn_head() -> gix_testtools::Result {
         let fixture = gix_testtools::tempfile::tempdir()?;
         assert!(

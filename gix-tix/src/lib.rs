@@ -5212,6 +5212,16 @@ mod tests {
             &current_linked,
             &worktrees
         ));
+        assert!(reference_event_is_relevant(
+            &modified(&current_linked.join("refs/worktree/tix/pins/abcd")),
+            &current_linked,
+            &worktrees
+        ));
+        assert!(!reference_event_is_relevant(
+            &modified(&linked.join("refs/worktree/tix/pins/abcd")),
+            &current_linked,
+            &worktrees
+        ));
         assert!(reference_watch_set_may_change(
             &modified(&worktrees.join("new-linked")),
             &worktrees
