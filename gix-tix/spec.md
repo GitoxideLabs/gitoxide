@@ -212,6 +212,15 @@ The Enter key is written as `<enter>` throughout.
   descendant, and sideways moves. Conflict acceptance, history-rebase checkout,
   and automatic fork travel use this same primitive. Successful travel preserves
   the selected row, refreshes history directly, and invalidates worktree status.
+- Active review commits define review trees containing all of their descendants.
+  Time travel within one review tree keeps ordinary checkout behavior and never
+  creates or restores a stash. Crossing out of a dirty review tree saves tracked,
+  staged, unstaged, and untracked state with Git under
+  `refs/worktree/tix/review/stashes/N`; ignored files remain untouched. Crossing
+  into any commit in that review tree restores the state with `git stash apply
+  --index` and always removes the companion ref after Git returns. Apply conflicts
+  remain in the ordinary index/worktree conflict workflow. Nested trees use the
+  nearest review-root ancestor.
 
 ### Held Shift ancestry mode
 
@@ -451,8 +460,10 @@ space first; changes blocks adapt within the remaining history width.
   after it; with multiple leaves they branch directly after the finished review.
   The review ref is deleted in the same atomic ref/worktree transaction.
 - Forget is unavailable for a review commit with descendants. Forgetting a review
-  leaf, or dropping a review commit through a rebase todo, also deletes its review
-  ref atomically; reordering or rewriting it preserves the header and resource.
+  leaf, finishing a review, or dropping a review commit through a rebase todo also
+  deletes its review ref and optional saved-worktree ref atomically; reordering or
+  rewriting it preserves the header and resources. Review stash refs are internal:
+  they are neither traversal tips nor decorations.
 
 ### Forget commits
 

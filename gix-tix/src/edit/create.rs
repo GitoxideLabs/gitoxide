@@ -492,7 +492,7 @@ mod tests {
         let repository_path = repository.git_dir().to_owned();
         let graph = super::super::loaded_graph(&repository)?;
         drop(repository);
-        super::super::time_travel::perform(&repository_path, false, fork, &graph, &[], false)?.complete()?;
+        super::super::time_travel::perform(&repository_path, false, fork, &graph, &[], &[], false)?.complete()?;
         let repository = open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "automatic fork travel detaches HEAD");
         assert_eq!(repository.head_id()?.detach(), fork);
@@ -530,16 +530,16 @@ mod tests {
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
         let first = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
-        super::super::time_travel::perform(&repository_path, false, first, &graph, &[], false)?.complete()?;
+        super::super::time_travel::perform(&repository_path, false, first, &graph, &[], &[], false)?.complete()?;
 
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
-        super::super::time_travel::perform(&repository_path, false, base, &graph, &[], false)?.complete()?;
+        super::super::time_travel::perform(&repository_path, false, base, &graph, &[], &[], false)?.complete()?;
         let prepared = prepare(open(fixture.path())?, Some(base))?;
         let edited = prepared.document.replacen(b"what\n\nwhy", b"second fork\n\nreason", 1);
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
         let second = apply_fork(open(fixture.path())?, &graph, prepared, &edited)?;
         let graph = super::super::loaded_graph(&open(fixture.path())?)?;
-        super::super::time_travel::perform(&repository_path, false, second, &graph, &[], false)?.complete()?;
+        super::super::time_travel::perform(&repository_path, false, second, &graph, &[], &[], false)?.complete()?;
 
         let repository = open(fixture.path())?;
         let snapshot = crate::history::snapshot(&repository, &[], &[], false)?;
