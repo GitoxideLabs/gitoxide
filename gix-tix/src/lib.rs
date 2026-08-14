@@ -1850,6 +1850,8 @@ fn event_loop(
                         });
                     match created {
                         Ok(Some(new_id)) => {
+                            let review_roots: Vec<_> =
+                                app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                             let travel = open_repository(&repository_path, repository_is_bare, false)
                                 .context("could not reopen repository before travelling to fork")
                                 .and_then(|repository| edit::loaded_graph(&repository))
@@ -1859,6 +1861,7 @@ fn event_loop(
                                         repository_is_bare,
                                         new_id,
                                         &graph,
+                                        &review_roots,
                                         &revisions,
                                         worktrees,
                                     )
@@ -2137,6 +2140,7 @@ fn event_loop(
                 Effect::TimeTravel(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
+                    let review_roots: Vec<_> = app.rows.iter().filter(|row| row.is_review).map(|row| row.id).collect();
                     let result = history_graph
                         .as_ref()
                         .context("time-travel requires a completed history graph")
@@ -2146,6 +2150,7 @@ fn event_loop(
                                 repository_is_bare,
                                 id,
                                 graph,
+                                &review_roots,
                                 &revisions,
                                 worktrees,
                             )
@@ -2169,7 +2174,11 @@ fn event_loop(
                             app.select_commit(original);
                             pending_rebase_conflict = Some(conflict);
                         }
-                        Err(err) => app.leave_message(format!("time-travel: {err:#}")),
+                        Err(err) => {
+                            app.leave_message(format!("time-travel: {err:#}"));
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
                     }
                 }
                 Effect::VerifySignatures(ids) => {
