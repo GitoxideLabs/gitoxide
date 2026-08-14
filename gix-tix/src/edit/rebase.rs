@@ -27,6 +27,11 @@ pub(crate) enum Signature {
     Remove,
 }
 
+enum CommitState {
+    Unmarked(Signature),
+    Pending { original_parent: Option<ObjectId> },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Tree {
     #[cfg_attr(not(test), allow(dead_code))]
@@ -321,8 +326,7 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        marker(&mut commit, false, None);
-        let id = write_commit(&repo, commit, signature, signing.clone())?;
+        let id = write_commit(&repo, commit, CommitState::Unmarked(signature), signing.clone())?;
         selected = Some(id);
         if inserted {
             if let Some(root) = root {
@@ -410,24 +414,22 @@ fn perform_inner(
             || (commit_tree_mode == Tree::LeaveAsIsAndMarkDescendants && Some(old_id) != root)
             || conflict.is_some()
             || new_conflict.is_some();
-        marker(
-            &mut commit,
-            pending && (repeat || Some(old_id) != root),
-            recorded_parent.flatten().or_else(|| old_parents.first().copied()),
-        );
         let is_conflicting_commit = new_conflict.is_some();
-        let new_id = write_commit(
-            &repo,
-            commit,
-            if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
-                Signature::InvalidateExisting
-            } else if repeat {
-                Signature::RedoIfNeeded
-            } else {
-                signature
-            },
-            signing.clone(),
-        )?;
+        let signature = if conflict.is_some() || is_conflicting_commit || (repeat && !eager) {
+            Signature::InvalidateExisting
+        } else if repeat {
+            Signature::RedoIfNeeded
+        } else {
+            signature
+        };
+        let state = if pending && (repeat || Some(old_id) != root) {
+            CommitState::Pending {
+                original_parent: recorded_parent.flatten().or_else(|| old_parents.first().copied()),
+            }
+        } else {
+            CommitState::Unmarked(signature)
+        };
+        let new_id = write_commit(&repo, commit, state, signing.clone())?;
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
@@ -435,8 +437,12 @@ fn perform_inner(
         if Some(old_id) == root {
             if let Some(mut upper) = split_upper.take() {
                 upper.parents = [new_id].into_iter().collect();
-                marker(&mut upper, false, None);
-                let upper_id = write_commit(&repo, upper, Signature::RedoIfNeeded, signing.clone())?;
+                let upper_id = write_commit(
+                    &repo,
+                    upper,
+                    CommitState::Unmarked(Signature::RedoIfNeeded),
+                    signing.clone(),
+                )?;
                 rewritten.insert(old_id, Some(upper_id));
                 selected = Some(upper_id);
             } else {
@@ -540,8 +546,12 @@ pub(super) fn finish_review(
                     && value.as_slice().strip_prefix(b"onto ") == Some(review_ref.as_bstr().as_ref()))
             });
         }
-        marker(&mut commit, false, None);
-        let new = write_commit(&repo, commit, Signature::RedoIfNeeded, signing.clone())?;
+        let new = write_commit(
+            &repo,
+            commit,
+            CommitState::Unmarked(Signature::RedoIfNeeded),
+            signing.clone(),
+        )?;
         rewritten.insert(*old, Some(new));
         if *old == review {
             finished_review = Some(new);
@@ -580,8 +590,14 @@ pub(super) fn finish_review(
             .collect();
         commit.parents = new_parents.into_iter().collect();
         commit.committer = committer.clone();
-        marker(&mut commit, true, old_parents.first().copied());
-        let new = write_commit(&repo, commit, Signature::InvalidateExisting, signing.clone())?;
+        let new = write_commit(
+            &repo,
+            commit,
+            CommitState::Pending {
+                original_parent: old_parents.first().copied(),
+            },
+            signing.clone(),
+        )?;
         rewritten.insert(old, Some(new));
     }
 
@@ -700,17 +716,14 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: P
         };
         commit.parents = [parent].into_iter().collect();
         commit.committer = committer.clone();
-        marker(
-            &mut commit,
-            !eager || new_conflict.is_some(),
-            recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
-        );
-        let signature = if eager && new_conflict.is_none() {
-            Signature::RedoIfNeeded
+        let state = if eager && new_conflict.is_none() {
+            CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
-            Signature::InvalidateExisting
+            CommitState::Pending {
+                original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
+            }
         };
-        let new_id = write_commit(&repo, commit, signature, signing.clone())?;
+        let new_id = write_commit(&repo, commit, state, signing.clone())?;
         if let PlanCommit::Pick(old_id) = step.commit {
             rewritten.insert(old_id, Some(new_id));
         }
@@ -1154,9 +1167,19 @@ pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
 fn write_commit(
     repo: &gix::Repository,
     mut commit: gix::objs::Commit,
-    signature: Signature,
+    state: CommitState,
     signing: Option<gix::objs::commit::signature::Options>,
 ) -> Result<ObjectId> {
+    let signature = match state {
+        CommitState::Unmarked(signature) => {
+            marker(&mut commit, false, None);
+            signature
+        }
+        CommitState::Pending { original_parent } => {
+            marker(&mut commit, true, original_parent);
+            Signature::InvalidateExisting
+        }
+    };
     let had_signature = commit.extra_headers.iter().any(|(name, _)| is_signature(name));
     commit.extra_headers.retain(|(name, _)| !is_signature(name));
     commit = match (signature, signing) {
