@@ -405,6 +405,9 @@ space first; changes blocks adapt within the remaining history width.
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
   unavailable and report a no-op through `tix amend|spill`.
+- Command-line edits use the same default HEAD, applicable pin, and review tips
+  as the history view. Unrelated refs do not broaden their descendant rewrite
+  scope, while mutable refs pointing into that scope are still retargeted.
 - With a path selected in the focused tree-changes block, the main `e` prefix
   offers `spill` and `e s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.

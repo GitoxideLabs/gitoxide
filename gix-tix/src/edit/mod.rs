@@ -3,14 +3,9 @@ use std::{ffi::OsStr, io::Write, process::Command};
 use anyhow::{Context, Result};
 
 pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
-    use std::sync::atomic::AtomicBool;
-
     if repo.head_id().is_err() {
         return Ok(crate::history::HistoryGraph::default());
     }
-    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
-        crate::history::Authors::default(),
-    ));
     let mut revisions = Vec::new();
     for reference in repo.references()?.all()? {
         let reference = reference.map_err(|err| anyhow::anyhow!("could not read reference: {err}"))?;
@@ -33,10 +28,23 @@ pub(super) fn loaded_graph(repo: &gix::Repository) -> Result<crate::history::His
     if repo.head().is_ok_and(|head| head.referent_name().is_none()) {
         revisions.push("HEAD".into());
     }
+    load_graph(repo, &revisions)
+}
+
+pub(super) fn loaded_view_graph(repo: &gix::Repository) -> Result<crate::history::HistoryGraph> {
+    load_graph(repo, &[])
+}
+
+fn load_graph(repo: &gix::Repository, revisions: &[std::ffi::OsString]) -> Result<crate::history::HistoryGraph> {
+    use std::sync::atomic::AtomicBool;
+
+    let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
+        crate::history::Authors::default(),
+    ));
     let mut graph = None;
     crate::history::load(
         repo,
-        &revisions,
+        revisions,
         &[],
         false,
         &authors,
@@ -103,27 +111,69 @@ pub(crate) fn edit_document(
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
+    use std::{path::Path, process::Command};
 
     use super::*;
+
+    fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        Ok(output.stdout)
+    }
 
     #[test]
     fn edit_graph_ignores_refs_that_do_not_point_to_commits() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(fixture.path())
-            .args(["update-ref", "refs/cache/tree", "HEAD^{tree}"])
-            .output()?;
-        assert!(
-            output.status.success(),
-            "the non-commit ref is created: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        git(fixture.path(), &["update-ref", "refs/cache/tree", "HEAD^{tree}"])?;
         let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
         let head = repo.head_id()?.detach();
         let graph = loaded_graph(&repo)?;
         assert!(graph.parents_of(head).is_some(), "HEAD remains part of the edit graph");
+        Ok(())
+    }
+
+    #[test]
+    fn edit_graph_excludes_unrelated_descendant_merges() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
+        let path = fixture.path();
+        let head = String::from_utf8(git(path, &["rev-parse", "HEAD"])?)?;
+        let head = head.trim();
+        let tree = String::from_utf8(git(path, &["rev-parse", "HEAD^{tree}"])?)?;
+        let tree = tree.trim();
+        let pinned = String::from_utf8(git(path, &["commit-tree", tree, "-p", head, "-m", "pinned tip"])?)?;
+        let pinned = pinned.trim();
+        let merge = String::from_utf8(git(
+            path,
+            &["commit-tree", tree, "-p", head, "-p", pinned, "-m", "unrelated merge"],
+        )?)?;
+        let merge = merge.trim();
+        git(path, &["update-ref", "refs/worktree/tix/pins/keep", pinned])?;
+        git(path, &["update-ref", "refs/heads/unrelated", merge])?;
+        git(path, &["checkout", "--detach", head])?;
+
+        let repo = gix::open_opts(path, gix::open::Options::isolated())?;
+        let graph = loaded_view_graph(&repo)?;
+        let pinned = gix::ObjectId::from_hex(pinned.as_bytes())?;
+        let merge = gix::ObjectId::from_hex(merge.as_bytes())?;
+        assert!(
+            graph.parents_of(pinned).is_some(),
+            "the applicable pin remains in edit scope"
+        );
+        assert!(
+            graph.parents_of(merge).is_none(),
+            "an unrelated ref does not add its descendant merge to edit scope"
+        );
+        assert!(
+            head::perform(repo, &graph, head::Kind::Amend, None)?.is_some(),
+            "amending HEAD succeeds despite the unrelated merge"
+        );
         Ok(())
     }
 }
