@@ -3209,15 +3209,17 @@ fn rebase_history(
         repository.object_cache_size(None);
         edit::todo::prepare(&repository, base, onto, onto_title.as_deref(), &commits, head)?
     };
-    let Some(edited) = edit::edit_document(
+    let edited = edit::edit_document(
         terminal,
         &prepared.editor,
         &prepared.document,
         &format!("tix-rebase-{}.md", std::process::id()),
         enhanced_keyboard,
-    )?
-    else {
-        return Ok(None);
+    )?;
+    let edited = match edited {
+        Some(edited) => edited,
+        None if prepared.has_pending => prepared.document.clone(),
+        None => return Ok(None),
     };
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing rebase")?;
