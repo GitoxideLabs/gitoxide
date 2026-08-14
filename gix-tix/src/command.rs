@@ -31,6 +31,8 @@ enum Command {
     Amend,
     /// Move the changes introduced by HEAD into the worktree.
     Spill,
+    /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
+    Split,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -72,23 +74,56 @@ impl Platform {
             );
         };
 
-        let (kind, verb) = match command {
-            Command::Amend => (crate::edit::head::Kind::Amend, "amend"),
-            Command::Spill => (crate::edit::head::Kind::Spill, "spill"),
-        };
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         let repository = repository.to_thread_local();
         let graph = crate::edit::loaded_view_graph(&repository)?;
-        match crate::edit::head::perform(repository, &graph, kind, None)? {
-            Some(id) => println!("{}", id.to_hex_with_len(7)),
-            None => println!("nothing to {verb}"),
+        match command {
+            Command::Amend => edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?,
+            Command::Spill => edit_head(repository, &graph, crate::edit::head::Kind::Spill, "spill")?,
+            Command::Split => split(repository, &graph)?,
         }
         Ok(())
     }
 }
 
+fn edit_head(
+    repository: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    kind: crate::edit::head::Kind,
+    verb: &str,
+) -> Result<()> {
+    match crate::edit::head::perform(repository, graph, kind, None)? {
+        Some(id) => println!("{}", id.to_hex_with_len(7)),
+        None => println!("nothing to {verb}"),
+    }
+    Ok(())
+}
+
+fn split(repository: gix::Repository, graph: &crate::history::HistoryGraph) -> Result<()> {
+    let repository_path = repository.git_dir().to_owned();
+    let bare = repository.is_bare();
+    let prepared = crate::edit::split::prepare(repository)?;
+    let Some(edited) = crate::edit::edit_document_without_terminal(
+        &prepared.editor,
+        &prepared.document,
+        &format!("tix-split-{}.md", std::process::id()),
+    )?
+    else {
+        println!("no split performed: no input was provided");
+        return Ok(());
+    };
+    let mut repository = crate::open_repository(&repository_path, bare, false)
+        .context("could not reopen repository after editing split")?;
+    repository.object_cache_size(None);
+    let id = crate::edit::split::apply(repository, graph, prepared, &edited)?;
+    println!("{}", id.to_hex_with_len(7));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{path::Path, process::Command as ProcessCommand};
+
     use clap::{CommandFactory, error::ErrorKind};
 
     use super::*;
@@ -126,6 +161,20 @@ mod tests {
                 .command,
             Some(Command::Spill)
         ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "split"])
+                .expect("split parses")
+                .platform
+                .command,
+            Some(Command::Split)
+        ));
+        assert!(
+            Cli::command()
+                .render_help()
+                .to_string()
+                .contains("Split HEAD by amending worktree changes into it and committing staged index changes on top"),
+            "short help explains how split distributes index and worktree changes"
+        );
     }
 
     #[test]
@@ -152,5 +201,39 @@ mod tests {
         let cli = Cli::try_parse_from(["tix", "--", "amend"]).expect("-- makes amend a revision");
         assert!(cli.platform.command.is_none());
         assert_eq!(cli.platform.revisions, ["amend"]);
+    }
+
+    #[test]
+    fn split_command_uses_the_index_for_the_new_commit_and_worktree_for_its_parent() -> gix_testtools::Result {
+        fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+            let output = ProcessCommand::new("git").arg("-C").arg(path).args(args).output()?;
+            if !output.status.success() {
+                return Err(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr)
+                )
+                .into());
+            }
+            Ok(output.stdout)
+        }
+
+        let fixture = gix_testtools::scripted_fixture_writable("split_commit.sh")?;
+        let repository = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "core.editor=sed -i.bak -e 's/^what$/split/'".to_owned(),
+                "commit.gpgSign=false".to_owned(),
+            ]),
+        )?;
+        let graph = crate::edit::loaded_view_graph(&repository)?;
+        split(repository, &graph)?;
+
+        assert_eq!(git(fixture.path(), &["log", "-1", "--format=%s"])?, b"split\n");
+        assert_eq!(git(fixture.path(), &["show", "HEAD^:unstaged"])?, b"worktree\n");
+        assert_eq!(git(fixture.path(), &["show", "HEAD:staged"])?, b"staged\n");
+        assert!(git(fixture.path(), &["diff", "--exit-code"])?.is_empty());
+        assert!(git(fixture.path(), &["diff", "--cached", "--exit-code"])?.is_empty());
+        Ok(())
     }
 }
