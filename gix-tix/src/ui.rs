@@ -747,6 +747,9 @@ pub(crate) fn draw_with_worktree(
             if app.can_rebase() {
                 options.push(("rebase", 'b'));
             }
+            if app.can_rebase_update() {
+                options.push(("rebase-update", 'u'));
+            }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
                 options.push(("reword", 'r'));
             }
@@ -1774,6 +1777,18 @@ pub(crate) fn todo_metadata(
         }
         out.push_str(&title.to_str_lossy());
     }
+    out
+}
+
+pub(crate) fn todo_title(app: &App, row: &CommitRow) -> String {
+    let mut out = String::new();
+    if row.has_agent_marker {
+        out.push_str("[A] ");
+    }
+    if !app.notes(row.id).is_empty() {
+        out.push_str("[N] ");
+    }
+    out.push_str(&app.title(row).to_str_lossy());
     out
 }
 
@@ -4322,6 +4337,11 @@ mod tests {
             row.contains("[A] [N] subject"),
             "agent and note markers precede the title"
         );
+        assert_eq!(
+            todo_title(&app, &app.rows[0]),
+            "[A] [N] subject",
+            "rebase headings reuse the title exactly as shown in history"
+        );
         assert_eq!(history.backend().buffer()[(agent_x, 0)].fg, Color::LightMagenta);
         assert_eq!(history.backend().buffer()[(note_x, 0)].fg, Color::LightMagenta);
 
@@ -4471,7 +4491,10 @@ mod tests {
         app.extend_hidden_commits(vec![commit(2)]);
         complete(&mut app);
         app.select_commit(gix::ObjectId::Sha1([2; 20]));
-        app.set_hidden_branch_behind(std::collections::HashMap::from([(gix::ObjectId::Sha1([2; 20]), 2)]));
+        app.set_hidden_branch_updates(std::collections::HashMap::from([(
+            gix::ObjectId::Sha1([2; 20]),
+            (2, gix::ObjectId::Sha1([3; 20])),
+        )]));
         app.set_lane(0, "● ");
         app.set_lane(1, "● ");
         let changes = Changes {
@@ -4568,7 +4591,7 @@ mod tests {
         let mut actions = Terminal::new(TestBackend::new(120, 3))?;
         actions.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert!(
-            rendered_line(&actions, 2).contains("edit (rebase · fork)"),
+            rendered_line(&actions, 2).contains("edit (rebase · rebase-update · fork)"),
             "the selected hidden base offers independent edits: {:?}",
             rendered_line(&actions, 2)
         );
