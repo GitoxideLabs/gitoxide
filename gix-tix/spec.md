@@ -566,11 +566,24 @@ space first; changes blocks adapt within the remaining history width.
   heading is `## fork <id> (updated-base) <title>`, with the Markdown-escaped
   title exactly as shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
-- Pick lines may be reordered or removed. Fork headings may target an earlier
-  pick or any existing commit, so adding and removing headings creates and joins
-  branches. `empty <title>` inserts an empty commit. Markdown code spans and
-  equivalent plain commands are accepted; display text after a pick ID is
+- Pick lines may be reordered or removed. `squash <id>` folds an existing
+  non-merge commit into the preceding `pick` or `empty` in the same fork; it may
+  carry `@`, and fork headings naming any folded ID resolve to the combined
+  result. A fork cannot begin with `squash`. Fork headings may otherwise target
+  an earlier pick or any existing commit, so adding and removing headings creates
+  and joins branches. `empty <title>` inserts an empty commit. Markdown code
+  spans and equivalent plain commands are accepted; display text after an ID is
   informational.
+- Squash groups are materialized eagerly on every fork by applying their source
+  deltas in todo order. The result retains the first member's author, author
+  time, encoding, extra headers, and message, receives the operation's committer,
+  and is signed once. Before every later full message, a permanent
+  `# <short-id> <subject>` line identifies its source. Distinct raw authors of
+  later commits are appended in first-seen order as `Co-authored-by` trailers,
+  excluding the first author and identities already named by a valid such
+  trailer in any source message. Name and email pairs are compared without
+  mailmap. All folded IDs and mutable refs map to the one resulting commit;
+  resources owned by a later folded review commit are removed.
 - The first line points to complete self-documenting help at the bottom. All
   instructions are enclosed in Markdown comments so only headings and command
   lines participate in the editable plan.
@@ -583,14 +596,18 @@ space first; changes blocks adapt within the remaining history width.
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics.
-- `@pick` or `@empty` chooses the post-rebase checkout. When the current worktree
+- `@pick`, `@squash`, or `@empty` chooses the post-rebase checkout. When the current worktree
   `HEAD` is in the editable region, exactly one generated `@` must remain; without
   one, zero or one may be added. A checkout marker is invalid without a worktree.
-- Only the ancestry ending at `@` is eagerly cherry-picked and re-signed. Other
-  resulting stacks retain their trees, receive pending-rebase markers, and
-  invalidate old signatures for later time travel. With no `@`, the entire edit
-  is lazy. The existing suspended-conflict acceptance path handles eager
-  conflicts; bare repositories reject a conflict without persisting it.
+- Only the ancestry ending at `@` and any squash groups are eagerly cherry-picked
+  and re-signed. Other resulting stacks retain their trees, receive pending-rebase
+  markers, and invalidate old signatures for later time travel. With no `@`,
+  ordinary steps remain lazy while squash groups are still materialized.
+  Any conflict while applying a history todo aborts the entire in-memory
+  transaction without writing objects, refs, index, or worktree state. The TUI
+  selects the original offending commit and marks it with a transient blinking
+  red `C`; command-line apply reports that commit as an error. Suspended conflict
+  checkout remains available only to direct edits and time travel.
 - Mutable refs captured on original leaves stay tips: after their commit is
   rewritten or dropped, they follow the first continuation in todo order to its
   resulting leaf. Other mutable refs remain bound to their rewritten commit.
