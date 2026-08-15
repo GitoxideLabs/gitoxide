@@ -2,7 +2,7 @@ use std::{collections::HashSet, ffi::OsString};
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use gix::prelude::ObjectIdExt;
+use gix::prelude::{ObjectIdExt, ReferenceExt};
 
 mod rebase;
 
@@ -121,27 +121,37 @@ fn pin(repository: &gix::Repository, args: Pin) -> Result<()> {
 
 fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<Vec<crate::history::Pin>> {
     let mut seen = HashSet::new();
-    let ids = revisions
+    let targets = revisions
         .iter()
         .map(|revision| {
             let revision = gix::path::os_str_into_bstr(revision)
                 .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
-            let id = repository
-                .rev_parse_single(revision)
+            let spec = repository
+                .rev_parse(revision)
                 .with_context(|| format!("could not resolve revision {revision:?}"))?;
-            Ok(id
+            let reference = spec.first_reference().cloned();
+            let id = spec
+                .single()
+                .with_context(|| format!("revision {revision:?} does not name a single object"))?
                 .object()
                 .context("could not read pin target")?
                 .peel_to_commit()
                 .context("pin target does not resolve to a commit")?
-                .id)
+                .id;
+            let target = match reference {
+                Some(reference) if reference.clone().attach(repository).peel_to_commit()?.id == id => {
+                    gix::refs::Target::Symbolic(reference.name)
+                }
+                _ => gix::refs::Target::Object(id),
+            };
+            Ok((target, id))
         })
         .collect::<Result<Vec<_>>>()?;
-    ids.into_iter()
-        .filter(|id| seen.insert(*id))
-        .map(|id| {
-            crate::edit::time_travel::create_or_reuse_pin(repository, gix::refs::Target::Object(id), id, "tix pin")
-                .map(|(pin, _created)| pin)
+    targets
+        .into_iter()
+        .filter(|(target, _id)| seen.insert(target.clone()))
+        .map(|(target, id)| {
+            crate::edit::time_travel::create_or_reuse_pin(repository, target, id, "tix pin").map(|(pin, _created)| pin)
         })
         .collect()
 }
@@ -334,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_resolves_every_revision_before_creating_direct_deduplicated_pins() -> gix_testtools::Result {
+    fn pin_follows_direct_references_and_keeps_derived_revisions_fixed() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repository = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
         let revisions = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
@@ -359,27 +369,30 @@ mod tests {
             "the fixture has a movable symbolic pin"
         );
         let root = repository.rev_parse_single("v1")?.object()?.peel_to_commit()?.id;
+        let parent = repository.rev_parse_single("main~1")?.detach();
         let short_main = main.to_hex_with_len(7).to_string();
-        let pins = create_pins(&repository, &revisions(&["main", "v1", &short_main]))?;
+        let pins = create_pins(&repository, &revisions(&["main", "v1", "main~1", &short_main]))?;
         assert_eq!(
             pins.iter().map(|pin| pin.id).collect::<Vec<_>>(),
-            [main, root],
-            "duplicate revspec results preserve first-seen order"
+            [main, root, parent, main],
+            "distinct pin targets preserve argument order even when IDs match"
         );
-        assert!(
+        assert_eq!(
             pins.iter()
-                .all(|pin| pin.target.try_id().map(ToOwned::to_owned) == Some(pin.id)),
-            "command-created pins are direct"
+                .map(|pin| pin.target.try_name().is_some())
+                .collect::<Vec<_>>(),
+            [true, true, false, false],
+            "direct reference names follow symbolically while derived revisions and IDs stay fixed"
         );
         assert_eq!(
             crate::history::all_pins(&repository)?.len(),
-            3,
-            "the symbolic pin does not suppress an explicit direct pin"
+            4,
+            "the existing branch pin is reused while other semantic targets remain distinct"
         );
 
         let repeated = create_pins(&repository, &revisions(&["main"]))?;
-        assert_eq!(repeated[0].name, pins[0].name, "an existing direct pin is reused");
-        assert_eq!(crate::history::all_pins(&repository)?.len(), 3);
+        assert_eq!(repeated[0].name, pins[0].name, "an existing symbolic pin is reused");
+        assert_eq!(crate::history::all_pins(&repository)?.len(), 4);
         let display = display_pin(&repository, &pins[0])?;
         let (label, short_id) = display.split_once(' ').context("pin output has a label and ID")?;
         assert!(label.starts_with("pin:"), "output names the pin");
@@ -388,6 +401,17 @@ mod tests {
             main.attach(&repository).shorten()?.to_string(),
             "output uses the repository's abbreviated ID"
         );
+        repository.reference(
+            "refs/heads/main",
+            parent,
+            gix::refs::transaction::PreviousValue::MustExistAndMatch(gix::refs::Target::Object(main)),
+            "advance pinned reference",
+        )?;
+        let followed = crate::history::all_pins(&repository)?
+            .into_iter()
+            .find(|pin| pin.name == pins[0].name)
+            .context("the symbolic pin remains")?;
+        assert_eq!(followed.id, parent, "the symbolic pin follows the moved branch");
         Ok(())
     }
 
