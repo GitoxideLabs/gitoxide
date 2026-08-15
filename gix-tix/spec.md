@@ -20,6 +20,16 @@ without trading responsiveness for metadata that is not visible.
   revisions. Hidden revisions still exclude matching ancestry.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
+- `tix rebase todo -h HIDDEN... [--onto REV] [TIP...]` writes a self-contained
+  Markdown history-rebase plan to stdout. At least one hidden revision must
+  resolve; visible tips default to `HEAD`, and an ambiguous derived fork point is
+  an error. `--edit-and-apply` opens the same plan with Git's configured editor
+  and applies it when the editor exits.
+- `tix rebase apply [FILE]` applies such a plan from a file, or from standard
+  input when `FILE` is omitted or `-`. Removing its state comment or emptying the
+  document cancels successfully; malformed or unsupported state is an error.
+- Editor-launching commands honor Git's normal editor selection and
+  `GIT_EDITOR` overrides it.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
   revisions are errors. An unavailable hidden revision emits a warning and is
   ignored when another hidden revision resolves; if none resolve, startup fails.
@@ -564,6 +574,15 @@ space first; changes blocks adapt within the remaining history width.
 - The first line points to complete self-documenting help at the bottom. All
   instructions are enclosed in Markdown comments so only headings and command
   lines participate in the editable plan.
+- A versioned Markdown state comment makes the document independently
+  applicable in a later process. It records full base, target, scope and tip IDs,
+  checkout requirements, and compare-and-swap state for mutable refs. Ref names
+  use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
+  state cancels; present invalid state never reaches repository mutation.
+- Pick lines use display-only state symbols documented in the footer: `↻` for a
+  lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
+  unverified signature, and `○` for an unsigned commit. Applicable states may be
+  combined without changing plan semantics.
 - `@pick` or `@empty` chooses the post-rebase checkout. When the current worktree
   `HEAD` is in the editable region, exactly one generated `@` must remain; without
   one, zero or one may be added. A checkout marker is invalid without a worktree.
@@ -583,7 +602,8 @@ space first; changes blocks adapt within the remaining history width.
   fail; the editor result is not rebuilt against a later graph snapshot. Leaving
   the document unchanged is a no-op unless its scope contains pending commits or
   rebase-update selected a newer base; then the unchanged plan runs with the same
-  eager `@` ancestry and lazy-fork rules.
+  eager `@` ancestry and lazy-fork rules. Explicit `tix rebase apply` always
+  applies a valid plan, even when its editable commands are unchanged.
 
 ### Editing shortcuts
 
