@@ -228,7 +228,8 @@ The Enter key is written as `<enter>` throughout.
   moves the checked-out branch down its stack. Pins from other worktrees,
   dangling, malformed, and non-commit pins do not
   enter the view or its decorations. Normal hidden-revision exclusions still apply.
-- Worktree pins are shown as blue `pin:<suffix>` decorations. `t` on a pinned
+- One or more worktree pins at a commit are shown as a single blue `📌`
+  decoration; their internal names are omitted from history rows. `t` on a pinned
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.

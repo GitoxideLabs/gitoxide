@@ -1669,6 +1669,7 @@ fn metadata_line<'a>(
         },
     )];
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
+    let mut pin_shown = false;
     let mut labels = row_decorations
         .iter()
         .filter(|decoration| match ref_mode {
@@ -1684,6 +1685,14 @@ fn metadata_line<'a>(
                     )
             }
         })
+        .filter(|decoration| {
+            if decoration.kind != DecorationKind::Pin {
+                return true;
+            }
+            let show = !pin_shown;
+            pin_shown = true;
+            show
+        })
         .peekable();
     if labels.peek().is_some() {
         spans.push(Span::raw(" ("));
@@ -1691,7 +1700,11 @@ fn metadata_line<'a>(
             if index != 0 {
                 spans.push(Span::raw(", "));
             }
-            let name = decoration.name.to_str_lossy();
+            let name = if decoration.kind == DecorationKind::Pin {
+                std::borrow::Cow::Borrowed("📌")
+            } else {
+                decoration.name.to_str_lossy()
+            };
             spans.push(Span::styled(
                 if matches!(
                     decoration.kind,
@@ -2796,10 +2809,16 @@ mod tests {
         let mut decorations = Decorations::from([
             (
                 selected,
-                vec![Decoration {
-                    name: "pin:01010101".into(),
-                    kind: DecorationKind::Pin,
-                }],
+                vec![
+                    Decoration {
+                        name: "pin:01010101".into(),
+                        kind: DecorationKind::Pin,
+                    },
+                    Decoration {
+                        name: "pin:01010102".into(),
+                        kind: DecorationKind::Pin,
+                    },
+                ],
             ),
             (
                 head,
@@ -2812,7 +2831,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(140, 2))?;
         app.edit_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_row(&terminal).contains("pin:01010101"));
+        let row = rendered_row(&terminal);
+        assert!(row.contains("📌"), "a pinned commit has an obvious pin marker: {row:?}");
+        assert_eq!(row.matches("📌").count(), 1, "multiple pins share one visual marker");
+        assert!(!row.contains("pin:01010101"), "pin identities stay out of history rows");
         assert!(
             rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return · unpin)"),
             "the active edit prefix contains exactly its actionable commands"
