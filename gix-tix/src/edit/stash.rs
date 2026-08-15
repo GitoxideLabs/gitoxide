@@ -181,6 +181,27 @@ pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> R
     Ok(notice)
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
+pub(crate) fn restore_manual(repository_path: &Path, bare: bool, id: ObjectId) -> Result<String> {
+    let repo = open_repository(repository_path, bare, false).context("could not open repository to unstash changes")?;
+    let workdir = repo
+        .workdir()
+        .context("unstashing changes requires a worktree")?
+        .to_owned();
+    if repo
+        .head_id()
+        .context("unstashing changes requires a born HEAD")?
+        .detach()
+        != id
+    {
+        anyhow::bail!("changes can only be unstashed at the current HEAD");
+    }
+    let name = reference(id)?;
+    drop(repo);
+    let saved = find(repository_path, bare, name)?.context("the selected commit has no saved worktree state")?;
+    apply(repository_path, bare, &workdir, saved)
+}
+
 #[derive(Clone)]
 pub(super) struct SavedStash {
     pub name: gix::refs::FullName,
@@ -399,14 +420,19 @@ mod tests {
         assert_eq!(std::fs::read(fixture.path().join("ignored"))?, b"ignored\n");
         drop(repo);
 
-        let saved = find(&repository_path, false, name.clone())?.expect("the manual stash exists");
-        apply(&repository_path, false, fixture.path(), saved)?;
+        std::fs::write(fixture.path().join("local"), "existing worktree change\n")?;
+        restore_manual(&repository_path, false, head)?;
         assert_eq!(
             git(fixture.path(), &["diff", "--cached", "--name-only"])?.trim(),
             b"staged"
         );
         assert_eq!(git(fixture.path(), &["diff", "--name-only"])?.trim(), b"tracked");
         assert_eq!(std::fs::read(fixture.path().join("untracked"))?, b"untracked\n");
+        assert_eq!(
+            std::fs::read(fixture.path().join("local"))?,
+            b"existing worktree change\n",
+            "unstashing leaves unrelated worktree changes intact"
+        );
         let repo = crate::open_test_repository(fixture.path())?;
         assert!(repo.try_find_reference(name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);

@@ -334,6 +334,7 @@ pub(crate) fn draw_with_worktree(
                 }
             }),
         stashable,
+        selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
         selected_is_head && selected_is_review && worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
@@ -833,6 +834,8 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_stash() {
                 options.push(("stash", 'h'));
+            } else if app.can_unstash() {
+                options.push(("unstash", 'h'));
             }
             if app.can_spill() {
                 options.push(("spill", 's'));
@@ -3008,7 +3011,7 @@ mod tests {
             }],
             ..Changes::default()
         };
-        app.set_head_edit_availability(true, false, true, false, false, false);
+        app.set_head_edit_availability(true, false, false, true, false, false, false);
         assert!(app.can_amend(), "the focused worktree path is amendable");
         assert!(app.edit_expanded, "the edit prefix remains expanded");
         terminal.draw(|frame| {
@@ -3066,8 +3069,8 @@ mod tests {
             );
         })?;
         assert!(
-            !rendered_line(&terminal, 7).contains("stash"),
-            "an existing commit stash suppresses another save action"
+            rendered_line(&terminal, 7).contains("unstash"),
+            "an existing commit stash offers in-place restoration even with worktree changes"
         );
         decorations
             .get_mut(&id)
