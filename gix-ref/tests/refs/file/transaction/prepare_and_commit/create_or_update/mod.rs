@@ -544,6 +544,37 @@ fn windows_device_name_check_runs_before_lock_acquisition() -> crate::Result {
 }
 
 #[test]
+fn lock_failure_on_symbolic_referent_is_reported_for_the_symbolic_ref() -> crate::Result {
+    let (keep, store) = empty_store()?;
+    std::fs::write(keep.path().join("HEAD"), b"ref: refs/heads/main\n")?;
+    std::fs::create_dir_all(keep.path().join("refs/heads"))?;
+    std::fs::write(keep.path().join("refs/heads/main.lock"), b"")?;
+
+    let err = store
+        .transaction()
+        .prepare(
+            Some(RefEdit {
+                change: Change::Update {
+                    log: LogChange::default(),
+                    new: Target::Object(hex_to_id("28ce6a8b26aa170e1de65536fe8abe1832bd3242")),
+                    expected: PreviousValue::Any,
+                },
+                name: "HEAD".try_into()?,
+                deref: true,
+            }),
+            Fail::Immediately,
+            Fail::Immediately,
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(err, transaction::prepare::Error::LockAcquire { full_name, .. } if full_name == "HEAD"),
+        "the lock error should name the symbolic ref that initiated the dereferenced update"
+    );
+    Ok(())
+}
+
+#[test]
 fn symbolic_head_missing_referent_then_update_referent() -> crate::Result {
     for reflog_writemode in &[WriteReflog::Normal, WriteReflog::Disable, WriteReflog::Always] {
         let (_keep, mut store) = empty_store()?;
