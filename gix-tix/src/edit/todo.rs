@@ -1125,7 +1125,7 @@ mod tests {
                 Commit {
                     id: tip,
                     parents: vec![middle],
-                    info: "(main) 2000-01-03 author tip".into(),
+                    info: "2000-01-03 author tip".into(),
                 },
                 Commit {
                     id: middle,

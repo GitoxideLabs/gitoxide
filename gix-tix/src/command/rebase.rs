@@ -185,7 +185,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             Ok(todo::Commit {
                 id: *id,
                 parents: row.parent_ids.iter().copied().collect(),
-                info: crate::ui::todo_metadata(&app, row, &decorations, &mailmap),
+                info: crate::ui::todo_metadata(&app, row, &mailmap),
             })
         })
         .collect::<Result<Vec<_>>>()?;

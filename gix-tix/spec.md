@@ -596,6 +596,8 @@ space first; changes blocks adapt within the remaining history width.
   state comment follows the complete help at the end of the document.
 - Standalone `(ref, ref)` lines place direct mutable refs at the preceding fork
   heading or command result. Multiple consecutive lines share that destination.
+  Commit command metadata omits ref decorations because these lines are their
+  sole editable representation.
   Existing displayed names may be moved or removed, and new unqualified names
   create local branches; explicit editable `refs/...` names are also accepted.
   Short names follow the history display, ambiguous names expand to full names,

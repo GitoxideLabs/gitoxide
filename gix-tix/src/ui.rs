@@ -1806,18 +1806,14 @@ fn metadata_line<'a>(
     Line::from(spans)
 }
 
-pub(crate) fn todo_metadata(
-    app: &App,
-    row: &CommitRow,
-    decorations: &Decorations,
-    mailmap: &gix::mailmap::Snapshot,
-) -> String {
+pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::Snapshot) -> String {
     let title = app.title(row);
+    let decorations = Decorations::new();
     let line = metadata_line(
         row,
         title,
         app.attributions(row),
-        decorations,
+        &decorations,
         mailmap,
         MetadataOptions {
             show_committer_date: app.show_committer_date,
@@ -2576,6 +2572,12 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(180, 2))?;
 
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+
+        assert_eq!(
+            super::todo_metadata(&app, &app.rows[0], &mailmap),
+            "1970-01-01 mapped author subject",
+            "todo commit metadata excludes separately represented refs"
+        );
 
         let footer_text = "#1 · view · edit · copy · refs · ? · ↑↓/jk move · h/l pan · <enter> diff · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
