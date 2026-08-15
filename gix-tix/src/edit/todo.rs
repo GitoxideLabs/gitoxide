@@ -21,7 +21,7 @@ const HELP: &str = r#"
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
 - Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs. The current attached branch stays attached while it remains at the `@` command. Prefix one local branch with `@` to attach HEAD to it explicitly; it must point to the `@` command.
-- Saving an unchanged document in the history-view editor is a no-op unless listed commits have a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
+- Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A branch checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
 - Commit states are display-only: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, and `○` means unsigned.
@@ -104,6 +104,7 @@ pub(crate) fn prepare(
         .flatten();
     let scope: Vec<_> = commits.iter().map(|commit| commit.id).collect();
     let scope_set: HashSet<_> = scope.iter().copied().collect();
+    let by_id: HashMap<_, _> = commits.iter().map(|commit| (commit.id, commit)).collect();
     let marker_required = repo.workdir().is_some() && scope_set.contains(&head);
     let mut tips = scope_set.clone();
     for commit in commits {
@@ -112,13 +113,23 @@ pub(crate) fn prepare(
         }
     }
     let tips = tips.into_iter().collect::<Vec<_>>();
-    let has_pending = commits.iter().try_fold(false, |pending, commit| {
-        Ok::<_, anyhow::Error>(pending || rebase::is_pending(&repo.find_commit(commit.id)?.decode()?.into_owned()?))
-    })?;
+    let mut cursor = marker_required.then_some(head);
+    let mut has_pending = false;
+    while let Some(id) = cursor {
+        let commit = by_id.get(&id).context("the checkout ancestry is incomplete")?;
+        if rebase::is_pending(&repo.find_commit(id)?.decode()?.into_owned()?) {
+            has_pending = true;
+            break;
+        }
+        cursor = commit
+            .parents
+            .first()
+            .copied()
+            .filter(|parent| scope_set.contains(parent));
+    }
     let apply_unchanged = base != onto || has_pending;
 
     let mut children = HashMap::<ObjectId, Vec<ObjectId>>::new();
-    let by_id: HashMap<_, _> = commits.iter().map(|commit| (commit.id, commit)).collect();
     for commit in commits {
         let parent = commit
             .parents
@@ -338,13 +349,13 @@ fn unchanged_notice(base_updated: bool, has_pending: bool) -> &'static str {
             "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
         }
         (false, true) => {
-            "<!-- Rebase help follows. Pending commits make saving unchanged apply this todo: the @ ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Pending commits on the @ ancestry make saving unchanged apply this todo: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
         }
         (true, false) => {
             "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
         }
         (true, true) => {
-            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits: the @ ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry: that ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
         }
     }
 }
@@ -1096,12 +1107,16 @@ mod tests {
     fn unchanged_notices_cover_every_reason_to_apply_or_cancel() {
         for (updated, pending, expected) in [
             (false, false, "Saving unchanged is a no-op"),
-            (false, true, "Pending commits make saving unchanged apply this todo"),
+            (
+                false,
+                true,
+                "Pending commits on the @ ancestry make saving unchanged apply this todo",
+            ),
             (true, false, "Saving unchanged rebases onto the updated base"),
             (
                 true,
                 true,
-                "Saving unchanged rebases onto the updated base and applies pending commits",
+                "Saving unchanged rebases onto the updated base and applies pending commits on the @ ancestry",
             ),
         ] {
             let notice = unchanged_notice(updated, pending);
@@ -1310,6 +1325,42 @@ mod tests {
             .output()?;
         assert!(files.status.success());
         assert_eq!(files.stdout, b"base\ntip\n", "replay uses the recorded original parent");
+        Ok(())
+    }
+
+    #[test]
+    fn pending_commits_outside_the_checkout_ancestry_do_not_apply_an_unchanged_todo() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, mut commits) = commits(&repo)?;
+        let mut sibling = repo.find_commit(tip)?.decode()?.into_owned()?;
+        sibling.parents = [middle].into_iter().collect();
+        sibling.message = "pending sibling".into();
+        sibling
+            .extra_headers
+            .push(("tix-rebase-parent".into(), middle.to_hex().to_string().into()));
+        let sibling = repo.write_object(&sibling)?.detach();
+        commits.push(Commit {
+            id: sibling,
+            parents: vec![middle],
+            info: "pending sibling".into(),
+        });
+
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        assert!(
+            !prepared.apply_unchanged,
+            "pending commits on another fork must not replay the clean checkout ancestry"
+        );
+        assert!(
+            prepared.document.starts_with(unchanged_notice(false, false).as_bytes()),
+            "the first line identifies an unchanged todo as a no-op"
+        );
+        assert!(
+            prepared
+                .document
+                .windows("↻".len())
+                .any(|window| window == "↻".as_bytes()),
+            "the pending sibling remains visible in the todo"
+        );
         Ok(())
     }
 
