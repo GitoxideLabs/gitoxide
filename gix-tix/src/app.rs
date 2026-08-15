@@ -308,6 +308,7 @@ pub(crate) enum Action {
     RebaseUpdate,
     Review,
     TimeTravel,
+    Unpin,
     VerifySignatures,
     Cancel,
     Copy,
@@ -347,6 +348,7 @@ pub(crate) enum Effect {
     },
     FinishReview(ObjectId),
     TimeTravel(ObjectId),
+    Unpin(ObjectId),
     VerifySignatures(Vec<ObjectId>),
     Quit,
 }
@@ -806,6 +808,7 @@ impl App {
                 | Action::RebaseUpdate
                 | Action::Review
                 | Action::TimeTravel
+                | Action::Unpin
         ) {
             self.edit_expanded = false;
         }
@@ -1065,6 +1068,11 @@ impl App {
                 return vec![Effect::TimeTravel(
                     self.rows[self.selected.expect("time-travel requires a selection")].id,
                 )];
+            }
+            Action::Unpin => {
+                if let Some(id) = self.selected.and_then(|index| self.rows.get(index)).map(|row| row.id) {
+                    return vec![Effect::Unpin(id)];
+                }
             }
             Action::VerifySignatures if !self.signature_verification_running => {
                 let start = self.offset.min(self.rows.len());
@@ -2643,6 +2651,7 @@ mod tests {
         assert_eq!(app.update(Action::TimeTravel), vec![Effect::TimeTravel(id(1))]);
         app.set_worktree_changes_available(false);
         assert!(app.update(Action::TimeTravel).is_empty());
+        assert_eq!(app.update(Action::Unpin), vec![Effect::Unpin(id(1))]);
     }
 
     #[test]

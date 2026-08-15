@@ -231,6 +231,8 @@ The Enter key is written as `<enter>` throughout.
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.
+- The edit menu offers `unpin` on a pinned row. It atomically removes every pin
+  for that commit in the current worktree and retains that row's selection.
 - Checkout failures retain the original `HEAD`, remove only a newly created
   source pin, and leave destination pins intact. Successful travel consumes a
   destination pin and applies the same source-pin reconciliation for ancestor,
