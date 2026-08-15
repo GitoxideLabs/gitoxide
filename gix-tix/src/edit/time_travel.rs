@@ -57,7 +57,7 @@ impl Conflict {
         )?
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
         delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
-        conflict.write_index()?;
+        conflict.materialize()?;
         Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
     }
 }
@@ -75,7 +75,7 @@ pub(crate) fn materialize_plan_conflict(
     let notice = move_head(repository_path, bare, conflict.commit, revisions, include_worktrees)?
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
     delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
-    conflict.write_index()?;
+    conflict.materialize()?;
     tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
     Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
 }
@@ -1175,6 +1175,18 @@ mod tests {
             repository.head_id()?.detach(),
             conflict_id,
             "the conflicting commit is checked out"
+        );
+        let conflict_commit = repository.find_commit(conflict_id)?;
+        assert_eq!(
+            conflict_commit.tree_id()?.detach(),
+            conflict_commit
+                .parent_ids()
+                .next()
+                .expect("a cherry-picked commit has a parent")
+                .object()?
+                .peel_to_tree()?
+                .id,
+            "the conflicting commit records the ours tree"
         );
         assert!(repository.head()?.is_detached(), "conflict resolution detaches HEAD");
         let branch = repository.find_reference("refs/heads/main")?.id().detach();
