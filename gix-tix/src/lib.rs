@@ -1585,6 +1585,11 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
+        if key_pressed && pending_rebase_conflict.is_none() && app.has_rebase_conflict() {
+            app.clear_rebase_conflict();
+            dirty = true;
+            urgent = true;
+        }
         if key_pressed && pending_rebase_conflict.is_some() {
             if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
                 let conflict = pending_rebase_conflict
@@ -2031,7 +2036,7 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(Some(edit::rebase::Perform::Complete(outcome))) => {
+                        Ok(Some(edit::rebase::PlanPerform::Complete(outcome))) => {
                             let checkout = outcome.selected;
                             let notice = checkout
                                 .map(|selected| {
@@ -2059,22 +2064,9 @@ fn event_loop(
                                 }
                             }
                         }
-                        Ok(Some(edit::rebase::Perform::Conflict(conflict))) => {
-                            match edit::time_travel::Conflict::from_rebase(
-                                &repository_path,
-                                repository_is_bare,
-                                conflict,
-                                &revisions,
-                                worktrees,
-                            ) {
-                                Ok(conflict) => {
-                                    let original = conflict.original();
-                                    app.arm_rebase_conflict(original);
-                                    app.select_commit(original);
-                                    pending_rebase_conflict = Some(conflict);
-                                }
-                                Err(err) => app.leave_message(format!("rebase conflict: {err:#}")),
-                            }
+                        Ok(Some(edit::rebase::PlanPerform::Conflict(original))) => {
+                            app.mark_todo_rebase_conflict(original);
+                            app.select_commit(original);
                         }
                         Ok(None) => app.leave_message("no rebase performed: the todo was unchanged"),
                         Err(err) => app.leave_message(format!("rebase: {err:#}")),
@@ -3173,7 +3165,7 @@ fn rebase_history(
     commits: Vec<edit::todo::Commit>,
     head: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
-) -> Result<Option<edit::rebase::Perform>> {
+) -> Result<Option<edit::rebase::PlanPerform>> {
     let (prepared, editor) = {
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;

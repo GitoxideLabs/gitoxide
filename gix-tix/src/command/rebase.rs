@@ -231,7 +231,7 @@ fn apply_document(repo: gix::Repository, document: &[u8]) -> Result<()> {
     let bare = repo.is_bare();
     let tips = parsed.tips;
     match rebase::perform_plan(&repo, &graph, parsed.plan)? {
-        rebase::Perform::Complete(outcome) => {
+        rebase::PlanPerform::Complete(outcome) => {
             let revisions = mapped_revisions(&tips, |id| outcome.map(id));
             if let Some(selected) = outcome.selected {
                 let notice =
@@ -242,16 +242,10 @@ fn apply_document(repo: gix::Repository, document: &[u8]) -> Result<()> {
             }
             Ok(())
         }
-        rebase::Perform::Conflict(conflict) => {
-            let revisions = mapped_revisions(&tips, |id| conflict.map(id));
-            let (notice, commit) =
-                edit::time_travel::Conflict::from_rebase(&repository_path, bare, conflict, &revisions, false)?
-                    .accept()?;
-            anyhow::bail!(
-                "{notice}; resolve conflicts at {} and amend the result",
-                commit.to_hex_with_len(7)
-            )
-        }
+        rebase::PlanPerform::Conflict(original) => anyhow::bail!(
+            "rebase aborted without changes: conflict while applying {}",
+            original.to_hex_with_len(7)
+        ),
     }
 }
 

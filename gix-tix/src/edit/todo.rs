@@ -16,13 +16,14 @@ const HELP: &str = r#"
 
 - Each fork section lists a stack from its oldest commit to its newest. Blank lines are ignored.
 - `pick <id>` keeps a commit. Delete its line to drop it, or move the line to reorder it. Each listed commit may be picked only once.
+- `squash <id>` folds a commit into the preceding command in the same fork. Its full message is retained with a source heading, and additional authors become `Co-authored-by` trailers.
 - `## fork <id>` starts a stack at an existing commit or an earlier picked commit. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork headings stay terse. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
-- Prefix `pick` or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
+- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
 - Saving an unchanged document in the history-view editor is a no-op unless listed commits have a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Mutable refs on original leaves stay on the primary resulting leaf; the first continuation in todo order is primary. Other mutable refs follow their commits. Tags and remote-tracking refs stay unchanged, and new unreferenced leaves are pinned.
-- A checkout conflict uses tix's standard suspended-conflict flow; concurrent ref changes abort the update.
+- A todo conflict aborts without changing the repository and marks the offending commit in the history view; concurrent ref changes also abort the update.
 - Commit states are display-only: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, and `○` means unsigned.
 -->
 "#;
@@ -464,12 +465,13 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     };
     let scope: HashSet<_> = state.scope.iter().copied().collect();
     let mut picked = HashMap::<ObjectId, usize>::new();
-    let mut steps = Vec::new();
+    let mut steps = Vec::<rebase::PlanStep>::new();
     let mut cursor = None;
     let mut checkout = None;
     let mut marker_count = 0;
     let mut sections = 0;
     let mut section_has_commit = false;
+    let mut section_last_step = None;
     let mut in_comment = false;
 
     for raw in input.lines() {
@@ -507,6 +509,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             });
             sections += 1;
             section_has_commit = false;
+            section_last_step = None;
             continue;
         }
 
@@ -529,6 +532,25 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             if !state.checkout_allowed || repo.workdir().is_none() {
                 anyhow::bail!("the rebase todo cannot select a checkout without a worktree");
             }
+        }
+        if verb == "squash" {
+            let index = section_last_step.context("a squash must follow a command in the same fork")?;
+            let id = resolve_commit(
+                repo,
+                value.split_whitespace().next().context("a squash needs a commit ID")?,
+            )?;
+            if !scope.contains(&id) {
+                anyhow::bail!("a squash is outside the editable history");
+            }
+            if picked.insert(id, index).is_some() {
+                anyhow::bail!("a commit is picked more than once");
+            }
+            steps[index].squash.push(id);
+            if marked {
+                checkout = Some(index);
+            }
+            section_has_commit = true;
+            continue;
         }
         let parent = cursor.context("the first todo command must follow a fork heading")?;
         let commit = match verb {
@@ -558,8 +580,13 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         if let rebase::PlanCommit::Pick(id) = commit {
             picked.insert(id, index);
         }
-        steps.push(rebase::PlanStep { parent, commit });
+        steps.push(rebase::PlanStep {
+            parent,
+            commit,
+            squash: Vec::new(),
+        });
         cursor = Some(rebase::PlanParent::Step(index));
+        section_last_step = Some(index);
         if marked {
             checkout = Some(index);
         }
@@ -903,6 +930,45 @@ mod tests {
         assert_eq!(plan.checkout, Some(2));
         assert_eq!(plan.steps[2].parent, rebase::PlanParent::Step(0));
         assert!(matches!(&plan.steps[1].commit, rebase::PlanCommit::Empty(title) if title == b"a new checkpoint"));
+        Ok(())
+    }
+
+    #[test]
+    fn squash_folds_into_the_previous_command_and_may_carry_checkout() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, commits) = commits(&repo)?;
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let edited = with_state(
+            &prepared,
+            &format!(
+                "## fork {}\npick {}\n`@squash {}` ignored display metadata\n\n## fork {}\nempty side\n",
+                base.to_hex_with_len(7),
+                middle.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+            ),
+        );
+        let plan = parse_plan(&repo, &edited)?;
+        assert_eq!(plan.steps.len(), 2, "squash does not produce another commit");
+        assert_eq!(plan.steps[0].squash, [tip]);
+        assert_eq!(plan.checkout, Some(0), "the squash marker selects the folded result");
+        assert_eq!(
+            plan.steps[1].parent,
+            rebase::PlanParent::Step(0),
+            "the squashed ID resolves to the folded result as a fork target"
+        );
+
+        let invalid = with_state(
+            &prepared,
+            &format!(
+                "## fork {}\n@squash {}\npick {}\n",
+                base.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+                middle.to_hex_with_len(7),
+            ),
+        );
+        let err = parse(&repo, &invalid).expect_err("a fork cannot begin with squash");
+        assert!(format!("{err:#}").contains("same fork"));
         Ok(())
     }
 
