@@ -1904,7 +1904,7 @@ fn color_graph(
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
         if review && symbol == '●' {
-            cell.set_symbol("★");
+            cell.set_symbol("◆");
         } else if head.is_some() && symbol == '●' {
             cell.set_symbol("@");
         }
@@ -3168,7 +3168,7 @@ mod tests {
     }
 
     #[test]
-    fn review_commit_uses_a_star_instead_of_the_signature_disc() -> Result<(), Box<dyn std::error::Error>> {
+    fn review_commit_uses_a_diamond_instead_of_the_signature_disc() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
         terminal.draw(|frame| {
             frame.render_widget(Paragraph::new("●─"), Rect::new(0, 0, 2, 1));
@@ -3182,7 +3182,7 @@ mod tests {
                 Some(true),
             );
         })?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "★");
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "◆");
         assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
         Ok(())
     }

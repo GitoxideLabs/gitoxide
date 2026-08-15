@@ -477,7 +477,7 @@ space first; changes blocks adapt within the remaining history width.
   as unstaged changes.
 - Review refs are always traversal tips and remain visible in every ref mode. One
   active ref is shown as `review`; multiple refs are shown as `review:N`. Review
-  commits replace the signature disc with a star while retaining independent
+  commits replace the signature disc with a filled diamond while retaining independent
   signature state. Ordinary edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
 - At a checked-out review commit, amend is offered only for staged changes and
