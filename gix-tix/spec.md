@@ -234,10 +234,11 @@ The Enter key is written as `<enter>` throughout.
   then lexical ref-name order.
 - The edit menu offers `unpin` on a pinned row. It atomically removes every pin
   for that commit in the current worktree and retains that row's selection.
-- `tix pin <REVSPEC>...` resolves every argument before writing, deduplicates
-  commits in argument order, and creates or reuses direct current-worktree pins.
-  Each unique commit prints as `pin:<suffix> <short-id>`; symbolic pins at the
-  same current commit remain distinct because their targets may move.
+- `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
+  pin targets in argument order. A direct reference name creates or reuses a
+  symbolic current-worktree pin so it follows later reference updates; derived
+  revisions and object IDs remain fixed direct pins. Each unique target prints
+  as `pin:<suffix> <short-id>`, and targets at the same commit remain distinct.
 - Checkout failures retain the original `HEAD`, remove only a newly created
   source pin, and leave destination pins intact. Successful travel consumes a
   destination pin and applies the same source-pin reconciliation for ancestor,
