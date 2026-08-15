@@ -1,7 +1,8 @@
-use std::ffi::OsString;
+use std::{collections::HashSet, ffi::OsString};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use gix::prelude::ObjectIdExt;
 
 mod rebase;
 
@@ -35,9 +36,18 @@ enum Command {
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split,
+    /// Pin one or more commits as persistent history tips.
+    Pin(Pin),
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+}
+
+#[derive(Debug, clap::Args)]
+struct Pin {
+    /// Revisions resolving to commits to pin.
+    #[arg(required = true, value_name = "REVSPEC")]
+    revisions: Vec<OsString>,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -95,10 +105,56 @@ impl Platform {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 split(repository, &graph)?;
             }
+            Command::Pin(args) => pin(&repository, args)?,
             Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
     }
+}
+
+fn pin(repository: &gix::Repository, args: Pin) -> Result<()> {
+    for pin in create_pins(repository, &args.revisions)? {
+        println!("{}", display_pin(repository, &pin)?);
+    }
+    Ok(())
+}
+
+fn create_pins(repository: &gix::Repository, revisions: &[OsString]) -> Result<Vec<crate::history::Pin>> {
+    let mut seen = HashSet::new();
+    let ids = revisions
+        .iter()
+        .map(|revision| {
+            let revision = gix::path::os_str_into_bstr(revision)
+                .with_context(|| format!("revision {} is not valid UTF-8", revision.to_string_lossy()))?;
+            let id = repository
+                .rev_parse_single(revision)
+                .with_context(|| format!("could not resolve revision {revision:?}"))?;
+            Ok(id
+                .object()
+                .context("could not read pin target")?
+                .peel_to_commit()
+                .context("pin target does not resolve to a commit")?
+                .id)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ids.into_iter()
+        .filter(|id| seen.insert(*id))
+        .map(|id| {
+            crate::edit::time_travel::create_or_reuse_pin(repository, gix::refs::Target::Object(id), id, "tix pin")
+                .map(|(pin, _created)| pin)
+        })
+        .collect()
+}
+
+fn display_pin(repository: &gix::Repository, pin: &crate::history::Pin) -> Result<String> {
+    Ok(format!(
+        "{} {}",
+        crate::edit::time_travel::pin_label(pin),
+        pin.id
+            .attach(repository)
+            .shorten()
+            .context("could not shorten pinned commit ID")?
+    ))
 }
 
 fn edit_head(
@@ -183,6 +239,14 @@ mod tests {
                 .command,
             Some(Command::Split)
         ));
+        let pin = Cli::try_parse_from(["tix", "pin", "main", "HEAD~2"])
+            .expect("one or more pin revisions parse")
+            .platform
+            .command;
+        let Some(Command::Pin(pin)) = pin else {
+            panic!("pin was expected")
+        };
+        assert_eq!(pin.revisions, ["main", "HEAD~2"]);
         assert!(matches!(
             Cli::try_parse_from([
                 "tix",
@@ -257,10 +321,74 @@ mod tests {
                 .kind(),
             ErrorKind::UnknownArgument
         );
+        assert_eq!(
+            Cli::try_parse_from(["tix", "pin"])
+                .expect_err("pin requires at least one revision")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
 
         let cli = Cli::try_parse_from(["tix", "--", "amend"]).expect("-- makes amend a revision");
         assert!(cli.platform.command.is_none());
         assert_eq!(cli.platform.revisions, ["amend"]);
+    }
+
+    #[test]
+    fn pin_resolves_every_revision_before_creating_direct_deduplicated_pins() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let revisions = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+        let main = repository.rev_parse_single("main")?.detach();
+
+        for invalid in ["missing", "main..topic", "HEAD^{tree}"] {
+            create_pins(&repository, &revisions(&["main", invalid]))
+                .expect_err("a non-commit revision rejects the complete request");
+            assert!(
+                crate::history::all_pins(&repository)?.is_empty(),
+                "resolution failure is unobservable"
+            );
+        }
+
+        assert!(
+            ProcessCommand::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["symbolic-ref", "refs/worktree/tix/pins/follow", "refs/heads/main",])
+                .status()?
+                .success(),
+            "the fixture has a movable symbolic pin"
+        );
+        let root = repository.rev_parse_single("v1")?.object()?.peel_to_commit()?.id;
+        let short_main = main.to_hex_with_len(7).to_string();
+        let pins = create_pins(&repository, &revisions(&["main", "v1", &short_main]))?;
+        assert_eq!(
+            pins.iter().map(|pin| pin.id).collect::<Vec<_>>(),
+            [main, root],
+            "duplicate revspec results preserve first-seen order"
+        );
+        assert!(
+            pins.iter()
+                .all(|pin| pin.target.try_id().map(ToOwned::to_owned) == Some(pin.id)),
+            "command-created pins are direct"
+        );
+        assert_eq!(
+            crate::history::all_pins(&repository)?.len(),
+            3,
+            "the symbolic pin does not suppress an explicit direct pin"
+        );
+
+        let repeated = create_pins(&repository, &revisions(&["main"]))?;
+        assert_eq!(repeated[0].name, pins[0].name, "an existing direct pin is reused");
+        assert_eq!(crate::history::all_pins(&repository)?.len(), 3);
+        let display = display_pin(&repository, &pins[0])?;
+        let (label, short_id) = display.split_once(' ').context("pin output has a label and ID")?;
+        assert!(label.starts_with("pin:"), "output names the pin");
+        assert_eq!(
+            short_id,
+            main.attach(&repository).shorten()?.to_string(),
+            "output uses the repository's abbreviated ID"
+        );
+        Ok(())
     }
 
     #[test]

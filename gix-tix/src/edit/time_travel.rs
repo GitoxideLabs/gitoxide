@@ -139,7 +139,7 @@ fn move_head_to(
         return Ok(None);
     }
     let destination_pin = selected_pin(&repository, selected)?;
-    let provisional = create_or_reuse_pin(&repository, saved_target, head_id)?;
+    let provisional = create_or_reuse_pin(&repository, saved_target, head_id, "tix time-travel")?;
     drop(repository);
     let checkout = match (reference, &destination_pin) {
         (Some(reference), _) => checkout_branch(&workdir, reference),
@@ -536,7 +536,12 @@ fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     Ok(pins.into_iter().next())
 }
 
-fn create_or_reuse_pin(repository: &gix::Repository, target: Target, id: ObjectId) -> Result<(history::Pin, bool)> {
+pub(crate) fn create_or_reuse_pin(
+    repository: &gix::Repository,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<(history::Pin, bool)> {
     let pins = history::all_pins(repository)?;
     if let Some(pin) = pins.iter().find(|pin| pin.target == target) {
         return Ok((pin.clone(), false));
@@ -574,7 +579,7 @@ fn create_or_reuse_pin(repository: &gix::Repository, target: Target, id: ObjectI
                 log: LogChange {
                     mode: RefLog::AndReference,
                     force_create_reflog: false,
-                    message: "tix time-travel".into(),
+                    message: reflog_message.into(),
                 },
                 expected: PreviousValue::MustNotExist,
                 new: target.clone(),
@@ -704,7 +709,7 @@ fn contains(repository: &gix::Repository, ancestor: ObjectId, descendant: Object
             .is_ok_and(|base| base.as_ref() == ancestor)
 }
 
-fn pin_label(pin: &history::Pin) -> String {
+pub(crate) fn pin_label(pin: &history::Pin) -> String {
     format!(
         "pin:{}",
         pin.name
