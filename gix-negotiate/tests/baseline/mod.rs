@@ -25,11 +25,11 @@ fn run() -> crate::Result {
             let buf = std::fs::read(base.join(format!("baseline.{algo_name}")))?;
             let object_hash = gix_testtools::object_hash();
             let store = gix_odb::at(base.join("client").join(".git/objects"), object_hash)?;
-            let refs = gix_ref::file::Store::at(
+            let refs = gix_ref::file::Store::at_opts(
                 base.join("client").join(".git"),
+                object_hash,
                 gix_ref::store::init::Options {
                     write_reflog: WriteReflog::Disable,
-                    object_hash,
                     ..Default::default()
                 },
             );

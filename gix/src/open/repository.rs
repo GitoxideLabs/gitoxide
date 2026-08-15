@@ -226,15 +226,17 @@ impl ThreadSafeRepository {
             let object_hash = repo_config.object_hash;
             let ref_store_init_opts = gix_ref::store::init::Options {
                 write_reflog: reflog,
-                object_hash,
                 precompose_unicode: repo_config.precompose_unicode,
                 prohibit_windows_device_names: repo_config.protect_windows,
             };
             match &common_dir {
-                Some(common_dir) => {
-                    crate::RefStore::for_linked_worktree(git_dir.to_owned(), common_dir.into(), ref_store_init_opts)
-                }
-                None => crate::RefStore::at(git_dir.to_owned(), ref_store_init_opts),
+                Some(common_dir) => crate::RefStore::for_linked_worktree_opts(
+                    git_dir.to_owned(),
+                    common_dir.into(),
+                    object_hash,
+                    ref_store_init_opts,
+                ),
+                None => crate::RefStore::at_opts(git_dir.to_owned(), object_hash, ref_store_init_opts),
             }
         };
         let head = refs.find("HEAD").ok();

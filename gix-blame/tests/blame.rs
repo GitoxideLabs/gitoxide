@@ -160,11 +160,11 @@ impl Fixture {
         use gix_ref::store::WriteReflog;
 
         let object_hash = fixture_hash_kind();
-        let store = gix_ref::file::Store::at(
+        let store = gix_ref::file::Store::at_opts(
             worktree_path.join(".git"),
+            object_hash,
             gix_ref::store::init::Options {
                 write_reflog: WriteReflog::Disable,
-                object_hash,
                 ..Default::default()
             },
         );

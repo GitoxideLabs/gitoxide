@@ -112,15 +112,15 @@ fn write_refs(
 
     let start = Instant::now();
     let precompose_unicode = gix::fs::Capabilities::probe(&directory).precompose_unicode;
-    let store = gix::RefStore::at(
+    let store = gix::RefStore::at_opts(
         directory,
+        object_hash,
         gix::refs::store::init::Options {
             write_reflog: if write_reflog {
                 gix::refs::store::WriteReflog::Always
             } else {
                 gix::refs::store::WriteReflog::Disable
             },
-            object_hash,
             precompose_unicode,
             prohibit_windows_device_names: cfg!(windows),
         },
