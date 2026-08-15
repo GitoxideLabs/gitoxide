@@ -3178,15 +3178,25 @@ fn rebase_history(
     head: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::Perform>> {
-    let prepared = {
+    let (prepared, editor) = {
         let mut repository =
             open_repository(repository_path, bare, false).context("could not open repository before rebasing")?;
         repository.object_cache_size(None);
-        edit::todo::prepare(&repository, base, onto, &commits, head)?
+        let editor = repository.editor().context("no Git editor is available")?;
+        let prepared = edit::todo::prepare(
+            &repository,
+            base,
+            onto,
+            &commits,
+            head,
+            &[],
+            edit::todo::OntoKind::UpdatedBase,
+        )?;
+        (prepared, editor)
     };
     let edited = edit::edit_document(
         terminal,
-        &prepared.editor,
+        &editor,
         &prepared.document,
         &format!("tix-rebase-{}.md", std::process::id()),
         enhanced_keyboard,
@@ -3199,8 +3209,10 @@ fn rebase_history(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing rebase")?;
     repository.object_cache_size(None);
-    let plan = edit::todo::parse(&repository, prepared, &edited)?;
-    edit::rebase::perform_plan(&repository, graph, plan).map(Some)
+    let Some(parsed) = edit::todo::parse(&repository, &edited)? else {
+        return Ok(None);
+    };
+    edit::rebase::perform_plan(&repository, graph, parsed.plan).map(Some)
 }
 
 #[derive(Clone, Copy)]

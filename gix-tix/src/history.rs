@@ -147,6 +147,24 @@ impl PartialOrd for GenThenTime {
 }
 
 impl HistoryGraph {
+    pub(crate) fn for_commits(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Self> {
+        let mut graph = HistoryGraph::default();
+        let shallow: HashSet<_> = repo
+            .shallow_commits()
+            .context("could not read shallow commits")?
+            .into_iter()
+            .flat_map(|commits| commits.iter().copied().collect::<Vec<_>>())
+            .collect();
+        let commit_graph = repo
+            .commit_graph_if_enabled()
+            .context("could not open commit-graph for rebase")?;
+        let mut buf = Vec::new();
+        for id in ids {
+            graph.ensure_commit(repo, commit_graph.as_ref(), &shallow, *id, &mut buf)?;
+        }
+        Ok(graph)
+    }
+
     fn intern(&mut self, id: ObjectId) -> Result<CommitIndex> {
         if let Some(index) = self.by_id.get(&id) {
             return Ok(*index);
