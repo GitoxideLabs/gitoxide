@@ -73,11 +73,12 @@ without trading responsiveness for metadata that is not visible.
   that connect visible history to hidden history remain as boundary rows.
 - Boundary rows retain graph styling but use terminal-default colors, are dimmed,
   and can be selected, paged to, restored as a selection, copied, and inspected.
-  They cannot be reworded, forgotten, or signature-verified, and Shift navigation
-  continues to skip them. They may be used for time travel or as the parent of an
-  independent fork commit. A boundary whose visible
-  descendants contain no merge commit offers the history-rebase editor, including
-  when those descendants fork into multiple linear stacks.
+  They cannot be reworded, forgotten, or signature-verified. During review-base
+  selection, only an eligible base boundary remains selectable among hidden rows.
+  They may be used for time travel or as the parent of an independent fork commit.
+  A boundary whose visible descendants contain no merge commit offers the
+  history-rebase editor, including when those descendants fork into multiple
+  linear stacks.
 - If a boundary has exactly one leaf among its visible descendants, selecting it
   uses the boundary-to-leaf tree comparison for the changes block and selection
   diff-stat. Forks which merge back into one leaf qualify; multiple surviving
@@ -126,7 +127,7 @@ without trading responsiveness for metadata that is not visible.
   never invert an adjacent character.
 - A compared merge parent is cyan, including its commit marker, and its hash is
   inverted.
-- Rows outside active Shift reachability are dimmed. When a changes block has
+- Rows outside active review-base reachability are dimmed. When a changes block has
   focus, history is dimmed but its contextual selection information and main
   status line remain prominent.
 
@@ -172,7 +173,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-u`/`Ctrl-d` | Move half a page. |
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
-| `?` | Toggle the view-information key group. Its actions remain direct shortcuts. |
+| `?` | Toggle the information key group. Its actions remain direct shortcuts. |
 | `[` | Toggle graph/metadata alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Toggle committer dates. |
@@ -194,7 +195,9 @@ without trading responsiveness for metadata that is not visible.
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions, but these
-actions retain their direct shortcuts while the group is closed. The footer
+actions retain their direct shortcuts while the group is closed. While expanded,
+the group visually contains every following status action through `<enter> diff`,
+including pane switching and navigation; quit remains outside it. The footer
 underlines the `v` in `view`; while active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
@@ -243,22 +246,6 @@ The Enter key is written as `<enter>` throughout.
   --index` and always removes the companion ref after Git returns. Apply conflicts
   remain in the ordinary index/worktree conflict workflow. Nested trees use the
   nearest review-root ancestor.
-
-### Held Shift ancestry mode
-
-- On terminals that report modifier press and release events, pressing Shift in
-  focused history anchors navigation at the selected commit. Releasing Shift
-  restores ordinary navigation.
-- `j` and `k` then visit only commits reachable through the selected rail; other
-  rows are dimmed.
-- A non-merge anchor follows all of its ancestry. A merge anchor initially uses
-  its second parent, excluding first-parent ancestry except shared fork points.
-- `h` and `l` cycle the merge anchor's parents instead of panning. The chosen
-  parent is numbered beside the junction marker. Later merges on the chosen rail
-  traverse all their parents normally.
-- Reachability is computed only after traversal and lane computation complete.
-  Shift is ignored while another changes block has focus or while the terminal
-  itself is unfocused.
 
 ## Overlay views
 
