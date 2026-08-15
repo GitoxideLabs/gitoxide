@@ -258,6 +258,18 @@ The Enter key is written as `<enter>` throughout.
   --index` and always removes the companion ref after Git returns. Apply conflicts
   remain in the ordinary index/worktree conflict workflow. Nested trees use the
   nearest review-root ancestor.
+- When loaded worktree status shows staged, unstaged, or untracked changes without
+  conflicts, the edit menu offers `stas[h]` at the selected `@` entry. Missing or
+  stale worktree status hides the action instead of performing another status
+  query. Saving uses Git with `--include-untracked`, leaves ignored files alone,
+  preserves the ordinary stash stack, and records the stash commit at
+  `refs/tix/stash/<full-commit-id>`. A commit can retain only one such stash.
+- A commit stash is shown as a bright `🎁` beside any `📌`, directly after the
+  hash and outside reference visibility. Time travel back to that exact commit
+  restores it with `git stash apply --index` and consumes its companion ref after
+  Git returns, including when application leaves conflicts to resolve. Manual
+  commit stashes use the same plumbing during reviews, while automatic review
+  stashes retain their review-tree identity and namespace.
 
 ## Overlay views
 
@@ -682,7 +694,7 @@ space first; changes blocks adapt within the remaining history width.
 - `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base and
   `e u` rebases it onto the newer hidden branch tip when available,
   `e r` rewords, `e n` creates a rebased child, `e f` forks an independent child,
-  `e a` amends `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
+  `e a` amends `@`, `e h` stashes changes at `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
   `e d d` confirms forgetting a top commit, and `e t` enters or returns from
   time travel when each action is available.
 - Edit shortcuts keep the group open. Navigation or another recognized command

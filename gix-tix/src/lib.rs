@@ -2077,6 +2077,19 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("{verb}: {err:#}")),
                     }
                 }
+                Effect::Stash(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit::stash::save_manual(&repository_path, repository_is_bare, id) {
+                        Ok(notice) => {
+                            app.leave_message(notice);
+                            app.select_commit_after_refresh(id);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_message(format!("stash: {err:#}")),
+                    }
+                }
                 Effect::Forget(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
@@ -2789,7 +2802,10 @@ fn draw(
     }
     let message = commit_message.as_ref().map(|(_, message)| message.as_bstr());
     let tree_changes = tree_changes.as_ref().map(|(_, changes)| changes);
-    let worktree_changes = worktree_changes.as_ref().map(|(_, changes)| changes);
+    let worktree_changes = worktree_changes
+        .as_ref()
+        .filter(|(marker, _)| *marker != usize::MAX)
+        .map(|(_, changes)| changes);
     terminal
         .autoresize()
         .context("could not resize the terminal before drawing")?;
@@ -4263,6 +4279,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Esc => Some(Action::Cancel),
         KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
         KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+        KeyCode::Char('h') if edit_expanded => Some(Action::Stash),
         KeyCode::Char('h') if history_display_expanded => Some(Action::ToggleHidden),
         KeyCode::Char('h') => Some(Action::ScrollLeft),
         KeyCode::Char('l') => Some(Action::ScrollRight),
@@ -5296,6 +5313,7 @@ mod tests {
             ('m', Action::NewEmptyCommit),
             ('f', Action::ForkCommit),
             ('a', Action::Amend),
+            ('h', Action::Stash),
             ('s', Action::Spill),
             ('p', Action::Split),
             ('d', Action::Forget),

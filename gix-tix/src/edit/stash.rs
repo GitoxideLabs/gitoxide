@@ -12,6 +12,63 @@ use gix::{
 
 use crate::open_repository;
 
+pub(crate) fn reference(id: ObjectId) -> Result<gix::refs::FullName> {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(crate::history::STASH_PREFIX),
+        id.to_hex()
+    )
+    .try_into()
+    .context("generated an invalid tix stash reference")
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %id))]
+pub(crate) fn save_manual(repository_path: &Path, bare: bool, id: ObjectId) -> Result<String> {
+    let repo = open_repository(repository_path, bare, false).context("could not open repository to stash changes")?;
+    let workdir = repo
+        .workdir()
+        .context("stashing changes requires a worktree")?
+        .to_owned();
+    let head = repo
+        .head_id()
+        .context("stashing changes requires a born HEAD")?
+        .detach();
+    if head != id {
+        anyhow::bail!("changes can only be stashed at the current HEAD");
+    }
+    if repo
+        .index_or_empty()
+        .context("could not inspect the index before stashing")?
+        .entries()
+        .iter()
+        .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+    {
+        anyhow::bail!("cannot stash changes with unresolved index conflicts");
+    }
+    let name = reference(id)?;
+    if repo.try_find_reference(name.as_ref())?.is_some() {
+        anyhow::bail!("{} already has saved worktree state", id.to_hex_with_len(7));
+    }
+    drop(repo);
+    if !super::review::is_dirty(&workdir)? {
+        anyhow::bail!("there are no worktree or index changes to stash");
+    }
+    let saved = save(
+        repository_path,
+        bare,
+        &workdir,
+        name,
+        format!("tix {}", id.to_hex_with_len(7)),
+        "tix commit stash",
+        "commit state",
+    )?;
+    let mut notice = format!("stashed changes at {}", id.to_hex_with_len(7));
+    if let Some(warning) = saved.warning {
+        write!(notice, "; {warning}").expect("writing to a string cannot fail");
+    }
+    Ok(notice)
+}
+
 #[derive(Clone)]
 pub(super) struct SavedStash {
     pub name: gix::refs::FullName,
@@ -170,4 +227,78 @@ pub(super) fn apply(repository_path: &Path, bare: bool, workdir: &Path, stash: S
     }
     tracing::info!(stash = %stash.name, success = output.status.success(), "applied saved worktree state");
     Ok(notice)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
+        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        Ok(output.stdout)
+    }
+
+    #[test]
+    fn manual_stashes_preserve_git_stashes_and_restore_index_and_worktree_state() -> gix_testtools::Result {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        git(fixture.path(), &["init", "-q", "-b", "main"])?;
+        git(fixture.path(), &["config", "user.name", "user"])?;
+        git(fixture.path(), &["config", "user.email", "user@example.com"])?;
+        std::fs::write(fixture.path().join("tracked"), "base\n")?;
+        std::fs::write(fixture.path().join(".gitignore"), "ignored\n")?;
+        git(fixture.path(), &["add", "."])?;
+        git(fixture.path(), &["-c", "commit.gpgSign=false", "commit", "-qm", "base"])?;
+        let head = ObjectId::from_hex(git(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+
+        std::fs::write(fixture.path().join("ordinary"), "ordinary stash\n")?;
+        git(
+            fixture.path(),
+            &["stash", "push", "--include-untracked", "-qm", "ordinary"],
+        )?;
+        let ordinary = ObjectId::from_hex(git(fixture.path(), &["rev-parse", "refs/stash"])?.trim())?;
+
+        std::fs::write(fixture.path().join("staged"), "staged\n")?;
+        git(fixture.path(), &["add", "staged"])?;
+        std::fs::write(fixture.path().join("tracked"), "unstaged\n")?;
+        std::fs::write(fixture.path().join("untracked"), "untracked\n")?;
+        std::fs::write(fixture.path().join("ignored"), "ignored\n")?;
+
+        let repo = crate::open_test_repository(fixture.path())?;
+        let repository_path = repo.git_dir().to_owned();
+        drop(repo);
+        let notice = save_manual(&repository_path, false, head)?;
+        assert!(notice.contains("stashed changes"));
+
+        let repo = crate::open_test_repository(fixture.path())?;
+        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
+        let name = reference(head)?;
+        assert!(repo.try_find_reference(name.as_ref())?.is_some());
+        assert!(
+            git(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+            "the tracked and untracked changes were stashed"
+        );
+        assert_eq!(std::fs::read(fixture.path().join("ignored"))?, b"ignored\n");
+        drop(repo);
+
+        let saved = find(&repository_path, false, name.clone())?.expect("the manual stash exists");
+        apply(&repository_path, false, fixture.path(), saved)?;
+        assert_eq!(
+            git(fixture.path(), &["diff", "--cached", "--name-only"])?.trim(),
+            b"staged"
+        );
+        assert_eq!(git(fixture.path(), &["diff", "--name-only"])?.trim(), b"tracked");
+        assert_eq!(std::fs::read(fixture.path().join("untracked"))?, b"untracked\n");
+        let repo = crate::open_test_repository(fixture.path())?;
+        assert!(repo.try_find_reference(name.as_ref())?.is_none());
+        assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
+        Ok(())
+    }
 }

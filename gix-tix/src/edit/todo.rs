@@ -24,7 +24,7 @@ const HELP: &str = r#"
 - Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A branch checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
-- Commit states are display-only: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, and `○` means unsigned.
+- Commit states are display-only and editing them has no effect: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
 "#;
 
@@ -477,7 +477,10 @@ fn commit_states(repo: &gix::Repository, id: ObjectId) -> Result<String> {
             signature = true;
         }
     }
-    let mut out = Vec::with_capacity(3);
+    let stashed = repo
+        .try_find_reference(super::stash::reference(id)?.as_ref())?
+        .is_some();
+    let mut out = Vec::with_capacity(4);
     if pending {
         out.push("↻");
     }
@@ -489,6 +492,9 @@ fn commit_states(repo: &gix::Repository, id: ObjectId) -> Result<String> {
     }
     if !empty_signature && !signature {
         out.push("○");
+    }
+    if stashed {
+        out.push("🎁");
     }
     Ok(format!("{} ", out.join(" ")))
 }
@@ -1182,7 +1188,13 @@ mod tests {
     #[test]
     fn markdown_flows_from_base_to_tip_and_uses_repository_abbreviations() -> gix_testtools::Result {
         let (_fixture, repo) = repo()?;
-        let (base, _middle, tip, commits) = commits(&repo)?;
+        let (base, middle, tip, commits) = commits(&repo)?;
+        repo.reference(
+            super::super::stash::reference(middle)?,
+            tip,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test todo stash marker",
+        )?;
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         assert!(!prepared.apply_unchanged);
         let document = String::from_utf8(prepared.document.clone())?;
@@ -1214,6 +1226,14 @@ mod tests {
             document.contains("○"),
             "unsigned commits carry the documented status symbol"
         );
+        assert!(
+            document.contains("🎁"),
+            "stashed commits carry a display-only gift marker"
+        );
+        let mut edited_symbols = document.clone();
+        let marker = edited_symbols.find("🎁").expect("the command carries a stash marker");
+        edited_symbols.replace_range(marker..marker + "🎁".len(), "changed-state");
+        parse_plan(&repo, edited_symbols.as_bytes())?;
         let plan = parse_plan(&repo, &prepared.document)?;
         assert_eq!(
             plan.checkout.as_ref().and_then(|checkout| checkout.reference.as_ref()),
