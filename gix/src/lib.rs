@@ -147,6 +147,7 @@ pub use gix_odb as odb;
 #[cfg(feature = "credentials")]
 pub use gix_prompt as prompt;
 pub use gix_protocol as protocol;
+pub use gix_quote as quote;
 pub use gix_ref as refs;
 pub use gix_refspec as refspec;
 pub use gix_revwalk as revwalk;
