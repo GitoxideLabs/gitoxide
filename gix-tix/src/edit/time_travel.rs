@@ -17,6 +17,9 @@ use gix::{
 
 use crate::{history, open_repository};
 
+#[cfg(test)]
+use super::stash::SavedStash;
+
 pub(crate) enum Perform {
     Complete(Option<String>),
     Conflict(Conflict),
@@ -336,161 +339,46 @@ fn review_tree(
     Ok(Some(ReviewTree { root, reference }))
 }
 
-#[derive(Clone)]
-struct SavedStash {
-    name: gix::refs::FullName,
-    target: Target,
-    warning: Option<String>,
-}
-
 #[tracing::instrument(skip_all, fields(review = %review.reference))]
 fn save_review_stash(
     repository_path: &Path,
     bare: bool,
     workdir: &Path,
     review: &ReviewTree,
-) -> Result<Option<SavedStash>> {
+) -> Result<Option<super::stash::SavedStash>> {
     if !super::review::is_dirty(workdir)? {
         return Ok(None);
     }
     let name = super::review::stash_reference(review.reference.as_bstr())?;
-    let repo =
-        open_repository(repository_path, bare, false).context("could not open repository to save review state")?;
-    if repo.try_find_reference(name.as_ref())?.is_some() {
-        anyhow::bail!("review {} already has saved worktree state", review.reference.shorten());
-    }
-    let previous = repo
-        .try_find_reference("refs/stash")?
-        .and_then(|mut reference| reference.peel_to_id().ok().map(gix::Id::detach));
-    drop(repo);
-
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .args(["stash", "push", "--include-untracked", "--quiet", "--message"])
-        .arg(format!("tix review {}", review.reference.shorten()))
-        .output()
-        .context("could not launch git stash push")?;
-    if !output.status.success() {
-        anyhow::bail!("git stash push failed: {}", output.stderr.trim().to_str_lossy());
-    }
-
-    let repo = open_repository(repository_path, bare, false).context("could not reopen repository after stashing")?;
-    let mut stash = repo
-        .try_find_reference("refs/stash")?
-        .context("git stash push did not create refs/stash")?;
-    let id = stash.peel_to_id()?.detach();
-    if previous == Some(id) {
-        anyhow::bail!("git stash push did not create a new stash");
-    }
-    let target = Target::Object(id);
-    if let Err(err) = repo.edit_references([RefEdit {
-        change: Change::Update {
-            log: LogChange {
-                mode: RefLog::AndReference,
-                force_create_reflog: false,
-                message: "tix review auto-stash".into(),
-            },
-            expected: PreviousValue::MustNotExist,
-            new: target.clone(),
-        },
-        name: name.clone(),
-        deref: false,
-    }]) {
-        drop(repo);
-        let restore = Command::new("git")
-            .arg("-C")
-            .arg(workdir)
-            .args(["stash", "pop", "--index", "--quiet"])
-            .output();
-        return Err(anyhow::anyhow!(err)).context(match restore {
-            Ok(output) if output.status.success() => {
-                "could not retain review stash; original state was restored".to_owned()
-            }
-            Ok(output) => format!(
-                "could not retain review stash and git stash pop failed: {}",
-                output.stderr.trim().to_str_lossy()
-            ),
-            Err(restore) => format!("could not retain review stash and could not launch git stash pop: {restore}"),
-        });
-    }
-    drop(repo);
-
-    let warning = match current_stash(repository_path, bare)? {
-        Some(current) if current == id => {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(workdir)
-                .args(["stash", "drop", "--quiet", "stash@{0}"])
-                .output()
-                .context("could not launch git stash drop")?;
-            (!output.status.success()).then(|| {
-                format!(
-                    "review state was saved, but its ordinary stash entry remains: {}",
-                    output.stderr.trim().to_str_lossy()
-                )
-            })
-        }
-        _ => Some("review state was saved, but refs/stash changed before its entry could be dropped".to_owned()),
-    };
-    tracing::info!(review = %review.reference, stash = %name, %id, "saved review worktree state");
-    Ok(Some(SavedStash { name, target, warning }))
-}
-
-fn current_stash(repository_path: &Path, bare: bool) -> Result<Option<ObjectId>> {
-    let repo = open_repository(repository_path, bare, false).context("could not inspect refs/stash")?;
-    let Some(mut reference) = repo.try_find_reference("refs/stash")? else {
-        return Ok(None);
-    };
-    Ok(Some(reference.peel_to_id()?.detach()))
-}
-
-fn find_review_stash(repository_path: &Path, bare: bool, review: &ReviewTree) -> Result<Option<SavedStash>> {
-    let repo = open_repository(repository_path, bare, false).context("could not inspect saved review state")?;
-    let name = super::review::stash_reference(review.reference.as_bstr())?;
-    let Some(reference) = repo.try_find_reference(name.as_ref())? else {
-        return Ok(None);
-    };
-    Ok(Some(SavedStash {
+    super::stash::save(
+        repository_path,
+        bare,
+        workdir,
         name,
-        target: reference.target().into_owned(),
-        warning: None,
-    }))
+        format!("tix review {}", review.reference.shorten()),
+        "tix review auto-stash",
+        "review state",
+    )
+    .map(Some)
+}
+
+fn find_review_stash(
+    repository_path: &Path,
+    bare: bool,
+    review: &ReviewTree,
+) -> Result<Option<super::stash::SavedStash>> {
+    let name = super::review::stash_reference(review.reference.as_bstr())?;
+    super::stash::find(repository_path, bare, name)
 }
 
 #[tracing::instrument(skip_all, fields(stash = %stash.name))]
-fn apply_review_stash(repository_path: &Path, bare: bool, workdir: &Path, stash: SavedStash) -> Result<String> {
-    let repo =
-        open_repository(repository_path, bare, false).context("could not open repository before applying stash")?;
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workdir)
-        .args(["stash", "apply", "--index", "--quiet"])
-        .arg(stash.name.as_bstr().to_str_lossy().as_ref())
-        .output()
-        .context("could not launch git stash apply")?;
-    let deletion = repo.edit_references([RefEdit {
-        change: Change::Delete {
-            expected: PreviousValue::MustExistAndMatch(stash.target),
-            log: RefLog::AndReference,
-        },
-        name: stash.name.clone(),
-        deref: false,
-    }]);
-    let mut notice = if output.status.success() {
-        format!("restored {}", stash.name.shorten())
-    } else {
-        format!(
-            "{} restore needs attention: {}",
-            stash.name.shorten(),
-            output.stderr.trim().to_str_lossy()
-        )
-    };
-    if let Err(err) = deletion {
-        write!(notice, "; stash reference remains: {err}").expect("writing to a string cannot fail");
-    }
-    tracing::info!(stash = %stash.name, success = output.status.success(), "applied review worktree state");
-    Ok(notice)
+fn apply_review_stash(
+    repository_path: &Path,
+    bare: bool,
+    workdir: &Path,
+    stash: super::stash::SavedStash,
+) -> Result<String> {
+    super::stash::apply(repository_path, bare, workdir, stash)
 }
 
 fn append_notice(notice: &mut Option<String>, addition: String) {

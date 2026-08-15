@@ -66,6 +66,7 @@ pub(crate) mod rebase;
 pub(crate) mod review;
 pub(crate) mod reword;
 pub(crate) mod split;
+pub(crate) mod stash;
 pub(crate) mod time_travel;
 pub(crate) mod todo;
 
