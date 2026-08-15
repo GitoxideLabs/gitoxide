@@ -364,6 +364,8 @@ struct Prepared {
     skip_worktree_transitions: bool,
     selected: Option<ObjectId>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    stash_rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    removed: HashSet<ObjectId>,
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<ExpectedRef>>,
     checkout_reference: Option<gix::refs::FullName>,
@@ -643,7 +645,13 @@ fn perform_inner(
             || forked
             || (matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants) && !removed),
         selected,
+        stash_rewritten: rewritten.clone(),
         rewritten,
+        removed: if removed {
+            root.into_iter().collect()
+        } else {
+            HashSet::new()
+        },
         committer,
         expected_refs: None,
         checkout_reference: None,
@@ -791,7 +799,9 @@ pub(super) fn finish_review(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected: Some(finished_review),
+        stash_rewritten: rewritten.clone(),
         rewritten,
+        removed: HashSet::new(),
         committer,
         expected_refs: None,
         checkout_reference: None,
@@ -1038,6 +1048,7 @@ pub(crate) fn perform_plan_with_progress(
     }
 
     let dropped: Vec<_> = plan.scope.iter().copied().filter(|id| !picked.contains(id)).collect();
+    let removed: HashSet<_> = dropped.iter().copied().collect();
     for id in &dropped {
         let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
         delete_refs.extend(super::review::deletions(&repo, &commit)?);
@@ -1134,6 +1145,8 @@ pub(crate) fn perform_plan_with_progress(
         skip_worktree_transitions: false,
         selected,
         rewritten: rewritten.clone(),
+        stash_rewritten: rewritten.clone(),
+        removed,
         committer,
         expected_refs: Some(plan.expected_refs.clone()),
         checkout_reference: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
@@ -1206,6 +1219,7 @@ pub(crate) fn perform_plan_with_progress(
 
 impl Prepared {
     fn finish(&mut self) -> Result<Outcome> {
+        let stash_edits = super::stash::rewrite_edits(&self.repo, &self.stash_rewritten, &self.removed)?;
         let objects = self
             .repo
             .objects
@@ -1261,6 +1275,7 @@ impl Prepared {
             &self.committer,
             self.expected_refs.take(),
             (&self.pins, &self.delete_refs),
+            stash_edits,
         )?;
         for (transitioned, transition) in transitions.iter().enumerate() {
             if let Err(err) = super::forget::apply_tree_transition(&transition.workdir, transition.old, transition.new)
@@ -1801,6 +1816,7 @@ fn worktree_transitions(
     Ok(out)
 }
 
+#[expect(clippy::too_many_arguments)]
 fn update_refs(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
@@ -1809,10 +1825,11 @@ fn update_refs(
     committer: &gix::actor::Signature,
     expected_refs: Option<Vec<ExpectedRef>>,
     resources: (&[ObjectId], &[(gix::refs::FullName, Target)]),
+    stash_edits: super::stash::RewriteEdits,
 ) -> Result<Vec<RefEdit>> {
     let (pins, delete_refs) = resources;
-    let mut edits = Vec::new();
-    let mut rollback = Vec::new();
+    let mut edits = stash_edits.forward;
+    let mut rollback = stash_edits.rollback;
     if let Some(expected_refs) = expected_refs {
         for ExpectedRef { name, old, new, .. } in expected_refs {
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
@@ -2062,6 +2079,37 @@ mod tests {
         insta::assert_snapshot!(
             "reworded-middle-stack",
             gix_testtools::repository::snapshot(fixture.path())?.to_string()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewriting_a_stashed_commit_moves_its_stash_association() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let saved = repo.write_blob(b"saved worktree state")?.detach();
+        let old_name = super::super::stash::reference(middle)?;
+        repo.reference(old_name.clone(), saved, PreviousValue::MustNotExist, "test stash")?;
+        let mut commit = repo.find_commit(middle)?.decode()?.into_owned()?;
+        commit.message = "rewritten middle".into();
+
+        let outcome = perform(
+            &repo,
+            &graph,
+            Edit::Replace { target: middle, commit },
+            Signature::RedoIfNeeded,
+            Tree::LeaveAsIs,
+        )?
+        .complete()?;
+        let rewritten = outcome.map(middle).expect("the stashed commit is retained");
+        let new_name = super::super::stash::reference(rewritten)?;
+        assert!(repo.try_find_reference(old_name.as_ref())?.is_none());
+        assert_eq!(
+            repo.find_reference(new_name.as_ref())?.id().detach(),
+            saved,
+            "the saved state follows the rewritten commit without changing its target"
         );
         Ok(())
     }
@@ -3060,6 +3108,46 @@ mod tests {
             repo.find_reference("refs/patches/example")?.id().detach(),
             base,
             "the dropped commit's ref does not keep the old history alive"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dropping_a_stashed_commit_is_rejected_before_refs_change() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let saved = repo.write_blob(b"saved worktree state")?.detach();
+        let name = super::super::stash::reference(middle)?;
+        repo.reference(name.clone(), saved, PreviousValue::MustNotExist, "test stash")?;
+
+        let err = match perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                }],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        ) {
+            Ok(_) => panic!("dropping a commit with saved state must fail before producing an outcome"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("cannot drop stashed commit"));
+        assert_eq!(repo.head_id()?.detach(), tip, "HEAD remains at the original tip");
+        assert_eq!(
+            repo.find_reference(name.as_ref())?.id().detach(),
+            saved,
+            "the stash association remains unchanged"
         );
         Ok(())
     }
