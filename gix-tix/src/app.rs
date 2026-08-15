@@ -650,7 +650,6 @@ impl App {
             .and_then(|id| self.rows.iter().position(|row| row.id == id))
         {
             self.selected = Some(index);
-            self.pending_initial_selection = None;
             self.ensure_visible();
         }
         if self.reachability_anchor.is_some() {
@@ -1137,7 +1136,6 @@ impl App {
                 self.state = State::Computing;
                 self.follow_tail = false;
                 self.reload_selection = None;
-                self.pending_initial_selection = None;
                 Some(self.rows.clone())
             }
             State::Cancelling => {
@@ -1812,6 +1810,26 @@ impl App {
             self.offset = selected;
         } else if selected >= self.offset.saturating_add(height) {
             self.offset = selected + 1 - height;
+        }
+    }
+
+    pub(crate) fn center_initial_selection(&mut self) {
+        let Some(id) = self.pending_initial_selection else {
+            return;
+        };
+        let Some(selected) = self.rows.iter().position(|row| row.id == id) else {
+            if matches!(self.state, State::Complete | State::Cancelled) {
+                self.pending_initial_selection = None;
+            }
+            return;
+        };
+        let height = self.viewport_rows.max(1);
+        let centered = selected.saturating_sub(height / 2);
+        let max_offset = self.rows.len().saturating_sub(height);
+        self.selected = Some(selected);
+        self.offset = centered.min(max_offset);
+        if matches!(self.state, State::Complete | State::Cancelled) {
+            self.pending_initial_selection = None;
         }
     }
 
@@ -2895,6 +2913,22 @@ mod tests {
         moved.update(Action::MoveDown);
         moved.extend_commits(vec![row(2)]);
         assert_eq!(moved.selected, Some(0), "navigation cancels the pending jump to HEAD");
+    }
+
+    #[test]
+    fn startup_selection_centers_the_worktree_head_once_the_viewport_is_known() {
+        let mut app = App::new(1);
+        app.set_worktree_head(Some(id(4)), true);
+        app.extend_commits((1..=7).rev().map(row).collect::<Vec<_>>());
+        assert_eq!(
+            app.offset, 3,
+            "the provisional one-row viewport only keeps HEAD visible"
+        );
+
+        app.viewport_rows = 5;
+        app.center_initial_selection();
+        assert_eq!(app.selected, Some(3), "HEAD remains selected");
+        assert_eq!(app.offset, 1, "HEAD is centered once the real viewport height is known");
     }
 
     #[test]
