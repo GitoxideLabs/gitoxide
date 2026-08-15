@@ -606,12 +606,12 @@ space first; changes blocks adapt within the remaining history width.
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics.
 - `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
-  todo keeps this marker even when `HEAD` is attached, and additionally marks
-  its local branch as `@branch`. One command marker and one branch marker may
-  coexist only when they resolve to the same result. Removing only the branch
-  marker detaches `HEAD` without deleting the branch; removing the name deletes
-  it. Checkout markers are invalid without a worktree. Todo generation and
-  application reject an unborn `HEAD`.
+  todo keeps this marker even when `HEAD` is attached, but shows its branch as an
+  ordinary ref. Versioned state remembers that attachment while the branch stays
+  at the marked result. Moving it elsewhere detaches `HEAD`; adding `@` to one
+  local branch explicitly attaches it and is valid only at the marked result.
+  Removing the name deletes the branch. Checkout markers are invalid without a
+  worktree. Todo generation and application reject an unborn `HEAD`.
 - Only the ancestry ending at `@` and any squash groups are eagerly cherry-picked
   and re-signed. Other resulting stacks retain their trees, receive pending-rebase
   markers, and invalidate old signatures for later time travel. With no `@`,
