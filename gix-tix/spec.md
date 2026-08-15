@@ -584,14 +584,15 @@ space first; changes blocks adapt within the remaining history width.
   trailer in any source message. Name and email pairs are compared without
   mailmap. All folded IDs and mutable refs map to the one resulting commit;
   resources owned by a later folded review commit are removed.
-- The first line points to complete self-documenting help at the bottom. All
-  instructions are enclosed in Markdown comments so only headings and command
-  lines participate in the editable plan.
+- The first line points to complete self-documenting help after the editable
+  todo. All instructions are enclosed in Markdown comments so only headings and
+  command lines participate in the editable plan.
 - A versioned Markdown state comment makes the document independently
   applicable in a later process. It records full base, target, scope and tip IDs,
   checkout requirements, and compare-and-swap state for mutable refs. Ref names
   use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
-  state cancels; present invalid state never reaches repository mutation.
+  state cancels; present invalid state never reaches repository mutation. The
+  state comment follows the complete help at the end of the document.
 - Pick lines use display-only state symbols documented in the footer: `↻` for a
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
