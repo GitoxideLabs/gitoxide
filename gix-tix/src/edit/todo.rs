@@ -20,7 +20,7 @@ const HELP: &str = r#"
 - `## fork <id>` starts a stack at an existing commit or an earlier picked commit. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork headings stay terse. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
-- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs. Prefix one local branch with `@` to attach HEAD to it. `@command` and `@branch` may coexist only at the same result. Removing only the branch's `@` detaches HEAD without deleting the branch.
+- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs. The current attached branch stays attached while it remains at the `@` command. Prefix one local branch with `@` to attach HEAD to it explicitly; it must point to the `@` command.
 - Saving an unchanged document in the history-view editor is a no-op unless listed commits have a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Tix pins and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A branch checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
@@ -57,6 +57,7 @@ struct State {
     scope: Vec<ObjectId>,
     marker_required: bool,
     checkout_allowed: bool,
+    head_ref: Option<gix::refs::FullName>,
     edit_refs: bool,
     expected_refs: Vec<rebase::ExpectedRef>,
     resolved: Option<ObjectId>,
@@ -164,6 +165,7 @@ pub(crate) fn prepare(
         scope: scope.clone(),
         marker_required,
         checkout_allowed: repo.workdir().is_some(),
+        head_ref,
         edit_refs: true,
         expected_refs,
         resolved: None,
@@ -193,7 +195,7 @@ pub(crate) fn prepare(
             (section.parent == onto).then_some((anchor_kind, anchor_title.as_str())),
         )?;
         if !scope_set.contains(&section.parent) {
-            write_refs_at(&mut document, &state.expected_refs, section.parent, head_ref.as_ref())?;
+            write_refs_at(&mut document, &state.expected_refs, section.parent)?;
         }
         for id in &section.commits {
             let commit = by_id[id];
@@ -211,12 +213,12 @@ pub(crate) fn prepare(
                 )
                 .as_bytes(),
             );
-            write_refs_at(&mut document, &state.expected_refs, *id, head_ref.as_ref())?;
+            write_refs_at(&mut document, &state.expected_refs, *id)?;
         }
     }
     if sections.is_empty() {
         write_fork_heading(&mut document, repo, onto, Some((anchor_kind, anchor_title.as_str())))?;
-        write_refs_at(&mut document, &state.expected_refs, onto, head_ref.as_ref())?;
+        write_refs_at(&mut document, &state.expected_refs, onto)?;
     }
     document.extend_from_slice(HELP.as_bytes());
     write_state(&mut document, &state);
@@ -242,6 +244,7 @@ pub(crate) fn prepare_continuation(
         scope: plan.scope.clone(),
         marker_required: plan.checkout.is_some(),
         checkout_allowed: repo.workdir().is_some(),
+        head_ref: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
         edit_refs: true,
         expected_refs: plan.expected_refs.clone(),
         resolved,
@@ -274,7 +277,7 @@ pub(crate) fn prepare_continuation(
                 (parent == plan.base).then_some(("base", base_title.as_str())),
             )?;
             if matches!(step.parent, rebase::PlanParent::Existing(_)) {
-                write_plan_refs_at(&mut document, &plan.expected_refs, step.parent, plan.checkout.as_ref())?;
+                write_plan_refs_at(&mut document, &plan.expected_refs, step.parent)?;
             }
         }
         let marker = if plan
@@ -319,12 +322,7 @@ pub(crate) fn prepare_continuation(
                 .as_bytes(),
             );
         }
-        write_plan_refs_at(
-            &mut document,
-            &plan.expected_refs,
-            rebase::PlanParent::Step(index),
-            plan.checkout.as_ref(),
-        )?;
+        write_plan_refs_at(&mut document, &plan.expected_refs, rebase::PlanParent::Step(index))?;
     }
     document.extend_from_slice(HELP.as_bytes());
     write_state(&mut document, &state);
@@ -367,6 +365,11 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
         )
         .as_bytes(),
     );
+    if let Some(name) = &state.head_ref {
+        out.extend_from_slice(b"head-ref ");
+        out.extend_from_slice(gix::quote::ansi_c::quote(name.as_bstr()).as_ref());
+        out.push(b'\n');
+    }
     out.extend_from_slice(format!("edit-refs {}\n", state.edit_refs).as_bytes());
     for reference in &state.expected_refs {
         let name = gix::quote::ansi_c::quote(reference.name.as_bstr());
@@ -393,56 +396,33 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
     out.push(b'\n');
 }
 
-fn write_refs_at(
-    out: &mut Vec<u8>,
-    refs: &[rebase::ExpectedRef],
-    target: ObjectId,
-    head_ref: Option<&gix::refs::FullName>,
-) -> Result<()> {
+fn write_refs_at(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], target: ObjectId) -> Result<()> {
     let names = refs
         .iter()
         .filter(|reference| reference.editable && reference.target == target)
-        .map(|reference| (&reference.name, head_ref == Some(&reference.name)))
+        .map(|reference| &reference.name)
         .collect::<Vec<_>>();
     write_ref_line(out, refs, names)
 }
 
-fn write_plan_refs_at(
-    out: &mut Vec<u8>,
-    refs: &[rebase::ExpectedRef],
-    target: rebase::PlanParent,
-    checkout: Option<&rebase::PlanCheckout>,
-) -> Result<()> {
+fn write_plan_refs_at(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], target: rebase::PlanParent) -> Result<()> {
     let names = refs
         .iter()
         .filter(|reference| reference.placement == Some(target))
-        .map(|reference| {
-            let name = &reference.name;
-            (
-                name,
-                checkout.is_some_and(|checkout| checkout.target == target && checkout.reference.as_ref() == Some(name)),
-            )
-        })
+        .map(|reference| &reference.name)
         .collect::<Vec<_>>();
     write_ref_line(out, refs, names)
 }
 
-fn write_ref_line(
-    out: &mut Vec<u8>,
-    refs: &[rebase::ExpectedRef],
-    mut names: Vec<(&gix::refs::FullName, bool)>,
-) -> Result<()> {
+fn write_ref_line(out: &mut Vec<u8>, refs: &[rebase::ExpectedRef], mut names: Vec<&gix::refs::FullName>) -> Result<()> {
     if names.is_empty() {
         return Ok(());
     }
-    names.sort_by_key(|(name, _)| *name);
+    names.sort();
     out.push(b'(');
-    for (index, (name, head)) in names.into_iter().enumerate() {
+    for (index, name) in names.into_iter().enumerate() {
         if index > 0 {
             out.extend_from_slice(b", ");
-        }
-        if head {
-            out.push(b'@');
         }
         let display = ref_display_name(name, refs);
         out.extend_from_slice(gix::quote::ansi_c::quote(display.as_bstr()).as_ref());
@@ -597,6 +577,7 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
     let mut scope = Vec::new();
     let mut marker_required = None;
     let mut checkout_allowed = None;
+    let mut head_ref = None;
     let mut edit_refs = false;
     let mut expected_refs = Vec::new();
     let mut resolved = None;
@@ -624,6 +605,19 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
             "checkout-allowed" => {
                 if checkout_allowed.replace(value.parse()?).is_some() {
                     anyhow::bail!("the rebase state repeats checkout-allowed");
+                }
+            }
+            "head-ref" => {
+                let encoded = value.as_bytes().as_bstr();
+                let (name, consumed) = gix::quote::ansi_c::undo(encoded)
+                    .map_err(gix::Exn::into_error)
+                    .context("could not unquote the recorded HEAD ref")?;
+                if !encoded[consumed..].trim().is_empty() {
+                    anyhow::bail!("the recorded HEAD ref has trailing data");
+                }
+                let name = gix::refs::FullName::try_from(name.as_ref()).context("the recorded HEAD ref is invalid")?;
+                if head_ref.replace(name).is_some() {
+                    anyhow::bail!("the rebase state repeats its HEAD ref");
                 }
             }
             "edit-refs" => edit_refs = value.parse()?,
@@ -672,6 +666,7 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
         scope,
         marker_required: marker_required.context("the rebase state has no marker requirement")?,
         checkout_allowed: checkout_allowed.context("the rebase state has no checkout capability")?,
+        head_ref,
         edit_refs,
         expected_refs,
         resolved,
@@ -702,6 +697,15 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
         if !scope.contains(&reference.target) && reference.target != state.base && reference.target != state.onto {
             anyhow::bail!("a captured ref does not logically point into the rebase scope");
         }
+    }
+    if let Some(name) = &state.head_ref
+        && (name.category() != Some(gix::refs::Category::LocalBranch)
+            || !state
+                .expected_refs
+                .iter()
+                .any(|reference| reference.editable && reference.name == *name))
+    {
+        anyhow::bail!("the recorded HEAD ref is not an editable local branch");
     }
     for tip in &state.tips {
         repo.find_commit(*tip).context("could not find a recorded rebase tip")?;
@@ -739,7 +743,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     let mut steps = Vec::<rebase::PlanStep>::new();
     let mut cursor = None;
     let mut checkout_target = None;
-    let mut checkout_reference = None;
+    let mut explicit_checkout_reference = None;
     let mut command_marker = false;
     let mut ref_targets = HashMap::new();
     let mut sections = 0;
@@ -799,13 +803,9 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
                     if name.category() != Some(gix::refs::Category::LocalBranch) {
                         anyhow::bail!("only a local branch may carry the @ marker");
                     }
-                    if checkout_reference.replace(name).is_some() {
+                    if explicit_checkout_reference.replace((name, target)).is_some() {
                         anyhow::bail!("the rebase todo contains more than one @ reference");
                     }
-                    if checkout_target.is_some_and(|checkout| checkout != target) {
-                        anyhow::bail!("the @ command and @ reference point to different results");
-                    }
-                    checkout_target = Some(target);
                 }
             }
             section_has_commit = true;
@@ -920,6 +920,20 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
     if state.marker_required && checkout_target.is_none() {
         anyhow::bail!("the current checkout marker must be retained");
     }
+    let checkout_reference = match (checkout_target, explicit_checkout_reference) {
+        (Some(target), Some((name, reference_target))) => {
+            if target != reference_target {
+                anyhow::bail!("the @ command and @ reference point to different results");
+            }
+            Some(name)
+        }
+        (None, Some(_)) => anyhow::bail!("an @ reference requires an @ command at the same result"),
+        (Some(target), None) => state
+            .head_ref
+            .take()
+            .filter(|name| ref_targets.get(name) == Some(&target)),
+        (None, None) => None,
+    };
     if state.edit_refs {
         for reference in &mut state.expected_refs {
             if reference.editable {
@@ -1182,7 +1196,7 @@ mod tests {
         assert_eq!(
             plan.checkout.as_ref().and_then(|checkout| checkout.reference.as_ref()),
             Some(&"refs/heads/main".try_into()?),
-            "the generated @ command and @ branch agree"
+            "the generated @ command retains the implicitly attached branch"
         );
         Ok(())
     }
@@ -1201,6 +1215,7 @@ mod tests {
             scope: vec![middle],
             marker_required: false,
             checkout_allowed: true,
+            head_ref: Some(name.clone()),
             edit_refs: true,
             expected_refs: vec![rebase::ExpectedRef {
                 name: name.clone(),
@@ -1223,6 +1238,11 @@ mod tests {
         );
         let parsed = parse_state(&repo, &document)?.context("state is present")?;
         assert_eq!(parsed.expected_refs[0].name, name, "quoted names round-trip losslessly");
+        assert_eq!(
+            parsed.head_ref,
+            Some(name),
+            "the attached branch round-trips losslessly"
+        );
 
         assert!(parse(&repo, b"")?.is_none(), "empty input cancels");
         assert!(parse(&repo, b"pick deadbeef")?.is_none(), "removing the anchor cancels");
@@ -1497,6 +1517,11 @@ mod tests {
             "the continuation explains that saving unchanged resumes it"
         );
         let document = String::from_utf8(prepared.document.clone())?;
+        assert!(document.contains("(continued)"), "continuation refs are not marked");
+        assert!(
+            !document.contains("(@continued)"),
+            "HEAD attachment stays in transaction state"
+        );
         assert!(document.contains(&"0".repeat(40)), "the conflict uses the full null ID");
         assert!(
             document.contains(&format!("`squash {}`", tip.to_hex_with_len(7))),
@@ -1539,14 +1564,43 @@ mod tests {
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         let generated = String::from_utf8(prepared.document.clone())?;
         assert!(
-            generated.contains("(@main, refs/patches/tip)"),
-            "the generated todo shows the attached branch as well as the HEAD command:\n{generated}"
+            generated.contains("(main, refs/patches/tip)"),
+            "the generated todo shows the attached branch as an ordinary ref:\n{generated}"
         );
+        assert!(!generated.contains("@main"), "existing HEAD attachment is implicit");
+        assert_eq!(
+            parse_plan(&repo, &prepared.document)?
+                .checkout
+                .and_then(|checkout| checkout.reference),
+            Some("refs/heads/main".try_into()?),
+            "an unchanged todo retains the original attachment"
+        );
+
+        let explicit = generated.replace("(main, refs/patches/tip)", "(@main, refs/patches/tip)");
+        assert_eq!(
+            parse_plan(&repo, explicit.as_bytes())?
+                .checkout
+                .and_then(|checkout| checkout.reference),
+            Some("refs/heads/main".try_into()?),
+            "adding @ explicitly enforces the same attachment"
+        );
+
+        let mismatched = with_state(
+            &prepared,
+            &format!(
+                "## fork {}\npick {}\n(@main)\n@pick {}\n",
+                base.to_hex_with_len(7),
+                middle.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+            ),
+        );
+        let err = parse(&repo, &mismatched).expect_err("an explicit attachment must agree with @pick");
+        assert!(format!("{err:#}").contains("different results"));
 
         let edited = with_state(
             &prepared,
             &format!(
-                "## fork {}\npick {}\n(new-1)\n@pick {}\n(main)\n",
+                "## fork {}\npick {}\n(new-1, main)\n@pick {}\n",
                 base.to_hex_with_len(7),
                 middle.to_hex_with_len(7),
                 tip.to_hex_with_len(7),
@@ -1557,7 +1611,7 @@ mod tests {
             plan.checkout
                 .as_ref()
                 .is_some_and(|checkout| checkout.reference.is_none()),
-            "removing @ from main requests a detached checkout"
+            "moving the implicit HEAD branch away from @ requests a detached checkout"
         );
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
