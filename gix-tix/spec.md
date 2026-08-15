@@ -13,6 +13,15 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
+- `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
+  checkout, pending-rebase replay, stash handling, and pin reconciliation as
+  TUI time travel. Travelling to the current `HEAD` is a no-op. A detached
+  source may travel to a descendant without a pin, but travelling to an ancestor
+  or unrelated commit requires an existing current-worktree pin at `HEAD` or a
+  descendant. An attached source is preserved through the normal symbolic-pin
+  rules. Replay conflicts change nothing unless explicitly materialized; an
+  accepted conflict writes the checkout and unmerged index, then exits with an
+  error so resolution cannot be mistaken for completion.
 - `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-w/--worktrees` adds every successfully resolved main and linked worktree
