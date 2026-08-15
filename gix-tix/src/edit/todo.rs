@@ -23,7 +23,7 @@ const HELP: &str = r#"
 - Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Retain exactly one generated marker; if none was generated, add at most one. A checkout marker requires a worktree.
 - Saving an unchanged document in the history-view editor is a no-op unless listed commits have a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. The ancestry ending at `@` is cherry-picked and re-signed; other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
 - Mutable refs on original leaves stay on the primary resulting leaf; the first continuation in todo order is primary. Other mutable refs follow their commits. Tags and remote-tracking refs stay unchanged, and new unreferenced leaves are pinned.
-- A todo conflict aborts without changing the repository and marks the offending commit in the history view; concurrent ref changes also abort the update.
+- A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
 - Commit states are display-only: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, and `○` means unsigned.
 -->
 "#;
@@ -58,6 +58,8 @@ struct State {
     marker_required: bool,
     checkout_allowed: bool,
     expected_refs: Vec<rebase::ExpectedRef>,
+    resolved: Option<ObjectId>,
+    continuation_sources: Vec<ObjectId>,
 }
 
 #[derive(Debug)]
@@ -143,6 +145,8 @@ pub(crate) fn prepare(
         marker_required,
         checkout_allowed: repo.workdir().is_some(),
         expected_refs,
+        resolved: None,
+        continuation_sources: Vec::new(),
     };
     let mut document = b"<!-- Rebase help follows the editable todo. -->\n".to_vec();
     document.extend_from_slice(title.as_bytes());
@@ -191,6 +195,96 @@ pub(crate) fn prepare(
     })
 }
 
+pub(crate) fn prepare_continuation(
+    repo: &gix::Repository,
+    plan: &rebase::Plan,
+    tips: Vec<ObjectId>,
+) -> Result<Prepared> {
+    let resolved = plan.steps.iter().find_map(|step| match step.commit {
+        rebase::PlanCommit::Resolved(id) => Some(id),
+        _ => None,
+    });
+    let state = State {
+        base: plan.base,
+        onto: plan.base,
+        tips,
+        scope: plan.scope.clone(),
+        marker_required: plan.checkout.is_some(),
+        checkout_allowed: repo.workdir().is_some(),
+        expected_refs: plan.expected_refs.clone(),
+        resolved,
+        continuation_sources: plan.steps.iter().flat_map(|step| step.squash.iter().copied()).collect(),
+    };
+    let mut document = b"<!-- Rebase help follows the editable todo. -->\n# Continue materialized rebase\n\n".to_vec();
+    for (index, step) in plan.steps.iter().enumerate() {
+        let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
+        if !continues {
+            if index > 0 {
+                document.push(b'\n');
+            }
+            let parent = match step.parent {
+                rebase::PlanParent::Existing(id) => id,
+                rebase::PlanParent::Step(parent) => match plan.steps[parent].commit {
+                    rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) => id,
+                    rebase::PlanCommit::Empty(_) => {
+                        anyhow::bail!("a continuation fork cannot target an unwritten empty commit")
+                    }
+                },
+            };
+            let base_title = (parent == plan.base)
+                .then(|| anchor_title(repo, parent))
+                .transpose()?
+                .unwrap_or_default();
+            write_fork_heading(
+                &mut document,
+                repo,
+                parent,
+                (parent == plan.base).then_some(("base", base_title.as_str())),
+            )?;
+        }
+        let marker = if plan.checkout == Some(index) { "@" } else { "" };
+        match step.commit {
+            rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) => {
+                let value = if matches!(step.commit, rebase::PlanCommit::Resolved(_)) {
+                    ObjectId::null(id.kind()).to_string()
+                } else {
+                    short(repo, id)?
+                };
+                let title = anchor_title(repo, id)?;
+                document.extend_from_slice(
+                    format!(
+                        "`{marker}pick {value}` {}{}\n",
+                        commit_states(repo, id)?,
+                        escape_markdown(&title)
+                    )
+                    .as_bytes(),
+                );
+            }
+            rebase::PlanCommit::Empty(ref title) => {
+                document.extend_from_slice(format!("`{marker}empty {}`\n", title.to_str_lossy()).as_bytes());
+            }
+        }
+        for id in &step.squash {
+            let title = anchor_title(repo, *id)?;
+            document.extend_from_slice(
+                format!(
+                    "`squash {}` {}{}\n",
+                    short(repo, *id)?,
+                    commit_states(repo, *id)?,
+                    escape_markdown(&title)
+                )
+                .as_bytes(),
+            );
+        }
+    }
+    document.extend_from_slice(HELP.as_bytes());
+    write_state(&mut document, &state);
+    Ok(Prepared {
+        document,
+        apply_unchanged: true,
+    })
+}
+
 fn write_state(out: &mut Vec<u8>, state: &State) {
     out.extend_from_slice(STATE_START.as_bytes());
     out.extend_from_slice(format!("base {}\nonto {}\n", state.base, state.onto).as_bytes());
@@ -211,13 +305,20 @@ fn write_state(out: &mut Vec<u8>, state: &State) {
         let name = gix::quote::ansi_c::quote(reference.name.as_bstr());
         out.extend_from_slice(
             format!(
-                "ref {} {} {}\n",
+                "ref {} {} {} {}\n",
                 reference.old,
+                reference.target,
                 reference.follows_tip,
                 name.to_str_lossy()
             )
             .as_bytes(),
         );
+    }
+    if let Some(id) = state.resolved {
+        out.extend_from_slice(format!("resolved {id}\n").as_bytes());
+    }
+    for id in &state.continuation_sources {
+        out.extend_from_slice(format!("continuation-source {id}\n").as_bytes());
     }
     out.extend_from_slice(STATE_END.as_bytes());
     out.push(b'\n');
@@ -363,6 +464,8 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
     let mut marker_required = None;
     let mut checkout_allowed = None;
     let mut expected_refs = Vec::new();
+    let mut resolved = None;
+    let mut continuation_sources = Vec::new();
     for line in body[..end].lines() {
         let (key, value) = line.split_once(' ').context("a rebase state line has no value")?;
         match key {
@@ -389,9 +492,11 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                 }
             }
             "ref" => {
-                let (old, value) = value.split_once(' ').context("a captured ref has no follow mode")?;
-                let (follows_tip, name) = value.split_once(' ').context("a captured ref has no name")?;
+                let (old, value) = value.split_once(' ').context("a captured ref has no target")?;
+                let (target, value) = value.split_once(' ').context("a captured ref has no follow mode")?;
                 let old = ObjectId::from_hex(old.as_bytes())?;
+                let target = ObjectId::from_hex(target.as_bytes())?;
+                let (follows_tip, name) = value.split_once(' ').context("a captured ref has no name")?;
                 let follows_tip = follows_tip.parse()?;
                 let encoded_name = name.as_bytes().as_bstr();
                 let (name, consumed) = gix::quote::ansi_c::undo(encoded_name)
@@ -404,10 +509,17 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
                 expected_refs.push(rebase::ExpectedRef {
                     name,
                     old,
+                    target,
                     new: old,
                     follows_tip,
                 });
             }
+            "resolved" => {
+                if resolved.replace(ObjectId::from_hex(value.as_bytes())?).is_some() {
+                    anyhow::bail!("the rebase state repeats its resolved conflict");
+                }
+            }
+            "continuation-source" => continuation_sources.push(ObjectId::from_hex(value.as_bytes())?),
             _ => anyhow::bail!("unsupported rebase state field {key:?}"),
         }
     }
@@ -419,6 +531,8 @@ fn parse_state(repo: &gix::Repository, input: &str) -> Result<Option<State>> {
         marker_required: marker_required.context("the rebase state has no marker requirement")?,
         checkout_allowed: checkout_allowed.context("the rebase state has no checkout capability")?,
         expected_refs,
+        resolved,
+        continuation_sources,
     };
     validate_state(repo, &state)?;
     Ok(Some(state))
@@ -430,6 +544,7 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
     repo.find_commit(state.onto)
         .context("could not find the recorded rebase target")?;
     let scope: HashSet<_> = state.scope.iter().copied().collect();
+    let continuation_sources: HashSet<_> = state.continuation_sources.iter().copied().collect();
     if scope.len() != state.scope.len() {
         anyhow::bail!("the rebase state contains duplicate scope commits");
     }
@@ -441,8 +556,8 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
         if !refs.insert(reference.name.as_bstr()) {
             anyhow::bail!("the rebase state contains duplicate refs");
         }
-        if !scope.contains(&reference.old) {
-            anyhow::bail!("a captured ref does not point into the rebase scope");
+        if !scope.contains(&reference.target) {
+            anyhow::bail!("a captured ref does not logically point into the rebase scope");
         }
     }
     for tip in &state.tips {
@@ -457,9 +572,15 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
             .next()
             .map(gix::Id::detach)
             .context("a recorded scope commit has no parent")?;
-        if parent != state.base && !scope.contains(&parent) {
+        if parent != state.base && !scope.contains(&parent) && !continuation_sources.contains(id) {
             anyhow::bail!("a recorded scope commit is disconnected from the rebase base");
         }
+    }
+    if state.resolved.is_some_and(|id| !scope.contains(&id)) {
+        anyhow::bail!("the resolved conflict is outside the rebase scope");
+    }
+    if !continuation_sources.is_subset(&scope) {
+        anyhow::bail!("a continuation source is outside the rebase scope");
     }
     Ok(())
 }
@@ -561,17 +682,30 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
         let parent = cursor.context("the first todo command must follow a fork heading")?;
         let commit = match verb {
             "pick" => {
-                let id = resolve_commit(
-                    repo,
-                    value.split_whitespace().next().context("a pick needs a commit ID")?,
-                )?;
+                let value = value.split_whitespace().next().context("a pick needs a commit ID")?;
+                let resolved_id = state.resolved;
+                let full_null = resolved_id.is_some_and(|id| {
+                    value.len() == id.kind().len_in_bytes() * 2 && value.bytes().all(|byte| byte == b'0')
+                });
+                let (id, resolved) = if full_null {
+                    (
+                        resolved_id.context("a null pick has no materialized conflict state")?,
+                        true,
+                    )
+                } else {
+                    (resolve_commit(repo, value)?, false)
+                };
                 if !scope.contains(&id) {
                     anyhow::bail!("a pick is outside the editable history");
                 }
                 if picked.contains_key(&id) {
                     anyhow::bail!("a commit is picked more than once");
                 }
-                rebase::PlanCommit::Pick(id)
+                if resolved {
+                    rebase::PlanCommit::Resolved(id)
+                } else {
+                    rebase::PlanCommit::Pick(id)
+                }
             }
             "empty" => {
                 let title = if value.trim().is_empty() { tail } else { value.trim() };
@@ -583,7 +717,7 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
             _ => anyhow::bail!("unsupported rebase todo command {verb:?}"),
         };
         let index = steps.len();
-        if let rebase::PlanCommit::Pick(id) = commit {
+        if let rebase::PlanCommit::Pick(id) | rebase::PlanCommit::Resolved(id) = commit {
             picked.insert(id, index);
         }
         steps.push(rebase::PlanStep {
@@ -749,9 +883,12 @@ mod tests {
             expected_refs: vec![rebase::ExpectedRef {
                 name: name.clone(),
                 old: middle,
+                target: middle,
                 new: middle,
                 follows_tip: true,
             }],
+            resolved: None,
+            continuation_sources: Vec::new(),
         };
         let mut document = Vec::new();
         write_state(&mut document, &state);
@@ -983,6 +1120,37 @@ mod tests {
         );
         let err = parse(&repo, &invalid).expect_err("a fork cannot begin with squash");
         assert!(format!("{err:#}").contains("same fork"));
+        Ok(())
+    }
+
+    #[test]
+    fn continuation_todos_round_trip_the_resolved_index_and_remaining_squashes() -> gix_testtools::Result {
+        let (_fixture, repo) = repo()?;
+        let (base, middle, tip, _) = commits(&repo)?;
+        let prepared = prepare_continuation(
+            &repo,
+            &rebase::Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![rebase::PlanStep {
+                    parent: rebase::PlanParent::Existing(base),
+                    commit: rebase::PlanCommit::Resolved(middle),
+                    squash: vec![tip],
+                }],
+                checkout: Some(0),
+                expected_refs: Vec::new(),
+            },
+            vec![middle],
+        )?;
+        let document = String::from_utf8(prepared.document.clone())?;
+        assert!(document.contains(&"0".repeat(40)), "the conflict uses the full null ID");
+        assert!(
+            document.contains(&format!("`squash {}`", tip.to_hex_with_len(7))),
+            "unapplied squash sources remain editable"
+        );
+        let plan = parse_plan(&repo, &prepared.document)?;
+        assert!(matches!(plan.steps[0].commit, rebase::PlanCommit::Resolved(id) if id == middle));
+        assert_eq!(plan.steps[0].squash, [tip]);
         Ok(())
     }
 

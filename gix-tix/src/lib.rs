@@ -977,6 +977,8 @@ fn event_loop(
     let mut history_status_deadline: Option<Instant> = None;
     let mut pending_terminal_event = None;
     let mut pending_rebase_conflict: Option<edit::time_travel::Conflict> = None;
+    let mut pending_todo_rebase_conflict: Option<edit::rebase::PlanConflict> = None;
+    let mut pending_todo_rebase_plan: Option<edit::rebase::Plan> = None;
     let result: Result<Option<Duration>> = (|| loop {
         if let Some(mut recovered) =
             recover_event_loop_repository(&mut repository_path, &common_dir, &mut repository_is_bare)?
@@ -1586,7 +1588,11 @@ fn event_loop(
             dirty = true;
             urgent = true;
         }
-        if key_pressed && pending_rebase_conflict.is_none() && app.has_rebase_conflict() {
+        if key_pressed
+            && pending_rebase_conflict.is_none()
+            && pending_todo_rebase_conflict.is_none()
+            && app.has_rebase_conflict()
+        {
             app.clear_rebase_conflict();
             dirty = true;
             urgent = true;
@@ -1640,6 +1646,107 @@ fn event_loop(
             app.clear_rebase_conflict();
             dirty = true;
             urgent = true;
+        }
+        if key_pressed && pending_todo_rebase_conflict.is_some() {
+            if action == Some(Action::OpenDiff) && app.changes_focus.is_none() {
+                let conflict = pending_todo_rebase_conflict
+                    .take()
+                    .expect("a pending todo conflict was checked before accepting it");
+                let plan = conflict.continuation_plan();
+                match edit::time_travel::materialize_plan_conflict(
+                    conflict,
+                    &repository_path,
+                    repository_is_bare,
+                    &revisions,
+                    worktrees,
+                ) {
+                    Ok((notice, id)) => {
+                        pending_todo_rebase_plan = Some(plan);
+                        app.begin_conflict_resolution();
+                        app.leave_message(format!("{notice}; resolve the index, then press <enter>"));
+                        app.select_commit_after_refresh(id);
+                    }
+                    Err(err) => {
+                        app.clear_rebase_conflict();
+                        app.leave_message(format!("conflict checkout: {err:#}"));
+                    }
+                }
+                invalidate_worktree_changes(&mut worktree_changes);
+                refresh_pending = true;
+                dirty = true;
+                urgent = true;
+                continue;
+            }
+            let conflict = pending_todo_rebase_conflict
+                .take()
+                .expect("a pending todo conflict was checked before discarding it");
+            tracing::info!(commit_id = %conflict.original(), ?action, "discarded suspended todo rebase conflict");
+            app.clear_rebase_conflict();
+            refresh_pending = true;
+            dirty = true;
+            urgent = true;
+        }
+        if key_pressed
+            && action == Some(Action::OpenDiff)
+            && app.changes_focus.is_none()
+            && pending_todo_rebase_plan.is_some()
+        {
+            let plan = pending_todo_rebase_plan
+                .take()
+                .expect("a pending continuation plan was checked before resuming it");
+            let result = (|| {
+                let mut repository = open_repository(&repository_path, repository_is_bare, false)
+                    .context("could not reopen repository to continue the rebase")?;
+                repository.object_cache_size(None);
+                let graph = HistoryGraph::for_commits(&repository, &plan.scope)?;
+                run_rebase_plan(terminal, repository.into_sync(), &graph, plan.clone())
+            })();
+            match result {
+                Ok(edit::rebase::PlanPerform::Complete(outcome)) => {
+                    let notice = outcome
+                        .selected
+                        .map(|selected| {
+                            edit::time_travel::checkout_without_replay(
+                                &repository_path,
+                                repository_is_bare,
+                                selected,
+                                &revisions,
+                                worktrees,
+                            )
+                        })
+                        .transpose()
+                        .map(Option::flatten);
+                    app.clear_rebase_conflict();
+                    app.set_worktree_conflicted(false);
+                    app.leave_message(
+                        notice
+                            .unwrap_or_else(|err| Some(format!("rebase applied, checkout failed: {err:#}")))
+                            .unwrap_or_else(|| "rebased history".into()),
+                    );
+                    refresh_pending = true;
+                }
+                Ok(edit::rebase::PlanPerform::Conflict(conflict)) => {
+                    let id = conflict.commit();
+                    preview_todo_rebase_conflict(
+                        &mut app,
+                        &conflict,
+                        &authors,
+                        &ref_snapshot.view_tips,
+                        &ref_snapshot.hidden_tips,
+                    )?;
+                    app.arm_rebase_conflict(id);
+                    app.select_commit(id);
+                    pending_todo_rebase_conflict = Some(conflict);
+                }
+                Err(err) => {
+                    pending_todo_rebase_plan = Some(plan);
+                    app.leave_message(format!("continue rebase: {err:#}"));
+                }
+            }
+            invalidate_worktree_changes(&mut worktree_changes);
+            dirty = true;
+            urgent = true;
+            continue;
         }
         let Some(action) = action else {
             continue;
@@ -2065,9 +2172,18 @@ fn event_loop(
                                 }
                             }
                         }
-                        Ok(Some(edit::rebase::PlanPerform::Conflict(original))) => {
-                            app.mark_todo_rebase_conflict(original);
-                            app.select_commit(original);
+                        Ok(Some(edit::rebase::PlanPerform::Conflict(conflict))) => {
+                            let id = conflict.commit();
+                            preview_todo_rebase_conflict(
+                                &mut app,
+                                &conflict,
+                                &authors,
+                                &ref_snapshot.view_tips,
+                                &ref_snapshot.hidden_tips,
+                            )?;
+                            app.arm_rebase_conflict(id);
+                            app.select_commit(id);
+                            pending_todo_rebase_conflict = Some(conflict);
                         }
                         Ok(None) => app.leave_message("no rebase performed: the todo was unchanged"),
                         Err(err) => app.leave_message(format!("rebase: {err:#}")),
@@ -3206,6 +3322,55 @@ fn rebase_history(
         return Ok(None);
     };
     run_rebase_plan(terminal, repository.into_sync(), graph, parsed.plan).map(Some)
+}
+
+fn preview_todo_rebase_conflict(
+    app: &mut App,
+    conflict: &edit::rebase::PlanConflict,
+    authors: &SharedAuthors,
+    view_tips: &[gix::ObjectId],
+    hidden_tips: &[gix::ObjectId],
+) -> Result<()> {
+    let repo = conflict.repository();
+    let mut rows = Vec::with_capacity(conflict.produced().len());
+    let mut attributions = Vec::new();
+    for id in conflict.produced().iter().rev().copied() {
+        let commit = repo
+            .find_commit(id)
+            .context("could not load an in-memory rebase result")?;
+        let parent_ids = commit.parent_ids().map(gix::Id::detach).collect();
+        let (metadata, mut row_attributions) = history::load_metadata(repo, id, authors)?;
+        let attribution_start = attributions.len();
+        let attribution_len = metadata.attributions.len();
+        attributions.append(&mut row_attributions);
+        rows.push(app::Commit {
+            id,
+            parent_ids,
+            committer_time: metadata.committer_time,
+            author: metadata.author,
+            attributions: attribution_start..attribution_start + attribution_len,
+            title: metadata.title,
+            metadata_loaded: true,
+            has_agent_marker: metadata.has_agent_marker,
+            is_review: metadata.is_review,
+            signature: metadata.signature,
+        });
+    }
+    let view_tips = view_tips.iter().filter_map(|id| conflict.map(*id)).collect::<Vec<_>>();
+    let hidden_tips = hidden_tips
+        .iter()
+        .filter_map(|id| conflict.map(*id))
+        .collect::<Vec<_>>();
+    if let Some(rows) = app.start_refresh(
+        app::LoadedCommits { rows, attributions },
+        &view_tips,
+        &hidden_tips,
+        false,
+    ) {
+        let (rows, graph, elapsed) = app::compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, elapsed);
+    }
+    Ok(())
 }
 
 enum RebaseWorkerEvent {
@@ -5568,5 +5733,55 @@ mod tests {
     fn rebase_progress_appears_at_three_hundred_milliseconds() {
         assert!(!rebase_progress_visible(Duration::from_millis(299)));
         assert!(rebase_progress_visible(REBASE_PROGRESS_DELAY));
+    }
+
+    #[test]
+    fn todo_conflict_preview_selects_the_partial_result_in_memory() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "commit.gpgSign=false".to_owned(),
+                "user.name=preview author".to_owned(),
+                "user.email=preview@example.com".to_owned(),
+            ]),
+        )?;
+        let graph = edit::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let edit::rebase::PlanPerform::Conflict(conflict) = edit::rebase::perform_plan(
+            &repo,
+            &graph,
+            edit::rebase::Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![edit::rebase::PlanStep {
+                    parent: edit::rebase::PlanParent::Existing(base),
+                    commit: edit::rebase::PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                }],
+                checkout: Some(0),
+                expected_refs: edit::rebase::capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        else {
+            return Err("the reordered history should conflict".into());
+        };
+        let authors =
+            gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
+        let mut app = App::new(usize::MAX);
+        preview_todo_rebase_conflict(&mut app, &conflict, &authors, &[tip], &[])?;
+        app.arm_rebase_conflict(conflict.commit());
+        app.select_commit(conflict.commit());
+
+        assert_eq!(
+            app.rows
+                .get(app.selected.expect("the conflict is selected"))
+                .map(|row| row.id),
+            Some(conflict.commit()),
+            "the displayed red-C row is the prepared result, not its original source"
+        );
+        Ok(())
     }
 }
