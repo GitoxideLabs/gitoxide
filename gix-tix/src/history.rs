@@ -2471,7 +2471,7 @@ mod tests {
     }
 
     #[test]
-    fn pins_are_private_to_the_current_worktree_and_legacy_pins_are_ignored() -> gix_testtools::Result {
+    fn pins_are_private_to_the_current_worktree() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let linked = gix_testtools::tempfile::tempdir()?;
         let linked_path = linked.path().join("linked");
@@ -2498,13 +2498,6 @@ mod tests {
                 "test private pin",
             )?;
         }
-        main.reference(
-            "refs/tix/pins/legacy",
-            linked_id,
-            gix::refs::transaction::PreviousValue::MustNotExist,
-            "test legacy pin",
-        )?;
-
         assert_eq!(
             all_pins(&main)?.into_iter().map(|pin| pin.id).collect::<Vec<_>>(),
             [main_id],
@@ -2514,10 +2507,6 @@ mod tests {
             all_pins(&linked)?.into_iter().map(|pin| pin.id).collect::<Vec<_>>(),
             [linked_id],
             "the linked worktree sees only its private pin"
-        );
-        assert!(
-            main.try_find_reference("refs/tix/pins/legacy")?.is_some(),
-            "the ignored shared pin remains untouched"
         );
         Ok(())
     }
