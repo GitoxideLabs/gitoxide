@@ -1670,9 +1670,15 @@ fn metadata_line<'a>(
         },
     )];
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
-    let mut pin_shown = false;
+    if row_decorations
+        .iter()
+        .any(|decoration| decoration.kind == DecorationKind::Pin)
+    {
+        spans.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
+    }
     let mut labels = row_decorations
         .iter()
+        .filter(|decoration| decoration.kind != DecorationKind::Pin)
         .filter(|decoration| match ref_mode {
             _ if decoration.kind == DecorationKind::Head => false,
             _ if decoration.kind == DecorationKind::Review => true,
@@ -1686,14 +1692,6 @@ fn metadata_line<'a>(
                     )
             }
         })
-        .filter(|decoration| {
-            if decoration.kind != DecorationKind::Pin {
-                return true;
-            }
-            let show = !pin_shown;
-            pin_shown = true;
-            show
-        })
         .peekable();
     if labels.peek().is_some() {
         spans.push(Span::raw(" ("));
@@ -1701,11 +1699,7 @@ fn metadata_line<'a>(
             if index != 0 {
                 spans.push(Span::raw(", "));
             }
-            let name = if decoration.kind == DecorationKind::Pin {
-                std::borrow::Cow::Borrowed("📌")
-            } else {
-                decoration.name.to_str_lossy()
-            };
+            let name = decoration.name.to_str_lossy();
             spans.push(Span::styled(
                 if matches!(
                     decoration.kind,
@@ -2836,6 +2830,19 @@ mod tests {
         assert!(row.contains("📌"), "a pinned commit has an obvious pin marker: {row:?}");
         assert_eq!(row.matches("📌").count(), 1, "multiple pins share one visual marker");
         assert!(!row.contains("pin:01010101"), "pin identities stay out of history rows");
+        let hash = row.find("0101010").expect("the row contains its hash");
+        let pin = row.find("📌").expect("the row contains its pin");
+        let date = row.find("1970-01-01").expect("the row contains its date");
+        assert!(
+            hash < pin && pin < date,
+            "the pin sits between the hash and metadata: {row:?}"
+        );
+        app.ref_mode = RefMode::None;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_row(&terminal).contains("📌"),
+            "hiding refs retains resource markers"
+        );
         assert!(
             rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return · unpin)"),
             "the active edit prefix contains exactly its actionable commands"
