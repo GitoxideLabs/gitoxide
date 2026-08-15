@@ -588,16 +588,36 @@ fn create_or_reuse_pin(repository: &gix::Repository, target: Target, id: ObjectI
 
 fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
     repository
-        .edit_references([RefEdit {
-            change: Change::Delete {
-                expected: PreviousValue::MustExistAndMatch(pin.target.clone()),
-                log: RefLog::AndReference,
-            },
-            name: pin.name.clone(),
-            deref: false,
-        }])
+        .edit_references([delete_pin_edit(pin)])
         .context("could not remove tix pin")?;
     Ok(())
+}
+
+pub(crate) fn remove_pins(repository_path: &Path, bare: bool, selected: ObjectId) -> Result<usize> {
+    let repository =
+        open_repository(repository_path, bare, false).context("could not open repository to remove pins")?;
+    let pins: Vec<_> = history::all_pins(&repository)?
+        .into_iter()
+        .filter(|pin| pin.id == selected)
+        .collect();
+    if pins.is_empty() {
+        return Ok(0);
+    }
+    repository
+        .edit_references(pins.iter().map(delete_pin_edit))
+        .context("could not remove tix pins")?;
+    Ok(pins.len())
+}
+
+fn delete_pin_edit(pin: &history::Pin) -> RefEdit {
+    RefEdit {
+        change: Change::Delete {
+            expected: PreviousValue::MustExistAndMatch(pin.target.clone()),
+            log: RefLog::AndReference,
+        },
+        name: pin.name.clone(),
+        deref: false,
+    }
 }
 
 fn delete_deferred_refs(repository_path: &Path, bare: bool, refs: &[(gix::refs::FullName, ObjectId)]) -> Result<()> {
@@ -1023,6 +1043,35 @@ mod tests {
         );
         assert_eq!(repository.head_id()?.detach(), main);
         assert!(history::all_pins(&repository)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn removes_every_pin_at_the_selected_commit() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let selected = repository.rev_parse_single("main")?.detach();
+        let other = repository.rev_parse_single("topic")?.detach();
+        for (name, target) in [
+            ("refs/worktree/tix/pins/first", selected),
+            ("refs/worktree/tix/pins/second", selected),
+            ("refs/worktree/tix/pins/other", other),
+        ] {
+            repository.reference(name, target, PreviousValue::MustNotExist, "test pin removal")?;
+        }
+        drop(repository);
+
+        assert_eq!(remove_pins(&repository_path, false, selected)?, 2);
+        let repository = crate::open_test_repository(fixture.path())?;
+        assert_eq!(
+            history::all_pins(&repository)?
+                .into_iter()
+                .map(|pin| pin.id)
+                .collect::<Vec<_>>(),
+            [other],
+            "pins on other commits remain"
+        );
         Ok(())
     }
 
