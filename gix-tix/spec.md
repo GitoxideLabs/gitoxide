@@ -191,7 +191,7 @@ without trading responsiveness for metadata that is not visible.
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
-| `@` | Time-travel to the selected commit, or return through its tix pin. |
+| `@` | Time-travel to the selected commit, or return through its tix pin. Terminals reporting the base key as `Shift-2` are also accepted. |
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open

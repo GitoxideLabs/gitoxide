@@ -4318,6 +4318,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('i') if edit_expanded => Some(Action::Unpin),
         KeyCode::Char('v') if edit_expanded => Some(Action::Review),
         KeyCode::Char('@') => Some(Action::TimeTravel),
+        KeyCode::Char('2') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::TimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -5267,6 +5268,16 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)),
             Some(Action::TimeTravel),
             "the terminal's direct at-sign event invokes time travel"
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::SHIFT)),
+            Some(Action::TimeTravel),
+            "terminals which preserve the base character map Shift-2 to time travel"
+        );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+            None,
+            "an unshifted 2 has no time-travel behavior"
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
