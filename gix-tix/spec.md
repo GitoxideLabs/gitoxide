@@ -450,11 +450,12 @@ space first; changes blocks adapt within the remaining history width.
   ancestry through that destination. Every later descendant is reparented and
   becomes or remains lazy and unsigned, including ordinary commits created above
   pending history; traveling toward a non-pending ancestor leaves the entire
-  pending region untouched. A conflict
-  retains the exact merge tree, conflict stages, prepared commits, and in-memory
-  objects without changing the repository. The conflicting row shows a blinking
-  red `C`; `<enter>` persists the prepared rebase, leaves later descendants lazy,
-  and checks out the conflict tree with an unmerged index. Any other key discards
+  pending region untouched. A conflict retains the ours tree, exact merge-result
+  tree, conflict stages, prepared commits, and in-memory objects without changing
+  the repository. The conflicting row shows a blinking red `C`; `<enter>` persists
+  the prepared rebase, leaves later descendants lazy, checks out the conflicting
+  commit at the ours tree, then checks out the merge result and derives the
+  unmerged index from it. Any other key discards
   the suspended operation; key-release events are not actions and leave it armed.
   Diagnostics warn when a conflict suspends the rebase and record whether it is
   accepted, discarded, or fails during checkout.
@@ -546,8 +547,8 @@ space first; changes blocks adapt within the remaining history width.
   unreachable objects may remain for normal Git garbage collection.
 - A suspended conflict temporarily owns a cloned repository with object memory
   while awaiting one confirmation key. Dropping it writes nothing; accepting it
-  consumes the repository immediately after persisting and checking out the
-  retained merge result.
+  consumes the repository immediately after persisting the commit at the ours
+  tree and materializing the retained merge result in the worktree and index.
 
 ### History rebase editor
 
@@ -618,7 +619,8 @@ space first; changes blocks adapt within the remaining history width.
   marks it with a blinking red `C`; predicted ref decorations remain at their
   repository positions. Repository-backed overlay content is hidden while these
   candidate objects exist only in memory. `<enter>` accepts the partial result,
-  moves already-final refs, checks out the conflicting tree with an unmerged index,
+  moves already-final refs, records the ours tree in the conflicting commit, and
+  checks out the retained merge result with an unmerged index,
   and retains an in-memory continuation plan. Any other key discards the preview
   without writes.
   Once the index has no unresolved stages, `<enter>` continues; another conflict

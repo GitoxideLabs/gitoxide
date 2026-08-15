@@ -439,6 +439,19 @@ mod tests {
             unresolved.stdout, b"file\n",
             "materialization writes the unmerged index"
         );
+        let materialized = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let conflict_commit = materialized.head_commit()?;
+        assert_eq!(
+            conflict_commit.tree_id()?.detach(),
+            conflict_commit
+                .parent_ids()
+                .next()
+                .expect("a cherry-picked commit has a parent")
+                .object()?
+                .peel_to_tree()?
+                .id,
+            "the materialized conflict commit records the ours tree"
+        );
 
         std::fs::write(fixture.path().join("file"), b"resolved\n")?;
         assert!(

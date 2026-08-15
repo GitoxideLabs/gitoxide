@@ -285,7 +285,7 @@ impl Perform {
 pub(crate) struct Conflict {
     prepared: Prepared,
     conflicts: Vec<gix::merge::tree::Conflict>,
-    tree: ObjectId,
+    merged_tree: ObjectId,
     commit: ObjectId,
     original: ObjectId,
 }
@@ -300,7 +300,7 @@ impl Conflict {
         Ok(PersistedConflict {
             repo: self.prepared.repo,
             conflicts: self.conflicts,
-            tree: self.tree,
+            merged_tree: self.merged_tree,
             commit: self.commit,
             deferred_ref_deletions: outcome.deferred_ref_deletions,
         })
@@ -310,16 +310,16 @@ impl Conflict {
 pub(crate) struct PersistedConflict {
     repo: gix::Repository,
     conflicts: Vec<gix::merge::tree::Conflict>,
-    tree: ObjectId,
+    merged_tree: ObjectId,
     pub(crate) commit: ObjectId,
     pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
 }
 
 impl PersistedConflict {
-    pub(crate) fn write_index(&mut self) -> Result<()> {
+    pub(crate) fn materialize(&mut self) -> Result<()> {
         let mut index = self
             .repo
-            .index_from_tree(&self.tree)
+            .index_from_tree(&self.merged_tree)
             .context("could not prepare the conflicting index")?;
         if !gix::merge::tree::apply_index_entries(
             &self.conflicts,
@@ -330,9 +330,29 @@ impl PersistedConflict {
             anyhow::bail!("could not apply conflict stages to the prepared index");
         }
         index.remove_tree();
-        index
+        let ours_tree = self
+            .repo
+            .find_commit(self.commit)
+            .context("could not find the conflicting commit")?
+            .tree_id()
+            .context("could not read the conflicting commit tree")?
+            .detach();
+        let workdir = self
+            .repo
+            .workdir()
+            .context("materializing a conflict requires a worktree")?;
+        super::forget::apply_tree_transition(workdir, ours_tree, self.merged_tree)
+            .context("could not check out the conflicting merge result")?;
+        if let Err(err) = index
             .write(gix::index::write::Options::default())
             .context("could not write the conflicting index")
+        {
+            return match super::forget::apply_tree_transition(workdir, self.merged_tree, ours_tree) {
+                Ok(()) => Err(err),
+                Err(rollback) => Err(err.context(format!("conflict checkout rollback failed: {rollback:#}"))),
+            };
+        }
+        Ok(())
     }
 }
 
@@ -560,9 +580,13 @@ fn perform_inner(
         let mut new_conflict = None;
         commit.tree = match rewritten_tree {
             TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict { tree, conflicts } => {
-                new_conflict = Some((tree, conflicts));
-                tree
+            TreeRewrite::Conflict {
+                ours,
+                merged,
+                conflicts,
+            } => {
+                new_conflict = Some((merged, conflicts));
+                ours
             }
         };
         commit.parents = new_parents.into_iter().collect();
@@ -632,10 +656,10 @@ fn perform_inner(
         delete_refs,
     };
     match conflict {
-        Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
+        Some((original, merged_tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
             prepared,
             conflicts,
-            tree,
+            merged_tree,
             commit,
             original,
         })),
@@ -912,12 +936,16 @@ pub(crate) fn perform_plan_with_progress(
         let mut step_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict { tree, conflicts } => {
+            TreeRewrite::Conflict {
+                ours,
+                merged,
+                conflicts,
+            } => {
                 let (PlanCommit::Pick(original) | PlanCommit::Resolved(original)) = step.commit else {
                     unreachable!("empty commits cannot conflict")
                 };
-                step_conflict = Some((original, tree, conflicts, None));
-                tree
+                step_conflict = Some((original, merged, conflicts, None));
+                ours
             }
         };
         if let Some(started) = cherry_pick_started.filter(|_| step_conflict.is_none()) {
@@ -952,9 +980,13 @@ pub(crate) fn perform_plan_with_progress(
                 let started = Instant::now();
                 commit.tree = match cherry_pick_tree_outcome(&repo, old_base, commit.tree, source.tree)? {
                     TreeRewrite::Complete(tree) => tree,
-                    TreeRewrite::Conflict { tree, conflicts } => {
-                        step_conflict = Some((*id, tree, conflicts, Some(squash_index)));
-                        tree
+                    TreeRewrite::Conflict {
+                        ours,
+                        merged,
+                        conflicts,
+                    } => {
+                        step_conflict = Some((*id, merged, conflicts, Some(squash_index)));
+                        ours
                     }
                 };
                 applied += 1;
@@ -1118,7 +1150,7 @@ pub(crate) fn perform_plan_with_progress(
         signing_ms = progress.signing_time.as_millis(),
         "prepared rebase plan"
     );
-    let Some((original, tree, conflicts, commit, conflict_step, conflict_remaining_squash)) = conflict else {
+    let Some((original, merged_tree, conflicts, commit, conflict_step, conflict_remaining_squash)) = conflict else {
         return Ok(PlanPerform::Complete(prepared.finish()?));
     };
 
@@ -1158,7 +1190,7 @@ pub(crate) fn perform_plan_with_progress(
         conflict: Conflict {
             prepared,
             conflicts,
-            tree,
+            merged_tree,
             commit,
             original,
         },
@@ -1426,7 +1458,8 @@ fn validate(
 enum TreeRewrite {
     Complete(ObjectId),
     Conflict {
-        tree: ObjectId,
+        ours: ObjectId,
+        merged: ObjectId,
         conflicts: Vec<gix::merge::tree::Conflict>,
     },
 }
@@ -1567,18 +1600,19 @@ fn cherry_pick_tree_outcome(
         .merge_trees(old_base, new_base, tree, labels, repo.tree_merge_options()?)
         .context("could not cherry-pick a descendant tree")?;
     let unresolved = outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::git());
-    let tree = outcome
+    let merged = outcome
         .tree
         .write()
         .context("could not prepare a rebased tree")?
         .detach();
     if unresolved {
         Ok(TreeRewrite::Conflict {
-            tree,
+            ours: new_base,
+            merged,
             conflicts: outcome.conflicts,
         })
     } else {
-        Ok(TreeRewrite::Complete(tree))
+        Ok(TreeRewrite::Complete(merged))
     }
 }
 
