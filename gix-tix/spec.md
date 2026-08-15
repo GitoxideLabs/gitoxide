@@ -663,9 +663,10 @@ space first; changes blocks adapt within the remaining history width.
   a referenced leaf, the existing time-travel checkout detaches `HEAD` there while
   the ref stays at the leaf. Concurrent ref edits win by making the transaction
   fail; the editor result is not rebuilt against a later graph snapshot. Leaving
-  the document unchanged is a no-op unless its scope contains pending commits or
-  rebase-update selected a newer base; then the unchanged plan runs with the same
-  eager `@` ancestry and lazy-fork rules. Explicit `tix rebase apply` always
+  the document unchanged is a no-op unless the ancestry ending at `@` contains
+  pending commits or rebase-update selected a newer base; pending commits on
+  other forks remain lazy and do not replay a clean checkout ancestry. Explicit
+  `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying
   the file or removing the `tix-rebase-state-v1` comment cancels. Continuation
