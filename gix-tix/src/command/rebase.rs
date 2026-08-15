@@ -242,16 +242,8 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
     match rebase::perform_plan(&repo, &graph, parsed.plan)? {
         rebase::PlanPerform::Complete(outcome) => {
             let revisions = mapped_revisions(&tips, |id| outcome.map(id));
-            if let Some(selected) = outcome.selected {
-                let notice = edit::time_travel::checkout_plan(
-                    &repository_path,
-                    bare,
-                    selected,
-                    outcome.checkout_reference.as_ref(),
-                    &outcome.deferred_ref_deletions,
-                    &revisions,
-                    false,
-                )?;
+            if outcome.selected.is_some() {
+                let notice = edit::time_travel::checkout_plan(&repository_path, bare, &outcome, &revisions, false)?;
                 println!("{}", notice.unwrap_or_else(|| "rebased history".into()));
             } else {
                 println!("rebased history");
