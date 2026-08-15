@@ -22,10 +22,14 @@ without trading responsiveness for metadata that is not visible.
   rules. Replay conflicts change nothing unless explicitly materialized; an
   accepted conflict writes the checkout and unmerged index, then exits with an
   error so resolution cannot be mistaken for completion.
-- `tix reword REVSPEC` opens the standard Markdown reword document and applies
-  the same signing, lazy-rebase, mutable-ref, and worktree-safety rules as the
-  TUI. An attached `HEAD` may reword itself without a pin. Every other target
-  requires an existing current-worktree tix pin at that commit or a descendant;
+- `tix reword REVSPEC [-m MESSAGE ... | -f FILE]` applies the same signing,
+  lazy-rebase, mutable-ref, and worktree-safety rules as the TUI. Without either
+  message option it opens the standard Markdown reword document. Repeated
+  `-m/--message` values form paragraphs; `-f/--file` reads the complete message
+  from a file, or from standard input when given `-`. Explicit sources bypass
+  the editor and do not add suggested trailers. An attached `HEAD` may reword
+  itself without a pin. Every other target requires an existing current-worktree
+  tix pin at that commit or a descendant;
   every such covering pin participates so retained forks are rewritten together.
   Eligibility is checked before the editor opens, and an unchanged document is
   an explicit no-op.
@@ -404,6 +408,9 @@ space first; changes blocks adapt within the remaining history width.
   time travel; the edited commit itself needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
+- Command-line message inputs replace only the message, retain
+  editor-comment-looking lines as content, and are a no-op when their cleaned
+  message already matches the commit.
 - Editor, signing, parsing, writing, or reference-update failures are shown in
   the main status line and do not leave a repository retained by the UI.
 

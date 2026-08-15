@@ -1,4 +1,8 @@
-use std::ffi::OsString;
+use std::{
+    ffi::OsString,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
@@ -7,6 +11,12 @@ pub(super) struct Args {
     /// Revision resolving to the commit whose message should be edited.
     #[arg(value_name = "REVSPEC")]
     pub(super) revision: OsString,
+    /// Use this message instead of opening an editor; repeat to add paragraphs.
+    #[arg(short = 'm', long, value_name = "MESSAGE", conflicts_with = "file")]
+    pub(super) message: Vec<OsString>,
+    /// Read the new message from this file, or from standard input with `-`.
+    #[arg(short = 'f', long, value_name = "FILE", conflicts_with = "message")]
+    pub(super) file: Option<PathBuf>,
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
@@ -37,6 +47,12 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         anyhow::bail!("the reword target or one of its descendants must be pinned");
     }
 
+    if let Some(message) = explicit_message(&args, std::io::stdin())? {
+        return finish(crate::edit::reword::apply_message(
+            repository, &graph, target, &message,
+        )?);
+    }
+
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
     let (editor, document) = crate::edit::reword::document(&repository, target)?;
@@ -54,7 +70,41 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let mut repository = crate::open_repository(&repository_path, bare, false)
         .context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    match crate::edit::reword::apply(repository, &graph, target, &edited)? {
+    finish(crate::edit::reword::apply(repository, &graph, target, &edited)?)
+}
+
+fn explicit_message(args: &Args, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
+    if !args.message.is_empty() {
+        let mut out = Vec::new();
+        for (index, message) in args.message.iter().enumerate() {
+            if index > 0 {
+                out.extend_from_slice(b"\n\n");
+            }
+            out.extend_from_slice(
+                gix::path::os_str_into_bstr(message)
+                    .with_context(|| format!("message {} is not valid UTF-8", index + 1))?,
+            );
+        }
+        return Ok(Some(out));
+    }
+    let Some(path) = args.file.as_deref() else {
+        return Ok(None);
+    };
+    if path == Path::new("-") {
+        let mut out = Vec::new();
+        stdin
+            .read_to_end(&mut out)
+            .context("could not read the commit message from standard input")?;
+        Ok(Some(out))
+    } else {
+        std::fs::read(path)
+            .with_context(|| format!("could not read commit message at {}", path.display()))
+            .map(Some)
+    }
+}
+
+fn finish(outcome: Option<gix::ObjectId>) -> Result<()> {
+    match outcome {
         Some(id) => println!("{}", id.to_hex_with_len(7)),
         None => println!("no reword performed: the edited commit was unchanged"),
     }
@@ -88,7 +138,70 @@ mod tests {
     fn args(revision: &str) -> Args {
         Args {
             revision: revision.into(),
+            message: Vec::new(),
+            file: None,
         }
+    }
+
+    #[test]
+    fn explicit_message_sources_are_complete_and_git_like() -> gix_testtools::Result {
+        let mut message_args = args("HEAD");
+        message_args.message = vec!["title".into(), "body".into()];
+        assert_eq!(
+            explicit_message(&message_args, &b"ignored"[..])?,
+            Some(b"title\n\nbody".to_vec()),
+            "repeated messages become paragraphs without reading stdin"
+        );
+
+        let mut file_args = args("HEAD");
+        file_args.file = Some("-".into());
+        assert_eq!(
+            explicit_message(&file_args, &b"from stdin\n"[..])?,
+            Some(b"from stdin\n".to_vec()),
+            "a dash reads the entire message from stdin"
+        );
+
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let path = fixture.path().join("message.md");
+        std::fs::write(&path, b"from file\n\nbody\n")?;
+        let mut file_args = args("HEAD");
+        file_args.file = Some(path);
+        assert_eq!(
+            explicit_message(&file_args, &b"ignored"[..])?,
+            Some(b"from file\n\nbody\n".to_vec()),
+            "a file supplies the complete message"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn message_bypasses_the_editor_and_rewords_head() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let mut initial = args("HEAD");
+        initial.message = vec!["replacement title".into(), ";literal body".into()];
+        run(open(fixture.path(), "false")?, initial)?;
+
+        assert_eq!(
+            git(fixture.path(), &["log", "-1", "--format=%B"])?,
+            b"replacement title\n\n;literal body\n\n",
+            "an explicit message bypasses the editor and retains editor-comment-looking lines"
+        );
+        let rewritten = git(fixture.path(), &["rev-parse", "HEAD"])?;
+        let mut same = args("HEAD");
+        same.message = vec!["replacement title\n\n;literal body".into()];
+        run(open(fixture.path(), "false")?, same)?;
+        assert_eq!(
+            git(fixture.path(), &["rev-parse", "HEAD"])?,
+            rewritten,
+            "an unchanged explicit message does not rewrite the commit"
+        );
+
+        let mut empty = args("HEAD");
+        empty.message = vec!["   ".into()];
+        let err = run(open(fixture.path(), "false")?, empty)
+            .expect_err("an empty cleaned message must not replace the commit message");
+        assert!(format!("{err:#}").contains("message is empty"));
+        Ok(())
     }
 
     #[test]
