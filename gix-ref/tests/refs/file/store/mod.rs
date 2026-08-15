@@ -25,11 +25,11 @@ fn precompose_unicode_journey() -> crate::Result {
     let root = tmp.path().join(decomposed_a);
     std::fs::create_dir(&root)?;
 
-    let store_decomposed = gix_ref::file::Store::at(
+    let store_decomposed = gix_ref::file::Store::at_opts(
         root,
+        crate::fixture_hash_kind(),
         gix_ref::store::init::Options {
             write_reflog: WriteReflog::Always,
-            object_hash: crate::fixture_hash_kind(),
             precompose_unicode: false,
             ..Default::default()
         },
@@ -54,11 +54,11 @@ fn precompose_unicode_journey() -> crate::Result {
         return Ok(());
     }
 
-    let store_precomposed = gix_ref::file::Store::at(
+    let store_precomposed = gix_ref::file::Store::at_opts(
         tmp.path().join(precomposed_a), // it's important that root paths are also precomposed then.
+        crate::fixture_hash_kind(),
         gix_ref::store::init::Options {
             write_reflog: WriteReflog::Always,
-            object_hash: crate::fixture_hash_kind(),
             precompose_unicode: true,
             ..Default::default()
         },
