@@ -22,6 +22,13 @@ without trading responsiveness for metadata that is not visible.
   rules. Replay conflicts change nothing unless explicitly materialized; an
   accepted conflict writes the checkout and unmerged index, then exits with an
   error so resolution cannot be mistaken for completion.
+- `tix reword REVSPEC` opens the standard Markdown reword document and applies
+  the same signing, lazy-rebase, mutable-ref, and worktree-safety rules as the
+  TUI. An attached `HEAD` may reword itself without a pin. Every other target
+  requires an existing current-worktree tix pin at that commit or a descendant;
+  every such covering pin participates so retained forks are rewritten together.
+  Eligibility is checked before the editor opens, and an unchanged document is
+  an explicit no-op.
 - `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-w/--worktrees` adds every successfully resolved main and linked worktree
