@@ -2263,6 +2263,19 @@ fn event_loop(
                         }
                     }
                 }
+                Effect::Unpin(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit::time_travel::remove_pins(&repository_path, repository_is_bare, id) {
+                        Ok(0) => app.leave_message("no pins removed"),
+                        Ok(count) => {
+                            app.leave_message(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
+                            app.select_commit_after_refresh(id);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_message(format!("unpin: {err:#}")),
+                    }
+                }
                 Effect::VerifySignatures(ids) => {
                     verification_receiver = Some(start_signature_verification(
                         repository_path.clone(),
@@ -4276,6 +4289,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
         KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
+        KeyCode::Char('i') if edit_expanded => Some(Action::Unpin),
         KeyCode::Char('v') if edit_expanded => Some(Action::Review),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
@@ -5285,6 +5299,7 @@ mod tests {
             ('p', Action::Split),
             ('d', Action::Forget),
             ('t', Action::TimeTravel),
+            ('i', Action::Unpin),
         ] {
             assert_eq!(
                 action_with_shortcut_groups(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE), false, true),

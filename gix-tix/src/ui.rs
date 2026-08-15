@@ -837,6 +837,19 @@ pub(crate) fn draw_with_worktree(
             {
                 options.push(label);
             }
+            if app.changes_focus.is_none()
+                && app
+                    .selected
+                    .and_then(|index| app.rows.get(index))
+                    .and_then(|row| decorations.get(&row.id))
+                    .is_some_and(|decorations| {
+                        decorations
+                            .iter()
+                            .any(|decoration| decoration.kind == DecorationKind::Pin)
+                    })
+            {
+                options.push(("unpin", 'i'));
+            }
             edit_prefix_spans.push(Span::raw(" · "));
             edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
             edit_prefix_spans.push(Span::raw("dit ("));
@@ -2798,7 +2811,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_row(&terminal).contains("pin:01010101"));
         assert!(
-            rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return)"),
+            rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return · unpin)"),
             "the active edit prefix contains exactly its actionable commands"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
@@ -2806,6 +2819,7 @@ mod tests {
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         assert!(rendered_line(&terminal, 1).contains("travel"));
+        assert!(!rendered_line(&terminal, 1).contains("unpin"));
         Ok(())
     }
 
