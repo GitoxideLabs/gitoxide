@@ -9,6 +9,7 @@ use gix::{
     ObjectId,
     bstr::{BStr, BString, ByteSlice},
     objs::Write,
+    prelude::ObjectIdExt,
     refs::{
         Category, Target,
         transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
@@ -85,6 +86,7 @@ pub(crate) enum PlanCommit {
 pub(crate) struct PlanStep {
     pub parent: PlanParent,
     pub commit: PlanCommit,
+    pub squash: Vec<ObjectId>,
 }
 
 #[derive(Debug)]
@@ -102,6 +104,21 @@ pub(crate) struct Plan {
     pub steps: Vec<PlanStep>,
     pub checkout: Option<usize>,
     pub expected_refs: Vec<ExpectedRef>,
+}
+
+pub(crate) enum PlanPerform {
+    Complete(Outcome),
+    Conflict(ObjectId),
+}
+
+impl PlanPerform {
+    #[cfg(test)]
+    pub(crate) fn complete(self) -> Result<Outcome> {
+        match self {
+            PlanPerform::Complete(outcome) => Ok(outcome),
+            PlanPerform::Conflict(id) => anyhow::bail!("rebase plan conflicts at {id}"),
+        }
+    }
 }
 
 pub(crate) struct Outcome {
@@ -140,10 +157,6 @@ pub(crate) struct Conflict {
 impl Conflict {
     pub(crate) fn original(&self) -> ObjectId {
         self.original
-    }
-
-    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
-        self.prepared.rewritten.get(&id).copied().unwrap_or(Some(id))
     }
 
     pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
@@ -629,7 +642,7 @@ pub(super) fn finish_review(
 }
 
 #[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
-pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut plan: Plan) -> Result<Perform> {
+pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut plan: Plan) -> Result<PlanPerform> {
     let mut repo = repo.clone();
     let signing = repo
         .commit_signing_options_if_enabled()
@@ -651,7 +664,11 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
     let scope: HashSet<_> = plan.scope.iter().copied().collect();
     let mut picked = HashSet::new();
     for step in &plan.steps {
-        if let PlanCommit::Pick(id) = step.commit {
+        let ids = match step.commit {
+            PlanCommit::Pick(id) => Some(id).into_iter().chain(step.squash.iter().copied()),
+            PlanCommit::Empty(_) => None.into_iter().chain(step.squash.iter().copied()),
+        };
+        for id in ids {
             if !scope.contains(&id) || !picked.insert(id) {
                 anyhow::bail!("a rebase plan contains an invalid or duplicate pick");
             }
@@ -675,7 +692,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
 
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut produced = Vec::with_capacity(plan.steps.len());
-    let mut conflict = None;
+    let mut delete_refs = Vec::new();
     for (index, step) in plan.steps.iter().enumerate() {
         let parent = match step.parent {
             PlanParent::Existing(id) => {
@@ -684,7 +701,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
             }
             PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
         };
-        let eager = eager.contains(&index) && conflict.is_none();
+        let eager = eager.contains(&index) || !step.squash.is_empty();
         let mut commit = match &step.commit {
             PlanCommit::Pick(id) => repo
                 .find_commit(*id)
@@ -717,17 +734,46 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         } else {
             Tree::LeaveAsIsAndMark
         };
-        let mut new_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict { tree, conflicts } => {
-                new_conflict = Some((tree, conflicts));
-                tree
+            TreeRewrite::Conflict { .. } => {
+                let PlanCommit::Pick(original) = step.commit else {
+                    unreachable!("empty commits cannot conflict")
+                };
+                return Ok(PlanPerform::Conflict(original));
             }
         };
+        let mut squashed = Vec::with_capacity(step.squash.len());
+        for id in &step.squash {
+            let source = repo
+                .find_commit(*id)
+                .context("could not find a squashed commit")?
+                .decode()
+                .context("could not decode a squashed commit")?
+                .into_owned()
+                .context("could not own a squashed commit")?;
+            let graph_parents = graph.parents_of(*id).context("a squashed commit is incomplete")?;
+            let recorded_parent = has_marker(&source).then(|| marked_parent(&source)).transpose()?;
+            let replay_parents = recorded_parent.map_or_else(
+                || graph_parents.clone(),
+                |parent| parent.into_iter().collect::<Vec<_>>(),
+            );
+            squashed.push((*id, source, replay_parents));
+        }
+        if !squashed.is_empty() {
+            squash_message(&repo, &mut commit, &squashed)?;
+            for (id, source, replay_parents) in &squashed {
+                let old_base = parent_tree(&repo, replay_parents.first().copied())?;
+                commit.tree = match cherry_pick_tree_outcome(&repo, old_base, commit.tree, source.tree)? {
+                    TreeRewrite::Complete(tree) => tree,
+                    TreeRewrite::Conflict { .. } => return Ok(PlanPerform::Conflict(*id)),
+                };
+                delete_refs.extend(super::review::deletions(&repo, source)?);
+            }
+        }
         commit.parents = [parent].into_iter().collect();
         commit.committer = committer.clone();
-        let state = if eager && new_conflict.is_none() {
+        let state = if eager {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
             CommitState::Pending {
@@ -738,17 +784,13 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         if let PlanCommit::Pick(old_id) = step.commit {
             rewritten.insert(old_id, Some(new_id));
         }
-        produced.push(new_id);
-        if let Some((tree, conflicts)) = new_conflict {
-            let PlanCommit::Pick(original) = step.commit else {
-                unreachable!("empty commits cannot conflict")
-            };
-            conflict = Some((original, tree, conflicts, new_id));
+        for old_id in &step.squash {
+            rewritten.insert(*old_id, Some(new_id));
         }
+        produced.push(new_id);
     }
 
     let dropped: Vec<_> = plan.scope.iter().copied().filter(|id| !picked.contains(id)).collect();
-    let mut delete_refs = Vec::new();
     for id in &dropped {
         let commit = repo.find_commit(*id)?.decode()?.into_owned()?;
         delete_refs.extend(super::review::deletions(&repo, &commit)?);
@@ -817,7 +859,11 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         }
     }
     let selected = plan.checkout.map(|index| produced[index]);
-    let marked = plan.steps.iter().enumerate().any(|(index, _)| !eager.contains(&index)) || conflict.is_some();
+    let marked = plan
+        .steps
+        .iter()
+        .enumerate()
+        .any(|(index, step)| !eager.contains(&index) && step.squash.is_empty());
     let mut prepared = Prepared {
         repo,
         root: Some(plan.base),
@@ -831,16 +877,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         pins,
         delete_refs,
     };
-    match conflict {
-        Some((original, tree, conflicts, commit)) => Ok(Perform::Conflict(Conflict {
-            prepared,
-            conflicts,
-            tree,
-            commit,
-            original,
-        })),
-        None => Ok(Perform::Complete(prepared.finish()?)),
-    }
+    Ok(PlanPerform::Complete(prepared.finish()?))
 }
 
 impl Prepared {
@@ -1075,6 +1112,88 @@ enum TreeRewrite {
         tree: ObjectId,
         conflicts: Vec<gix::merge::tree::Conflict>,
     },
+}
+
+fn squash_message(
+    repo: &gix::Repository,
+    commit: &mut gix::objs::Commit,
+    squashed: &[(ObjectId, gix::objs::Commit, Vec<ObjectId>)],
+) -> Result<()> {
+    let mut known = HashSet::<(BString, BString)>::new();
+    collect_co_authors(&commit.message, &mut known);
+    for (_, source, _) in squashed {
+        collect_co_authors(&source.message, &mut known);
+    }
+    known.insert(author_identity(&commit.author));
+    let mut additional = Vec::new();
+    for (_, source, _) in squashed {
+        let author = author_identity(&source.author);
+        if known.insert(author.clone()) {
+            additional.push(author);
+        }
+    }
+
+    let mut message = commit.message.to_vec();
+    for (id, source, _) in squashed {
+        while message.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
+            message.pop();
+        }
+        let short = id
+            .attach(repo)
+            .shorten()
+            .context("could not shorten a squashed commit ID")?;
+        message.extend_from_slice(b"\n\n# ");
+        message.extend_from_slice(short.to_string().as_bytes());
+        message.push(b' ');
+        message.extend_from_slice(
+            gix::objs::commit::MessageRef::from_bytes(&source.message)
+                .summary()
+                .as_ref(),
+        );
+        message.extend_from_slice(b"\n\n");
+        message.extend_from_slice(&source.message);
+    }
+    if !additional.is_empty() {
+        let has_trailers = gix::objs::commit::MessageRef::from_bytes(&message)
+            .body()
+            .is_some_and(|body| body.trailers().next().is_some());
+        while message.last().is_some_and(|byte| matches!(byte, b'\n' | b'\r')) {
+            message.pop();
+        }
+        message.extend_from_slice(if has_trailers { b"\n" } else { b"\n\n" });
+        for (name, email) in additional {
+            message.extend_from_slice(b"Co-authored-by: ");
+            message.extend_from_slice(&name);
+            message.extend_from_slice(b" <");
+            message.extend_from_slice(&email);
+            message.extend_from_slice(b">\n");
+        }
+    }
+    commit.message = message.into();
+    Ok(())
+}
+
+fn author_identity(author: &gix::actor::Signature) -> (BString, BString) {
+    (
+        author.name.trim().to_owned().into(),
+        author.email.trim().to_owned().into(),
+    )
+}
+
+fn collect_co_authors(message: &[u8], out: &mut HashSet<(BString, BString)>) {
+    let Some(body) = gix::objs::commit::MessageRef::from_bytes(message).body() else {
+        return;
+    };
+    for trailer in body.trailers().co_authored_by() {
+        let mut value: &[u8] = trailer.value.as_ref();
+        let Ok(identity) = gix::actor::IdentityRef::from_bytes_consuming(&mut value) else {
+            continue;
+        };
+        if value.trim().is_empty() {
+            let identity = identity.trim();
+            out.insert((identity.name.to_owned(), identity.email.to_owned()));
+        }
+    }
 }
 
 fn rewritten_tree(
@@ -1880,6 +1999,59 @@ mod tests {
     }
 
     #[test]
+    fn a_conflicting_todo_aborts_at_the_original_commit_without_observable_changes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let before = gix_testtools::repository::snapshot(fixture.path())?;
+        let objects_before = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["count-objects", "-v"])
+            .output()?
+            .stdout;
+
+        let PlanPerform::Conflict(original) = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                }],
+                checkout: Some(0),
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        else {
+            return Err("the conflicting todo should abort before persistence".into());
+        };
+        assert_eq!(original, tip, "the diagnostic identifies the source delta");
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?,
+            before,
+            "refs, index, checkout, and worktree remain unchanged"
+        );
+        assert_eq!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["count-objects", "-v"])
+                .output()?
+                .stdout,
+            objects_before,
+            "the discarded object-memory transaction writes no objects"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_todo_rebase_eagerly_replays_only_the_checkout_ancestry_and_keeps_the_branch_at_the_leaf()
     -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -1901,14 +2073,17 @@ mod tests {
                     PlanStep {
                         parent: PlanParent::Existing(base),
                         commit: PlanCommit::Pick(tip),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(0),
                         commit: PlanCommit::Pick(middle),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(1),
                         commit: PlanCommit::Empty("checkpoint".into()),
+                        squash: Vec::new(),
                     },
                 ],
                 checkout: Some(0),
@@ -1982,6 +2157,105 @@ mod tests {
     }
 
     #[test]
+    fn a_todo_squash_materializes_one_commit_and_maps_every_source_to_it() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let tip_tree = repo.find_commit(tip)?.tree_id()?.detach();
+
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(middle),
+                    squash: vec![tip],
+                }],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        .complete()?;
+        let combined = outcome.map(middle).context("the first commit is retained")?;
+        assert_eq!(outcome.map(tip), Some(combined), "both source IDs map to one commit");
+        let commit = repo.find_commit(combined)?.decode()?.into_owned()?;
+        assert_eq!(commit.parents.as_slice(), [base]);
+        assert_eq!(commit.tree, tip_tree, "all source tree changes are present");
+        assert_eq!(commit.author.name, b"author".as_bstr());
+        assert_eq!(commit.committer.name, b"rebasing committer".as_bstr());
+        assert!(!has_marker(&commit), "squash is eager even without a checkout marker");
+        assert_eq!(
+            commit.message,
+            format!("middle\n\n# {} tip\n\ntip\n", tip.to_hex_with_len(7)).as_bytes(),
+            "the source title permanently identifies the appended full message"
+        );
+        assert_eq!(
+            repo.head_id()?.detach(),
+            combined,
+            "the branch follows the combined tip"
+        );
+        assert_eq!(
+            repo.find_reference("refs/patches/middle")?.id().detach(),
+            combined,
+            "a ref on the first source follows the combined commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn squash_messages_add_distinct_raw_authors_after_permanent_source_sections() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let mut first = repo.find_commit(base)?.decode()?.into_owned()?;
+        first.author.name = "Alice".into();
+        first.author.email = "alice@example.com".into();
+        first.message = "first title\n\nfirst body".into();
+
+        let mut bob = repo.find_commit(base)?.decode()?.into_owned()?;
+        bob.author.name = "Bob".into();
+        bob.author.email = "bob@example.com".into();
+        bob.message = "bob title\n\nbob body".into();
+        let mut carol = repo.find_commit(middle)?.decode()?.into_owned()?;
+        carol.author.name = "Carol".into();
+        carol.author.email = "carol@example.com".into();
+        carol.message = "carol title\n\nCo-authored-by: Bob <bob@example.com>".into();
+        let mut repeated_carol = repo.find_commit(tip)?.decode()?.into_owned()?;
+        repeated_carol.author = carol.author.clone();
+        repeated_carol.message = "carol follow-up".into();
+
+        squash_message(
+            &repo,
+            &mut first,
+            &[
+                (base, bob, Vec::new()),
+                (middle, carol, Vec::new()),
+                (tip, repeated_carol, Vec::new()),
+            ],
+        )?;
+        assert_eq!(
+            first.message,
+            format!(
+                "first title\n\nfirst body\n\n# {} bob title\n\nbob title\n\nbob body\n\n# {} carol title\n\ncarol title\n\nCo-authored-by: Bob <bob@example.com>\n\n# {} carol follow-up\n\ncarol follow-up\n\nCo-authored-by: Carol <carol@example.com>\n",
+                base.to_hex_with_len(7),
+                middle.to_hex_with_len(7),
+                tip.to_hex_with_len(7)
+            )
+            .as_bytes(),
+            "existing trailers suppress duplicates and repeated raw authors appear once"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn tip_refs_follow_the_primary_continuation_and_other_leaves_are_pinned() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repo = open(fixture.path())?;
@@ -2006,14 +2280,17 @@ mod tests {
                     PlanStep {
                         parent: PlanParent::Existing(base),
                         commit: PlanCommit::Pick(tip),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(0),
                         commit: PlanCommit::Pick(middle),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(0),
                         commit: PlanCommit::Empty("side".into()),
+                        squash: Vec::new(),
                     },
                 ],
                 checkout: Some(0),
@@ -2058,10 +2335,12 @@ mod tests {
                     PlanStep {
                         parent: PlanParent::Existing(base),
                         commit: PlanCommit::Pick(middle),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(0),
                         commit: PlanCommit::Empty("replacement tip".into()),
+                        squash: Vec::new(),
                     },
                 ],
                 checkout: None,
@@ -2110,10 +2389,12 @@ mod tests {
                     PlanStep {
                         parent: PlanParent::Existing(onto),
                         commit: PlanCommit::Pick(middle),
+                        squash: Vec::new(),
                     },
                     PlanStep {
                         parent: PlanParent::Step(0),
                         commit: PlanCommit::Pick(tip),
+                        squash: Vec::new(),
                     },
                 ],
                 checkout: Some(1),
@@ -2163,6 +2444,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
                 }],
                 checkout: None,
                 expected_refs,
@@ -2208,6 +2490,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
                 }],
                 checkout: None,
                 expected_refs,
@@ -2266,6 +2549,7 @@ mod tests {
                 steps: vec![PlanStep {
                     parent: PlanParent::Existing(base),
                     commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
                 }],
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
@@ -2279,6 +2563,76 @@ mod tests {
         assert!(
             repo.try_find_reference("refs/worktree/tix/review/stashes/1")?.is_none(),
             "dropping the review commit also removes its saved worktree state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn squashing_a_later_review_commit_removes_its_resources() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let old_middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
+        let old_tip_tree = repo.find_commit(old_tip)?.tree_id()?.detach();
+        let mut middle = repo.find_commit(old_middle)?.decode()?.into_owned()?;
+        middle
+            .extra_headers
+            .push(("tix-rebase".into(), "onto refs/worktree/tix/review/1".into()));
+        let middle = repo.write_object(&middle)?.detach();
+        let mut tip = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        tip.parents = [middle].into_iter().collect();
+        let tip = repo.write_object(&tip)?.detach();
+        repo.reference(
+            "refs/worktree/tix/review/1",
+            old_middle,
+            PreviousValue::MustNotExist,
+            "test review resource",
+        )?;
+        repo.reference(
+            "refs/worktree/tix/review/stashes/1",
+            old_tip,
+            PreviousValue::MustNotExist,
+            "test review stash resource",
+        )?;
+        repo.reference(
+            "refs/heads/main",
+            tip,
+            PreviousValue::ExistingMustMatch(Target::Object(old_tip)),
+            "prepare review history",
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(tip),
+                    squash: vec![middle],
+                }],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+        )?
+        .complete()?;
+        let combined = outcome.map(tip).context("the first member remains")?;
+        assert_eq!(outcome.map(middle), Some(combined));
+        assert_eq!(
+            repo.find_commit(combined)?.tree_id()?.detach(),
+            old_tip_tree,
+            "reordered source deltas are composed into the combined tree"
+        );
+        assert!(
+            repo.try_find_reference("refs/worktree/tix/review/1")?.is_none(),
+            "the consumed review resource is removed"
+        );
+        assert!(
+            repo.try_find_reference("refs/worktree/tix/review/stashes/1")?.is_none(),
+            "the consumed review stash is removed"
         );
         Ok(())
     }

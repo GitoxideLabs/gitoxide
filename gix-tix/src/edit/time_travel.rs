@@ -41,25 +41,6 @@ pub(crate) struct Conflict {
 }
 
 impl Conflict {
-    pub(crate) fn from_rebase(
-        repository_path: &Path,
-        bare: bool,
-        rebase: super::rebase::Conflict,
-        revisions: &[OsString],
-        include_worktrees: bool,
-    ) -> Result<Self> {
-        open_repository(repository_path, bare, false)?
-            .workdir()
-            .context("a conflicting rebase requires a worktree")?;
-        Ok(Conflict {
-            rebase,
-            repository_path: repository_path.to_owned(),
-            bare,
-            revisions: revisions.to_vec(),
-            include_worktrees,
-        })
-    }
-
     pub(crate) fn original(&self) -> ObjectId {
         self.rebase.original()
     }
