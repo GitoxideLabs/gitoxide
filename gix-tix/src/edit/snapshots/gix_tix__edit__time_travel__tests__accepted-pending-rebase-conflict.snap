@@ -10,7 +10,7 @@ refs/worktree/tix/pins/9dabf957 = -> refs/heads/main
 
 [commits]
 C0
-  tree T1
+  tree T0
   author author <author@example.com> 946684800 +0000
   committer committer <committer@example.com> 946684800 +0000
 
@@ -26,7 +26,7 @@ C1
   tip
 
 C2
-  tree T2
+  tree T1
   parent C1
   author author <author@example.com> 946944000 +0000
   committer author <author@example.com> 978307200 +0000
@@ -44,12 +44,11 @@ tree = conflicted
 100644 file "file" = "<<<<<<< rebased parent\nbase\n=======\ntip\n>>>>>>> commit\n"
 
 [objects]
-T0 = 0f42ecffc297189265600788215c8b0055d862b8
-T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
-T2 = 6f2762b571ef9a93001cc607058818aa5d0d055c
+T0 = 6d5f482d15035cdd7733b1b551d1fead28d22592
+T1 = 6f2762b571ef9a93001cc607058818aa5d0d055c
+C2 = 7dda806fe5de746fe7e14316c0775eb7df6003dc
+C1 = a2ce4f2d51adba4c0e29abc2000475aee3a4e8ae
 B0 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
-C1 = ba56ce9b9d8d6244d2515a069c41954891242837
 C0 = c0b811a58f27425263a4276fe881de38736a9446
-C2 = caa38dc6da6e13db4a27c3d73fa15562f2890764
 B1 = df967b96a579e45a18b8251732d16804b2e56a55
 B2 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a
