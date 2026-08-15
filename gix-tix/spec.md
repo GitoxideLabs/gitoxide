@@ -656,7 +656,10 @@ space first; changes blocks adapt within the remaining history width.
   the document unchanged is a no-op unless its scope contains pending commits or
   rebase-update selected a newer base; then the unchanged plan runs with the same
   eager `@` ancestry and lazy-fork rules. Explicit `tix rebase apply` always
-  applies a valid plan, even when its editable commands are unchanged.
+  applies a valid plan, even when its editable commands are unchanged. The first
+  Markdown comment states which of these modes applies and explains that emptying
+  the file or removing the `tix-rebase-state-v1` comment cancels. Continuation
+  todos likewise state that saving unchanged continues the materialized rebase.
 
 ### Editing shortcuts
 
