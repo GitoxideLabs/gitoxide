@@ -51,12 +51,14 @@ impl Conflict {
     #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
     pub(crate) fn accept(self) -> Result<(String, ObjectId)> {
         let mut conflict = self.rebase.persist()?;
-        let notice = move_head(
+        let notice = move_head_to(
             &self.repository_path,
             self.bare,
             conflict.commit,
+            None,
             &self.revisions,
             self.include_worktrees,
+            |id| conflict.map(id),
         )?
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
         delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
@@ -75,8 +77,16 @@ pub(crate) fn materialize_plan_conflict(
 ) -> Result<(String, ObjectId)> {
     let original = conflict.original();
     let mut conflict = conflict.into_conflict().persist()?;
-    let notice = move_head(repository_path, bare, conflict.commit, revisions, include_worktrees)?
-        .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
+    let notice = move_head_to(
+        repository_path,
+        bare,
+        conflict.commit,
+        None,
+        revisions,
+        include_worktrees,
+        |id| conflict.map(id),
+    )?
+    .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
     delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
     conflict.materialize()?;
     tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
@@ -96,14 +106,21 @@ pub(crate) fn checkout_without_replay(
 pub(crate) fn checkout_plan(
     repository_path: &Path,
     bare: bool,
-    selected: ObjectId,
-    reference: Option<&gix::refs::FullName>,
-    deferred_ref_deletions: &[(gix::refs::FullName, ObjectId)],
+    outcome: &super::rebase::Outcome,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
-    let notice = move_head_to(repository_path, bare, selected, reference, revisions, include_worktrees)?;
-    delete_deferred_refs(repository_path, bare, deferred_ref_deletions)?;
+    let selected = outcome.selected.context("the rebase plan does not select a checkout")?;
+    let notice = move_head_to(
+        repository_path,
+        bare,
+        selected,
+        outcome.checkout_reference.as_ref(),
+        revisions,
+        include_worktrees,
+        |id| outcome.map(id),
+    )?;
+    delete_deferred_refs(repository_path, bare, &outcome.deferred_ref_deletions)?;
     Ok(notice)
 }
 
@@ -114,17 +131,29 @@ fn move_head(
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
-    move_head_to(repository_path, bare, selected, None, revisions, include_worktrees)
+    move_head_to(
+        repository_path,
+        bare,
+        selected,
+        None,
+        revisions,
+        include_worktrees,
+        Some,
+    )
 }
 
-fn move_head_to(
+fn move_head_to<F>(
     repository_path: &Path,
     bare: bool,
     selected: ObjectId,
     reference: Option<&gix::refs::FullName>,
     revisions: &[OsString],
     include_worktrees: bool,
-) -> Result<Option<String>> {
+    map_departure: F,
+) -> Result<Option<String>>
+where
+    F: FnOnce(ObjectId) -> Option<ObjectId>,
+{
     let repository = open_repository(repository_path, bare, false).context("could not open repository for checkout")?;
     let workdir = repository
         .workdir()
@@ -136,13 +165,19 @@ fn move_head_to(
         .map(gix::Id::detach)
         .context("cannot time-travel from an unborn HEAD")?;
     let head_ref = head.referent_name().map(ToOwned::to_owned);
-    let saved_target = head_ref.clone().map_or(Target::Object(head_id), Target::Symbolic);
+    let departure = map_departure(head_id);
     drop(head);
     if selected == head_id && head_ref.as_ref() == reference {
         return Ok(None);
     }
     let destination_pin = selected_pin(&repository, selected)?;
-    let provisional = create_or_reuse_pin(&repository, saved_target, head_id, "tix time-travel")?;
+    let provisional = departure
+        .filter(|departure| *departure != selected)
+        .map(|departure| {
+            let target = head_ref.clone().map_or(Target::Object(departure), Target::Symbolic);
+            create_or_reuse_pin(&repository, target, departure, "tix time-travel")
+        })
+        .transpose()?;
     drop(repository);
     let checkout = match (reference, &destination_pin) {
         (Some(reference), _) => checkout_branch(&workdir, reference),
@@ -150,14 +185,14 @@ fn move_head_to(
         (None, None) => checkout_detached(&workdir, selected),
     };
     if let Err(checkout) = checkout {
-        if provisional.1 {
+        if let Some((pin, true)) = provisional.as_ref() {
             let cleanup = open_repository(repository_path, bare, false)
                 .context("could not reopen repository to remove a provisional pin")
-                .and_then(|repository| delete_pin(&repository, &provisional.0));
+                .and_then(|repository| delete_pin(&repository, pin));
             if let Err(cleanup) = cleanup {
                 return Err(checkout.context(format!(
                     "checkout failed and {} could not be removed: {cleanup:#}",
-                    pin_label(&provisional.0)
+                    pin_label(pin)
                 )));
             }
         }
@@ -184,19 +219,21 @@ fn move_head_to(
         revisions,
         &[],
         include_worktrees,
-        Some(provisional.0.name.as_bstr()),
+        provisional.as_ref().map(|(pin, _)| pin.name.as_bstr()),
     )?;
-    if snapshot
-        .view_tips
-        .iter()
-        .copied()
-        .any(|tip| contains(&repository, head_id, tip))
-    {
-        if let Err(err) = delete_pin(&repository, &provisional.0) {
-            notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&provisional.0));
+    if let Some((provisional, _)) = provisional {
+        if snapshot
+            .view_tips
+            .iter()
+            .copied()
+            .any(|tip| contains(&repository, provisional.id, tip))
+        {
+            if let Err(err) = delete_pin(&repository, &provisional) {
+                notice = format!("{notice}; redundant {} remains: {err:#}", pin_label(&provisional));
+            }
+        } else {
+            notice = format!("{notice}; saved {}", pin_label(&provisional));
         }
-    } else {
-        notice = format!("{notice}; saved {}", pin_label(&provisional.0));
     }
     Ok(Some(notice))
 }
@@ -218,6 +255,7 @@ pub(crate) fn perform(
     let Some(mut head_id) = head.id().map(gix::Id::detach) else {
         anyhow::bail!("cannot time-travel from an unborn HEAD");
     };
+    let head_was_detached = head.is_detached();
     drop(head);
     if repository
         .index_or_empty()
@@ -284,7 +322,17 @@ pub(crate) fn perform(
     } else {
         None
     };
-    let moved = move_head(repository_path, bare, selected, revisions, include_worktrees);
+    let moved = move_head_to(
+        repository_path,
+        bare,
+        selected,
+        None,
+        revisions,
+        include_worktrees,
+        |actual| {
+            if head_was_detached { Some(head_id) } else { Some(actual) }
+        },
+    );
     let mut notice = match moved {
         Ok(notice) => notice,
         Err(err) => {
@@ -1313,6 +1361,12 @@ mod tests {
         assert_eq!(tip_commit.parents.first().copied(), Some(materialized_middle));
         assert!(super::super::rebase::is_pending(&tip_commit));
         assert!(super::super::rebase::has_marker(&tip_commit));
+        assert!(
+            history::all_pins(&repository)?
+                .iter()
+                .all(|pin| pin.id != pending_middle),
+            "travelling to a rewritten detached HEAD does not pin its predecessor"
+        );
         let graph = super::super::loaded_graph(&repository)?;
         drop(repository);
 

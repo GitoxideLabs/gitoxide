@@ -223,6 +223,9 @@ The Enter key is written as `<enter>` throughout.
   generated pins start with eight hexadecimal characters from the saved commit.
 - A pin is symbolic when the previous `HEAD` named a local branch, so later branch
   advances move the pinned tip. An already detached `HEAD` receives a direct pin.
+- When a rebase rewrites a detached departure, checkout applies the rebase mapping
+  before deciding whether to pin it. A departure rewritten into the selected `@`
+  successor is not pinned; a distinct departure preserves its rewritten identity.
 - While `HEAD` is detached, every valid pin from the current worktree augments
   implicit and explicit revision tips. While it is attached, only pins at strict
   descendants of `HEAD` do so, preserving rewritten leaves after a history rebase
