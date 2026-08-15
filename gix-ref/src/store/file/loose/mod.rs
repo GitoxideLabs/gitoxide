@@ -32,7 +32,7 @@ mod init {
     impl file::Store {
         /// Create a new instance at the given `git_dir`, which commonly is a standard git repository with a
         /// `refs/` subdirectory.
-        /// Use [`at_opts()`](Self::at_opts) to adjust settings.
+        /// Use [`at_opts()`](Self::at_opts) to adjust options.
         ///
         /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set in the options,
         /// the `git_dir` is also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
@@ -70,7 +70,7 @@ mod init {
 
         /// Like [`at()`][file::Store::at()], but for _linked_ work-trees which use `git_dir` as private ref store and `common_dir` for
         /// shared references.
-        /// Use [`for_linked_worktree_opts()`](Self::for_linked_worktree_opts) to adjust settings.
+        /// Use [`for_linked_worktree_opts()`](Self::for_linked_worktree_opts) to adjust options.
         ///
         /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set, the `git_dir` and
         /// `common_dir` are also expected to use precomposed unicode, or else some operations that strip prefixes will fail.

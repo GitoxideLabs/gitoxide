@@ -19,7 +19,7 @@ use crate::file;
 )]
 impl crate::Store {
     /// Create a new store at the given location, typically the `.git/` directory.
-    /// Use [`at_opts()`](Self::at_opts) to adjust settings.
+    /// Use [`at_opts()`](Self::at_opts) to adjust options.
     ///
     /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set in the options,
     /// the `git_dir` is also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
