@@ -19,25 +19,18 @@ pub fn store_at(name: &str) -> crate::Result<Store> {
 
 pub fn named_store_at(script_name: &str, name: &str) -> crate::Result<Store> {
     let path = crate::scripted_fixture_read_only(script_name)?;
-    Ok(Store::at(path.join(name).join(".git"), store_options()))
+    Ok(Store::at(path.join(name).join(".git"), crate::fixture_hash_kind()))
 }
 
 pub fn store_at_with_args(name: &str, args: impl IntoIterator<Item = impl Into<String>>) -> crate::Result<Store> {
     let path = crate::scripted_fixture_read_only_with_args(name, args)?;
-    Ok(Store::at(path.join(".git"), store_options()))
+    Ok(Store::at(path.join(".git"), crate::fixture_hash_kind()))
 }
 
 fn store_writable(name: &str) -> crate::Result<(gix_testtools::tempfile::TempDir, Store)> {
     let dir = crate::scripted_fixture_writable(name)?;
     let git_dir = dir.path().join(".git");
-    Ok((dir, Store::at(git_dir, store_options())))
-}
-
-pub fn store_options() -> gix_ref::store::init::Options {
-    gix_ref::store::init::Options {
-        object_hash: crate::fixture_hash_kind(),
-        ..Default::default()
-    }
+    Ok((dir, Store::at(git_dir, crate::fixture_hash_kind())))
 }
 
 pub fn odb_at(objects_dir: impl Into<std::path::PathBuf>) -> std::io::Result<gix_odb::Handle> {

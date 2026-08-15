@@ -3,11 +3,11 @@
 fn is_send_and_sync() {
     pub fn store_at(name: &str) -> crate::Result<gix_ref::file::Store> {
         let path = crate::scripted_fixture_read_only(name)?;
-        Ok(gix_ref::file::Store::at(
+        Ok(gix_ref::file::Store::at_opts(
             path.join(".git"),
+            crate::fixture_hash_kind(),
             gix_ref::store::init::Options {
                 write_reflog: gix_ref::store::WriteReflog::Normal,
-                object_hash: crate::fixture_hash_kind(),
                 ..Default::default()
             },
         ))

@@ -40,11 +40,11 @@ fn hex_to_id(hex: &str) -> gix_hash::ObjectId {
 
 fn empty_store(writemode: WriteReflog) -> Result<(TempDir, file::Store)> {
     let dir = TempDir::new()?;
-    let store = file::Store::at(
+    let store = file::Store::at_opts(
         dir.path().into(),
+        gix_testtools::object_hash(),
         crate::store::init::Options {
             write_reflog: writemode,
-            object_hash: gix_testtools::object_hash(),
             ..Default::default()
         },
     );

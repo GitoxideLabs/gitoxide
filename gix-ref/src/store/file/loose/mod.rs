@@ -32,15 +32,25 @@ mod init {
     impl file::Store {
         /// Create a new instance at the given `git_dir`, which commonly is a standard git repository with a
         /// `refs/` subdirectory.
+        /// Use [`at_opts()`](Self::at_opts) to adjust options.
+        ///
+        /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set in the options,
+        /// the `git_dir` is also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
+        pub fn at(git_dir: PathBuf, object_hash: gix_hash::Kind) -> Self {
+            Self::at_opts(git_dir, object_hash, Default::default())
+        }
+
+        /// Create a new instance at the given `git_dir`, which commonly is a standard git repository with a
+        /// `refs/` subdirectory.
         /// Use [`Options`](crate::store::init::Options) to adjust settings.
         ///
         /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set in the options,
         /// the `git_dir` is also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
-        pub fn at(
+        pub fn at_opts(
             git_dir: PathBuf,
+            object_hash: gix_hash::Kind,
             crate::store::init::Options {
                 write_reflog,
-                object_hash,
                 precompose_unicode,
                 prohibit_windows_device_names,
             }: crate::store::init::Options,
@@ -60,15 +70,25 @@ mod init {
 
         /// Like [`at()`][file::Store::at()], but for _linked_ work-trees which use `git_dir` as private ref store and `common_dir` for
         /// shared references.
+        /// Use [`for_linked_worktree_opts()`](Self::for_linked_worktree_opts) to adjust options.
         ///
         /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set, the `git_dir` and
         /// `common_dir` are also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
-        pub fn for_linked_worktree(
+        pub fn for_linked_worktree(git_dir: PathBuf, common_dir: PathBuf, object_hash: gix_hash::Kind) -> Self {
+            Self::for_linked_worktree_opts(git_dir, common_dir, object_hash, Default::default())
+        }
+
+        /// Like [`at_opts()`][Self::at_opts()], but for _linked_ work-trees which use `git_dir` as private ref store and `common_dir` for
+        /// shared references.
+        ///
+        /// Note that if [`precompose_unicode`](crate::store::init::Options::precompose_unicode) is set, the `git_dir` and
+        /// `common_dir` are also expected to use precomposed unicode, or else some operations that strip prefixes will fail.
+        pub fn for_linked_worktree_opts(
             git_dir: PathBuf,
             common_dir: PathBuf,
+            object_hash: gix_hash::Kind,
             crate::store::init::Options {
                 write_reflog,
-                object_hash,
                 precompose_unicode,
                 prohibit_windows_device_names,
             }: crate::store::init::Options,

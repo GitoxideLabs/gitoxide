@@ -19,13 +19,7 @@ fn large_transactions_hold_a_constant_number_of_file_descriptors() -> gix_testto
 
     let dir = gix_testtools::tempfile::TempDir::new()?;
     let object_hash = gix_testtools::object_hash();
-    let store = file::Store::at(
-        dir.path().into(),
-        gix_ref::store::init::Options {
-            object_hash,
-            ..Default::default()
-        },
-    );
+    let store = file::Store::at(dir.path().into(), object_hash);
     let edits = (0..20).map(|i| RefEdit {
         change: Change::Update {
             log: LogChange {
