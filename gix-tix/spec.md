@@ -644,8 +644,10 @@ space first; changes blocks adapt within the remaining history width.
   local branch explicitly attaches it and is valid only at the marked result.
   Removing the name deletes the branch. Checkout markers are invalid without a
   worktree. Todo generation and application reject an unborn `HEAD`.
-- Only the ancestry ending at `@` and any squash groups are eagerly cherry-picked
-  and re-signed. Other resulting stacks retain their trees, receive pending-rebase
+- Within the ancestry ending at `@`, unchanged picks whose original parent is
+  still their planned parent retain their IDs. Eager cherry-picking and re-signing
+  starts at the first pending or structurally changed commit. Any descendants
+  above `@` and other resulting stacks retain their trees, receive pending-rebase
   markers, and invalidate old signatures for later time travel. With no `@`,
   ordinary steps remain lazy while squash groups are still materialized.
   Any conflict while applying a history todo first remains entirely in memory.
