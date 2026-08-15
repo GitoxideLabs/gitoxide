@@ -35,6 +35,38 @@ mod single {
 }
 
 mod ansi_c {
+    mod quote {
+        use bstr::ByteSlice;
+        use gix_quote::ansi_c;
+
+        #[test]
+        fn matches_git_quote_c_style() {
+            for (input, expected) in [
+                (b"Name".as_slice(), b"Name".as_slice()),
+                (b"With SP in it", b"With SP in it"),
+                (b"Name and a\nLF", br#""Name and a\nLF""#),
+                (b"Name and an\tHT", br#""Name and an\tHT""#),
+                (b"Name\"", br#""Name\"""#),
+                ("濱野\t純".as_bytes(), br#""\346\277\261\351\207\216\t\347\264\224""#),
+            ] {
+                assert_eq!(
+                    ansi_c::quote(input.as_bstr()).as_ref(),
+                    expected.as_bstr(),
+                    "Git-compatible C-style quoting"
+                );
+            }
+        }
+
+        #[test]
+        fn every_byte_round_trips() {
+            let input = (0..=u8::MAX).collect::<Vec<_>>();
+            let quoted = ansi_c::quote(input.as_bstr());
+            let (unquoted, consumed) = ansi_c::undo(&quoted).expect("quoted bytes are valid");
+            assert_eq!(unquoted.as_ref(), input.as_bstr(), "quoting is lossless");
+            assert_eq!(consumed, quoted.len(), "the entire quoted value is consumed");
+        }
+    }
+
     mod undo {
         use bstr::ByteSlice;
         use gix_quote::ansi_c;
