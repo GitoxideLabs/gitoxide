@@ -876,6 +876,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut produced = Vec::with_capacity(plan.steps.len());
     let mut delete_refs = Vec::new();
     let mut conflict = None;
+    let mut marked = false;
     for (index, step) in plan.steps.iter().enumerate() {
         let parent = match step.parent {
             PlanParent::Existing(id) => {
@@ -932,6 +933,17 @@ pub(crate) fn perform_plan_with_progress(
             PlanCommit::Empty(_) => vec![parent],
         };
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
+        if let PlanCommit::Pick(id) = step.commit
+            && step.squash.is_empty()
+            && !is_pending(&commit)
+            && graph_parents.as_slice() == [parent]
+        {
+            rewritten.insert(id, Some(id));
+            produced.push(id);
+            progress.processed += 1;
+            report(progress);
+            continue;
+        }
         let replay_parents = recorded_parent.map_or_else(
             || graph_parents.clone(),
             |parent| parent.into_iter().collect::<Vec<_>>(),
@@ -1018,6 +1030,7 @@ pub(crate) fn perform_plan_with_progress(
         } else if eager {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
+            marked = true;
             CommitState::Pending {
                 original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
             }
@@ -1132,11 +1145,6 @@ pub(crate) fn perform_plan_with_progress(
         PlanParent::Existing(id) => id,
         PlanParent::Step(index) => produced[index],
     });
-    let marked = plan
-        .steps
-        .iter()
-        .enumerate()
-        .any(|(index, step)| !eager.contains(&index) && step.squash.is_empty());
     let mut prepared = Prepared {
         repo,
         root: Some(plan.base),
@@ -2589,6 +2597,101 @@ mod tests {
             pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
             Some(b"refs/heads/main".as_bstr()),
             "the visibility pin follows the branch symbolically"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_pending_checkout_rewrites_only_from_the_first_pending_commit() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = open(fixture.path())?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let clean = repo.rev_parse_single("HEAD~1")?.detach();
+        let old_tip = repo.head_id()?.detach();
+
+        let mut checkout = repo.find_commit(old_tip)?.decode()?.into_owned()?;
+        checkout.extra_headers.retain(|(name, _)| !is_signature(name));
+        checkout.extra_headers.push((
+            gix::objs::commit::signature_field_name(checkout.tree.kind()).into(),
+            BString::default(),
+        ));
+        let checkout = repo.write_object(&checkout)?.detach();
+
+        let mut descendant = repo.find_commit(checkout)?.decode()?.into_owned()?;
+        descendant.parents = [checkout].into_iter().collect();
+        descendant.message = "pending descendant".into();
+        descendant
+            .extra_headers
+            .push((ORIGINAL_PARENT.into(), checkout.to_hex().to_string().into()));
+        let descendant = repo.write_object(&descendant)?.detach();
+        repo.reference(
+            "refs/heads/main",
+            descendant,
+            PreviousValue::MustExistAndMatch(Target::Object(old_tip)),
+            "test pending tip",
+        )?;
+
+        let graph = super::super::loaded_graph(&repo)?;
+        let mut progress = Vec::new();
+        let outcome = perform_plan_with_progress(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![clean, checkout, descendant],
+                steps: vec![
+                    PlanStep {
+                        parent: PlanParent::Existing(base),
+                        commit: PlanCommit::Pick(clean),
+                        squash: Vec::new(),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(0),
+                        commit: PlanCommit::Pick(checkout),
+                        squash: Vec::new(),
+                    },
+                    PlanStep {
+                        parent: PlanParent::Step(1),
+                        commit: PlanCommit::Pick(descendant),
+                        squash: Vec::new(),
+                    },
+                ],
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(1),
+                    reference: None,
+                }),
+                expected_refs: capture_refs(&repo, &[clean, checkout, descendant], &[descendant])?,
+            },
+            |update| progress.push(update),
+        )?
+        .complete()?;
+
+        assert_eq!(
+            outcome.map(clean),
+            Some(clean),
+            "the clean prefix retains its commit ID"
+        );
+        let rewritten_checkout = outcome.map(checkout).context("the pending checkout is retained")?;
+        assert_ne!(rewritten_checkout, checkout, "the empty signature is materialized");
+        assert_eq!(outcome.selected, Some(rewritten_checkout));
+        assert!(
+            !is_pending(&repo.find_commit(rewritten_checkout)?.decode()?.into_owned()?),
+            "the selected commit is no longer pending"
+        );
+        let rewritten_descendant = outcome.map(descendant).context("the descendant is retained")?;
+        let descendant = repo.find_commit(rewritten_descendant)?.decode()?.into_owned()?;
+        assert!(has_marker(&descendant), "history above the checkout remains lazy");
+        assert_eq!(descendant.parents.as_slice(), [rewritten_checkout]);
+        assert_eq!(
+            repo.find_reference("refs/heads/main")?.id().detach(),
+            rewritten_descendant,
+            "the branch follows the lazily rewritten tip"
+        );
+        let progress = progress.last().context("rebase progress is reported")?;
+        assert_eq!(progress.processed, 3);
+        assert_eq!(
+            progress.cherry_picked, 1,
+            "only the pending checkout is replayed eagerly"
         );
         Ok(())
     }
