@@ -613,9 +613,11 @@ space first; changes blocks adapt within the remaining history width.
   Any conflict while applying a history todo first remains entirely in memory.
   The TUI projects the partial result, selects the actual conflicting result, and
   marks it with a blinking red `C`; predicted ref decorations remain at their
-  repository positions. `<enter>` accepts the partial result, moves already-final
-  refs, checks out the conflicting tree with an unmerged index, and retains an
-  in-memory continuation plan. Any other key discards the preview without writes.
+  repository positions. Repository-backed overlay content is hidden while these
+  candidate objects exist only in memory. `<enter>` accepts the partial result,
+  moves already-final refs, checks out the conflicting tree with an unmerged index,
+  and retains an in-memory continuation plan. Any other key discards the preview
+  without writes.
   Once the index has no unresolved stages, `<enter>` continues; another conflict
   repeats the same choice.
 - Command-line apply reports a conflict without changes unless
