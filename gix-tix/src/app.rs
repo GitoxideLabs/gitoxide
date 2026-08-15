@@ -301,6 +301,7 @@ pub(crate) enum Action {
     NewEmptyCommit,
     ForkCommit,
     Amend,
+    Stash,
     Spill,
     Split,
     Forget,
@@ -334,6 +335,7 @@ pub(crate) enum Effect {
     },
     ForkCommit(ObjectId),
     Amend(ObjectId),
+    Stash(ObjectId),
     Spill(ObjectId),
     Split(ObjectId),
     Forget(ObjectId),
@@ -440,6 +442,7 @@ pub(crate) struct App {
     pending_rebase_conflict: Option<ObjectId>,
     worktree_conflicted: bool,
     amend_available: bool,
+    stash_available: bool,
     worktree_path_amend_available: bool,
     finish_review_available: bool,
     spill_available: bool,
@@ -528,6 +531,7 @@ impl App {
             pending_rebase_conflict: None,
             worktree_conflicted: false,
             amend_available: false,
+            stash_available: false,
             worktree_path_amend_available: false,
             finish_review_available: false,
             spill_available: false,
@@ -800,6 +804,7 @@ impl App {
                 | Action::NewEmptyCommit
                 | Action::ForkCommit
                 | Action::Amend
+                | Action::Stash
                 | Action::Spill
                 | Action::Split
                 | Action::Forget
@@ -1015,6 +1020,11 @@ impl App {
             Action::Amend if self.can_amend() => {
                 return vec![Effect::Amend(
                     self.rows[self.selected.expect("amend requires a selection")].id,
+                )];
+            }
+            Action::Stash if self.can_stash() => {
+                return vec![Effect::Stash(
+                    self.rows[self.selected.expect("stash requires a selection")].id,
                 )];
             }
             Action::Spill if self.can_spill() => {
@@ -1730,6 +1740,19 @@ impl App {
             }
     }
 
+    pub(crate) fn can_stash(&self) -> bool {
+        self.state == State::Complete
+            && self.worktree_changes_available
+            && !self.worktree_conflicted
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.stash_available
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id) && Some(row.id) == self.worktree_head)
+    }
+
     pub(crate) fn can_spill(&self) -> bool {
         self.can_edit_head() && matches!(self.changes_focus, None | Some(ChangePane::Tree)) && self.spill_available
     }
@@ -1741,12 +1764,14 @@ impl App {
     pub(crate) fn set_head_edit_availability(
         &mut self,
         amend: bool,
+        stash: bool,
         worktree_path_amend: bool,
         finish_review: bool,
         spill: bool,
         split: bool,
     ) {
         self.amend_available = amend;
+        self.stash_available = stash;
         self.worktree_path_amend_available = worktree_path_amend;
         self.finish_review_available = finish_review;
         self.spill_available = spill;
@@ -2524,15 +2549,16 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_head_edit_availability(true, true, false, true, false);
+        app.set_head_edit_availability(true, true, true, false, true, false);
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
+        assert_eq!(app.update(Action::Stash), vec![Effect::Stash(id(2))]);
         assert_eq!(app.update(Action::Spill), vec![Effect::Spill(id(2))]);
         assert!(
             app.update(Action::Split).is_empty(),
             "split needs both kinds of changes"
         );
-        app.set_head_edit_availability(true, true, false, true, true);
+        app.set_head_edit_availability(true, true, true, false, true, true);
         assert_eq!(app.update(Action::Split), vec![Effect::Split(id(2))]);
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!app.can_amend(), "a tree path cannot be amended");
@@ -2552,6 +2578,7 @@ mod tests {
         app.changes_focus = None;
         app.update(Action::MoveDown);
         assert!(!app.can_amend());
+        assert!(!app.can_stash());
         assert!(app.update(Action::Amend).is_empty());
     }
 

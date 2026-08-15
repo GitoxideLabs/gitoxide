@@ -307,6 +307,16 @@ pub(crate) fn draw_with_worktree(
         .selected
         .and_then(|index| app.rows.get(index))
         .is_some_and(|row| row.is_review);
+    let selected_has_stash = app
+        .selected
+        .and_then(|index| app.rows.get(index))
+        .and_then(|row| decorations.get(&row.id))
+        .is_some_and(|refs| refs.iter().any(|reference| reference.kind == DecorationKind::Stash));
+    let stashable = selected_is_head
+        && !selected_has_stash
+        && worktree_changes.is_some_and(|changes| {
+            !changes.paths.is_empty() && !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
+        });
     let worktree_path_amend = worktree_changes.is_some_and(|changes| {
         !changes.paths.iter().any(|change| change.kind == ChangeKind::Unmerged)
             && changes
@@ -323,6 +333,7 @@ pub(crate) fn draw_with_worktree(
                     !changes.paths.is_empty()
                 }
             }),
+        stashable,
         selected_is_head && worktree_path_amend,
         selected_is_head && selected_is_review && worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
@@ -819,6 +830,9 @@ pub(crate) fn draw_with_worktree(
             }
             if app.can_amend() {
                 options.push(("amend", 'a'));
+            }
+            if app.can_stash() {
+                options.push(("stash", 'h'));
             }
             if app.can_spill() {
                 options.push(("spill", 's'));
@@ -1676,9 +1690,23 @@ fn metadata_line<'a>(
     {
         spans.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
     }
+    if row_decorations
+        .iter()
+        .any(|decoration| decoration.kind == DecorationKind::Stash)
+    {
+        let marker = if row_decorations
+            .iter()
+            .any(|decoration| decoration.kind == DecorationKind::Pin)
+        {
+            "🎁"
+        } else {
+            " 🎁"
+        };
+        spans.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
+    }
     let mut labels = row_decorations
         .iter()
-        .filter(|decoration| decoration.kind != DecorationKind::Pin)
+        .filter(|decoration| !matches!(decoration.kind, DecorationKind::Pin | DecorationKind::Stash))
         .filter(|decoration| match ref_mode {
             _ if decoration.kind == DecorationKind::Head => false,
             _ if decoration.kind == DecorationKind::Review => true,
@@ -1881,6 +1909,7 @@ fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::Stash => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::CurrentWorktreeBranch => Style::default().fg(Color::Cyan),
         DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => Style::default().fg(Color::LightBlue),
@@ -2813,6 +2842,10 @@ mod tests {
                         name: "pin:01010102".into(),
                         kind: DecorationKind::Pin,
                     },
+                    Decoration {
+                        name: "stash".into(),
+                        kind: DecorationKind::Stash,
+                    },
                 ],
             ),
             (
@@ -2832,16 +2865,22 @@ mod tests {
         assert!(!row.contains("pin:01010101"), "pin identities stay out of history rows");
         let hash = row.find("0101010").expect("the row contains its hash");
         let pin = row.find("📌").expect("the row contains its pin");
+        let gift = row.find("🎁").expect("the row contains its stash marker");
         let date = row.find("1970-01-01").expect("the row contains its date");
+        assert!(
+            pin < gift && gift < date,
+            "resource markers form one compact group: {row:?}"
+        );
         assert!(
             hash < pin && pin < date,
             "the pin sits between the hash and metadata: {row:?}"
         );
         app.ref_mode = RefMode::None;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
         assert!(
-            rendered_row(&terminal).contains("📌"),
-            "hiding refs retains resource markers"
+            row.contains("📌") && row.contains("🎁"),
+            "hiding refs retains resource markers: {row:?}"
         );
         assert!(
             rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return · unpin)"),
@@ -2933,7 +2972,7 @@ mod tests {
             }],
             ..Changes::default()
         };
-        let decorations = Decorations::from([(
+        let mut decorations = Decorations::from([(
             id,
             vec![Decoration {
                 name: "HEAD".into(),
@@ -2969,7 +3008,7 @@ mod tests {
             }],
             ..Changes::default()
         };
-        app.set_head_edit_availability(true, true, false, false, false);
+        app.set_head_edit_availability(true, false, true, false, false, false);
         assert!(app.can_amend(), "the focused worktree path is amendable");
         assert!(app.edit_expanded, "the edit prefix remains expanded");
         terminal.draw(|frame| {
@@ -2991,6 +3030,50 @@ mod tests {
             "worktree focus keeps the scoped edit visible: {footer}"
         );
         assert!(!footer.contains("spill"), "worktree paths cannot be spilled");
+
+        app.changes_focus = None;
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        assert!(
+            rendered_line(&terminal, 7).contains("stash"),
+            "loaded unconflicted worktree changes offer stashing"
+        );
+        decorations
+            .get_mut(&id)
+            .expect("HEAD has decorations")
+            .push(Decoration {
+                name: "stash".into(),
+                kind: DecorationKind::Stash,
+            });
+        terminal.draw(|frame| {
+            super::draw_with_worktree(
+                frame,
+                &mut app,
+                &decorations,
+                &gix::mailmap::Snapshot::default(),
+                None,
+                None,
+                Some(&worktree),
+            );
+        })?;
+        assert!(
+            !rendered_line(&terminal, 7).contains("stash"),
+            "an existing commit stash suppresses another save action"
+        );
+        decorations
+            .get_mut(&id)
+            .expect("HEAD has decorations")
+            .retain(|decoration| decoration.kind != DecorationKind::Stash);
+        app.changes_focus = Some(ChangePane::Worktree);
 
         std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
         terminal.draw(|frame| {
