@@ -2109,7 +2109,7 @@ fn event_loop(
                             Ok(edit::todo::Commit {
                                 id: *id,
                                 parents: row.parent_ids.to_vec(),
-                                info: ui::todo_metadata(&app, row, &decorations, &mailmap),
+                                info: ui::todo_metadata(&app, row, &mailmap),
                             })
                         })
                         .collect::<Result<Vec<_>>>();
