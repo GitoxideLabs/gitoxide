@@ -827,14 +827,15 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
 fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
     execute!(backend, EnableFocusChange, EnableMouseCapture)?;
     if enhanced_keyboard {
-        execute!(
-            backend,
-            PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-            )
-        )?;
+        execute!(backend, PushKeyboardEnhancementFlags(keyboard_enhancement_flags()))?;
     }
     Ok(())
+}
+
+fn keyboard_enhancement_flags() -> KeyboardEnhancementFlags {
+    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+        | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
 }
 
 fn disable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboard: bool) -> std::io::Result<()> {
@@ -5381,6 +5382,19 @@ mod tests {
             Some(&Action::ToggleDate),
             false
         ));
+    }
+
+    #[test]
+    fn enhanced_keyboard_reports_repeats_for_printable_navigation_keys() {
+        let flags = keyboard_enhancement_flags();
+        assert!(
+            flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES),
+            "enhanced input distinguishes presses, repeats, and releases"
+        );
+        assert!(
+            flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES),
+            "printable j/k keys must use enhanced input for repeat events"
+        );
     }
 
     #[test]
