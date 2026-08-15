@@ -169,7 +169,8 @@ pub(crate) fn prepare(
         resolved: None,
         continuation_sources: Vec::new(),
     };
-    let mut document = b"<!-- Rebase help follows the editable todo. -->\n".to_vec();
+    let mut document = unchanged_notice(base != onto, has_pending).as_bytes().to_vec();
+    document.push(b'\n');
     document.extend_from_slice(title.as_bytes());
     document.extend_from_slice(b"\n\n");
     let anchor_kind = if base == onto {
@@ -246,7 +247,7 @@ pub(crate) fn prepare_continuation(
         resolved,
         continuation_sources: plan.steps.iter().flat_map(|step| step.squash.iter().copied()).collect(),
     };
-    let mut document = b"<!-- Rebase help follows the editable todo. -->\n# Continue materialized rebase\n\n".to_vec();
+    let mut document = b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->\n# Continue materialized rebase\n\n".to_vec();
     for (index, step) in plan.steps.iter().enumerate() {
         let continues = matches!(step.parent, rebase::PlanParent::Step(parent) if parent + 1 == index);
         if !continues {
@@ -331,6 +332,23 @@ pub(crate) fn prepare_continuation(
         document,
         apply_unchanged: true,
     })
+}
+
+fn unchanged_notice(base_updated: bool, has_pending: bool) -> &'static str {
+    match (base_updated, has_pending) {
+        (false, false) => {
+            "<!-- Rebase help follows. Saving unchanged is a no-op; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+        }
+        (false, true) => {
+            "<!-- Rebase help follows. Pending commits make saving unchanged apply this todo: the @ ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+        }
+        (true, false) => {
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base; empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+        }
+        (true, true) => {
+            "<!-- Rebase help follows. Saving unchanged rebases onto the updated base and applies pending commits: the @ ancestry is replayed now and other forks stay lazy. Empty this file or remove the tix-rebase-state-v1 comment to cancel. -->"
+        }
+    }
 }
 
 fn write_state(out: &mut Vec<u8>, state: &State) {
@@ -1060,6 +1078,27 @@ mod tests {
         Ok((fixture, repo))
     }
 
+    #[test]
+    fn unchanged_notices_cover_every_reason_to_apply_or_cancel() {
+        for (updated, pending, expected) in [
+            (false, false, "Saving unchanged is a no-op"),
+            (false, true, "Pending commits make saving unchanged apply this todo"),
+            (true, false, "Saving unchanged rebases onto the updated base"),
+            (
+                true,
+                true,
+                "Saving unchanged rebases onto the updated base and applies pending commits",
+            ),
+        ] {
+            let notice = unchanged_notice(updated, pending);
+            assert!(notice.contains(expected), "the notice explains its execution mode");
+            assert!(
+                notice.contains("remove the tix-rebase-state-v1 comment to cancel"),
+                "every notice explains explicit cancellation"
+            );
+        }
+    }
+
     fn commits(repo: &gix::Repository) -> gix_testtools::Result<(ObjectId, ObjectId, ObjectId, Vec<Commit>)> {
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
@@ -1111,7 +1150,10 @@ mod tests {
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         assert!(!prepared.apply_unchanged);
         let document = String::from_utf8(prepared.document.clone())?;
-        assert!(document.starts_with("<!-- Rebase help follows the editable todo. -->"));
+        assert!(
+            document.starts_with(unchanged_notice(false, false)),
+            "the first line explains that saving unchanged is a no-op"
+        );
         assert!(document.contains(STATE_START), "the todo carries its transaction state");
         assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
         assert!(document.contains(&format!("## fork {} (base) base", base.to_hex_with_len(7))));
@@ -1226,6 +1268,10 @@ mod tests {
             prepared.apply_unchanged,
             "pending commits make an unchanged todo actionable"
         );
+        assert!(
+            prepared.document.starts_with(unchanged_notice(false, true).as_bytes()),
+            "the first line explains why the unchanged todo remains actionable"
+        );
         let document = prepared.document.clone();
         let plan = parse_plan(&repo, &document)?;
         let graph = super::super::loaded_graph(&repo)?;
@@ -1290,6 +1336,10 @@ mod tests {
         assert!(
             prepared.apply_unchanged,
             "moving the base makes an unchanged editor document actionable"
+        );
+        assert!(
+            prepared.document.starts_with(unchanged_notice(true, false).as_bytes()),
+            "the first line explains that the unchanged todo updates its base"
         );
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(
@@ -1440,6 +1490,12 @@ mod tests {
             },
             vec![middle],
         )?;
+        assert!(
+            prepared
+                .document
+                .starts_with(b"<!-- Rebase help follows. Saving unchanged continues the materialized rebase"),
+            "the continuation explains that saving unchanged resumes it"
+        );
         let document = String::from_utf8(prepared.document.clone())?;
         assert!(document.contains(&"0".repeat(40)), "the conflict uses the full null ID");
         assert!(
