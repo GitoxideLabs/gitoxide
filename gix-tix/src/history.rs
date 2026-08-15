@@ -30,6 +30,7 @@ pub(crate) struct Decoration {
 pub(crate) enum DecorationKind {
     Head,
     Pin,
+    Stash,
     Review,
     CurrentWorktreeBranch,
     WorktreeBranch,
@@ -44,6 +45,7 @@ pub(crate) enum DecorationKind {
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
+pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
 
@@ -1619,6 +1621,20 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
             continue;
         }
+        if let Some(suffix) = full_name.as_bstr().strip_prefix(STASH_PREFIX) {
+            let id = match ObjectId::from_hex(suffix) {
+                Ok(id) if id.to_hex().to_string().as_bytes() == suffix => id,
+                _ => {
+                    tracing::warn!(name = %full_name, "ignored malformed tix stash reference");
+                    continue;
+                }
+            };
+            out.entry(id).or_default().push(Decoration {
+                name: "stash".into(),
+                kind: DecorationKind::Stash,
+            });
+            continue;
+        }
         let pin_suffix = full_name.as_bstr().strip_prefix(PIN_PREFIX).map(BString::from);
         let review_suffix = review_number(full_name.as_bstr()).map(BString::from);
         if pin_suffix.is_some() && !pins.contains(full_name.as_bstr()) {
@@ -1715,6 +1731,8 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
 fn decoration_kind(name: &[u8]) -> DecorationKind {
     if name.starts_with(PIN_PREFIX) {
         DecorationKind::Pin
+    } else if name.starts_with(STASH_PREFIX) {
+        DecorationKind::Stash
     } else if name.starts_with(REVIEW_PREFIX) {
         DecorationKind::Review
     } else if name.starts_with(b"refs/heads/") {
@@ -2408,6 +2426,10 @@ mod tests {
     #[test]
     fn classifies_reference_kinds() {
         assert_eq!(decoration_kind(b"refs/worktree/tix/pins/abcd"), DecorationKind::Pin);
+        assert_eq!(
+            decoration_kind(b"refs/tix/stash/0123456789012345678901234567890123456789"),
+            DecorationKind::Stash
+        );
         assert_eq!(decoration_kind(b"refs/worktree/tix/review/1"), DecorationKind::Review);
         assert_eq!(decoration_kind(b"refs/heads/main"), DecorationKind::Local);
         assert_eq!(decoration_kind(b"refs/tags/v1"), DecorationKind::Tag);
@@ -2466,6 +2488,37 @@ mod tests {
                 .flatten()
                 .all(|decoration| !decoration.name.contains_str("stashes")),
             "saved review state is an internal resource"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn commit_stashes_decorate_the_associated_commit_without_becoming_tips() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::open_test_repository(fixture.path())?;
+        let head = repo.head_id()?.detach();
+        let stash = repo.rev_parse_single("topic")?.detach();
+        let name = super::super::edit::stash::reference(head)?;
+        repo.reference(
+            name,
+            stash,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test commit stash",
+        )?;
+
+        assert!(!snapshot(&repo, &[], &[], false)?.view_tips.contains(&stash));
+        let decorations = decorations(&repo, &[], &worktree_checkouts(&repo))?;
+        assert!(
+            decorations.get(&head).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Stash)),
+            "the ref-name suffix associates the stash with HEAD"
+        );
+        assert!(
+            decorations.get(&stash).is_none_or(|decorations| decorations
+                .iter()
+                .all(|decoration| decoration.kind != DecorationKind::Stash)),
+            "the stash object itself is not decorated"
         );
         Ok(())
     }

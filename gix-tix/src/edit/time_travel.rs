@@ -309,6 +309,12 @@ pub(crate) fn perform(
     {
         append_notice(&mut notice, apply_review_stash(repository_path, bare, &workdir, stash)?);
     }
+    if let Some(stash) = super::stash::find(repository_path, bare, super::stash::reference(selected)?)? {
+        append_notice(
+            &mut notice,
+            super::stash::apply(repository_path, bare, &workdir, stash)?,
+        );
+    }
     Ok(Perform::Complete(notice))
 }
 
@@ -936,6 +942,40 @@ mod tests {
         );
         assert_eq!(repository.head_id()?.detach(), main);
         assert!(history::all_pins(&repository)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn returning_to_a_commit_restores_its_manual_stash() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::open_test_repository(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let head = repository.head_id()?.detach();
+        let parent = repository
+            .find_commit(head)?
+            .parent_ids()
+            .next()
+            .context("the history fixture has a parent")?
+            .detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        std::fs::write(fixture.path().join("manual-stash"), "saved\n")?;
+        super::super::stash::save_manual(&repository_path, false, head)?;
+        perform(&repository_path, false, parent, &graph, &[], &[], false)?.complete()?;
+        assert!(
+            !fixture.path().join("manual-stash").exists(),
+            "leaving the stashed commit keeps its worktree clean"
+        );
+
+        perform(&repository_path, false, head, &graph, &[], &[], false)?.complete()?;
+        assert_eq!(std::fs::read(fixture.path().join("manual-stash"))?, b"saved\n");
+        assert!(
+            crate::open_test_repository(fixture.path())?
+                .try_find_reference(super::super::stash::reference(head)?.as_ref())?
+                .is_none(),
+            "returning consumes the manual stash association"
+        );
         Ok(())
     }
 
