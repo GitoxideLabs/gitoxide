@@ -43,6 +43,13 @@ pub(super) fn loaded_view_graph(repo: &gix::Repository) -> Result<crate::history
     load_graph(repo, &[])
 }
 
+pub(super) fn loaded_view_graph_with(
+    repo: &gix::Repository,
+    revisions: &[std::ffi::OsString],
+) -> Result<crate::history::HistoryGraph> {
+    load_graph(repo, revisions)
+}
+
 fn load_graph(repo: &gix::Repository, revisions: &[std::ffi::OsString]) -> Result<crate::history::HistoryGraph> {
     use std::sync::atomic::AtomicBool;
 
