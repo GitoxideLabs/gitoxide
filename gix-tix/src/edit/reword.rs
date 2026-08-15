@@ -90,8 +90,43 @@ pub(crate) fn apply(
     commit.author = actor(edit.author, edit.author_time, "author")?;
     commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
     commit.message = edit.message;
+    apply_commit(&repo, graph, old_id, commit)
+}
+
+#[tracing::instrument(skip_all, fields(commit_id = %old_id))]
+pub(crate) fn apply_message(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    message: &[u8],
+) -> Result<Option<gix::ObjectId>> {
+    let message = cleanup_message(message, None);
+    if message.is_empty() {
+        anyhow::bail!("the edited commit message is empty");
+    }
+    let mut commit = repo
+        .find_commit(old_id)
+        .context("could not find commit to reword")?
+        .decode()
+        .context("could not decode commit to reword")?
+        .into_owned()
+        .context("could not own commit to reword")?;
+    if commit.message == message {
+        return Ok(None);
+    }
+    commit.committer.time = gix::date::Time::now_local_or_utc();
+    commit.message = message;
+    apply_commit(&repo, graph, old_id, commit)
+}
+
+fn apply_commit(
+    repo: &gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    old_id: gix::ObjectId,
+    commit: gix::objs::Commit,
+) -> Result<Option<gix::ObjectId>> {
     let outcome = rebase::perform(
-        &repo,
+        repo,
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
@@ -148,7 +183,10 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     if parts.next().map(trim_cr) != Some(&[][..]) {
         anyhow::bail!("expected an empty line after the commit headers");
     }
-    let message = cleanup_message(parts.next().context("the commit message is missing")?, comment_char);
+    let message = cleanup_message(
+        parts.next().context("the commit message is missing")?,
+        Some(comment_char),
+    );
     Ok(Edit {
         author,
         author_time,
@@ -158,12 +196,12 @@ pub(super) fn parse(input: &[u8]) -> Result<Edit<'_>> {
     })
 }
 
-fn cleanup_message(input: &[u8], comment_char: &[u8]) -> BString {
+fn cleanup_message(input: &[u8], comment_char: Option<&[u8]>) -> BString {
     let mut out = Vec::new();
     let mut empty_lines = 0;
     for line in input.lines_with_terminator() {
         let line = trim_cr(line.strip_suffix(b"\n").unwrap_or(line));
-        if line.starts_with(comment_char) {
+        if comment_char.is_some_and(|comment_char| line.starts_with(comment_char)) {
             continue;
         }
         let line = &line[..line
