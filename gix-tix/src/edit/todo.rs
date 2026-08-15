@@ -144,9 +144,7 @@ pub(crate) fn prepare(
         checkout_allowed: repo.workdir().is_some(),
         expected_refs,
     };
-    let mut document = b"<!-- Rebase help is at the bottom of this file. -->\n".to_vec();
-    write_state(&mut document, &state);
-    document.push(b'\n');
+    let mut document = b"<!-- Rebase help follows the editable todo. -->\n".to_vec();
     document.extend_from_slice(title.as_bytes());
     document.extend_from_slice(b"\n\n");
     let anchor_kind = if base == onto {
@@ -186,6 +184,7 @@ pub(crate) fn prepare(
         write_fork_heading(&mut document, repo, onto, Some((anchor_kind, anchor_title.as_str())))?;
     }
     document.extend_from_slice(HELP.as_bytes());
+    write_state(&mut document, &state);
     Ok(Prepared {
         document,
         apply_unchanged,
@@ -705,7 +704,7 @@ mod tests {
         let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
         assert!(!prepared.apply_unchanged);
         let document = String::from_utf8(prepared.document.clone())?;
-        assert!(document.starts_with("<!-- Rebase help is at the bottom of this file. -->"));
+        assert!(document.starts_with("<!-- Rebase help follows the editable todo. -->"));
         assert!(document.contains(STATE_START), "the todo carries its transaction state");
         assert!(document.contains(&format!("# Rebase from `{}`", base.to_hex_with_len(7))));
         assert!(document.contains(&format!("## fork {} (base) base", base.to_hex_with_len(7))));
@@ -720,7 +719,12 @@ mod tests {
             document.find("# Rebase todo help").expect("help is present") > tip,
             "complete instructions follow the editable todo"
         );
-        assert!(document.ends_with("-->\n"), "all trailing help is one Markdown comment");
+        assert!(
+            document.find(STATE_START).expect("state is present")
+                > document.find("# Rebase todo help").expect("help is present"),
+            "transaction state follows the complete help"
+        );
+        assert!(document.ends_with("-->\n"), "the trailing state is a Markdown comment");
         assert!(
             document.contains("○"),
             "unsigned commits carry the documented status symbol"
