@@ -2595,10 +2595,11 @@ fn draw(
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let end = start.saturating_add(render_rows).min(app.rows.len());
+    let repository_fill_allowed = !app.has_rebase_conflict();
     let notes_to_load: Vec<_> = app.rows[start..end]
         .iter()
         .map(|row| row.id)
-        .filter(|id| !app.notes_loaded(*id))
+        .filter(|id| repository_fill_allowed && !app.notes_loaded(*id))
         .collect();
     let changes_visible = app.changes_visible();
     let selected_id = app.selected.and_then(|index| app.rows.get(index)).map(|row| row.id);
@@ -2617,6 +2618,7 @@ fn draw(
         .show_commit
         .then_some(selected)
         .flatten()
+        .filter(|_| repository_fill_allowed)
         .filter(|id| commit_message.as_ref().map(|(cached, _)| cached) != Some(id));
     if message_to_load.is_some() {
         app.reset_commit_view();
@@ -2652,7 +2654,10 @@ fn draw(
             )
         })
         .flatten();
-    if !app.show_commit || selected.is_none() {
+    if !app.show_commit
+        || selected.is_none()
+        || (!repository_fill_allowed && commit_message.as_ref().map(|(id, _)| *id) != selected)
+    {
         *commit_message = None;
     }
     if app.changes_mode.is_none() {

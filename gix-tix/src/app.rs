@@ -1449,7 +1449,7 @@ impl App {
     }
 
     pub(crate) fn changes_visible(&self) -> bool {
-        self.changes_mode.is_some() && !self.changes_suppressed
+        self.changes_mode.is_some() && !self.changes_suppressed && self.pending_rebase_conflict.is_none()
     }
 
     fn ensure_changes_visible(&mut self) {
@@ -2658,10 +2658,16 @@ mod tests {
         assert!(!app.time_travel_shortcut_visible());
         assert!(app.update(Action::TimeTravel).is_empty());
         app.set_worktree_conflicted(false);
+        assert!(app.changes_visible(), "changes are normally shown while enabled");
         app.arm_rebase_conflict(id(1));
         assert!(!app.time_travel_shortcut_visible());
+        assert!(
+            !app.changes_visible(),
+            "an in-memory conflict preview cannot be loaded by an on-disk changes view"
+        );
         app.clear_rebase_conflict();
         assert!(app.time_travel_shortcut_visible());
+        assert!(app.changes_visible(), "clearing the preview restores the changes view");
     }
 
     #[test]
