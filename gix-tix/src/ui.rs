@@ -1,10 +1,10 @@
 use gix::bstr::{BStr, BString, ByteSlice};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, Paragraph, Wrap},
 };
 
 use crate::{
@@ -21,6 +21,53 @@ const COMMIT_PANE_WIDTH: u16 = 84;
 const FILESYSTEM_NOTIFICATION_COLOR: Color = Color::Rgb(255, 165, 0);
 const NOTE_COLOR: Color = Color::LightMagenta;
 const PANE_STATUS_BACKGROUND: Color = Color::DarkGray;
+
+pub(crate) fn draw_rebase_progress(frame: &mut Frame<'_>, progress: crate::edit::rebase::PlanProgress) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+    let width = area.width.min(72);
+    let height = area.height.min(4);
+    let progress_area = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    let rows = Layout::vertical([Constraint::Length(1); 4]).split(progress_area);
+    frame.render_widget(
+        Paragraph::new("Rebasing commits")
+            .alignment(Alignment::Center)
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        rows[0],
+    );
+    let ratio = if progress.total == 0 {
+        1.0
+    } else {
+        progress.processed.min(progress.total) as f64 / progress.total as f64
+    };
+    frame.render_widget(
+        Gauge::default()
+            .ratio(ratio)
+            .label(format!("{} / {} commits", progress.processed, progress.total))
+            .gauge_style(Style::default().fg(Color::LightBlue)),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new(format!(
+            "cherry-picked {} · {:.1?}",
+            progress.cherry_picked, progress.cherry_pick_time
+        ))
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::LightYellow)),
+        rows[2],
+    );
+    frame.render_widget(
+        Paragraph::new(format!("signed {} · {:.1?}", progress.signed, progress.signing_time))
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Green)),
+        rows[3],
+    );
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ChangesPaneArea {
@@ -1971,6 +2018,32 @@ mod tests {
         assert_eq!(Line::from(spans.clone()).to_string(), "copy");
         assert!(spans[1].style.add_modifier.contains(Modifier::UNDERLINED));
         assert!(spans[1].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn renders_rebase_progress_with_operation_counts_and_times() -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 8))?;
+        terminal.draw(|frame| {
+            draw_rebase_progress(
+                frame,
+                crate::edit::rebase::PlanProgress {
+                    total: 100,
+                    processed: 42,
+                    cherry_picked: 31,
+                    signed: 28,
+                    cherry_pick_time: std::time::Duration::from_millis(1234),
+                    signing_time: std::time::Duration::from_millis(45),
+                },
+            );
+        })?;
+        assert_eq!(rendered_line(&terminal, 2).trim(), "Rebasing commits");
+        assert!(
+            rendered_line(&terminal, 3).contains("42 / 100 commits"),
+            "the gauge labels current and total source commits"
+        );
+        assert_eq!(rendered_line(&terminal, 4).trim(), "cherry-picked 31 · 1.2s");
+        assert_eq!(rendered_line(&terminal, 5).trim(), "signed 28 · 45.0ms");
+        Ok(())
     }
 
     #[test]

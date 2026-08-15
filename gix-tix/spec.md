@@ -609,6 +609,13 @@ space first; changes blocks adapt within the remaining history width.
   selects the original offending commit and marks it with a transient blinking
   red `C`; command-line apply reports that commit as an error. Suspended conflict
   checkout remains available only to direct edits and time travel.
+- Interactive todo application runs on a scoped worker so the terminal can
+  remain renderable without cloning the cached history graph. If application is
+  still running after 300 ms, a modal gauge shows processed versus total todo
+  source commits and live cherry-pick and signature counts with their cumulative
+  durations. `pick`, `squash`, and `empty` commands each contribute to the total;
+  squash sources advance separately while their combined commit is signed once.
+  Fast operations and command-line `tix rebase apply` do not show progress.
 - Mutable refs captured on original leaves stay tips: after their commit is
   rewritten or dropped, they follow the first continuation in todo order to its
   resulting leaf. Other mutable refs remain bound to their rewritten commit.

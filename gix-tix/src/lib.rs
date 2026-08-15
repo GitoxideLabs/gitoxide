@@ -52,6 +52,7 @@ use ratatui::{backend::CrosstermBackend, text::Line};
 const EVENT_BATCH_SIZE: usize = 256;
 const OBJECT_CACHE_SIZE: usize = 4 * 1024 * 1024;
 const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+const REBASE_PROGRESS_DELAY: Duration = Duration::from_millis(300);
 const HISTORY_STATUS_DELAY: Duration = Duration::from_millis(500);
 const REPEAT_IDLE: Duration = Duration::from_millis(75);
 const WORKTREE_EVENT_IDLE: Duration = Duration::from_millis(75);
@@ -3200,7 +3201,83 @@ fn rebase_history(
     let Some(parsed) = edit::todo::parse(&repository, &edited)? else {
         return Ok(None);
     };
-    edit::rebase::perform_plan(&repository, graph, parsed.plan).map(Some)
+    run_rebase_plan(terminal, repository.into_sync(), graph, parsed.plan).map(Some)
+}
+
+enum RebaseWorkerEvent {
+    Progress(edit::rebase::PlanProgress),
+    Complete(Result<edit::rebase::PlanPerform>),
+}
+
+fn run_rebase_plan(
+    terminal: &mut ratatui::DefaultTerminal,
+    repository: gix::ThreadSafeRepository,
+    graph: &HistoryGraph,
+    plan: edit::rebase::Plan,
+) -> Result<edit::rebase::PlanPerform> {
+    std::thread::scope(|scope| {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let worker = scope.spawn(move || {
+            let mut repository = repository.to_thread_local();
+            repository.object_cache_size(None);
+            let result = edit::rebase::perform_plan_with_progress(&repository, graph, plan, |progress| {
+                let _ = sender.try_send(RebaseWorkerEvent::Progress(progress));
+            });
+            let _ = sender.send(RebaseWorkerEvent::Complete(result));
+        });
+        let started = Instant::now();
+        let mut last_draw = started;
+        let mut latest = None;
+        let mut rendered = None;
+        let result = loop {
+            let now = Instant::now();
+            let timeout = if now.duration_since(started) < REBASE_PROGRESS_DELAY {
+                Some(REBASE_PROGRESS_DELAY.saturating_sub(now.duration_since(started)))
+            } else if latest != rendered {
+                Some(FRAME_INTERVAL.saturating_sub(now.duration_since(last_draw)))
+            } else {
+                None
+            };
+            let event = match timeout {
+                Some(timeout) => match receiver.recv_timeout(timeout) {
+                    Ok(event) => Some(event),
+                    Err(mpsc::RecvTimeoutError::Timeout) => None,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break Err(anyhow::anyhow!("rebase worker stopped unexpectedly"));
+                    }
+                },
+                None => match receiver.recv() {
+                    Ok(event) => Some(event),
+                    Err(_) => break Err(anyhow::anyhow!("rebase worker stopped unexpectedly")),
+                },
+            };
+            match event {
+                Some(RebaseWorkerEvent::Progress(progress)) => latest = Some(progress),
+                Some(RebaseWorkerEvent::Complete(result)) => break result,
+                None => {}
+            }
+            let now = Instant::now();
+            if rebase_progress_visible(now.duration_since(started))
+                && latest != rendered
+                && now.duration_since(last_draw) >= FRAME_INTERVAL
+            {
+                let progress = latest.expect("a changed progress snapshot is available");
+                if let Err(err) = terminal.draw(|frame| ui::draw_rebase_progress(frame, progress)) {
+                    break Err(err).context("could not draw rebase progress");
+                }
+                rendered = latest;
+                last_draw = now;
+            }
+        };
+        if worker.join().is_err() {
+            return Err(anyhow::anyhow!("rebase worker panicked"));
+        }
+        result
+    })
+}
+
+fn rebase_progress_visible(elapsed: Duration) -> bool {
+    elapsed >= REBASE_PROGRESS_DELAY
 }
 
 #[derive(Clone, Copy)]
@@ -5481,5 +5558,11 @@ mod tests {
             "reference inspection waits for the final transaction event"
         );
         assert!(take_due(&mut deadline, last_event + REF_EVENT_IDLE));
+    }
+
+    #[test]
+    fn rebase_progress_appears_at_three_hundred_milliseconds() {
+        assert!(!rebase_progress_visible(Duration::from_millis(299)));
+        assert!(rebase_progress_visible(REBASE_PROGRESS_DELAY));
     }
 }
