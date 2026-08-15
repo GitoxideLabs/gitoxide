@@ -2090,6 +2090,19 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("stash: {err:#}")),
                     }
                 }
+                Effect::Unstash(id) => {
+                    fill_repository.retain = false;
+                    fill_repository.retained = None;
+                    match edit::stash::restore_manual(&repository_path, repository_is_bare, id) {
+                        Ok(notice) => {
+                            app.leave_message(notice);
+                            app.select_commit_after_refresh(id);
+                            invalidate_worktree_changes(&mut worktree_changes);
+                            refresh_pending = true;
+                        }
+                        Err(err) => app.leave_message(format!("unstash: {err:#}")),
+                    }
+                }
                 Effect::Forget(id) => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;

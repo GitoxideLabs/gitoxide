@@ -336,6 +336,7 @@ pub(crate) enum Effect {
     ForkCommit(ObjectId),
     Amend(ObjectId),
     Stash(ObjectId),
+    Unstash(ObjectId),
     Spill(ObjectId),
     Split(ObjectId),
     Forget(ObjectId),
@@ -443,6 +444,7 @@ pub(crate) struct App {
     worktree_conflicted: bool,
     amend_available: bool,
     stash_available: bool,
+    unstash_available: bool,
     worktree_path_amend_available: bool,
     finish_review_available: bool,
     spill_available: bool,
@@ -532,6 +534,7 @@ impl App {
             worktree_conflicted: false,
             amend_available: false,
             stash_available: false,
+            unstash_available: false,
             worktree_path_amend_available: false,
             finish_review_available: false,
             spill_available: false,
@@ -1020,6 +1023,11 @@ impl App {
             Action::Amend if self.can_amend() => {
                 return vec![Effect::Amend(
                     self.rows[self.selected.expect("amend requires a selection")].id,
+                )];
+            }
+            Action::Stash if self.can_unstash() => {
+                return vec![Effect::Unstash(
+                    self.rows[self.selected.expect("unstash requires a selection")].id,
                 )];
             }
             Action::Stash if self.can_stash() => {
@@ -1753,6 +1761,17 @@ impl App {
                 .is_some_and(|row| !self.hidden_rows.contains(&row.id) && Some(row.id) == self.worktree_head)
     }
 
+    pub(crate) fn can_unstash(&self) -> bool {
+        self.state == State::Complete
+            && self.pending_rebase_conflict.is_none()
+            && self.changes_focus.is_none()
+            && self.unstash_available
+            && self
+                .selected
+                .and_then(|index| self.rows.get(index))
+                .is_some_and(|row| !self.hidden_rows.contains(&row.id) && Some(row.id) == self.worktree_head)
+    }
+
     pub(crate) fn can_spill(&self) -> bool {
         self.can_edit_head() && matches!(self.changes_focus, None | Some(ChangePane::Tree)) && self.spill_available
     }
@@ -1761,10 +1780,12 @@ impl App {
         self.can_edit_head() && self.changes_focus.is_none() && self.split_available
     }
 
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn set_head_edit_availability(
         &mut self,
         amend: bool,
         stash: bool,
+        unstash: bool,
         worktree_path_amend: bool,
         finish_review: bool,
         spill: bool,
@@ -1772,6 +1793,7 @@ impl App {
     ) {
         self.amend_available = amend;
         self.stash_available = stash;
+        self.unstash_available = unstash;
         self.worktree_path_amend_available = worktree_path_amend;
         self.finish_review_available = finish_review;
         self.spill_available = spill;
@@ -2549,7 +2571,7 @@ mod tests {
         let mut app = App::new(10);
         app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
         app.set_worktree_head(Some(id(2)), false);
-        app.set_head_edit_availability(true, true, true, false, true, false);
+        app.set_head_edit_availability(true, true, false, true, false, true, false);
         complete(&mut app);
         assert_eq!(app.update(Action::Amend), vec![Effect::Amend(id(2))]);
         assert_eq!(app.update(Action::Stash), vec![Effect::Stash(id(2))]);
@@ -2558,8 +2580,14 @@ mod tests {
             app.update(Action::Split).is_empty(),
             "split needs both kinds of changes"
         );
-        app.set_head_edit_availability(true, true, true, false, true, true);
+        app.set_head_edit_availability(true, true, false, true, false, true, true);
         assert_eq!(app.update(Action::Split), vec![Effect::Split(id(2))]);
+        app.set_head_edit_availability(true, false, true, true, false, true, true);
+        assert_eq!(
+            app.update(Action::Stash),
+            vec![Effect::Unstash(id(2))],
+            "the stash key restores existing state instead of saving another stash"
+        );
         app.changes_focus = Some(ChangePane::Tree);
         assert!(!app.can_amend(), "a tree path cannot be amended");
         assert!(!app.can_split(), "a tree path cannot be split");

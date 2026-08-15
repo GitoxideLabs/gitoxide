@@ -270,6 +270,9 @@ The Enter key is written as `<enter>` throughout.
   Git returns, including when application leaves conflicts to resolve. Manual
   commit stashes use the same plumbing during reviews, while automatic review
   stashes retain their review-tree identity and namespace.
+- At a selected `@` with a commit stash, the edit menu offers `unstas[h]` even
+  when other worktree changes are present. It applies and consumes the stash in
+  place through the same path used when time travel returns to that commit.
 - Rewriting a commit atomically renames its commit-stash association alongside
   other reference updates. Dropping a stashed commit, converging multiple stashes
   onto one result, or overwriting an existing destination stash is rejected before
