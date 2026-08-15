@@ -340,7 +340,6 @@ pub(crate) enum Effect {
         base: ObjectId,
         onto: ObjectId,
         commits: Vec<ObjectId>,
-        head: Option<ObjectId>,
     },
     StartReview {
         tip: ObjectId,
@@ -1040,7 +1039,6 @@ impl App {
                     base,
                     onto: base,
                     commits: self.hidden_descendants(base),
-                    head: self.worktree_head,
                 }];
             }
             Action::RebaseUpdate if self.can_rebase_update() => {
@@ -1049,7 +1047,6 @@ impl App {
                     base,
                     onto: self.hidden_branch_updates[&base].1,
                     commits: self.hidden_descendants(base),
-                    head: self.worktree_head,
                 }];
             }
             Action::Review if self.can_finish_review() => {
@@ -3009,7 +3006,6 @@ mod tests {
                 base: id(1),
                 onto: id(1),
                 commits: vec![id(3), id(2)],
-                head: None,
             }],
             "the todo receives all visible descendants"
         );
@@ -3025,7 +3021,6 @@ mod tests {
                 base: id(1),
                 onto: id(4),
                 commits: vec![id(3), id(2)],
-                head: None,
             }],
             "rebase-update retains the editable scope but changes its root"
         );

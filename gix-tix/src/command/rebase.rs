@@ -193,8 +193,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let head = repo.head()?.id().map(gix::Id::detach);
-    todo::prepare(repo, base, onto, &commits, head, &resolved_tips, todo::OntoKind::Onto)
+    todo::prepare(repo, base, onto, &commits, &resolved_tips, todo::OntoKind::Onto)
 }
 
 fn resolve_commit(repo: &gix::Repository, revision: &OsStr, description: &str) -> Result<ObjectId> {
@@ -244,8 +243,15 @@ fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts:
         rebase::PlanPerform::Complete(outcome) => {
             let revisions = mapped_revisions(&tips, |id| outcome.map(id));
             if let Some(selected) = outcome.selected {
-                let notice =
-                    edit::time_travel::checkout_without_replay(&repository_path, bare, selected, &revisions, false)?;
+                let notice = edit::time_travel::checkout_plan(
+                    &repository_path,
+                    bare,
+                    selected,
+                    outcome.checkout_reference.as_ref(),
+                    &outcome.deferred_ref_deletions,
+                    &revisions,
+                    false,
+                )?;
                 println!("{}", notice.unwrap_or_else(|| "rebased history".into()));
             } else {
                 println!("rebased history");
@@ -404,7 +410,6 @@ mod tests {
                     info: "middle".into(),
                 },
             ],
-            Some(tip),
             &[tip],
             todo::OntoKind::Onto,
         )?;

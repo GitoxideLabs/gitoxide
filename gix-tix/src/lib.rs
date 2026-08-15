@@ -2095,12 +2095,7 @@ fn event_loop(
                         Err(err) => app.leave_message(format!("forget: {err:#}")),
                     }
                 }
-                Effect::Rebase {
-                    base,
-                    onto,
-                    commits,
-                    head,
-                } => {
+                Effect::Rebase { base, onto, commits } => {
                     fill_repository.retain = false;
                     fill_repository.retained = None;
                     let todo_commits = commits
@@ -2130,19 +2125,20 @@ fn event_loop(
                                 base,
                                 onto,
                                 todo_commits?,
-                                head,
                                 enhanced_keyboard,
                             )
                         });
                     match result {
                         Ok(Some(edit::rebase::PlanPerform::Complete(outcome))) => {
-                            let checkout = outcome.selected;
-                            let notice = checkout
+                            let notice = outcome
+                                .selected
                                 .map(|selected| {
-                                    edit::time_travel::checkout_without_replay(
+                                    edit::time_travel::checkout_plan(
                                         &repository_path,
                                         repository_is_bare,
                                         selected,
+                                        outcome.checkout_reference.as_ref(),
+                                        &outcome.deferred_ref_deletions,
                                         &revisions,
                                         worktrees,
                                     )
@@ -3275,7 +3271,6 @@ fn rebase_history(
     base: gix::ObjectId,
     onto: gix::ObjectId,
     commits: Vec<edit::todo::Commit>,
-    head: Option<gix::ObjectId>,
     enhanced_keyboard: bool,
 ) -> Result<Option<edit::rebase::PlanPerform>> {
     let (prepared, editor) = {
@@ -3288,7 +3283,6 @@ fn rebase_history(
             base,
             onto,
             &commits,
-            head,
             &[],
             edit::todo::OntoKind::UpdatedBase,
         )?;
@@ -5742,7 +5736,10 @@ mod tests {
                     commit: edit::rebase::PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
-                checkout: Some(0),
+                checkout: Some(edit::rebase::PlanCheckout {
+                    target: edit::rebase::PlanParent::Step(0),
+                    reference: None,
+                }),
                 expected_refs: edit::rebase::capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
