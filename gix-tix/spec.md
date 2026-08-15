@@ -535,10 +535,12 @@ space first; changes blocks adapt within the remaining history width.
   so it never carries a usable signature. Automatically rebased descendants
   retain their author and receive one configured current committer identity and
   timestamp for the operation.
-- All mutable local refs pointing anywhere into the rewritten set are changed in
-  one compare-and-swap transaction. A checkout failure rolls back already-applied
-  worktree transitions and the ref transaction; newly written unreachable objects
-  may remain for normal Git garbage collection.
+- Ordinary edits retarget mutable local refs pointing into the rewritten set.
+  History todos instead use their explicit reference lines. Ref changes use
+  compare-and-swap transactions; a checkout failure rolls back already-applied
+  worktree transitions and the ref transaction, except that deleting the branch
+  being departed necessarily follows the successful checkout. Newly written
+  unreachable objects may remain for normal Git garbage collection.
 - A suspended conflict temporarily owns a cloned repository with object memory
   while awaiting one confirmation key. Dropping it writes nothing; accepting it
   consumes the repository immediately after persisting and checking out the
@@ -586,13 +588,24 @@ space first; changes blocks adapt within the remaining history width.
   use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
   state cancels; present invalid state never reaches repository mutation. The
   state comment follows the complete help at the end of the document.
+- Standalone `(ref, ref)` lines place direct mutable refs at the preceding fork
+  heading or command result. Multiple consecutive lines share that destination.
+  Existing displayed names may be moved or removed, and new unqualified names
+  create local branches; explicit editable `refs/...` names are also accepted.
+  Short names follow the history display, ambiguous names expand to full names,
+  and Git quoting preserves arbitrary bytes. Tags, remote-tracking refs, general
+  symbolic refs, tix pins, and review resources remain hidden and unchanged.
 - Pick lines use display-only state symbols documented in the footer: `↻` for a
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics.
-- `@pick`, `@squash`, or `@empty` chooses the post-rebase checkout. When the current worktree
-  `HEAD` is in the editable region, exactly one generated `@` must remain; without
-  one, zero or one may be added. A checkout marker is invalid without a worktree.
+- `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
+  todo keeps this marker even when `HEAD` is attached, and additionally marks
+  its local branch as `@branch`. One command marker and one branch marker may
+  coexist only when they resolve to the same result. Removing only the branch
+  marker detaches `HEAD` without deleting the branch; removing the name deletes
+  it. Checkout markers are invalid without a worktree. Todo generation and
+  application reject an unborn `HEAD`.
 - Only the ancestry ending at `@` and any squash groups are eagerly cherry-picked
   and re-signed. Other resulting stacks retain their trees, receive pending-rebase
   markers, and invalidate old signatures for later time travel. With no `@`,
@@ -621,11 +634,14 @@ space first; changes blocks adapt within the remaining history width.
   durations. `pick`, `squash`, and `empty` commands each contribute to the total;
   squash sources advance separately while their combined commit is signed once.
   Fast operations and command-line `tix rebase apply` do not show progress.
-- Mutable refs captured on original leaves stay tips: after their commit is
-  rewritten or dropped, they follow the first continuation in todo order to its
-  resulting leaf. Other mutable refs remain bound to their rewritten commit.
-  All moves use one compare-and-swap transaction; tags and remote-tracking refs
-  remain untouched. Every other resulting leaf gets a direct
+- Displayed mutable refs follow their explicit locations in the edited todo;
+  omission deletes them and newly named refs require nonexistence. Refs checked
+  out by linked worktrees are displayed normally and may move, with their index
+  and worktree updated through the same preflighted transition as other rebases,
+  but may not be deleted. The current worktree's branch may be deleted only when
+  the todo also moves or detaches `HEAD`; deletion is deferred until checkout
+  succeeds. All remaining moves use one compare-and-swap transaction. Every
+  other resulting leaf gets a direct
   `refs/worktree/tix/pins/*` ref, except the checked-out leaf. When `@` moves below
   a referenced leaf, the existing time-travel checkout detaches `HEAD` there while
   the ref stays at the leaf. Concurrent ref edits win by making the transaction

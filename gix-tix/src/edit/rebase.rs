@@ -94,10 +94,18 @@ pub(crate) struct PlanStep {
 #[derive(Clone, Debug)]
 pub(crate) struct ExpectedRef {
     pub name: gix::refs::FullName,
-    pub old: ObjectId,
+    pub old: Option<ObjectId>,
     pub target: ObjectId,
-    pub new: ObjectId,
+    pub new: Option<ObjectId>,
     pub follows_tip: bool,
+    pub editable: bool,
+    pub placement: Option<PlanParent>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PlanCheckout {
+    pub target: PlanParent,
+    pub reference: Option<gix::refs::FullName>,
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +113,7 @@ pub(crate) struct Plan {
     pub base: ObjectId,
     pub scope: Vec<ObjectId>,
     pub steps: Vec<PlanStep>,
-    pub checkout: Option<usize>,
+    pub checkout: Option<PlanCheckout>,
     pub expected_refs: Vec<ExpectedRef>,
 }
 
@@ -184,9 +192,17 @@ impl PlanConflict {
             .map(|expected| ExpectedRef {
                 name: expected.name.clone(),
                 old: expected.old,
-                target: expected.new,
+                target: expected.new.expect("continued refs have a target"),
                 new: expected.new,
                 follows_tip: expected.follows_tip,
+                editable: expected.editable,
+                placement: expected.placement.map(|target| match target {
+                    PlanParent::Existing(id) => PlanParent::Existing(id),
+                    PlanParent::Step(index) if index < self.continuation_start => {
+                        PlanParent::Existing(self.produced[index])
+                    }
+                    PlanParent::Step(index) => PlanParent::Step(index - self.continuation_start),
+                }),
             })
             .collect();
         let mut scope = self.produced[self.continuation_start..].to_vec();
@@ -220,7 +236,16 @@ impl PlanConflict {
                     squash: self.remaining_squash[index].clone(),
                 })
                 .collect(),
-            checkout: self.plan.checkout.map(|index| index - self.continuation_start),
+            checkout: self.plan.checkout.as_ref().map(|checkout| PlanCheckout {
+                target: match checkout.target {
+                    PlanParent::Existing(id) => PlanParent::Existing(id),
+                    PlanParent::Step(index) if index < self.continuation_start => {
+                        PlanParent::Existing(self.produced[index])
+                    }
+                    PlanParent::Step(index) => PlanParent::Step(index - self.continuation_start),
+                },
+                reference: checkout.reference.clone(),
+            }),
             expected_refs,
         }
     }
@@ -232,6 +257,8 @@ impl PlanConflict {
 
 pub(crate) struct Outcome {
     pub selected: Option<ObjectId>,
+    pub checkout_reference: Option<gix::refs::FullName>,
+    pub deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
@@ -269,12 +296,13 @@ impl Conflict {
     }
 
     pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
-        self.prepared.finish()?;
+        let outcome = self.prepared.finish()?;
         Ok(PersistedConflict {
             repo: self.prepared.repo,
             conflicts: self.conflicts,
             tree: self.tree,
             commit: self.commit,
+            deferred_ref_deletions: outcome.deferred_ref_deletions,
         })
     }
 }
@@ -284,6 +312,7 @@ pub(crate) struct PersistedConflict {
     conflicts: Vec<gix::merge::tree::Conflict>,
     tree: ObjectId,
     pub(crate) commit: ObjectId,
+    pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
 }
 
 impl PersistedConflict {
@@ -317,6 +346,8 @@ struct Prepared {
     rewritten: HashMap<ObjectId, Option<ObjectId>>,
     committer: gix::actor::Signature,
     expected_refs: Option<Vec<ExpectedRef>>,
+    checkout_reference: Option<gix::refs::FullName>,
+    checkout_after_finish: bool,
     pins: Vec<ObjectId>,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
 }
@@ -344,25 +375,15 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
         if scope.contains(&old) && seen.insert(reference.name().to_owned()) {
             out.push(ExpectedRef {
                 name: reference.name().to_owned(),
-                old,
+                old: Some(old),
                 target: old,
-                new: old,
+                new: Some(old),
                 follows_tip: tips.contains(&old),
+                editable: !reference.name().as_bstr().starts_with(crate::history::PIN_PREFIX)
+                    && !reference.name().as_bstr().starts_with(crate::history::REVIEW_PREFIX),
+                placement: None,
             });
         }
-    }
-    if let Some(head) = repo.try_find_reference("HEAD")?
-        && let Some(old) = head.try_id().map(gix::Id::detach)
-        && scope.contains(&old)
-        && seen.insert(head.name().to_owned())
-    {
-        out.push(ExpectedRef {
-            name: head.name().to_owned(),
-            old,
-            target: old,
-            new: old,
-            follows_tip: tips.contains(&old),
-        });
     }
     Ok(out)
 }
@@ -588,6 +609,7 @@ fn perform_inner(
 
     let marked = (!forked && matches!(tree_mode, Tree::LeaveAsIsAndMark | Tree::LeaveAsIsAndMarkDescendants))
         || conflict.is_some();
+    let checkout_after_finish = conflict.is_some();
     let mut prepared = Prepared {
         repo,
         root,
@@ -600,6 +622,8 @@ fn perform_inner(
         rewritten,
         committer,
         expected_refs: None,
+        checkout_reference: None,
+        checkout_after_finish,
         pins: if forked {
             selected.into_iter().collect()
         } else {
@@ -746,6 +770,8 @@ pub(super) fn finish_review(
         rewritten,
         committer,
         expected_refs: None,
+        checkout_reference: None,
+        checkout_after_finish: false,
         pins: Vec::new(),
         delete_refs,
     };
@@ -801,13 +827,13 @@ pub(crate) fn perform_plan_with_progress(
     }
 
     let mut eager = HashSet::new();
-    let mut cursor = plan.checkout;
-    while let Some(index) = cursor {
+    let mut cursor = plan.checkout.as_ref().map(|checkout| checkout.target);
+    while let Some(PlanParent::Step(index)) = cursor {
         if !eager.insert(index) {
             anyhow::bail!("the checkout ancestry contains a cycle");
         }
         cursor = match plan.steps.get(index).context("the checkout step is missing")?.parent {
-            PlanParent::Step(parent) => Some(parent),
+            parent @ PlanParent::Step(_) => Some(parent),
             PlanParent::Existing(_) => None,
         };
     }
@@ -1016,17 +1042,24 @@ pub(crate) fn perform_plan_with_progress(
         primary_children.entry(parent).or_insert(produced[index]);
     }
     for expected in &mut plan.expected_refs {
-        let mut target = rewritten
-            .get(&expected.target)
-            .copied()
-            .flatten()
-            .context("a captured reference target disappeared from the rebase plan")?;
-        if expected.follows_tip {
-            while let Some(child) = primary_children.get(&target) {
-                target = *child;
+        if let Some(target) = expected.placement {
+            expected.new = Some(match target {
+                PlanParent::Existing(id) => id,
+                PlanParent::Step(index) => *produced.get(index).context("a reference points to a missing step")?,
+            });
+        } else if expected.new.is_some() {
+            let mut target = rewritten
+                .get(&expected.target)
+                .copied()
+                .flatten()
+                .unwrap_or(expected.target);
+            if expected.follows_tip {
+                while let Some(child) = primary_children.get(&target) {
+                    target = *child;
+                }
             }
+            expected.new = Some(target);
         }
-        expected.new = target;
     }
 
     let planned_non_leaves: HashSet<_> = plan
@@ -1039,15 +1072,23 @@ pub(crate) fn perform_plan_with_progress(
         .collect();
     let mut pins = Vec::new();
     for (index, id) in produced.iter().copied().enumerate() {
-        if planned_non_leaves.contains(&index) || plan.checkout == Some(index) {
+        if planned_non_leaves.contains(&index)
+            || plan
+                .checkout
+                .as_ref()
+                .is_some_and(|checkout| checkout.target == PlanParent::Step(index))
+        {
             continue;
         }
-        let referenced = plan.expected_refs.iter().any(|expected| expected.new == id);
+        let referenced = plan.expected_refs.iter().any(|expected| expected.new == Some(id));
         if !referenced {
             pins.push(id);
         }
     }
-    let selected = plan.checkout.map(|index| produced[index]);
+    let selected = plan.checkout.as_ref().map(|checkout| match checkout.target {
+        PlanParent::Existing(id) => id,
+        PlanParent::Step(index) => produced[index],
+    });
     let marked = plan
         .steps
         .iter()
@@ -1063,6 +1104,8 @@ pub(crate) fn perform_plan_with_progress(
         rewritten: rewritten.clone(),
         committer,
         expected_refs: Some(plan.expected_refs.clone()),
+        checkout_reference: plan.checkout.as_ref().and_then(|checkout| checkout.reference.clone()),
+        checkout_after_finish: false,
         pins,
         delete_refs,
     };
@@ -1081,14 +1124,18 @@ pub(crate) fn perform_plan_with_progress(
 
     let continuation_start = plan
         .checkout
-        .filter(|index| *index < conflict_step)
+        .as_ref()
+        .and_then(|checkout| match checkout.target {
+            PlanParent::Step(index) if index < conflict_step => Some(index),
+            _ => None,
+        })
         .map_or(conflict_step, |_| 0);
     let affected_steps: HashSet<_> = (continuation_start..plan.steps.len()).collect();
     let affected_ids: HashSet<_> = affected_steps.iter().map(|index| produced[*index]).collect();
     let final_refs: Vec<_> = plan
         .expected_refs
         .iter()
-        .filter(|expected| !affected_ids.contains(&expected.new))
+        .filter(|expected| expected.new.is_none_or(|new| !affected_ids.contains(&new)))
         .cloned()
         .collect();
     let final_ref_names = final_refs.iter().map(|expected| expected.name.clone()).collect();
@@ -1098,10 +1145,12 @@ pub(crate) fn perform_plan_with_progress(
         remaining_squash[index].clone_from(&step.squash);
     }
     prepared.selected = None;
+    prepared.checkout_reference = None;
+    prepared.checkout_after_finish = true;
     prepared.reset_index = false;
     prepared.rewritten = final_refs
         .iter()
-        .map(|expected| (expected.old, Some(expected.new)))
+        .filter_map(|expected| expected.old.map(|old| (old, expected.new)))
         .collect();
     prepared.expected_refs = Some(final_refs);
     prepared.pins.retain(|id| !affected_ids.contains(id));
@@ -1136,7 +1185,12 @@ impl Prepared {
                 .map_err(|err| anyhow::anyhow!("could not persist a prepared rebase object: {err}"))?;
         }
 
-        let transitions = worktree_transitions(&self.repo, &self.rewritten, self.skip_worktree_transitions)?;
+        let transitions = worktree_transitions(
+            &self.repo,
+            &self.rewritten,
+            self.expected_refs.as_deref(),
+            self.skip_worktree_transitions,
+        )?;
         let index_reset_from = if self.reset_index { self.root } else { None };
         let index_resets = index_reset_from
             .map(|old| index_resets(&self.repo, &self.rewritten, old))
@@ -1148,6 +1202,24 @@ impl Prepared {
                 transition.old,
                 transition.new,
             )?;
+        }
+        let current_ref = self.repo.head()?.referent_name().map(ToOwned::to_owned);
+        let mut deferred_ref_deletions = Vec::new();
+        if let (Some(expected_refs), Some(current_ref)) = (&mut self.expected_refs, current_ref) {
+            if expected_refs
+                .iter()
+                .any(|expected| expected.name == current_ref && expected.old.is_some() && expected.new.is_none())
+                && (self.repo.workdir().is_none() || (self.selected.is_none() && !self.checkout_after_finish))
+            {
+                anyhow::bail!("cannot delete the checked-out branch without selecting another checkout");
+            }
+            expected_refs.retain(|expected| {
+                let defer = expected.name == current_ref && expected.old.is_some() && expected.new.is_none();
+                if defer {
+                    deferred_ref_deletions.push((expected.name.clone(), expected.old.expect("checked above")));
+                }
+                !defer
+            });
         }
         let rollback_refs = update_refs(
             &self.repo,
@@ -1183,6 +1255,8 @@ impl Prepared {
         }
         Ok(Outcome {
             selected: self.selected,
+            checkout_reference: self.checkout_reference.clone(),
+            deferred_ref_deletions,
             rewritten: std::mem::take(&mut self.rewritten),
         })
     }
@@ -1622,6 +1696,7 @@ struct Transition {
 fn worktree_transitions(
     repo: &gix::Repository,
     rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+    expected_refs: Option<&[ExpectedRef]>,
     inserted: bool,
 ) -> Result<Vec<Transition>> {
     if inserted {
@@ -1642,16 +1717,29 @@ fn worktree_transitions(
         if !seen.insert(worktree_repo.git_dir().to_owned()) {
             continue;
         }
-        let Some(old) = worktree_repo
-            .head()
-            .ok()
-            .and_then(|head| head.id().map(gix::Id::detach))
-        else {
+        let Ok(head) = worktree_repo.head() else {
             continue;
         };
-        let Some(new) = rewritten.get(&old).copied() else {
+        let Some(old) = head.id().map(gix::Id::detach) else {
             continue;
         };
+        let planned = head.referent_name().and_then(|name| {
+            expected_refs.and_then(|refs| refs.iter().find(|expected| expected.name.as_bstr() == name.as_bstr()))
+        });
+        let new = match planned {
+            Some(expected) if expected.new.is_none() => {
+                if worktree_repo.git_dir() == repo.git_dir() {
+                    continue;
+                }
+                anyhow::bail!(
+                    "cannot delete {} because another worktree has it checked out",
+                    expected.name.shorten()
+                );
+            }
+            Some(expected) => Some(expected.new),
+            None => rewritten.get(&old).copied(),
+        };
+        let Some(new) = new else { continue };
         if worktree_repo.workdir().is_none() && worktree_repo.is_bare() {
             continue;
         }
@@ -1696,8 +1784,11 @@ fn update_refs(
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
                 continue;
             }
-            edits.push(ref_edit(name.clone(), old, Some(new)));
-            rollback.push(reverse_ref_edit(name, old, Some(new)));
+            if old == new {
+                continue;
+            }
+            edits.push(ref_edit(name.clone(), old, new));
+            rollback.push(ref_edit(name, new, old));
         }
     } else {
         for reference in repo.references()?.all()? {
@@ -1720,16 +1811,16 @@ fn update_refs(
             if delete_refs.iter().any(|(delete, _)| delete == &name) {
                 continue;
             }
-            edits.push(ref_edit(name.clone(), old, *new));
-            rollback.push(reverse_ref_edit(name, old, *new));
+            edits.push(ref_edit(name.clone(), Some(old), *new));
+            rollback.push(ref_edit(name, *new, Some(old)));
         }
         if let Some(head) = repo.try_find_reference("HEAD")?
             && let Some(old) = head.try_id().map(gix::Id::detach)
             && let Some(new) = rewritten.get(&old)
         {
             let name = head.name().to_owned();
-            edits.push(ref_edit(name.clone(), old, *new));
-            rollback.push(reverse_ref_edit(name, old, *new));
+            edits.push(ref_edit(name.clone(), Some(old), *new));
+            rollback.push(ref_edit(name, *new, Some(old)));
         }
     }
     if unborn {
@@ -1850,39 +1941,26 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
     }
 }
 
-fn reverse_ref_edit(name: gix::refs::FullName, old: ObjectId, new: Option<ObjectId>) -> RefEdit {
+fn ref_edit(name: gix::refs::FullName, old: Option<ObjectId>, new: Option<ObjectId>) -> RefEdit {
     RefEdit {
         name,
         deref: false,
-        change: match new {
-            Some(new) => Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustExistAndMatch(Target::Object(new)),
-                new: Target::Object(old),
-            },
-            None => Change::Update {
-                log: log_change(),
-                expected: PreviousValue::MustNotExist,
-                new: Target::Object(old),
-            },
-        },
-    }
-}
-
-fn ref_edit(name: gix::refs::FullName, old: ObjectId, new: Option<ObjectId>) -> RefEdit {
-    RefEdit {
-        name,
-        deref: false,
-        change: match new {
-            Some(new) => Change::Update {
+        change: match (old, new) {
+            (Some(old), Some(new)) => Change::Update {
                 log: log_change(),
                 expected: PreviousValue::MustExistAndMatch(Target::Object(old)),
                 new: Target::Object(new),
             },
-            None => Change::Delete {
+            (Some(old), None) => Change::Delete {
                 expected: PreviousValue::MustExistAndMatch(Target::Object(old)),
                 log: RefLog::AndReference,
             },
+            (None, Some(new)) => Change::Update {
+                log: log_change(),
+                expected: PreviousValue::MustNotExist,
+                new: Target::Object(new),
+            },
+            (None, None) => unreachable!("unchanged absent refs are filtered before editing"),
         },
     }
 }
@@ -2285,7 +2363,10 @@ mod tests {
                     commit: PlanCommit::Pick(tip),
                     squash: Vec::new(),
                 }],
-                checkout: Some(0),
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(0),
+                    reference: None,
+                }),
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
@@ -2347,7 +2428,10 @@ mod tests {
                         squash: Vec::new(),
                     },
                 ],
-                checkout: Some(0),
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(0),
+                    reference: None,
+                }),
                 expected_refs,
             },
             |update| progress.push(update),
@@ -2632,7 +2716,10 @@ mod tests {
                         squash: Vec::new(),
                     },
                 ],
-                checkout: Some(0),
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(0),
+                    reference: None,
+                }),
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
@@ -2736,7 +2823,10 @@ mod tests {
                         squash: Vec::new(),
                     },
                 ],
-                checkout: Some(1),
+                checkout: Some(PlanCheckout {
+                    target: PlanParent::Step(1),
+                    reference: None,
+                }),
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
         )?
@@ -2800,6 +2890,102 @@ mod tests {
         assert!(
             format!("{err:#}").contains("reference"),
             "the failure identifies reference persistence: {err:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_out_linked_worktree_refs_move_but_cannot_be_deleted() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let linked_root = gix_testtools::tempfile::tempdir()?;
+        let linked = linked_root.path().join("linked");
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["worktree", "add", "-q", "-b", "linked"])
+                .arg(&linked)
+                .arg("HEAD")
+                .status()?
+                .success(),
+            "the linked worktree is created"
+        );
+        let repo = open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let steps = || {
+            vec![
+                PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(middle),
+                    squash: Vec::new(),
+                },
+                PlanStep {
+                    parent: PlanParent::Step(0),
+                    commit: PlanCommit::Pick(tip),
+                    squash: Vec::new(),
+                },
+            ]
+        };
+
+        let mut deleting = capture_refs(&repo, &[middle, tip], &[tip])?;
+        let linked_ref = deleting
+            .iter_mut()
+            .find(|reference| reference.name.as_bstr() == b"refs/heads/linked")
+            .expect("the linked branch is captured");
+        linked_ref.new = None;
+        let err = match perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: steps(),
+                checkout: None,
+                expected_refs: deleting,
+            },
+        ) {
+            Ok(_) => return Err("a checked-out linked branch was deleted".into()),
+            Err(err) => err,
+        };
+        assert!(
+            format!("{err:#}").contains("another worktree has it checked out"),
+            "the refusal identifies the linked-worktree constraint"
+        );
+
+        let mut moving = capture_refs(&repo, &[middle, tip], &[tip])?;
+        let linked_ref = moving
+            .iter_mut()
+            .find(|reference| reference.name.as_bstr() == b"refs/heads/linked")
+            .expect("the linked branch is captured");
+        linked_ref.new = None;
+        linked_ref.placement = Some(PlanParent::Step(0));
+        let outcome = perform_plan(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: steps(),
+                checkout: None,
+                expected_refs: moving,
+            },
+        )?
+        .complete()?;
+        assert_eq!(
+            repo.find_reference("refs/heads/linked")?.id().detach(),
+            outcome.map(middle).expect("the middle commit is retained"),
+            "the linked branch moves to its explicit todo destination"
+        );
+        assert!(
+            linked.join("middle").is_file(),
+            "the linked worktree receives the new tree"
+        );
+        assert!(
+            !linked.join("tip").exists(),
+            "files beyond the moved branch are removed"
         );
         Ok(())
     }

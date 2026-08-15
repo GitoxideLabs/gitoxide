@@ -56,6 +56,7 @@ impl Conflict {
             self.include_worktrees,
         )?
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
+        delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
         conflict.write_index()?;
         Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
     }
@@ -73,6 +74,7 @@ pub(crate) fn materialize_plan_conflict(
     let mut conflict = conflict.into_conflict().persist()?;
     let notice = move_head(repository_path, bare, conflict.commit, revisions, include_worktrees)?
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
+    delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
     conflict.write_index()?;
     tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
     Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
@@ -88,10 +90,35 @@ pub(crate) fn checkout_without_replay(
     move_head(repository_path, bare, selected, revisions, include_worktrees)
 }
 
+pub(crate) fn checkout_plan(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    reference: Option<&gix::refs::FullName>,
+    deferred_ref_deletions: &[(gix::refs::FullName, ObjectId)],
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Option<String>> {
+    let notice = move_head_to(repository_path, bare, selected, reference, revisions, include_worktrees)?;
+    delete_deferred_refs(repository_path, bare, deferred_ref_deletions)?;
+    Ok(notice)
+}
+
 fn move_head(
     repository_path: &Path,
     bare: bool,
     selected: ObjectId,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<Option<String>> {
+    move_head_to(repository_path, bare, selected, None, revisions, include_worktrees)
+}
+
+fn move_head_to(
+    repository_path: &Path,
+    bare: bool,
+    selected: ObjectId,
+    reference: Option<&gix::refs::FullName>,
     revisions: &[OsString],
     include_worktrees: bool,
 ) -> Result<Option<String>> {
@@ -105,20 +132,19 @@ fn move_head(
         .id()
         .map(gix::Id::detach)
         .context("cannot time-travel from an unborn HEAD")?;
-    let saved_target = head
-        .referent_name()
-        .map(ToOwned::to_owned)
-        .map_or(Target::Object(head_id), Target::Symbolic);
+    let head_ref = head.referent_name().map(ToOwned::to_owned);
+    let saved_target = head_ref.clone().map_or(Target::Object(head_id), Target::Symbolic);
     drop(head);
-    if selected == head_id {
+    if selected == head_id && head_ref.as_ref() == reference {
         return Ok(None);
     }
     let destination_pin = selected_pin(&repository, selected)?;
     let provisional = create_or_reuse_pin(&repository, saved_target, head_id)?;
     drop(repository);
-    let checkout = match &destination_pin {
-        Some(pin) => checkout_pin(&workdir, pin),
-        None => checkout_detached(&workdir, selected),
+    let checkout = match (reference, &destination_pin) {
+        (Some(reference), _) => checkout_branch(&workdir, reference),
+        (None, Some(pin)) => checkout_pin(&workdir, pin),
+        (None, None) => checkout_detached(&workdir, selected),
     };
     if let Err(checkout) = checkout {
         if provisional.1 {
@@ -134,9 +160,14 @@ fn move_head(
         }
         return Err(checkout);
     }
-    let mut notice = destination_pin.as_ref().map_or_else(
-        || format!("time-travelled to {}", selected.to_hex_with_len(7)),
-        |pin| format!("returned from {}", pin_label(pin)),
+    let mut notice = reference.map_or_else(
+        || {
+            destination_pin.as_ref().map_or_else(
+                || format!("time-travelled to {}", selected.to_hex_with_len(7)),
+                |pin| format!("returned from {}", pin_label(pin)),
+            )
+        },
+        |reference| format!("checked out {}", reference.shorten()),
     );
     let repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after time-travel")?;
@@ -567,6 +598,39 @@ fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
         }])
         .context("could not remove tix pin")?;
     Ok(())
+}
+
+fn delete_deferred_refs(repository_path: &Path, bare: bool, refs: &[(gix::refs::FullName, ObjectId)]) -> Result<()> {
+    if refs.is_empty() {
+        return Ok(());
+    }
+    let repository = open_repository(repository_path, bare, false)
+        .context("could not reopen repository to finish reference deletions")?;
+    repository
+        .edit_references(refs.iter().map(|(name, old)| RefEdit {
+            name: name.clone(),
+            deref: false,
+            change: Change::Delete {
+                expected: PreviousValue::MustExistAndMatch(Target::Object(*old)),
+                log: RefLog::AndReference,
+            },
+        }))
+        .context("could not delete the branch HEAD left during rebase")?;
+    Ok(())
+}
+
+fn checkout_branch(workdir: &Path, name: &gix::refs::FullName) -> Result<()> {
+    let branch = name
+        .as_bstr()
+        .strip_prefix(b"refs/heads/")
+        .context("the rebase checkout target is not a local branch")?;
+    checkout(
+        workdir,
+        [
+            OsString::from("--no-guess"),
+            gix::path::from_bstr(branch.as_bstr()).into_owned().into_os_string(),
+        ],
+    )
 }
 
 fn checkout_pin(workdir: &Path, pin: &history::Pin) -> Result<()> {
