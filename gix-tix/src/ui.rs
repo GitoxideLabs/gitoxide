@@ -774,9 +774,10 @@ pub(crate) fn draw_with_worktree(
             Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         ));
     }
+    let mut time_travel = None;
     let mut edit_prefix_spans = Vec::new();
     if app.changes_focus != Some(ChangePane::Worktree) || app.can_amend() {
-        let time_travel = if app.time_travel_shortcut_visible()
+        time_travel = if app.time_travel_shortcut_visible()
             && decorations
                 .values()
                 .flatten()
@@ -793,9 +794,9 @@ pub(crate) fn draw_with_worktree(
                         .iter()
                         .any(|decoration| decoration.kind == DecorationKind::Pin)
                     {
-                        ("return", 't')
+                        "@ return"
                     } else {
-                        ("travel", 't')
+                        "@ travel"
                     },
                 )
             } else {
@@ -849,11 +850,6 @@ pub(crate) fn draw_with_worktree(
                 } else {
                     ("d forget", 'd')
                 });
-            }
-            if app.changes_focus.is_none()
-                && let Some(label) = time_travel
-            {
-                options.push(label);
             }
             if app.changes_focus.is_none()
                 && app
@@ -941,6 +937,10 @@ pub(crate) fn draw_with_worktree(
     let mut ordered = vec![Span::raw(history_position(app))];
     ordered.append(&mut view_prefix_spans);
     ordered.append(&mut edit_prefix_spans);
+    if let Some(label) = time_travel {
+        ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut(label, '@', true));
+    }
     ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("copy", 'y', true));
     ordered.push(Span::raw(" · "));
@@ -2886,14 +2886,15 @@ mod tests {
             "hiding refs retains resource markers: {row:?}"
         );
         assert!(
-            rendered_line(&terminal, 1).contains("edit (reword · new · new-empty · fork · d forget · return · unpin)"),
-            "the active edit prefix contains exactly its actionable commands"
+            rendered_line(&terminal, 1)
+                .contains("edit (reword · new · new-empty · fork · d forget · unpin) · @ return · copy"),
+            "time travel stays outside the active edit prefix"
         );
         assert!(!rendered_line(&terminal, 1).contains(" · edit ·"));
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
-        assert!(rendered_line(&terminal, 1).contains("travel"));
+        assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
         Ok(())
     }

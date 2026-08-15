@@ -191,7 +191,7 @@ without trading responsiveness for metadata that is not visible.
 | `y` | Copy the selected commit ID, or the selected raw path when a changes block is focused. |
 | `Shift-y`/`Y` | Copy the selected author as `Name <email>`. |
 | `s` | Verify signed, unverified commits currently visible on screen. |
-| `t` | Time-travel to the selected commit, or return through its tix pin. |
+| `@` | Time-travel to the selected commit, or return through its tix pin. |
 
 The display group remains open for consecutive display changes and closes on
 navigation or another recognized command. The `?` group similarly remains open
@@ -204,8 +204,8 @@ underlines the `v` in `view`; while active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
 `v` prefix and the `e` prefix when it is addressable. Remaining history-level
-actions end at the information prefix while it is closed. Copy
-immediately follows the edit group; the reference toggle immediately precedes
+actions end at the information prefix while it is closed. An available direct
+time-travel action follows the edit group, and copy follows time travel; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
 possible; keys that cannot be expressed naturally in the label remain explicit.
@@ -213,7 +213,7 @@ The Enter key is written as `<enter>` throughout.
 
 ### Time-travel
 
-- On a completed, focused history in a worktree repository, `t` on a non-`HEAD`
+- On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
 - Before every move, tix provisionally retains the previous `HEAD` with a
   `refs/worktree/tix/pins/<suffix>` ref. Git stores these refs privately for the
@@ -235,7 +235,7 @@ The Enter key is written as `<enter>` throughout.
 - One or more worktree pins at a commit are shown as a single blue `📌`
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin
-  names are omitted from history rows. `t` on a pinned
+  names are omitted from history rows. `@` on a pinned
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.
@@ -707,11 +707,12 @@ space first; changes blocks adapt within the remaining history width.
   `e u` rebases it onto the newer hidden branch tip when available,
   `e r` rewords, `e n` creates a rebased child, `e f` forks an independent child,
   `e a` amends `@`, `e h` stashes changes at `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
-  `e d d` confirms forgetting a top commit, and `e t` enters or returns from
-  time travel when each action is available.
+  and `e d d` confirms forgetting a top commit when each action is available.
+- `@` invokes time travel directly, outside the edit group. Invoking it leaves an
+  already expanded edit group open.
 - Edit shortcuts keep the group open. Navigation or another recognized command
-  closes it, matching the `v` display shortcut group. Plain `r` and `t` do not
-  mutate the repository.
+  closes it, matching the `v` display shortcut group. Plain `r` does not mutate
+  the repository, and plain `t` has no action.
 - The footer underlines the `e` in `edit`; while active, `edit (` contains only the
   actions available for the current selection, followed by `)`. An empty group
   says `no actions`.
