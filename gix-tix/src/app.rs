@@ -587,15 +587,6 @@ impl App {
         self.leave_message("rebase conflict · <enter> checkout for resolution · any other key cancel");
     }
 
-    pub(crate) fn mark_todo_rebase_conflict(&mut self, id: ObjectId) {
-        tracing::warn!(commit_id = %id, "todo rebase aborted on conflict");
-        self.pending_rebase_conflict = Some(id);
-        self.leave_message(format!(
-            "rebase aborted · conflict at {} · repository unchanged",
-            id.to_hex_with_len(7)
-        ));
-    }
-
     pub(crate) fn has_rebase_conflict(&self) -> bool {
         self.pending_rebase_conflict.is_some()
     }
@@ -2755,16 +2746,6 @@ mod tests {
         assert!(!app.time_travel_shortcut_visible());
         app.clear_rebase_conflict();
         assert!(app.time_travel_shortcut_visible());
-
-        app.mark_todo_rebase_conflict(id(1));
-        assert!(app.has_rebase_conflict());
-        assert!(
-            app.message
-                .as_deref()
-                .is_some_and(|message| message.contains("repository unchanged")),
-            "an aborted todo explains that no state was materialized"
-        );
-        app.clear_rebase_conflict();
     }
 
     #[test]

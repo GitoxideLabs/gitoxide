@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ffi::{OsStr, OsString},
-    io::{Read, Write},
+    io::{IsTerminal, Read, Write},
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
@@ -21,6 +21,9 @@ pub(super) enum Command {
     #[command(disable_help_flag = true)]
     Todo(Todo),
     /// Apply a self-contained rebase todo from FILE or standard input.
+    #[command(
+        after_long_help = "Conflicts change nothing by default. To opt in, write the continuation only when needed:\n  tix rebase apply --materialize-conflicts todo.continue.md todo.md\nResolve the index, then run:\n  tix rebase apply todo.continue.md\nUse --materialize-conflicts=- to write a continuation to non-terminal stdout."
+    )]
     Apply(Apply),
 }
 
@@ -48,9 +51,12 @@ pub(super) struct Todo {
 
 #[derive(Debug, clap::Args)]
 pub(super) struct Apply {
+    /// On conflict, materialize it and write a continuation todo to FILE, or stdout if omitted or '-'.
+    #[arg(long, value_name = "CONTINUE", num_args = 0..=1, default_missing_value = "-")]
+    pub(super) materialize_conflicts: Option<PathBuf>,
     /// Todo file to apply; omit or use '-' to read standard input.
     #[arg(value_name = "FILE")]
-    file: Option<PathBuf>,
+    pub(super) file: Option<PathBuf>,
 }
 
 pub(super) fn run(repo: gix::Repository, command: Command) -> Result<()> {
@@ -76,7 +82,7 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
         &format!("tix-rebase-{}.md", std::process::id()),
     )?
     .unwrap_or(prepared.document);
-    apply_document(repo, &edited)
+    apply_document(repo, &edited, None)
 }
 
 fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
@@ -218,10 +224,10 @@ fn apply(repo: gix::Repository, args: Apply) -> Result<()> {
                 std::fs::read(path).with_context(|| format!("could not read rebase todo at {}", path.display()))?;
         }
     }
-    apply_document(repo, &document)
+    apply_document(repo, &document, args.materialize_conflicts.as_deref())
 }
 
-fn apply_document(repo: gix::Repository, document: &[u8]) -> Result<()> {
+fn apply_document(repo: gix::Repository, document: &[u8], materialize_conflicts: Option<&Path>) -> Result<()> {
     let Some(parsed) = todo::parse(&repo, document)? else {
         println!("no rebase performed: the todo was cancelled");
         return Ok(());
@@ -242,10 +248,54 @@ fn apply_document(repo: gix::Repository, document: &[u8]) -> Result<()> {
             }
             Ok(())
         }
-        rebase::PlanPerform::Conflict(original) => anyhow::bail!(
-            "rebase aborted without changes: conflict while applying {}",
-            original.to_hex_with_len(7)
-        ),
+        rebase::PlanPerform::Conflict(conflict) => {
+            let Some(destination) = materialize_conflicts else {
+                anyhow::bail!(
+                    "rebase aborted without changes: conflict while applying {}; pass --materialize-conflicts to opt in",
+                    conflict.original().to_hex_with_len(7)
+                );
+            };
+            if destination == Path::new("-") && std::io::stdout().is_terminal() {
+                anyhow::bail!(
+                    "rebase aborted without changes: refusing to materialize a conflict without a continuation output file"
+                );
+            }
+            let plan = conflict.continuation_plan();
+            let mapped_tips = tips.iter().filter_map(|id| conflict.map(*id)).collect();
+            let continuation = todo::prepare_continuation(conflict.repository(), &plan, mapped_tips)?.document;
+            let revisions = mapped_revisions(&tips, |id| conflict.map(id));
+            if destination == Path::new("-") {
+                let mut stdout = std::io::stdout().lock();
+                stdout
+                    .write_all(&continuation)
+                    .and_then(|_| stdout.flush())
+                    .context("could not write the continuation rebase todo")?;
+            } else {
+                let mut output = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(destination)
+                    .with_context(|| {
+                        format!("could not create continuation rebase todo at {}", destination.display())
+                    })?;
+                output.write_all(&continuation).with_context(|| {
+                    format!("could not write continuation rebase todo at {}", destination.display())
+                })?;
+            }
+            let materialized =
+                edit::time_travel::materialize_plan_conflict(conflict, &repository_path, bare, &revisions, false);
+            let (notice, _) = match materialized {
+                Ok(materialized) => materialized,
+                Err(err) => {
+                    if destination != Path::new("-") {
+                        let _ = std::fs::remove_file(destination);
+                    }
+                    return Err(err);
+                }
+            };
+            eprintln!("{notice}; continue with `tix rebase apply {}`", destination.display());
+            anyhow::bail!("rebase stopped at a materialized conflict")
+        }
     }
 }
 
@@ -259,6 +309,7 @@ fn mapped_revisions(tips: &[ObjectId], mut map: impl FnMut(ObjectId) -> Option<O
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     fn repository() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
@@ -316,6 +367,122 @@ mod tests {
         )
         .expect_err("a hidden revision is required");
         assert!(format!("{err:#}").contains("at least one -h/--hide"));
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_conflicts_emit_an_applicable_continuation_todo() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
+        let repo = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "commit.gpgSign=false".to_owned(),
+                "user.name=todo author".to_owned(),
+                "user.email=todo@example.com".to_owned(),
+            ]),
+        )?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let prepared = todo::prepare(
+            &repo,
+            base,
+            base,
+            &[
+                todo::Commit {
+                    id: tip,
+                    parents: vec![middle],
+                    info: "tip".into(),
+                },
+                todo::Commit {
+                    id: middle,
+                    parents: vec![base],
+                    info: "middle".into(),
+                },
+            ],
+            Some(tip),
+            &[tip],
+            todo::OntoKind::Onto,
+        )?;
+        let generated = std::str::from_utf8(&prepared.document)?;
+        let state = &generated[generated
+            .find("<!-- tix-rebase-state-v1")
+            .expect("generated state is present")..];
+        let edited = format!(
+            "## fork {}\n`@pick {}` tip\n\n{state}",
+            base.to_hex_with_len(7),
+            tip.to_hex_with_len(7)
+        );
+        let output_dir = gix_testtools::tempfile::tempdir()?;
+        let output = output_dir.path().join("continue.md");
+        let err = apply_document(repo, edited.as_bytes(), Some(&output)).expect_err("the conflict stops the command");
+        assert!(format!("{err:#}").contains("materialized conflict"));
+        let continuation = std::fs::read(&output)?;
+        assert!(
+            continuation
+                .windows(40)
+                .any(|window| window.iter().all(|byte| *byte == b'0')),
+            "the conflicting command is represented by the full null object ID"
+        );
+        let unresolved = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["diff", "--name-only", "--diff-filter=U"])
+            .output()?;
+        assert!(unresolved.status.success());
+        assert_eq!(
+            unresolved.stdout, b"file\n",
+            "materialization writes the unmerged index"
+        );
+
+        std::fs::write(fixture.path().join("file"), b"resolved\n")?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["add", "file"])
+                .status()?
+                .success()
+        );
+        let repo = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "commit.gpgSign=false".to_owned(),
+                "user.name=todo author".to_owned(),
+                "user.email=todo@example.com".to_owned(),
+            ]),
+        )?;
+        apply_document(repo, &continuation, None)?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["diff", "--name-only", "--diff-filter=U"])
+                .output()?
+                .stdout
+                .is_empty(),
+            "the continuation consumes the resolved index"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn successful_apply_does_not_create_a_continuation_file() -> gix_testtools::Result {
+        let (_fixture, repo) = repository()?;
+        let prepared = prepare(
+            &repo,
+            &Todo {
+                help: None,
+                hide: vec!["HEAD~2".into()],
+                onto: None,
+                edit_and_apply: false,
+                tips: Vec::new(),
+            },
+        )?;
+        let output_dir = gix_testtools::tempfile::tempdir()?;
+        let output = output_dir.path().join("unused.md");
+        apply_document(repo, &prepared.document, Some(&output))?;
+        assert!(!output.exists(), "continuation output is created only after a conflict");
         Ok(())
     }
 }

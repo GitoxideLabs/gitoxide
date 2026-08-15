@@ -80,6 +80,7 @@ pub(crate) enum PlanParent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PlanCommit {
     Pick(ObjectId),
+    Resolved(ObjectId),
     Empty(BString),
 }
 
@@ -90,15 +91,16 @@ pub(crate) struct PlanStep {
     pub squash: Vec<ObjectId>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct ExpectedRef {
     pub name: gix::refs::FullName,
     pub old: ObjectId,
+    pub target: ObjectId,
     pub new: ObjectId,
     pub follows_tip: bool,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Plan {
     pub base: ObjectId,
     pub scope: Vec<ObjectId>,
@@ -128,7 +130,7 @@ impl PlanProgress {
 
 pub(crate) enum PlanPerform {
     Complete(Outcome),
-    Conflict(ObjectId),
+    Conflict(PlanConflict),
 }
 
 impl PlanPerform {
@@ -136,8 +138,95 @@ impl PlanPerform {
     pub(crate) fn complete(self) -> Result<Outcome> {
         match self {
             PlanPerform::Complete(outcome) => Ok(outcome),
-            PlanPerform::Conflict(id) => anyhow::bail!("rebase plan conflicts at {id}"),
+            PlanPerform::Conflict(conflict) => anyhow::bail!("rebase plan conflicts at {}", conflict.original()),
         }
+    }
+}
+
+pub(crate) struct PlanConflict {
+    conflict: Conflict,
+    plan: Plan,
+    produced: Vec<ObjectId>,
+    rewritten: HashMap<ObjectId, Option<ObjectId>>,
+    conflict_step: usize,
+    continuation_start: usize,
+    remaining_squash: Vec<Vec<ObjectId>>,
+    final_refs: HashSet<gix::refs::FullName>,
+}
+
+impl PlanConflict {
+    pub(crate) fn original(&self) -> ObjectId {
+        self.conflict.original()
+    }
+
+    pub(crate) fn commit(&self) -> ObjectId {
+        self.conflict.commit
+    }
+
+    pub(crate) fn produced(&self) -> &[ObjectId] {
+        &self.produced
+    }
+
+    pub(crate) fn repository(&self) -> &gix::Repository {
+        &self.conflict.prepared.repo
+    }
+
+    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
+        self.rewritten.get(&id).copied().unwrap_or(Some(id))
+    }
+
+    pub(crate) fn continuation_plan(&self) -> Plan {
+        let expected_refs = self
+            .plan
+            .expected_refs
+            .iter()
+            .filter(|expected| !self.final_refs.contains(&expected.name))
+            .map(|expected| ExpectedRef {
+                name: expected.name.clone(),
+                old: expected.old,
+                target: expected.new,
+                new: expected.new,
+                follows_tip: expected.follows_tip,
+            })
+            .collect();
+        let mut scope = self.produced[self.continuation_start..].to_vec();
+        scope.extend(self.remaining_squash.iter().flatten().copied());
+        let base = match self.plan.steps[self.continuation_start].parent {
+            PlanParent::Existing(id) => id,
+            PlanParent::Step(parent) => self.produced[parent],
+        };
+        Plan {
+            base,
+            scope,
+            steps: self
+                .plan
+                .steps
+                .iter()
+                .enumerate()
+                .skip(self.continuation_start)
+                .map(|(index, step)| PlanStep {
+                    parent: match step.parent {
+                        PlanParent::Existing(id) => PlanParent::Existing(id),
+                        PlanParent::Step(parent) if parent < self.continuation_start => {
+                            PlanParent::Existing(self.produced[parent])
+                        }
+                        PlanParent::Step(parent) => PlanParent::Step(parent - self.continuation_start),
+                    },
+                    commit: if index == self.conflict_step {
+                        PlanCommit::Resolved(self.produced[index])
+                    } else {
+                        PlanCommit::Pick(self.produced[index])
+                    },
+                    squash: self.remaining_squash[index].clone(),
+                })
+                .collect(),
+            checkout: self.plan.checkout.map(|index| index - self.continuation_start),
+            expected_refs,
+        }
+    }
+
+    pub(crate) fn into_conflict(self) -> Conflict {
+        self.conflict
     }
 }
 
@@ -256,6 +345,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
             out.push(ExpectedRef {
                 name: reference.name().to_owned(),
                 old,
+                target: old,
                 new: old,
                 follows_tip: tips.contains(&old),
             });
@@ -269,6 +359,7 @@ pub(crate) fn capture_refs(repo: &gix::Repository, scope: &[ObjectId], tips: &[O
         out.push(ExpectedRef {
             name: head.name().to_owned(),
             old,
+            target: old,
             new: old,
             follows_tip: tips.contains(&old),
         });
@@ -696,7 +787,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut picked = HashSet::new();
     for step in &plan.steps {
         let ids = match step.commit {
-            PlanCommit::Pick(id) => Some(id).into_iter().chain(step.squash.iter().copied()),
+            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id).into_iter().chain(step.squash.iter().copied()),
             PlanCommit::Empty(_) => None.into_iter().chain(step.squash.iter().copied()),
         };
         for id in ids {
@@ -724,6 +815,7 @@ pub(crate) fn perform_plan_with_progress(
     let mut rewritten = HashMap::<ObjectId, Option<ObjectId>>::new();
     let mut produced = Vec::with_capacity(plan.steps.len());
     let mut delete_refs = Vec::new();
+    let mut conflict = None;
     for (index, step) in plan.steps.iter().enumerate() {
         let parent = match step.parent {
             PlanParent::Existing(id) => {
@@ -732,7 +824,7 @@ pub(crate) fn perform_plan_with_progress(
             }
             PlanParent::Step(parent) => *produced.get(parent).context("a fork points to a later commit")?,
         };
-        let eager = eager.contains(&index) || !step.squash.is_empty();
+        let eager = conflict.is_none() && (eager.contains(&index) || !step.squash.is_empty());
         let mut commit = match &step.commit {
             PlanCommit::Pick(id) => repo
                 .find_commit(*id)
@@ -741,6 +833,28 @@ pub(crate) fn perform_plan_with_progress(
                 .context("could not decode a picked commit")?
                 .into_owned()
                 .context("could not own a picked commit")?,
+            PlanCommit::Resolved(_) => {
+                let mut commit = repo
+                    .head()?
+                    .peel_to_commit()
+                    .context("could not resolve the conflicted HEAD commit")?
+                    .decode()
+                    .context("could not decode the conflicted HEAD commit")?
+                    .into_owned()
+                    .context("could not own the conflicted HEAD commit")?;
+                let index = repo
+                    .index_or_empty()
+                    .context("could not load the resolved conflict index")?;
+                if index
+                    .entries()
+                    .iter()
+                    .any(|entry| entry.stage() != gix::index::entry::Stage::Unconflicted)
+                {
+                    anyhow::bail!("the conflict index still has unresolved entries");
+                }
+                commit.tree = super::create::index_tree(&repo, &index)?;
+                commit
+            }
             PlanCommit::Empty(title) => gix::objs::Commit {
                 tree: parent_tree(&repo, Some(parent))?,
                 parents: [parent].into_iter().collect(),
@@ -752,7 +866,9 @@ pub(crate) fn perform_plan_with_progress(
             },
         };
         let graph_parents = match step.commit {
-            PlanCommit::Pick(id) => graph.parents_of(id).context("a picked commit is incomplete")?,
+            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => {
+                graph.parents_of(id).context("a picked commit is incomplete")?
+            }
             PlanCommit::Empty(_) => vec![parent],
         };
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
@@ -765,21 +881,24 @@ pub(crate) fn perform_plan_with_progress(
         } else {
             Tree::LeaveAsIsAndMark
         };
-        let cherry_pick_started = (eager && matches!(step.commit, PlanCommit::Pick(_))).then(Instant::now);
+        let cherry_pick_started =
+            (eager && matches!(step.commit, PlanCommit::Pick(_) | PlanCommit::Resolved(_))).then(Instant::now);
+        let mut step_conflict = None;
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
-            TreeRewrite::Conflict { .. } => {
-                let PlanCommit::Pick(original) = step.commit else {
+            TreeRewrite::Conflict { tree, conflicts } => {
+                let (PlanCommit::Pick(original) | PlanCommit::Resolved(original)) = step.commit else {
                     unreachable!("empty commits cannot conflict")
                 };
-                return Ok(PlanPerform::Conflict(original));
+                step_conflict = Some((original, tree, conflicts, None));
+                tree
             }
         };
-        if let Some(started) = cherry_pick_started {
+        if let Some(started) = cherry_pick_started.filter(|_| step_conflict.is_none()) {
             progress.cherry_picked += 1;
             progress.cherry_pick_time += started.elapsed();
         }
-        if matches!(step.commit, PlanCommit::Pick(_)) {
+        if matches!(step.commit, PlanCommit::Pick(_) | PlanCommit::Resolved(_)) {
             progress.processed += 1;
             report(progress);
         }
@@ -800,25 +919,35 @@ pub(crate) fn perform_plan_with_progress(
             );
             squashed.push((*id, source, replay_parents));
         }
-        if !squashed.is_empty() {
-            squash_message(&repo, &mut commit, &squashed)?;
-            for (id, source, replay_parents) in &squashed {
+        if !squashed.is_empty() && conflict.is_none() && step_conflict.is_none() {
+            let mut applied = 0;
+            for (squash_index, (id, source, replay_parents)) in squashed.iter().enumerate() {
                 let old_base = parent_tree(&repo, replay_parents.first().copied())?;
                 let started = Instant::now();
                 commit.tree = match cherry_pick_tree_outcome(&repo, old_base, commit.tree, source.tree)? {
                     TreeRewrite::Complete(tree) => tree,
-                    TreeRewrite::Conflict { .. } => return Ok(PlanPerform::Conflict(*id)),
+                    TreeRewrite::Conflict { tree, conflicts } => {
+                        step_conflict = Some((*id, tree, conflicts, Some(squash_index)));
+                        tree
+                    }
                 };
+                applied += 1;
+                if step_conflict.is_some() {
+                    break;
+                }
                 progress.cherry_picked += 1;
                 progress.cherry_pick_time += started.elapsed();
                 progress.processed += 1;
                 report(progress);
                 delete_refs.extend(super::review::deletions(&repo, source)?);
             }
+            squash_message(&repo, &mut commit, &squashed[..applied])?;
         }
         commit.parents = [parent].into_iter().collect();
         commit.committer = committer.clone();
-        let state = if eager {
+        let state = if step_conflict.is_some() {
+            CommitState::Unmarked(Signature::InvalidateExisting)
+        } else if eager {
             CommitState::Unmarked(Signature::RedoIfNeeded)
         } else {
             CommitState::Pending {
@@ -834,13 +963,20 @@ pub(crate) fn perform_plan_with_progress(
             progress.processed += 1;
         }
         report(progress);
-        if let PlanCommit::Pick(old_id) = step.commit {
+        if let PlanCommit::Pick(old_id) | PlanCommit::Resolved(old_id) = step.commit {
             rewritten.insert(old_id, Some(new_id));
         }
         for old_id in &step.squash {
             rewritten.insert(*old_id, Some(new_id));
         }
         produced.push(new_id);
+        if let Some((original, tree, conflicts, squash_index)) = step_conflict {
+            let remaining_squash = squash_index.map_or_else(
+                || step.squash.clone(),
+                |squash_index| step.squash[squash_index + 1..].to_vec(),
+            );
+            conflict = Some((original, tree, conflicts, new_id, index, remaining_squash));
+        }
     }
 
     let dropped: Vec<_> = plan.scope.iter().copied().filter(|id| !picked.contains(id)).collect();
@@ -881,7 +1017,7 @@ pub(crate) fn perform_plan_with_progress(
     }
     for expected in &mut plan.expected_refs {
         let mut target = rewritten
-            .get(&expected.old)
+            .get(&expected.target)
             .copied()
             .flatten()
             .context("a captured reference target disappeared from the rebase plan")?;
@@ -924,9 +1060,9 @@ pub(crate) fn perform_plan_with_progress(
         reset_index_paths: None,
         skip_worktree_transitions: false,
         selected,
-        rewritten,
+        rewritten: rewritten.clone(),
         committer,
-        expected_refs: Some(plan.expected_refs),
+        expected_refs: Some(plan.expected_refs.clone()),
         pins,
         delete_refs,
     };
@@ -939,7 +1075,52 @@ pub(crate) fn perform_plan_with_progress(
         signing_ms = progress.signing_time.as_millis(),
         "prepared rebase plan"
     );
-    Ok(PlanPerform::Complete(prepared.finish()?))
+    let Some((original, tree, conflicts, commit, conflict_step, conflict_remaining_squash)) = conflict else {
+        return Ok(PlanPerform::Complete(prepared.finish()?));
+    };
+
+    let continuation_start = plan
+        .checkout
+        .filter(|index| *index < conflict_step)
+        .map_or(conflict_step, |_| 0);
+    let affected_steps: HashSet<_> = (continuation_start..plan.steps.len()).collect();
+    let affected_ids: HashSet<_> = affected_steps.iter().map(|index| produced[*index]).collect();
+    let final_refs: Vec<_> = plan
+        .expected_refs
+        .iter()
+        .filter(|expected| !affected_ids.contains(&expected.new))
+        .cloned()
+        .collect();
+    let final_ref_names = final_refs.iter().map(|expected| expected.name.clone()).collect();
+    let mut remaining_squash = vec![Vec::new(); plan.steps.len()];
+    remaining_squash[conflict_step] = conflict_remaining_squash;
+    for (index, step) in plan.steps.iter().enumerate().skip(conflict_step + 1) {
+        remaining_squash[index].clone_from(&step.squash);
+    }
+    prepared.selected = None;
+    prepared.reset_index = false;
+    prepared.rewritten = final_refs
+        .iter()
+        .map(|expected| (expected.old, Some(expected.new)))
+        .collect();
+    prepared.expected_refs = Some(final_refs);
+    prepared.pins.retain(|id| !affected_ids.contains(id));
+    Ok(PlanPerform::Conflict(PlanConflict {
+        conflict: Conflict {
+            prepared,
+            conflicts,
+            tree,
+            commit,
+            original,
+        },
+        plan,
+        produced,
+        rewritten,
+        conflict_step,
+        continuation_start,
+        remaining_squash,
+        final_refs: final_ref_names,
+    }))
 }
 
 impl Prepared {
@@ -1618,7 +1799,7 @@ fn update_refs(
         });
     }
     if edits.is_empty() {
-        anyhow::bail!("no mutable reference points to an affected commit");
+        return Ok(Vec::new());
     }
     let mut time = gix::date::parse::TimeBuf::default();
     repo.edit_references_as(edits, Some(committer.to_ref(&mut time)))
@@ -2093,7 +2274,7 @@ mod tests {
             .output()?
             .stdout;
 
-        let PlanPerform::Conflict(original) = perform_plan(
+        let PlanPerform::Conflict(conflict) = perform_plan(
             &repo,
             &graph,
             Plan {
@@ -2111,7 +2292,7 @@ mod tests {
         else {
             return Err("the conflicting todo should abort before persistence".into());
         };
-        assert_eq!(original, tip, "the diagnostic identifies the source delta");
+        assert_eq!(conflict.original(), tip, "the diagnostic identifies the source delta");
         assert_eq!(
             gix_testtools::repository::snapshot(fixture.path())?,
             before,

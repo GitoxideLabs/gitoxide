@@ -207,6 +207,23 @@ mod tests {
                 .command,
             Some(Command::Rebase(rebase::Command::Apply(_)))
         ));
+        let parsed = Cli::try_parse_from([
+            "tix",
+            "rebase",
+            "apply",
+            "--materialize-conflicts",
+            "continue.md",
+            "todo.md",
+        ])
+        .expect("conflict materialization output parses");
+        let Some(Command::Rebase(rebase::Command::Apply(args))) = parsed.platform.command else {
+            panic!("rebase apply was expected")
+        };
+        assert_eq!(
+            args.materialize_conflicts.as_deref(),
+            Some(std::path::Path::new("continue.md"))
+        );
+        assert_eq!(args.file.as_deref(), Some(std::path::Path::new("todo.md")));
         assert!(
             Cli::command()
                 .render_help()
