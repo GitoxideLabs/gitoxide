@@ -61,6 +61,23 @@ impl Conflict {
     }
 }
 
+#[tracing::instrument(skip_all, fields(commit_id = %conflict.original()))]
+pub(crate) fn materialize_plan_conflict(
+    conflict: super::rebase::PlanConflict,
+    repository_path: &Path,
+    bare: bool,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(String, ObjectId)> {
+    let original = conflict.original();
+    let mut conflict = conflict.into_conflict().persist()?;
+    let notice = move_head(repository_path, bare, conflict.commit, revisions, include_worktrees)?
+        .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
+    conflict.write_index()?;
+    tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
+    Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
+}
+
 pub(crate) fn checkout_without_replay(
     repository_path: &Path,
     bare: bool,

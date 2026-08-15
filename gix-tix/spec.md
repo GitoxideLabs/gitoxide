@@ -28,6 +28,12 @@ without trading responsiveness for metadata that is not visible.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
+- By default, a todo conflict changes nothing. Explicit
+  `--materialize-conflicts [CONTINUE]` accepts the partial result, checks out the
+  conflicting commit with an unmerged index, and writes a fresh editable
+  continuation todo to `CONTINUE`, or stdout when `-` is used. A terminal stdout
+  is refused. Materialization exits unsuccessfully so scripts cannot mistake the
+  incomplete rebase for completion.
 - Editor-launching commands honor Git's normal editor selection and
   `GIT_EDITOR` overrides it.
 - Revisions must resolve and peel to commits. Invalid or non-commit visible
@@ -604,11 +610,23 @@ space first; changes blocks adapt within the remaining history width.
   and re-signed. Other resulting stacks retain their trees, receive pending-rebase
   markers, and invalidate old signatures for later time travel. With no `@`,
   ordinary steps remain lazy while squash groups are still materialized.
-  Any conflict while applying a history todo aborts the entire in-memory
-  transaction without writing objects, refs, index, or worktree state. The TUI
-  selects the original offending commit and marks it with a transient blinking
-  red `C`; command-line apply reports that commit as an error. Suspended conflict
-  checkout remains available only to direct edits and time travel.
+  Any conflict while applying a history todo first remains entirely in memory.
+  The TUI projects the partial result, selects the actual conflicting result, and
+  marks it with a blinking red `C`; predicted ref decorations remain at their
+  repository positions. `<enter>` accepts the partial result, moves already-final
+  refs, checks out the conflicting tree with an unmerged index, and retains an
+  in-memory continuation plan. Any other key discards the preview without writes.
+  Once the index has no unresolved stages, `<enter>` continues; another conflict
+  repeats the same choice.
+- Command-line apply reports a conflict without changes unless
+  `--materialize-conflicts` was explicitly supplied. Its continuation document
+  uses the full null object ID for the command whose tree must come from the
+  resolved index. Already produced commits use their new IDs, completed drops and
+  squash sources disappear, unapplied squash sources remain, and the remaining
+  todo stays editable. Applying it
+  requires only that `HEAD` names a commit and the index has no unresolved stages;
+  the index tree, including additional staged changes, becomes the resolved tree.
+  There is no hidden sequencer state or separate continue/abort command.
 - Interactive todo application runs on a scoped worker so the terminal can
   remain renderable without cloning the cached history graph. If application is
   still running after 300 ms, a modal gauge shows processed versus total todo
