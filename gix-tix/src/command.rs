@@ -5,6 +5,7 @@ use clap::Parser;
 use gix::prelude::{ObjectIdExt, ReferenceExt};
 
 mod rebase;
+mod reword;
 mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
@@ -41,6 +42,8 @@ enum Command {
     Pin(Pin),
     /// Travel to a commit while preserving reachable history through tix pins.
     Travel(travel::Args),
+    /// Edit a commit and lazily rebase every descendant retained by a tix pin.
+    Reword(reword::Args),
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
@@ -56,7 +59,7 @@ struct Pin {
 #[derive(Debug, clap::Parser)]
 #[command(
     name = "tix",
-    about = "Browse commits or edit the checked-out commit",
+    about = "Browse or edit commit history",
     disable_help_flag = true,
     after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
@@ -110,6 +113,7 @@ impl Platform {
             }
             Command::Pin(args) => pin(&repository, args)?,
             Command::Travel(args) => return travel::run(repository, args),
+            Command::Reword(args) => return reword::run(repository, args),
             Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
@@ -270,6 +274,14 @@ mod tests {
         };
         assert!(travel.materialize_conflicts);
         assert_eq!(travel.revision, "HEAD~1");
+        let reword = Cli::try_parse_from(["tix", "reword", "HEAD~2"])
+            .expect("reword parses")
+            .platform
+            .command;
+        let Some(Command::Reword(reword)) = reword else {
+            panic!("reword was expected")
+        };
+        assert_eq!(reword.revision, "HEAD~2");
         assert!(matches!(
             Cli::try_parse_from([
                 "tix",
