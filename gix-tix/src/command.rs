@@ -5,6 +5,7 @@ use clap::Parser;
 use gix::prelude::{ObjectIdExt, ReferenceExt};
 
 mod rebase;
+mod travel;
 
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
@@ -38,6 +39,8 @@ enum Command {
     Split,
     /// Pin one or more commits as persistent history tips.
     Pin(Pin),
+    /// Travel to a commit while preserving reachable history through tix pins.
+    Travel(travel::Args),
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
@@ -106,6 +109,7 @@ impl Platform {
                 split(repository, &graph)?;
             }
             Command::Pin(args) => pin(&repository, args)?,
+            Command::Travel(args) => return travel::run(repository, args),
             Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
@@ -257,6 +261,15 @@ mod tests {
             panic!("pin was expected")
         };
         assert_eq!(pin.revisions, ["main", "HEAD~2"]);
+        let travel = Cli::try_parse_from(["tix", "travel", "--materialize-conflicts", "HEAD~1"])
+            .expect("travel parses")
+            .platform
+            .command;
+        let Some(Command::Travel(travel)) = travel else {
+            panic!("travel was expected")
+        };
+        assert!(travel.materialize_conflicts);
+        assert_eq!(travel.revision, "HEAD~1");
         assert!(matches!(
             Cli::try_parse_from([
                 "tix",
