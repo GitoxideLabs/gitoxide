@@ -14,6 +14,10 @@
 
 ## Commit authorship
 
+- Create one commit per semantically distinct change. Do not combine independent
+  behavior changes merely because they were requested together.
+- Keep each change's implementation, tests, snapshots, and corresponding
+  `spec.md` updates in that change's commit.
 - A commit created or materially rewritten by an AI agent must use that agent's own name and email as its author. Do not silently inherit the repository owner's configured identity.
 - Preserve the author of an existing commit when the agent is not responsible for its contents.
 - Use another author's identity only when the user explicitly requests it for that particular commit.
