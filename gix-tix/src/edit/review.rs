@@ -91,6 +91,7 @@ pub(crate) fn start(
         head.referent_name().map(|name| name.as_bstr().to_owned()),
         head.id().map(gix::Id::detach),
     );
+    let reattach = (restore.1 == Some(tip)).then(|| restore.0.clone()).flatten();
     if tip == base || !graph.is_ancestor(base, tip) {
         anyhow::bail!("the review base must be an ancestor of the reviewed commit");
     }
@@ -135,10 +136,15 @@ pub(crate) fn start(
 
     git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()])
         .context("could not check out the reviewed commit")?;
-    if let Err(err) = git(
-        &workdir,
-        ["update-ref", name.as_bstr().to_str_lossy().as_ref(), &tip.to_string()],
-    ) {
+    let review_name = name.as_bstr().to_str_lossy();
+    let create_ref = match reattach.as_ref() {
+        Some(target) => git(
+            &workdir,
+            ["symbolic-ref", review_name.as_ref(), target.to_str_lossy().as_ref()],
+        ),
+        None => git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]),
+    };
+    if let Err(err) = create_ref {
         restore_checkout(&workdir, &restore)?;
         return Err(err.context("could not create review reference"));
     }
@@ -146,7 +152,7 @@ pub(crate) fn start(
         &workdir,
         ["update-ref", "--no-deref", "HEAD", &id.to_string(), &tip.to_string()],
     ) {
-        let _ = git(&workdir, ["update-ref", "-d", name.as_bstr().to_str_lossy().as_ref()]);
+        let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
         return Err(err.context("could not attach the worktree to the review commit"));
     }
@@ -155,7 +161,7 @@ pub(crate) fn start(
             &workdir,
             ["update-ref", "--no-deref", "HEAD", &tip.to_string(), &id.to_string()],
         );
-        let _ = git(&workdir, ["update-ref", "-d", name.as_bstr().to_str_lossy().as_ref()]);
+        let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
         return Err(err.context("could not reset the index to the review base"));
     }
@@ -167,11 +173,14 @@ pub(crate) fn start(
 
 #[tracing::instrument(skip_all, fields(%review))]
 pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, review: ObjectId) -> Result<ObjectId> {
-    let workdir = repo.workdir().context("finishing review requires a worktree")?;
+    let workdir = repo
+        .workdir()
+        .context("finishing review requires a worktree")?
+        .to_owned();
     if repo.head_id()?.detach() != review {
         anyhow::bail!("the review commit must be checked out before it can be finished");
     }
-    ensure_clean(workdir)?;
+    ensure_clean(&workdir)?;
     let commit = repo.find_commit(review)?.decode()?.into_owned()?;
     let review_ref = reference(&commit)?.context("the selected commit is not an active review")?;
     let base = commit
@@ -182,6 +191,7 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
     let mut reference = repo
         .find_reference(review_ref.as_ref())
         .context("the review reference is missing")?;
+    let reattach = reference.target().try_name().map(ToOwned::to_owned);
     let tip = reference
         .peel_to_id()
         .context("the review reference does not resolve")?
@@ -193,9 +203,23 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs)?
+    let finished = super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs)?
         .selected
-        .context("finishing review did not produce a commit")
+        .context("finishing review did not produce a commit")?;
+    if let Some(reattach) = reattach {
+        let mut reference = repo
+            .find_reference(reattach.as_ref())
+            .context("the branch to restore after review is missing")?;
+        if reference.peel_to_id()?.detach() != finished {
+            anyhow::bail!("the branch to restore after review no longer points to the finished commit");
+        }
+        git(
+            &workdir,
+            ["symbolic-ref", "HEAD", reattach.as_bstr().to_str_lossy().as_ref()],
+        )
+        .context("could not reattach HEAD after review")?;
+    }
+    Ok(finished)
 }
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
@@ -301,6 +325,8 @@ mod tests {
             fixture.path(),
             &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "natural descendant"],
         )?;
+        run(fixture.path(), &["branch", "natural"])?;
+        run(fixture.path(), &["reset", "--hard", &tip.to_string()])?;
 
         let repo = gix::open_opts(
             fixture.path(),
@@ -323,10 +349,11 @@ mod tests {
             repo.find_commit(started.commit)?.tree_id()?,
             repo.find_commit(base)?.tree_id()?
         );
+        let review_ref = repo.find_reference(started.reference.as_ref())?;
         assert_eq!(
-            repo.find_reference(started.reference.as_ref())?.id().detach(),
-            tip,
-            "the review resource retains the reviewed tip"
+            review_ref.target().try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "the review resource remembers the branch to restore"
         );
         let commit = repo.find_commit(started.commit)?.decode()?.into_owned()?;
         assert_eq!(reference(&commit)?, Some(started.reference.clone()));
@@ -405,6 +432,11 @@ mod tests {
         let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
         assert_eq!(repo.head_id()?.detach(), finished);
         assert_eq!(
+            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "finishing reattaches HEAD to the branch saved by the review resource"
+        );
+        assert_eq!(
             repo.find_commit(finished)?.parent_ids().next().map(gix::Id::detach),
             Some(tip)
         );
@@ -414,7 +446,7 @@ mod tests {
             repo.find_commit(child)?.parent_ids().next().map(gix::Id::detach),
             Some(finished)
         );
-        let natural = repo.find_reference("refs/heads/main")?.id().detach();
+        let natural = repo.find_reference("refs/heads/natural")?.id().detach();
         assert_eq!(
             repo.find_commit(natural)?.parent_ids().next().map(gix::Id::detach),
             Some(child),
