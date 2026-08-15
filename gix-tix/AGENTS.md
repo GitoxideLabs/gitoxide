@@ -16,6 +16,11 @@
 
 - Create one commit per semantically distinct change. Do not combine independent
   behavior changes merely because they were requested together.
+- Write a descriptive commit body for every commit, not only a subject line.
+  Explain the motivation and relevant prior behavior, the context needed to
+  review the change, and any important constraints or decisions. The message
+  should let a reviewer understand why the change exists without reconstructing
+  the conversation that produced it.
 - Keep each change's implementation, tests, snapshots, and corresponding
   `spec.md` updates in that change's commit.
 - A commit created or materially rewritten by an AI agent must use that agent's own name and email as its author. Do not silently inherit the repository owner's configured identity.
