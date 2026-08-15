@@ -385,10 +385,8 @@ pub(crate) fn draw_with_worktree(
     let align_metadata = app.align_metadata;
     let show_committer_date = app.show_committer_date;
     let name_mode = app.name_mode;
-    let preview_author_copy = app.preview_author_copy;
     let copy_feedback = app.copy_feedback.take();
-    let show_author_name =
-        preview_author_copy || copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
+    let show_author_name = copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
@@ -408,11 +406,10 @@ pub(crate) fn draw_with_worktree(
                     show_emails: app.show_emails,
                     show_trailers,
                     has_notes: !app.notes(row.id).is_empty(),
-                    use_mailmap: app.use_mailmap && !preview_author_copy && copy_feedback != Some(CopyKind::Author),
+                    use_mailmap: app.use_mailmap && copy_feedback != Some(CopyKind::Author),
                     ref_mode,
                     selected: (selected == Some(start + index) && app.show_selection_tail)
                         || compared_parent == Some(row.id),
-                    preview_author_copy,
                     copy_feedback: if selected == Some(start + index) {
                         copy_feedback
                     } else {
@@ -565,32 +562,6 @@ pub(crate) fn draw_with_worktree(
                 (visible_rows[index].signature, visible_rows[index].is_review),
                 head_state,
             );
-        }
-        let lane_offset = if align_metadata {
-            graph_offset
-        } else {
-            horizontal_offset
-        };
-        if let (Some(parent), Some(disk)) = (
-            app.junction_parent(start + index),
-            lane.chars().position(|symbol| symbol == '●'),
-        ) && disk >= lane_offset
-        {
-            let number = parent.to_string();
-            let x = disk + 1 - lane_offset;
-            if x < row_area.width as usize {
-                let width = number
-                    .chars()
-                    .count()
-                    .min(lane.chars().count().saturating_sub(disk + 1))
-                    .min(row_area.width as usize - x);
-                if width > 0 {
-                    frame.render_widget(
-                        Paragraph::new(number).style(style),
-                        Rect::new(row_area.x + x as u16, y, width as u16, 1),
-                    );
-                }
-            }
         }
         if selected && app.show_selection_tail && body.width > 0 {
             let marker_limit = hidden_branch_marker
@@ -939,21 +910,9 @@ pub(crate) fn draw_with_worktree(
     ordered.append(&mut view_prefix_spans);
     ordered.append(&mut edit_prefix_spans);
     ordered.push(Span::raw(" · "));
-    ordered.extend(if app.preview_author_copy {
-        shortcut("copY author", 'Y', true)
-    } else {
-        shortcut("copy", 'y', true)
-    });
+    ordered.extend(shortcut("copy", 'y', true));
     ordered.push(Span::raw(" · "));
-    if app.preview_author_copy && app.manual_refresh {
-        ordered.extend(shortcut(
-            "Refresh",
-            'R',
-            matches!(history_state, State::Complete | State::Cancelled),
-        ));
-    } else {
-        ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
-    }
+    ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
     ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
     if app.information_expanded {
@@ -978,7 +937,6 @@ pub(crate) fn draw_with_worktree(
         ordered.extend(shortcut("message", 'm', app.show_commit));
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
-        ordered.push(Span::raw(")"));
     }
     ordered.append(&mut footer_spans);
     footer_spans = ordered;
@@ -988,6 +946,11 @@ pub(crate) fn draw_with_worktree(
     footer_spans.push(Span::raw(" · ↑↓/jk move · h/l pan"));
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · <enter> diff"));
+    }
+    if app.information_expanded {
+        footer_spans.push(Span::raw(")"));
+    }
+    if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · "));
         footer_spans.extend(shortcut("quit", 'q', true));
     }
@@ -1654,7 +1617,6 @@ struct MetadataOptions {
     use_mailmap: bool,
     ref_mode: RefMode,
     selected: bool,
-    preview_author_copy: bool,
     copy_feedback: Option<CopyKind>,
 }
 
@@ -1676,11 +1638,10 @@ fn metadata_line<'a>(
         use_mailmap,
         ref_mode,
         selected,
-        preview_author_copy,
         copy_feedback,
     } = options;
     let id = row.id.to_hex().to_string();
-    let id_style = if preview_author_copy || copy_feedback == Some(CopyKind::Id) {
+    let id_style = if copy_feedback == Some(CopyKind::Id) {
         Style::default()
     } else {
         color(Color::Magenta).add_modifier(Modifier::BOLD)
@@ -1745,8 +1706,6 @@ fn metadata_line<'a>(
         let author = author_label(row.author, mailmap, use_mailmap, show_emails && !row.author.is_bot());
         let mut author_style = if copy_feedback == Some(CopyKind::Author) {
             Style::default()
-        } else if preview_author_copy {
-            color(Color::Magenta).add_modifier(Modifier::BOLD)
         } else {
             color(Color::Green)
         };
@@ -1856,7 +1815,6 @@ pub(crate) fn todo_metadata(
             use_mailmap: app.use_mailmap,
             ref_mode: app.ref_mode,
             selected: false,
-            preview_author_copy: false,
             copy_feedback: None,
         },
     );
@@ -2798,35 +2756,6 @@ mod tests {
             "the footer reflects the unfiltered view"
         );
 
-        app.manual_refresh = true;
-        app.update(Action::PreviewAuthorCopy(true));
-        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
-        let row = rendered_row(&terminal);
-        assert!(
-            row.contains("author subject"),
-            "holding Shift reveals the raw author even when names are hidden"
-        );
-        let buffer = terminal.backend().buffer();
-        let hash_x = row.find("0101010").expect("the commit hash is rendered") as u16;
-        let author_x = row.find("author").expect("the author is rendered") as u16;
-        assert_ne!(buffer[(hash_x, 0)].fg, Color::Magenta, "the hash yields its copy color");
-        assert_eq!(
-            buffer[(author_x, 0)].fg,
-            Color::Magenta,
-            "the author takes the copy color"
-        );
-        assert!(
-            rendered_line(&terminal, 1).contains("copY author"),
-            "the footer previews the shifted shortcut"
-        );
-        assert!(
-            rendered_line(&terminal, 1).contains("Refresh"),
-            "the footer previews the shifted refresh shortcut"
-        );
-        assert!(
-            !rendered_line(&terminal, 1).contains(" · refs"),
-            "the shifted refresh shortcut replaces the reference toggle"
-        );
         Ok(())
     }
 
@@ -2917,10 +2846,12 @@ mod tests {
         app.edit_expanded = false;
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let footer = rendered_line(&terminal, 1);
         assert!(
-            rendered_line(&terminal, 1)
-                .starts_with("0 commits · view · edit · copy · refs · ? ([ align · message · changes)"),
-            "the information prefix contains the post-reference view actions"
+            footer.starts_with(
+                    "0 commits · view · edit · copy · refs · ? ([ align · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                ),
+            "the information prefix contains every following action except quit: {footer}"
         );
         Ok(())
     }
@@ -3169,7 +3100,6 @@ mod tests {
             "the hash color returns on the next frame"
         );
 
-        drop(app.update(Action::PreviewAuthorCopy(true)));
         drop(app.update(Action::CopyAuthor));
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         let selected_author = rendered_line(&terminal, 0)
@@ -3185,14 +3115,14 @@ mod tests {
         );
         assert_eq!(
             terminal.backend().buffer()[(other_author, 1)].fg,
-            Color::Magenta,
+            Color::Green,
             "author feedback does not affect other rows"
         );
 
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
         assert_eq!(
             terminal.backend().buffer()[(selected_author, 0)].fg,
-            Color::Magenta,
+            Color::Green,
             "the author color returns on the next frame"
         );
         Ok(())
@@ -3916,6 +3846,40 @@ mod tests {
                 Some(&changes),
             );
         })?;
+        let mut footer_terminal = Terminal::new(TestBackend::new(240, 16))?;
+        footer_terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            rendered_line(&footer_terminal, 15)
+                .contains("? · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff · quit"),
+            "the collapsed information prefix leaves the following actions visible"
+        );
+        app.information_expanded = true;
+        footer_terminal.draw(|frame| {
+            super::draw(
+                frame,
+                &mut app,
+                &Decorations::new(),
+                &gix::mailmap::Snapshot::default(),
+                None,
+                Some(&changes),
+            );
+        })?;
+        assert!(
+            rendered_line(&footer_terminal, 15).contains(
+                "? ([ align · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+            ),
+            "the expanded information prefix contains every following action except quit"
+        );
+        app.information_expanded = false;
 
         assert_eq!(
             terminal.backend().buffer()[(119, 7)].symbol(),
@@ -4682,41 +4646,6 @@ mod tests {
     }
 
     #[test]
-    fn dims_rows_outside_the_shift_reachability_set() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::new(2);
-        app.extend_commits(
-            (1..=2)
-                .map(|n| Commit {
-                    id: gix::ObjectId::Sha1([n; 20]),
-                    parent_ids: Default::default(),
-                    committer_time: gix::date::Time::default(),
-                    author: author(b"author", b"author@example.com"),
-                    attributions: 0..0,
-                    title: format!("subject {n}").into(),
-                    metadata_loaded: true,
-                    has_agent_marker: false,
-                    is_review: false,
-                    signature: SignatureState::Unsigned,
-                })
-                .collect::<Vec<_>>(),
-        );
-        complete(&mut app);
-        app.update(Action::PreviewAuthorCopy(true));
-        let mut terminal = Terminal::new(TestBackend::new(80, 3))?;
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-
-        assert!(
-            !terminal.backend().buffer()[(10, 0)].modifier.contains(Modifier::DIM),
-            "the anchor row remains bright"
-        );
-        assert!(
-            terminal.backend().buffer()[(10, 1)].modifier.contains(Modifier::DIM),
-            "an unreachable row is dimmed"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn renders_hidden_boundary_rows_without_colors() -> Result<(), Box<dyn std::error::Error>> {
         let commit = |n: u8| Commit {
             id: gix::ObjectId::Sha1([n; 20]),
@@ -4844,55 +4773,6 @@ mod tests {
     }
 
     #[test]
-    fn shows_the_selected_parent_beside_the_junction_disk() -> Result<(), Box<dyn std::error::Error>> {
-        let commit = |n: u8, parents: &[u8]| Commit {
-            id: gix::ObjectId::Sha1([n; 20]),
-            parent_ids: parents
-                .iter()
-                .map(|parent| gix::ObjectId::Sha1([*parent; 20]))
-                .collect(),
-            committer_time: gix::date::Time::default(),
-            author: author(b"author", b"author@example.com"),
-            attributions: 0..0,
-            title: format!("subject {n}").into(),
-            metadata_loaded: true,
-            has_agent_marker: false,
-            is_review: false,
-            signature: SignatureState::Unsigned,
-        };
-        let mut app = App::new(4);
-        app.extend_commits(vec![
-            commit(4, &[3, 2]),
-            commit(3, &[1]),
-            commit(2, &[1]),
-            commit(1, &[]),
-        ]);
-        complete(&mut app);
-        app.update(Action::PreviewAuthorCopy(true));
-        let mut terminal = Terminal::new(TestBackend::new(80, 5))?;
-
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let metadata_x = rendered_row(&terminal)
-            .find("0404040")
-            .expect("the junction metadata is visible");
-        assert_eq!(
-            terminal.backend().buffer()[(3, 0)].symbol(),
-            "2",
-            "the initial parent number replaces the connector beside the disk"
-        );
-
-        app.update(Action::ScrollRight);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(3, 0)].symbol(), "1");
-        assert_eq!(
-            rendered_row(&terminal).find("0404040"),
-            Some(metadata_x),
-            "cycling parents does not shift metadata"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn uses_the_tig_palette_without_coloring_the_selection() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let commit = Commit {
@@ -4952,7 +4832,6 @@ mod tests {
                 use_mailmap: false,
                 ref_mode: RefMode::All,
                 selected: false,
-                preview_author_copy: false,
                 copy_feedback: None,
             },
         );

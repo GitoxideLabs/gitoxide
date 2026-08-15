@@ -34,7 +34,7 @@ use crossterm::{
     cursor,
     event::{
         self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event as TerminalEvent,
-        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode, MouseEventKind,
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -830,9 +830,7 @@ fn enable_input(backend: &mut CrosstermBackend<std::io::Stdout>, enhanced_keyboa
         execute!(
             backend,
             PushKeyboardEnhancementFlags(
-                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
         )?;
     }
@@ -905,7 +903,6 @@ fn event_loop(
     if recovered_at_startup {
         app.leave_message("worktree removed; using the common repository without worktree changes");
     }
-    app.manual_refresh = ref_watcher.is_none();
     let mut lane_receiver = None;
     let mut refresh_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
@@ -1013,7 +1010,6 @@ fn event_loop(
                 }
             };
             ref_watch_set_changed = false;
-            app.manual_refresh = ref_watcher.is_none();
             app.leave_message("worktree removed; using the common repository without worktree changes");
             if history_graph.is_some() {
                 refresh_pending = true;
@@ -1119,7 +1115,6 @@ fn event_loop(
             ref_watcher = None;
             ref_refresh_deadline = None;
             ref_watch_set_changed = false;
-            app.manual_refresh = true;
             schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
         }
         if take_due(&mut ref_refresh_deadline, Instant::now()) {
@@ -1127,12 +1122,10 @@ fn event_loop(
                 match start_ref_watcher(&repository_path, &common_dir) {
                     Ok(watcher) => {
                         ref_watcher = Some(watcher);
-                        app.manual_refresh = false;
                     }
                     Err(err) => {
                         tracing::warn!(error = %err, "reference watcher rebuild failed");
                         ref_watcher = None;
-                        app.manual_refresh = true;
                         schedule_once(&mut watcher_retry_deadline, Instant::now(), WATCH_RETRY_INTERVAL);
                     }
                 }
@@ -1155,7 +1148,6 @@ fn event_loop(
                     Ok(watcher) => {
                         tracing::info!("reference watcher recovered");
                         ref_watcher = Some(watcher);
-                        app.manual_refresh = false;
                     }
                     Err(err) => {
                         tracing::warn!(error = %err, "reference watcher retry failed");
@@ -1526,7 +1518,6 @@ fn event_loop(
                 focused = false;
                 app.changes_suppressed = false;
                 repeat_deadline = None;
-                drop(app.update(Action::PreviewAuthorCopy(false)));
                 dirty = true;
                 urgent = true;
                 continue;
@@ -4234,18 +4225,10 @@ fn action(key: KeyEvent) -> Option<Action> {
 }
 
 fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, edit_expanded: bool) -> Option<Action> {
-    if key.kind == KeyEventKind::Release
-        && !matches!(
-            key.code,
-            KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
-        )
-    {
+    if key.kind == KeyEventKind::Release {
         return None;
     }
     match key.code {
-        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift) => {
-            Some(Action::PreviewAuthorCopy(key.kind != KeyEventKind::Release))
-        }
         KeyCode::Tab => Some(Action::ToggleChangesFocus),
         KeyCode::Enter => Some(Action::OpenDiff),
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Action::ForceQuit),
@@ -4297,6 +4280,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
+        KeyCode::Char('/') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::ToggleInformation),
         KeyCode::Char('[') => Some(Action::ToggleAlign),
         KeyCode::Char(']') => Some(Action::ToggleCommit),
         KeyCode::Char('Y') => Some(Action::CopyAuthor),
@@ -5253,6 +5237,19 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::SHIFT)),
             Some(Action::ToggleInformation)
         );
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::SHIFT)),
+            Some(Action::ToggleInformation),
+            "terminals which preserve the base character map Shift-/ to information"
+        );
+        assert_eq!(
+            action(KeyEvent::new(
+                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                KeyModifiers::SHIFT,
+            )),
+            None,
+            "standalone Shift has no application behavior"
+        );
         for (key, expected) in [
             ('d', Action::ToggleDate),
             ('e', Action::ToggleEmail),
@@ -5326,22 +5323,6 @@ mod tests {
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::SHIFT)),
             Some(Action::CopyAuthor)
-        );
-        assert_eq!(
-            action(KeyEvent::new_with_kind(
-                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
-                KeyModifiers::SHIFT,
-                KeyEventKind::Press,
-            )),
-            Some(Action::PreviewAuthorCopy(true))
-        );
-        assert_eq!(
-            action(KeyEvent::new_with_kind(
-                KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
-                KeyModifiers::NONE,
-                KeyEventKind::Release,
-            )),
-            Some(Action::PreviewAuthorCopy(false))
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
