@@ -871,8 +871,9 @@ pub(crate) fn draw_with_worktree(
             edit_prefix_spans.push(Span::raw("dit"));
         }
     }
-    if app.tree_changes_visible || app.worktree_changes_visible {
-        footer_spans.push(match app.focus_feedback.take() {
+    let focus_feedback = app.focus_feedback.take();
+    if app.information_expanded && (app.tree_changes_visible || app.worktree_changes_visible) {
+        footer_spans.push(match focus_feedback {
             Some(destination) => Span::raw(format!(" · <tab> → {destination}")),
             None => Span::raw(" · <tab> switch"),
         });
@@ -957,11 +958,11 @@ pub(crate) fn draw_with_worktree(
     if app.changes_focus.is_none() && history_state == State::Loading {
         footer_spans.push(Span::raw(" · Esc cancel"));
     }
-    footer_spans.push(Span::raw(" · ↑↓/jk move · h/l pan"));
-    if app.changes_focus.is_none() {
-        footer_spans.push(Span::raw(" · <enter> diff"));
-    }
     if app.information_expanded {
+        footer_spans.push(Span::raw(" · ↑↓/jk move · h/l pan"));
+        if app.changes_focus.is_none() {
+            footer_spans.push(Span::raw(" · <enter> diff"));
+        }
         footer_spans.push(Span::raw(")"));
     }
     if app.changes_focus.is_none() {
@@ -2593,7 +2594,7 @@ mod tests {
             "todo commit metadata excludes separately represented refs"
         );
 
-        let footer_text = "#1 · view · edit · copy · refs · ? · ↑↓/jk move · h/l pan · <enter> diff · quit";
+        let footer_text = "#1 · view · edit · copy · refs · ? · quit";
         let selected_line = "> @ 0101010 1970-01-01 mapped author subject";
         let mut expected = Buffer::with_lines([format!("{selected_line:<180}"), format!("{footer_text:<180}")]);
         for x in 0..11 {
@@ -3897,9 +3898,15 @@ mod tests {
             );
         })?;
         assert!(
-            rendered_line(&footer_terminal, 15)
-                .contains("? · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff · quit"),
-            "the collapsed information prefix leaves the following actions visible"
+            rendered_line(&footer_terminal, 15).contains("? · quit"),
+            "the collapsed information prefix is followed only by quit"
+        );
+        assert!(
+            !rendered_line(&footer_terminal, 15).contains("<tab> switch")
+                && !rendered_line(&footer_terminal, 15).contains("↑↓/jk move")
+                && !rendered_line(&footer_terminal, 15).contains("h/l pan")
+                && !rendered_line(&footer_terminal, 15).contains("<enter> diff"),
+            "information actions are hidden with their prefix"
         );
         app.information_expanded = true;
         footer_terminal.draw(|frame| {
@@ -3991,7 +3998,7 @@ mod tests {
             Color::Reset,
             "the main status keeps its original background"
         );
-        assert!(rendered_line(&terminal, 15).contains("<tab> switch"));
+        assert!(!rendered_line(&terminal, 15).contains("<tab> switch"));
 
         app.changes_suppressed = true;
         app.information_expanded = true;
@@ -4045,7 +4052,7 @@ mod tests {
                 && !terminal.backend().buffer()[(2, 15)].modifier.contains(Modifier::DIM),
             "the inactive history is dimmed without dimming the main status"
         );
-        assert!(rendered_line(&terminal, 15).contains("<tab> → tree changes"));
+        assert!(!rendered_line(&terminal, 15).contains("<tab> → tree changes"));
         assert!(rendered_line(&terminal, 15).contains("q/Esc history"));
         terminal.draw(|frame| {
             super::draw(
@@ -4057,10 +4064,7 @@ mod tests {
                 Some(&changes),
             );
         })?;
-        assert!(
-            rendered_line(&terminal, 15).contains("<tab> switch"),
-            "focus feedback lasts for one redraw"
-        );
+        assert!(!rendered_line(&terminal, 15).contains("<tab> switch"));
         assert!(
             !terminal.backend().buffer()[(added_x, 7)]
                 .modifier

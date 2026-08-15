@@ -198,12 +198,13 @@ navigation or another recognized command. The `?` group similarly remains open
 for signature verification, alignment, message, and changes actions, but these
 actions retain their direct shortcuts while the group is closed. While expanded,
 the group visually contains every following status action through `<enter> diff`,
-including pane switching and navigation; quit remains outside it. The footer
+including pane switching and navigation; none of those hints is visible while
+the group is closed, and quit remains outside it. The footer
 underlines the `v` in `view`; while active, `view (` contains
 every applicable display option and a closing `)` so direct shortcuts remain visibly
 outside the prefix. The history status starts with the history position, then the
 `v` prefix and the `e` prefix when it is addressable. Remaining history-level
-actions follow before movement, panning, and diff navigation shortcuts. Copy
+actions end at the information prefix while it is closed. Copy
 immediately follows the edit group; the reference toggle immediately precedes
 the `?` group; quit is always last.
 All status lines embed and underline a shortcut character in its action label when
