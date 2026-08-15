@@ -1621,11 +1621,12 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
             continue;
         }
-        if let Some(suffix) = full_name.as_bstr().strip_prefix(STASH_PREFIX) {
-            let id = match ObjectId::from_hex(suffix) {
-                Ok(id) if id.to_hex().to_string().as_bytes() == suffix => id,
-                _ => {
-                    tracing::warn!(name = %full_name, "ignored malformed tix stash reference");
+        if full_name.as_bstr().starts_with(STASH_PREFIX) {
+            let id = match crate::edit::stash::associated_commit(full_name.as_bstr()) {
+                Ok(Some(id)) => id,
+                Ok(None) => unreachable!("the stash prefix was checked"),
+                Err(err) => {
+                    tracing::warn!(name = %full_name, error = %err, "ignored malformed tix stash reference");
                     continue;
                 }
             };

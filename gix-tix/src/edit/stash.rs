@@ -1,9 +1,14 @@
-use std::{fmt::Write as _, path::Path, process::Command};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as _,
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{Context, Result};
 use gix::{
     ObjectId,
-    bstr::ByteSlice,
+    bstr::{BStr, ByteSlice},
     refs::{
         Target,
         transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog},
@@ -20,6 +25,113 @@ pub(crate) fn reference(id: ObjectId) -> Result<gix::refs::FullName> {
     )
     .try_into()
     .context("generated an invalid tix stash reference")
+}
+
+pub(crate) fn associated_commit(name: &BStr) -> Result<Option<ObjectId>> {
+    let Some(suffix) = name.strip_prefix(crate::history::STASH_PREFIX) else {
+        return Ok(None);
+    };
+    let id = ObjectId::from_hex(suffix).context("tix stash reference has an invalid commit ID")?;
+    if id.to_hex().to_string().as_bytes() != suffix {
+        anyhow::bail!("tix stash reference does not use a canonical full commit ID");
+    }
+    Ok(Some(id))
+}
+
+pub(super) struct RewriteEdits {
+    pub forward: Vec<RefEdit>,
+    pub rollback: Vec<RefEdit>,
+}
+
+pub(super) fn rewrite_edits(
+    repo: &gix::Repository,
+    rewritten: &HashMap<ObjectId, Option<ObjectId>>,
+    removed: &HashSet<ObjectId>,
+) -> Result<RewriteEdits> {
+    let mut moves = Vec::new();
+    let mut destinations = HashMap::<ObjectId, ObjectId>::new();
+    for reference in repo.references()?.all()? {
+        let reference = match reference {
+            Ok(reference) => reference,
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "could not inspect a stash reference before rebasing: {err}"
+                ));
+            }
+        };
+        let old = match associated_commit(reference.name().as_bstr()) {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(name = %reference.name(), error = %err, "ignored malformed tix stash reference");
+                continue;
+            }
+        };
+        let Some(new) = rewritten.get(&old).copied() else {
+            continue;
+        };
+        if removed.contains(&old) {
+            anyhow::bail!("cannot drop stashed commit {}", old.to_hex_with_len(7));
+        }
+        let new = new.context("a stashed commit cannot disappear during a rewrite")?;
+        if new == old {
+            continue;
+        }
+        if let Some(other) = destinations.insert(new, old) {
+            anyhow::bail!(
+                "stashes at {} and {} would converge on {}",
+                other.to_hex_with_len(7),
+                old.to_hex_with_len(7),
+                new.to_hex_with_len(7)
+            );
+        }
+        moves.push((reference.name().to_owned(), reference.target().into_owned(), old, new));
+    }
+
+    let mut forward = Vec::with_capacity(moves.len() * 2);
+    let mut rollback = Vec::with_capacity(moves.len() * 2);
+    for (old_name, target, old, new) in moves {
+        let new_name = reference(new)?;
+        if repo.try_find_reference(new_name.as_ref())?.is_some() {
+            anyhow::bail!(
+                "rewritten commit {} already has saved worktree state",
+                new.to_hex_with_len(7)
+            );
+        }
+        forward.push(delete_edit(old_name.clone(), target.clone()));
+        forward.push(create_edit(new_name.clone(), target.clone()));
+        rollback.push(delete_edit(new_name, target.clone()));
+        rollback.push(create_edit(old_name, target));
+        tracing::debug!(old = %old, new = %new, "prepared tix stash association rewrite");
+    }
+    Ok(RewriteEdits { forward, rollback })
+}
+
+fn create_edit(name: gix::refs::FullName, target: Target) -> RefEdit {
+    RefEdit {
+        change: Change::Update {
+            log: LogChange {
+                mode: RefLog::AndReference,
+                force_create_reflog: false,
+                message: "tix commit stash rewrite".into(),
+            },
+            expected: PreviousValue::MustNotExist,
+            new: target,
+        },
+        name,
+        deref: false,
+    }
+}
+
+fn delete_edit(name: gix::refs::FullName, target: Target) -> RefEdit {
+    RefEdit {
+        change: Change::Delete {
+            expected: PreviousValue::MustExistAndMatch(target),
+            log: RefLog::AndReference,
+        },
+        name,
+        deref: false,
+    }
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -76,7 +188,6 @@ pub(super) struct SavedStash {
     pub warning: Option<String>,
 }
 
-#[expect(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(stash = %name))]
 pub(super) fn save(
     repository_path: &Path,
