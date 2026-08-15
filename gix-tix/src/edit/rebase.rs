@@ -303,6 +303,7 @@ impl Conflict {
             merged_tree: self.merged_tree,
             commit: self.commit,
             deferred_ref_deletions: outcome.deferred_ref_deletions,
+            rewritten: outcome.rewritten,
         })
     }
 }
@@ -313,9 +314,14 @@ pub(crate) struct PersistedConflict {
     merged_tree: ObjectId,
     pub(crate) commit: ObjectId,
     pub(crate) deferred_ref_deletions: Vec<(gix::refs::FullName, ObjectId)>,
+    rewritten: HashMap<ObjectId, Option<ObjectId>>,
 }
 
 impl PersistedConflict {
+    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
+        self.rewritten.get(&id).copied().unwrap_or(Some(id))
+    }
+
     pub(crate) fn materialize(&mut self) -> Result<()> {
         let mut index = self
             .repo

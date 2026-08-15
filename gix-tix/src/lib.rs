@@ -2157,21 +2157,17 @@ fn event_loop(
                         });
                     match result {
                         Ok(Some(edit::rebase::PlanPerform::Complete(outcome))) => {
-                            let notice = outcome
-                                .selected
-                                .map(|selected| {
-                                    edit::time_travel::checkout_plan(
-                                        &repository_path,
-                                        repository_is_bare,
-                                        selected,
-                                        outcome.checkout_reference.as_ref(),
-                                        &outcome.deferred_ref_deletions,
-                                        &revisions,
-                                        worktrees,
-                                    )
-                                })
-                                .transpose()
-                                .map(Option::flatten);
+                            let notice = if outcome.selected.is_some() {
+                                edit::time_travel::checkout_plan(
+                                    &repository_path,
+                                    repository_is_bare,
+                                    &outcome,
+                                    &revisions,
+                                    worktrees,
+                                )
+                            } else {
+                                Ok(None)
+                            };
                             match notice {
                                 Ok(notice) => {
                                     app.leave_message(notice.unwrap_or_else(|| "rebased history".to_owned()));

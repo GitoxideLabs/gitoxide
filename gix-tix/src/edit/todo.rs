@@ -1686,16 +1686,7 @@ mod tests {
         );
         let graph = super::super::loaded_graph(&repo)?;
         let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
-        let selected = outcome.selected.context("the edited todo retains a checkout")?;
-        super::super::time_travel::checkout_plan(
-            repo.git_dir(),
-            false,
-            selected,
-            outcome.checkout_reference.as_ref(),
-            &outcome.deferred_ref_deletions,
-            &[],
-            false,
-        )?;
+        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
 
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert_eq!(
@@ -1712,6 +1703,48 @@ mod tests {
             std::fs::read_to_string(fixture.path().join("tip"))?,
             "tip\n",
             "the detached checkout keeps the selected tree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rewritten_detached_head_is_not_pinned_before_checkout() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (base, _middle, tip, commits) = commits(&repo)?;
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(["checkout", "--quiet", "--detach", &tip.to_string()])
+                .status()?
+                .success(),
+            "the fixture HEAD can be detached"
+        );
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let edited = with_state(
+            &prepared,
+            &format!(
+                "## fork {}\n@pick {}\n(main, refs/patches/tip)\n",
+                base.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+            ),
+        );
+        let plan = parse_plan(&repo, &edited)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let selected = outcome.selected.context("the rewritten todo retains @")?;
+        assert_ne!(selected, tip, "dropping the middle commit rewrites the checked-out tip");
+
+        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
+
+        assert_eq!(
+            repo.head_id()?.detach(),
+            selected,
+            "HEAD reaches the rewritten successor"
+        );
+        assert!(
+            crate::history::all_pins(&repo)?.iter().all(|pin| pin.id != tip),
+            "the superseded detached HEAD is not retained through a pin"
         );
         Ok(())
     }
@@ -1736,15 +1769,7 @@ mod tests {
             repo.try_find_reference("refs/heads/main")?.is_some(),
             "the checked-out branch remains until checkout succeeds"
         );
-        super::super::time_travel::checkout_plan(
-            repo.git_dir(),
-            false,
-            outcome.selected.context("the todo selects HEAD")?,
-            outcome.checkout_reference.as_ref(),
-            &outcome.deferred_ref_deletions,
-            &[],
-            false,
-        )?;
+        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
         assert!(repo.head()?.referent_name().is_none(), "HEAD is detached");
         assert!(
             repo.try_find_reference("refs/heads/main")?.is_none(),
