@@ -107,9 +107,10 @@ without trading responsiveness for metadata that is not visible.
   the same signature and selection coloring. It remains visible when textual
   reference labels are hidden, and textual `HEAD` is never rendered alongside it.
 - At startup, the current worktree's `@` row becomes selected as soon as it is
-  loaded, unless the user navigates first. If it has visible descendants, its
-  unselected non-whitespace content is underlined and `@` is bold; a selected
-  row keeps only bold `@`.
+  loaded, unless the user navigates first. Once the viewport is known, the row
+  is centered with normal history-boundary clamping so surrounding commits are
+  visible. If it has visible descendants, its unselected non-whitespace content
+  is underlined and `@` is bold; a selected row keeps only bold `@`.
 - Local branches checked out in other worktrees are displayed as `short-name@`
   in light blue instead of their plain branch decoration. Other detached
   worktrees use their checkout directory basename. The current worktree's

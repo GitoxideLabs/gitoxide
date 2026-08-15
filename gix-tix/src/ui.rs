@@ -351,6 +351,7 @@ pub(crate) fn draw_with_worktree(
         .min()
         .unwrap_or(body.height)
         .max(1) as usize;
+    app.center_initial_selection();
     app.ensure_visible();
     let start = app.offset.min(app.rows.len());
     let render_end = start.saturating_add(body.height as usize).min(app.rows.len());
