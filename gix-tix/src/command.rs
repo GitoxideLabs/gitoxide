@@ -3,6 +3,8 @@ use std::ffi::OsString;
 use anyhow::{Context, Result};
 use clap::Parser;
 
+mod rebase;
+
 /// Arguments and commands shared by the standalone `tix` binary and `gix tix`.
 #[derive(Debug, clap::Args)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -33,13 +35,17 @@ enum Command {
     Spill,
     /// Split HEAD by amending worktree changes into it and committing staged index changes on top.
     Split,
+    /// Generate or apply a self-contained history-rebase todo.
+    #[command(subcommand)]
+    Rebase(rebase::Command),
 }
 
 #[derive(Debug, clap::Parser)]
 #[command(
     name = "tix",
     about = "Browse commits or edit the checked-out commit",
-    disable_help_flag = true
+    disable_help_flag = true,
+    after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
 struct Cli {
     #[command(flatten)]
@@ -76,11 +82,20 @@ impl Platform {
 
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         let repository = repository.to_thread_local();
-        let graph = crate::edit::loaded_view_graph(&repository)?;
         match command {
-            Command::Amend => edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?,
-            Command::Spill => edit_head(repository, &graph, crate::edit::head::Kind::Spill, "spill")?,
-            Command::Split => split(repository, &graph)?,
+            Command::Amend => {
+                let graph = crate::edit::loaded_view_graph(&repository)?;
+                edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?;
+            }
+            Command::Spill => {
+                let graph = crate::edit::loaded_view_graph(&repository)?;
+                edit_head(repository, &graph, crate::edit::head::Kind::Spill, "spill")?;
+            }
+            Command::Split => {
+                let graph = crate::edit::loaded_view_graph(&repository)?;
+                split(repository, &graph)?;
+            }
+            Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
     }
@@ -168,12 +183,40 @@ mod tests {
                 .command,
             Some(Command::Split)
         ));
+        assert!(matches!(
+            Cli::try_parse_from([
+                "tix",
+                "rebase",
+                "todo",
+                "-h",
+                "main",
+                "--onto",
+                "next",
+                "--edit-and-apply",
+                "topic"
+            ])
+            .expect("rebase todo parses")
+            .platform
+            .command,
+            Some(Command::Rebase(rebase::Command::Todo(_)))
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["tix", "rebase", "apply", "-"])
+                .expect("rebase apply parses")
+                .platform
+                .command,
+            Some(Command::Rebase(rebase::Command::Apply(_)))
+        ));
         assert!(
             Cli::command()
                 .render_help()
                 .to_string()
                 .contains("Split HEAD by amending worktree changes into it and committing staged index changes on top"),
             "short help explains how split distributes index and worktree changes"
+        );
+        assert!(
+            Cli::command().render_long_help().to_string().contains("GIT_EDITOR"),
+            "top-level help explains how to override Git's editor"
         );
     }
 

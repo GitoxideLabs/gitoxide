@@ -1254,6 +1254,15 @@ impl App {
         out
     }
 
+    pub(crate) fn hidden_rebase_candidates(&mut self) -> Vec<(ObjectId, Vec<ObjectId>)> {
+        self.update_hidden_branch_targets();
+        self.rows
+            .iter()
+            .filter(|row| self.hidden_rebase_bases.contains(&row.id))
+            .map(|row| (row.id, self.hidden_descendants(row.id)))
+            .collect()
+    }
+
     pub(crate) fn start_refresh(
         &mut self,
         commits: LoadedCommits,

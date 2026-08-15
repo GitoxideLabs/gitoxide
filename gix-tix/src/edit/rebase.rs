@@ -91,8 +91,8 @@ pub(crate) struct PlanStep {
 pub(crate) struct ExpectedRef {
     pub name: gix::refs::FullName,
     pub old: ObjectId,
-    new: ObjectId,
-    follows_tip: bool,
+    pub new: ObjectId,
+    pub follows_tip: bool,
 }
 
 #[derive(Debug)]
@@ -140,6 +140,10 @@ pub(crate) struct Conflict {
 impl Conflict {
     pub(crate) fn original(&self) -> ObjectId {
         self.original
+    }
+
+    pub(crate) fn map(&self, id: ObjectId) -> Option<ObjectId> {
+        self.prepared.rewritten.get(&id).copied().unwrap_or(Some(id))
     }
 
     pub(crate) fn persist(mut self) -> Result<PersistedConflict> {
