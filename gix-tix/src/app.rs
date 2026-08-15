@@ -3339,6 +3339,7 @@ mod tests {
         app.update(Action::Forget);
         app.update(Action::Rebase);
         app.update(Action::RebaseUpdate);
+        app.update(Action::TimeTravel);
         assert!(app.edit_expanded, "grouped edit commands keep the group open");
 
         app.update(Action::MoveDown);

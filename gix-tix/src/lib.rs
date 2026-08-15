@@ -4311,9 +4311,9 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
         KeyCode::Char('s') if edit_expanded => Some(Action::Spill),
         KeyCode::Char('d') if edit_expanded => Some(Action::Forget),
-        KeyCode::Char('t') if edit_expanded => Some(Action::TimeTravel),
         KeyCode::Char('i') if edit_expanded => Some(Action::Unpin),
         KeyCode::Char('v') if edit_expanded => Some(Action::Review),
+        KeyCode::Char('@') => Some(Action::TimeTravel),
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
@@ -5260,6 +5260,11 @@ mod tests {
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
         assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)),
+            Some(Action::TimeTravel),
+            "the terminal's direct at-sign event invokes time travel"
+        );
+        assert_eq!(
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT)),
             Some(Action::Refresh),
             "terminals which preserve lowercase shifted letters map Shift-R to refresh"
@@ -5322,7 +5327,6 @@ mod tests {
             ('s', Action::Spill),
             ('p', Action::Split),
             ('d', Action::Forget),
-            ('t', Action::TimeTravel),
             ('i', Action::Unpin),
         ] {
             assert_eq!(
@@ -5331,6 +5335,16 @@ mod tests {
                 "{key} is available after the edit prefix"
             );
         }
+        assert_eq!(
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE), false, true),
+            None,
+            "time travel is no longer part of the edit prefix"
+        );
+        assert_eq!(
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE), false, true),
+            Some(Action::TimeTravel),
+            "the direct time-travel key remains available while edit is expanded"
+        );
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL), false, true,),
             Some(Action::PageUp),
