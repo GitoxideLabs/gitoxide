@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
     process::Command,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -104,6 +105,25 @@ pub(crate) struct Plan {
     pub steps: Vec<PlanStep>,
     pub checkout: Option<usize>,
     pub expected_refs: Vec<ExpectedRef>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PlanProgress {
+    pub total: usize,
+    pub processed: usize,
+    pub cherry_picked: usize,
+    pub signed: usize,
+    pub cherry_pick_time: Duration,
+    pub signing_time: Duration,
+}
+
+impl PlanProgress {
+    fn new(plan: &Plan) -> Self {
+        PlanProgress {
+            total: plan.steps.len() + plan.steps.iter().map(|step| step.squash.len()).sum::<usize>(),
+            ..PlanProgress::default()
+        }
+    }
 }
 
 pub(crate) enum PlanPerform {
@@ -641,8 +661,19 @@ pub(super) fn finish_review(
     prepared.finish()
 }
 
+pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, plan: Plan) -> Result<PlanPerform> {
+    perform_plan_with_progress(repo, graph, plan, |_| {})
+}
+
 #[tracing::instrument(skip_all, fields(base = %plan.base, steps = plan.steps.len()))]
-pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut plan: Plan) -> Result<PlanPerform> {
+pub(crate) fn perform_plan_with_progress(
+    repo: &gix::Repository,
+    graph: &HistoryGraph,
+    mut plan: Plan,
+    mut report: impl FnMut(PlanProgress),
+) -> Result<PlanPerform> {
+    let mut progress = PlanProgress::new(&plan);
+    report(progress);
     let mut repo = repo.clone();
     let signing = repo
         .commit_signing_options_if_enabled()
@@ -734,6 +765,7 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         } else {
             Tree::LeaveAsIsAndMark
         };
+        let cherry_pick_started = (eager && matches!(step.commit, PlanCommit::Pick(_))).then(Instant::now);
         commit.tree = match rewritten_tree(&repo, &commit, &replay_parents, &[parent], mode)? {
             TreeRewrite::Complete(tree) => tree,
             TreeRewrite::Conflict { .. } => {
@@ -743,6 +775,14 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
                 return Ok(PlanPerform::Conflict(original));
             }
         };
+        if let Some(started) = cherry_pick_started {
+            progress.cherry_picked += 1;
+            progress.cherry_pick_time += started.elapsed();
+        }
+        if matches!(step.commit, PlanCommit::Pick(_)) {
+            progress.processed += 1;
+            report(progress);
+        }
         let mut squashed = Vec::with_capacity(step.squash.len());
         for id in &step.squash {
             let source = repo
@@ -764,10 +804,15 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
             squash_message(&repo, &mut commit, &squashed)?;
             for (id, source, replay_parents) in &squashed {
                 let old_base = parent_tree(&repo, replay_parents.first().copied())?;
+                let started = Instant::now();
                 commit.tree = match cherry_pick_tree_outcome(&repo, old_base, commit.tree, source.tree)? {
                     TreeRewrite::Complete(tree) => tree,
                     TreeRewrite::Conflict { .. } => return Ok(PlanPerform::Conflict(*id)),
                 };
+                progress.cherry_picked += 1;
+                progress.cherry_pick_time += started.elapsed();
+                progress.processed += 1;
+                report(progress);
                 delete_refs.extend(super::review::deletions(&repo, source)?);
             }
         }
@@ -780,7 +825,15 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
                 original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
             }
         };
-        let new_id = write_commit(&repo, commit, state, signing.clone())?;
+        let (new_id, signing_time) = write_commit_timed(&repo, commit, state, signing.clone())?;
+        if let Some(elapsed) = signing_time {
+            progress.signed += 1;
+            progress.signing_time += elapsed;
+        }
+        if matches!(step.commit, PlanCommit::Empty(_)) {
+            progress.processed += 1;
+        }
+        report(progress);
         if let PlanCommit::Pick(old_id) = step.commit {
             rewritten.insert(old_id, Some(new_id));
         }
@@ -877,6 +930,15 @@ pub(crate) fn perform_plan(repo: &gix::Repository, graph: &HistoryGraph, mut pla
         pins,
         delete_refs,
     };
+    tracing::info!(
+        total = progress.total,
+        processed = progress.processed,
+        cherry_picked = progress.cherry_picked,
+        signed = progress.signed,
+        cherry_pick_ms = progress.cherry_pick_time.as_millis(),
+        signing_ms = progress.signing_time.as_millis(),
+        "prepared rebase plan"
+    );
     Ok(PlanPerform::Complete(prepared.finish()?))
 }
 
@@ -1315,10 +1377,19 @@ pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
 
 fn write_commit(
     repo: &gix::Repository,
-    mut commit: gix::objs::Commit,
+    commit: gix::objs::Commit,
     state: CommitState,
     signing: Option<gix::objs::commit::signature::Options>,
 ) -> Result<ObjectId> {
+    Ok(write_commit_timed(repo, commit, state, signing)?.0)
+}
+
+fn write_commit_timed(
+    repo: &gix::Repository,
+    mut commit: gix::objs::Commit,
+    state: CommitState,
+    signing: Option<gix::objs::commit::signature::Options>,
+) -> Result<(ObjectId, Option<Duration>)> {
     let signature = match state {
         CommitState::Unmarked(signature) => {
             marker(&mut commit, false, None);
@@ -1331,8 +1402,14 @@ fn write_commit(
     };
     let had_signature = commit.extra_headers.iter().any(|(name, _)| is_signature(name));
     commit.extra_headers.retain(|(name, _)| !is_signature(name));
+    let mut signing_time = None;
     commit = match (signature, signing) {
-        (Signature::RedoIfNeeded, Some(options)) => commit.sign(options).context("could not sign rebased commit")?,
+        (Signature::RedoIfNeeded, Some(options)) => {
+            let started = Instant::now();
+            let signed = commit.sign(options).context("could not sign rebased commit")?;
+            signing_time = Some(started.elapsed());
+            signed
+        }
         (Signature::InvalidateExisting, Some(_)) if had_signature => {
             let field = gix::objs::commit::signature_field_name(commit.tree.kind());
             commit.extra_headers.push((field.into(), BString::default()));
@@ -1341,10 +1418,12 @@ fn write_commit(
         (Signature::Remove, _) => commit,
         _ => commit,
     };
-    Ok(repo
-        .write_object(&commit)
-        .context("could not prepare rebased commit")?
-        .detach())
+    Ok((
+        repo.write_object(&commit)
+            .context("could not prepare rebased commit")?
+            .detach(),
+        signing_time,
+    ))
 }
 
 fn is_signature(name: &BString) -> bool {
@@ -2063,7 +2142,8 @@ mod tests {
         let old_middle_tree = repo.find_commit(middle)?.tree_id()?.detach();
         let expected_refs = capture_refs(&repo, &[middle, tip], &[tip])?;
 
-        let outcome = perform_plan(
+        let mut progress = Vec::new();
+        let outcome = perform_plan_with_progress(
             &repo,
             &graph,
             Plan {
@@ -2089,8 +2169,18 @@ mod tests {
                 checkout: Some(0),
                 expected_refs,
             },
+            |update| progress.push(update),
         )?
         .complete()?;
+        let progress = progress.last().context("rebase progress is reported")?;
+        assert_eq!(progress.total, 3, "every todo command contributes to the total");
+        assert_eq!(progress.processed, 3, "eager, lazy, and empty commands are processed");
+        assert_eq!(progress.cherry_picked, 1, "only the checkout ancestry is eager");
+        assert_eq!(progress.signed, 0, "signing is counted only when configured");
+        assert!(
+            progress.cherry_pick_time > Duration::ZERO,
+            "cherry-pick time accumulates"
+        );
         let new_tip = outcome.map(tip).context("the picked tip is retained")?;
         let new_middle = outcome.map(middle).context("the picked middle is retained")?;
         assert_eq!(
@@ -2166,7 +2256,8 @@ mod tests {
         let tip = repo.head_id()?.detach();
         let tip_tree = repo.find_commit(tip)?.tree_id()?.detach();
 
-        let outcome = perform_plan(
+        let mut progress = Vec::new();
+        let outcome = perform_plan_with_progress(
             &repo,
             &graph,
             Plan {
@@ -2180,8 +2271,14 @@ mod tests {
                 checkout: None,
                 expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
             },
+            |update| progress.push(update),
         )?
         .complete()?;
+        let progress = progress.last().context("squash progress is reported")?;
+        assert_eq!(progress.total, 2, "both squash source commits contribute to the total");
+        assert_eq!(progress.processed, 2);
+        assert_eq!(progress.cherry_picked, 2, "both source trees are replayed eagerly");
+        assert_eq!(progress.signed, 0, "the fixture has no signer configured");
         let combined = outcome.map(middle).context("the first commit is retained")?;
         assert_eq!(outcome.map(tip), Some(combined), "both source IDs map to one commit");
         let commit = repo.find_commit(combined)?.decode()?.into_owned()?;
@@ -2204,6 +2301,67 @@ mod tests {
             repo.find_reference("refs/patches/middle")?.id().detach(),
             combined,
             "a ref on the first source follows the combined commit"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_squash_group_reports_one_configured_signature() -> gix_testtools::Result {
+        if !gix_testtools::signature::program_available("ssh-keygen") {
+            return Ok(());
+        }
+        let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let repo = gix::open_opts(
+            fixture.path(),
+            gix::open::Options::isolated().config_overrides([
+                "user.name=rebasing committer".to_owned(),
+                "user.email=rebasing@example.com".to_owned(),
+                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
+                "commit.gpgSign=true".to_owned(),
+                "gpg.format=ssh".to_owned(),
+                format!("user.signingKey={}", key.display()),
+                format!(
+                    "gpg.ssh.allowedSignersFile={}",
+                    gix_testtools::signature::fixture("ssh-allowed-signers").display()
+                ),
+            ]),
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let base = repo.rev_parse_single("HEAD~2")?.detach();
+        let middle = repo.rev_parse_single("HEAD~1")?.detach();
+        let tip = repo.head_id()?.detach();
+        let mut updates = Vec::new();
+
+        let outcome = perform_plan_with_progress(
+            &repo,
+            &graph,
+            Plan {
+                base,
+                scope: vec![middle, tip],
+                steps: vec![PlanStep {
+                    parent: PlanParent::Existing(base),
+                    commit: PlanCommit::Pick(middle),
+                    squash: vec![tip],
+                }],
+                checkout: None,
+                expected_refs: capture_refs(&repo, &[middle, tip], &[tip])?,
+            },
+            |progress| updates.push(progress),
+        )?
+        .complete()?;
+        let progress = updates.last().context("signed progress is reported")?;
+        assert_eq!(progress.total, 2);
+        assert_eq!(progress.processed, 2);
+        assert_eq!(progress.cherry_picked, 2);
+        assert_eq!(progress.signed, 1, "the combined result is signed only once");
+        assert!(progress.signing_time > Duration::ZERO, "signing time accumulates");
+        assert!(
+            repo.find_commit(outcome.map(middle).context("the squash result is retained")?)?
+                .verify_signature()?
+                .expect("the squash result is signed")
+                .is_valid(),
+            "the reported signature is valid"
         );
         Ok(())
     }
