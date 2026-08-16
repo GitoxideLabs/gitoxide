@@ -124,7 +124,7 @@ pub(crate) fn start(
     }
     ensure_clean(&workdir)?;
 
-    let departure_pin = match restore.1.filter(|id| *id != tip || restore.0.is_none()) {
+    let departure_pin = match restore.1 {
         Some(id) => {
             let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
             Some(super::time_travel::create_or_reuse_pin(
@@ -158,10 +158,7 @@ pub(crate) fn start(
     commit
         .extra_headers
         .push((HEADER.into(), format!("onto {name}").into()));
-    let return_to = departure_pin
-        .as_ref()
-        .map(|(pin, _)| pin.name.clone())
-        .or_else(|| (restore.1 == Some(tip)).then(|| restore.0.clone()).flatten());
+    let return_to = departure_pin.as_ref().map(|(pin, _)| pin.name.clone());
     if let Some(return_to) = return_to {
         commit
             .extra_headers
@@ -241,6 +238,11 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
             let mut reference = repo
                 .find_reference(name.as_ref())
                 .context("the review return reference is missing")?;
+            let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
+                reference.target().try_name().map(ToOwned::to_owned)
+            } else {
+                Some(name)
+            };
             let id = reference
                 .peel_to_id()
                 .context("the review return reference does not resolve")?
@@ -248,11 +250,6 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
             if !graph.is_ancestor(tip, id) {
                 anyhow::bail!("the review return reference no longer descends from the reviewed commit");
             }
-            let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
-                reference.target().try_name().map(ToOwned::to_owned)
-            } else {
-                Some(name)
-            };
             Ok((id, checkout_reference))
         })
         .transpose()?;
@@ -417,10 +414,18 @@ mod tests {
         );
         let commit = repo.find_commit(started.commit)?.decode()?.into_owned()?;
         assert_eq!(reference(&commit)?, Some(started.reference.clone()));
+        let pins = history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "review start preserves its departure with a pin");
+        assert_eq!(pins[0].id, tip);
+        assert_eq!(
+            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "an attached departure uses a symbolic pin"
+        );
         assert_eq!(
             return_to(&commit)?.as_ref().map(gix::refs::FullName::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
-            "the review commit records the checkout to restore"
+            Some(pins[0].name.as_bstr()),
+            "the review commit records its departure pin"
         );
         assert_eq!(
             std::fs::read(fixture.path().join("file"))?,
@@ -450,7 +455,7 @@ mod tests {
         assert!(is_review(&amended_commit));
         assert_eq!(
             return_to(&amended_commit)?.as_ref().map(gix::refs::FullName::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
+            Some(pins[0].name.as_bstr()),
             "review amendments preserve the return action"
         );
         assert!(run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty());
@@ -488,6 +493,15 @@ mod tests {
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let finished = finish(repo, &graph, amended)?;
+        assert_eq!(
+            finished
+                .outcome
+                .checkout_reference
+                .as_ref()
+                .map(gix::refs::FullName::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "finishing retains the branch named by the symbolic departure pin"
+        );
         super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
         let finished = finished.commit;
         let repo = crate::test_repository::open(fixture.path())?;
