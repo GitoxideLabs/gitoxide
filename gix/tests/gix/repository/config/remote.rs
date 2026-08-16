@@ -110,10 +110,7 @@ mod branch_remote {
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/remote_repo/main".try_into()?)?
             .expect("mapping exists");
         assert_eq!(upstream, "refs/heads/main");
-        assert_eq!(
-            remote_name.name().expect("non-anonymous remote").as_bstr(),
-            "remote_repo"
-        );
+        assert_eq!(remote_name.name().expect("non-anonymous remote"), "remote_repo");
 
         assert_eq!(
             repo.upstream_branch_and_remote_for_tracking_branch("refs/remotes/missing-remote/main".try_into()?)?,
@@ -123,15 +120,12 @@ mod branch_remote {
 
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
-                repo.branch_remote_name("main", direction)
-                    .expect("Remote name exists")
-                    .as_ref(),
+                repo.branch_remote_name("main", direction).expect("Remote name exists"),
                 "remote_repo"
             );
             assert_eq!(
                 repo.branch_remote_name("broken", direction)
-                    .expect("Remote name exists")
-                    .as_ref(),
+                    .expect("Remote name exists"),
                 "remote_repo"
             );
         }
@@ -149,7 +143,7 @@ mod branch_remote {
         );
         for direction in [remote::Direction::Fetch, remote::Direction::Push] {
             assert_eq!(
-                repo.branch_remote_name("broken", direction).expect("is set").as_bstr(),
+                repo.branch_remote_name("broken", direction).expect("is set"),
                 "remote_repo"
             );
         }
@@ -166,7 +160,7 @@ mod branch_remote {
 
     #[test]
     fn upstream_branch_and_remote_name_for_tracking_branch() -> crate::Result {
-        let repo = repo("multiple-remotes")?;
+        let mut repo = repo("multiple-remotes")?;
         for expected_remote_name in ["other", "with/two"] {
             let (upstream, remote) = repo
                 .upstream_branch_and_remote_for_tracking_branch(
@@ -175,25 +169,60 @@ mod branch_remote {
                         .try_into()?,
                 )?
                 .expect("mapping exists");
-            assert_eq!(remote.name().expect("named remote").as_bstr(), expected_remote_name);
+            assert_eq!(remote.name().expect("named remote"), expected_remote_name);
             assert_eq!(upstream, "refs/heads/main");
         }
         let err = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/slashes/main".try_into()?)
-            .unwrap_err();
+            .expect_err("both remotes reverse-map the tracking branch");
         assert_eq!(
             err.to_string(),
             "Found ambiguous remotes without 1:1 mapping or more than one match: with/two, with/two/slashes",
-            "we aren't very specific report an error just like Git does in case of multi-remote ambiguity"
+            "the name is ambiguous because both remotes have fetch refspecs mapping to it"
         );
 
         let (upstream, remote) = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/special".try_into()?)?
             .expect("mapping exists");
-        assert_eq!(remote.name().expect("non-anonymous remote").as_bstr(), "with/two");
+        assert_eq!(remote.name().expect("non-anonymous remote"), "with/two");
         assert_eq!(
             upstream, "refs/heads/special",
             "it finds a single mapping even though there are two refspecs"
+        );
+
+        repo.config_snapshot_mut().append_config(
+            [
+                "remote.prefix.url=../fetch",
+                "remote.prefix.fetch=+refs/heads/*:refs/remotes/prefix/unrelated/*",
+                "remote.fallback.url=../fetch",
+                "remote.fallback.fetch=+refs/heads/*:refs/remotes/prefix/*",
+            ],
+            gix_config::Source::Api,
+        )?;
+        let (upstream, remote) = repo
+            .upstream_branch_and_remote_for_tracking_branch("refs/remotes/prefix/main".try_into()?)?
+            .expect("a remote maps the tracking branch");
+        assert_eq!(upstream.as_bstr(), "refs/heads/main");
+        assert_eq!(
+            remote.name().expect("named remote"),
+            "fallback",
+            "a matching remote-name prefix does not override the actual refspec mapping"
+        );
+
+        repo.config_snapshot_mut().append_config(
+            [
+                "remote.also-fallback.url=../fetch",
+                "remote.also-fallback.fetch=+refs/heads/*:refs/remotes/prefix/*",
+            ],
+            gix_config::Source::Api,
+        )?;
+        let err = repo
+            .upstream_branch_and_remote_for_tracking_branch("refs/remotes/prefix/main".try_into()?)
+            .expect_err("multiple remotes are ambiguous");
+        assert_eq!(
+            err.to_string(),
+            "Found ambiguous remotes without 1:1 mapping or more than one match: also-fallback, fallback",
+            "all remotes mapping the same tracking branch are reported"
         );
         Ok(())
     }

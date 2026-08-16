@@ -201,7 +201,7 @@ mod find_remote {
         for (name, (url, refspec)) in repo.remote_names().into_iter().zip(expected) {
             count += 1;
             let remote = repo.find_remote(&name)?;
-            assert_eq!(remote.name().expect("set").as_bstr(), name);
+            assert_eq!(remote.name().expect("set"), name);
 
             assert_eq!(
                 remote.fetch_tags(),

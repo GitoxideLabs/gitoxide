@@ -141,11 +141,8 @@ impl crate::Repository {
     /// the side of the remote, also called upstream branch.
     ///
     /// Return `Ok(None)` if there is no remote with fetch-refspecs that would match `tracking_branch` on the right-hand side,
-    /// or `Err` if the matches were ambiguous.
-    ///
-    /// ### Limitations
-    ///
-    /// A single valid mapping is required as fine-grained matching isn't implemented yet. This means that
+    /// or `Err` if the matches were ambiguous. All configured remotes are searched, and their fetch refspecs are reverse-mapped.
+    /// A single valid mapping is required: mappings from multiple remotes or multiple mappings within one remote are ambiguous.
     pub fn upstream_branch_and_remote_for_tracking_branch(
         &self,
         tracking_branch: &FullNameRef,
@@ -183,15 +180,10 @@ impl crate::Repository {
 
         if candidates.len() == 1 {
             let (remote, candidate) = candidates.pop().expect("just checked for one entry");
-            let upstream_branch = match candidate {
-                gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned())?,
-                gix_refspec::match_group::SourceRef::ObjectId(_) => {
-                    unreachable!("Such a reverse mapping isn't ever produced")
-                }
-            };
+            let upstream_branch = source_ref_to_full_name(candidate)?;
             return Ok(Some((upstream_branch, remote)));
         }
-        if ambiguous_remotes.len() + candidates.len() > 1 {
+        if !ambiguous_remotes.is_empty() || candidates.len() > 1 {
             return Err(Error::AmbiguousRemotes {
                 remotes: ambiguous_remotes
                     .into_iter()
@@ -259,6 +251,15 @@ impl crate::Repository {
                     .into(),
                 remote::Name::Symbol(_) => None,
             })
+    }
+}
+
+fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName, gix_ref::name::Error> {
+    match source {
+        gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned()),
+        gix_refspec::match_group::SourceRef::ObjectId(_) => {
+            unreachable!("Such a reverse mapping isn't ever produced")
+        }
     }
 }
 

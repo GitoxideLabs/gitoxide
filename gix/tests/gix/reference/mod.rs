@@ -76,8 +76,8 @@ fn remote_name() -> crate::Result {
     ] {
         let r = repo.find_reference(ref_name)?;
         assert_eq!(
-            r.remote_name(Direction::Fetch).map(|name| name.as_bstr().to_owned()),
-            Some(expected_remote.into())
+            r.remote_name(Direction::Fetch).expect("remote name can be inferred"),
+            expected_remote
         );
     }
     Ok(())

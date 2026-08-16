@@ -2,7 +2,7 @@ use gix_ref::{Category, FullName};
 
 use crate::{
     Reference,
-    bstr::ByteSlice,
+    bstr::{BStr, ByteSlice},
     remote,
     repository::{branch_remote_ref_name, branch_remote_tracking_ref_name},
 };
@@ -17,23 +17,14 @@ impl<'repo> Reference<'repo> {
         let (category, shortname) = self.name().category_and_short_name()?;
         match category {
             Category::RemoteBranch => {
-                if shortname.find_iter("/").take(2).count() == 1 {
-                    let slash_pos = shortname.find_byte(b'/').expect("it was just found");
-                    shortname[..slash_pos]
-                        .as_bstr()
-                        .to_str()
-                        .ok()
-                        .map(|n| remote::Name::Symbol(n.into()))
-                } else {
-                    let remotes = self.repo.remote_names();
-                    for slash_pos in shortname.rfind_iter("/") {
-                        let candidate = shortname[..slash_pos].as_bstr();
-                        if remotes.contains(candidate) {
-                            return candidate.to_str().ok().map(|n| remote::Name::Symbol(n.into()));
-                        }
-                    }
-                    None
-                }
+                let mut remotes = None;
+                remote_name_from_tracking_branch(shortname, |candidate| {
+                    remotes
+                        .get_or_insert_with(|| self.repo.remote_names())
+                        .contains(candidate)
+                })
+                .and_then(|name| name.to_str().ok())
+                .map(|name| remote::Name::Symbol(name.into()))
             }
             Category::LocalBranch => self.repo.branch_remote_name(shortname, direction),
             _ => None,
@@ -71,4 +62,25 @@ impl<'repo> Reference<'repo> {
     ) -> Option<Result<FullName, branch_remote_tracking_ref_name::Error>> {
         self.repo.branch_remote_tracking_ref_name(self.name(), direction)
     }
+}
+
+/// Infer the remote name from a remote-tracking branch name without its `refs/remotes/` prefix.
+///
+/// A name with exactly one slash, like `origin/main`, is unambiguous and yields `origin` even if that remote is not
+/// configured. With multiple slashes, both remote and branch names may contain slashes, so configured remote names are
+/// considered from longest to shortest: for `team/origin/topic`, `team/origin` wins over `team` when both exist.
+/// A name without a slash, or a multi-slash name without a matching configured remote prefix, yields `None`.
+/// `is_configured_remote` is only called for multi-slash names, for which configuration is needed to disambiguate.
+pub(crate) fn remote_name_from_tracking_branch(
+    shortname: &BStr,
+    mut is_configured_remote: impl FnMut(&BStr) -> bool,
+) -> Option<&BStr> {
+    if shortname.find_iter("/").take(2).count() == 1 {
+        let slash_pos = shortname.find_byte(b'/').expect("it was just found");
+        return Some(shortname[..slash_pos].as_bstr());
+    }
+    shortname
+        .rfind_iter("/")
+        .map(|slash_pos| shortname[..slash_pos].as_bstr())
+        .find(|candidate| is_configured_remote(candidate))
 }
