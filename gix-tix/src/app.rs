@@ -1329,6 +1329,22 @@ impl App {
         reachable
     }
 
+    fn is_known_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
+        let mut seen = HashSet::new();
+        let mut pending = vec![descendant];
+        while let Some(id) = pending.pop() {
+            if id == ancestor {
+                return true;
+            }
+            if seen.insert(id)
+                && let Some(row) = self.all_rows.get(&id)
+            {
+                pending.extend(row.parent_ids.iter().copied());
+            }
+        }
+        false
+    }
+
     pub(crate) fn finish_lane_computation(&mut self, rows: Vec<SharedCommitRow>, graph: Graph, lane_time: Duration) {
         if self.state != State::Computing {
             return;
@@ -1729,10 +1745,12 @@ impl App {
             && self.finish_review_available
             && self.changes_focus.is_none()
             && self.deferred_history_state.unwrap_or(self.state) == State::Complete
-            && self
-                .selected
-                .and_then(|index| self.rows.get(index))
-                .is_some_and(|row| row.is_review && Some(row.id) == self.worktree_head)
+            && self.selected.and_then(|index| self.rows.get(index)).is_some_and(|row| {
+                row.is_review
+                    && self
+                        .worktree_head
+                        .is_some_and(|head| self.is_known_ancestor(row.id, head))
+            })
     }
 
     pub(crate) fn review_selection_active(&self) -> bool {
@@ -2620,6 +2638,30 @@ mod tests {
         assert!(!app.can_amend());
         assert!(!app.can_stash());
         assert!(app.update(Action::Amend).is_empty());
+    }
+
+    #[test]
+    fn a_clean_review_can_finish_while_head_is_on_its_successor() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![
+            row_with_parents(3, &[2]),
+            row_with_parents(2, &[1]),
+            row_with_parents(4, &[1]),
+            row(1),
+        ]);
+        std::sync::Arc::make_mut(&mut app.rows[1]).is_review = true;
+        app.selected = Some(1);
+        app.set_worktree_head(Some(id(3)), false);
+        app.set_head_edit_availability(false, false, false, false, true, false, false);
+        complete(&mut app);
+
+        assert_eq!(app.update(Action::Review), vec![Effect::FinishReview(id(2))]);
+
+        app.set_worktree_head(Some(id(4)), false);
+        assert!(
+            app.update(Action::Review).is_empty(),
+            "an unrelated checkout cannot finish the selected review"
+        );
     }
 
     #[test]

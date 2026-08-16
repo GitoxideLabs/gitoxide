@@ -336,7 +336,7 @@ pub(crate) fn draw_with_worktree(
         stashable,
         selected_is_head && selected_has_stash,
         selected_is_head && worktree_path_amend,
-        selected_is_head && selected_is_review && worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
+        worktree_changes.is_some_and(|changes| changes.paths.is_empty()),
         selected_is_head && tree_changes.is_some_and(|changes| !changes.paths.is_empty()),
         selected_is_head
             && worktree_changes.is_some_and(|changes| {
