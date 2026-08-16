@@ -214,7 +214,9 @@ without trading responsiveness for metadata that is not visible.
   and cached only for reference rows visible in the viewport.
 - The ref-tree orders tips above roots and renders one retained or boundary
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
-  disk is the node marker, so counts do not repeat it.
+  disk is the node marker, so counts do not repeat it. Selection emphasizes the
+  label without inverting the disk, while a selected synthetic node inverts its
+  otherwise-unlabelled disk.
 - Rendering clips lanes and node labels to the viewport.
 - `Tab` switches nearest-direction and topological movement.
   Nearest movement chooses the closest node in the requested screen direction.

@@ -1255,7 +1255,19 @@ fn draw_nodes(
                 style = style.add_modifier(Modifier::DIM);
             }
         }
-        put(frame, area, offset, point, if node.is_head { '@' } else { '●' }, style);
+        let marker_style = if selected == Some(index) && node.is_anchor {
+            style.remove_modifier(Modifier::REVERSED)
+        } else {
+            style
+        };
+        put(
+            frame,
+            area,
+            offset,
+            point,
+            if node.is_head { '@' } else { '●' },
+            marker_style,
+        );
         draw_text(
             frame,
             area,
@@ -2347,6 +2359,34 @@ mod tests {
         assert!(
             !rendered.contains("5●"),
             "the rail marker is not repeated after a count"
+        );
+        let selected = tree.selected.expect("the ref-tree selects a node");
+        let placed = tree.placed.as_ref().expect("drawing places the ref-tree");
+        let point = placed.nodes[selected];
+        assert!(
+            !terminal.backend().buffer()[(point.x as u16, point.y as u16)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the selected disk is not inverted"
+        );
+        assert!(
+            terminal.backend().buffer()[(placed.rail_width as u16, point.y as u16)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "the selected node label remains inverted"
+        );
+
+        let fork = tree.overview.as_ref().expect("the ref-tree exists").by_commit
+            [&graph.index(id(2)).expect("the fork exists")];
+        tree.selected = Some(fork);
+        tree.selection_changed();
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[fork];
+        assert!(
+            terminal.backend().buffer()[(point.x as u16, point.y as u16)]
+                .modifier
+                .contains(Modifier::REVERSED),
+            "a selected synthetic node keeps its disk inverted"
         );
         Ok(())
     }
