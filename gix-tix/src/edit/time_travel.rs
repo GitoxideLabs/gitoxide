@@ -118,15 +118,15 @@ pub(crate) fn checkout_review_return(
     let mut target = repository
         .find_reference(name.as_ref())
         .context("the review return reference is missing")?;
-    let selected = target
-        .peel_to_id()
-        .context("the review return reference does not resolve")?
-        .detach();
     let reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
         target.target().try_name().map(ToOwned::to_owned)
     } else {
         Some(name.clone())
     };
+    let selected = target
+        .peel_to_id()
+        .context("the review return reference does not resolve")?
+        .detach();
     drop(repository);
     checkout(&workdir, [OsString::from("--force"), OsString::from("HEAD")])
         .context("could not discard the cancelled review checkout")?;
