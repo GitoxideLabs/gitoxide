@@ -188,8 +188,8 @@ without trading responsiveness for metadata that is not visible.
 
 - After traversal completes, `t` toggles history and a rounded rail ref-tree.
   `Escape` also returns directly to history. The ref-tree cursor and viewport are
-  independent of the history selection and panes, and the ref-tree provides
-  navigation only. The direct ref-tree action appears in the `?` information group.
+  independent of the history selection and panes. The direct ref-tree action
+  appears in the `?` information group.
   “Tree” without the `ref-` prefix refers to Git tree objects and tree diffs.
 - Entering the overview expands its completed graph with every successfully
   resolved main and linked worktree `HEAD` plus every valid symbolic
@@ -228,6 +228,12 @@ without trading responsiveness for metadata that is not visible.
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
+- `<enter>` on a node with visible references creates or reuses symbolic
+  current-worktree pins for every displayed local branch, tag, remote-tracking
+  reference, or review reference at that commit. It returns to history and
+  selects the pinned commit in the first refreshed frame, with its cached
+  ancestry and hidden merge-base boundary already projected. Synthetic nodes, raw tips, detached-worktree labels,
+  and stash associations have no Enter action.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
   `★branch` forms at the branch's actual tip. A detached current worktree is
   additionally shown with one `📌`; a detached foreign worktree instead uses
@@ -322,9 +328,10 @@ The Enter key is written as `<enter>` throughout.
   successor is not pinned; a distinct departure preserves its rewritten identity.
 - While `HEAD` is detached, every valid pin, including the HEAD pin, from the
   current worktree augments implicit and explicit revision tips. While it is
-  attached, only pins at strict descendants of `HEAD` do so and the HEAD pin is
-  inactive, preserving rewritten leaves after a history rebase moves the
-  checked-out branch down its stack. Pins from other worktrees, dangling,
+  attached, symbolic ordinary pins and direct pins at strict descendants of
+  `HEAD` do so while the HEAD pin is inactive. This lets explicitly pinned
+  references enter history while preserving rewritten leaves after a history
+  rebase moves the checked-out branch down its stack. Pins from other worktrees, dangling,
   malformed, and non-commit pins do not enter the view or its decorations.
   Normal hidden-revision exclusions still apply.
 - One or more worktree pins at a commit are shown as a single blue `📌`

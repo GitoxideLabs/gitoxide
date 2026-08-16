@@ -1485,9 +1485,10 @@ pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
         .filter(|pin| {
             !pin.is_head()
                 && pin.id != head_id
-                && repo
-                    .merge_base(head_id, pin.id)
-                    .is_ok_and(|base| base.as_ref() == head_id)
+                && (pin.target.try_name().is_some()
+                    || repo
+                        .merge_base(head_id, pin.id)
+                        .is_ok_and(|base| base.as_ref() == head_id))
         })
         .collect())
 }
@@ -1858,7 +1859,7 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
     Ok(out)
 }
 
-fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
+pub(crate) fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
     loop {
         if err
             .downcast_ref::<std::io::Error>()

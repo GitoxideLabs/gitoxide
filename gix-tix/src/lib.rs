@@ -910,6 +910,7 @@ fn event_loop(
     let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
     let mut ref_tree_refresh_pending = false;
+    let mut return_to_history_after_refresh = None;
     let mut refresh_from_filesystem = false;
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
@@ -1224,6 +1225,9 @@ fn event_loop(
             match result {
                 Ok((rows, graph, lane_time)) => {
                     app.finish_lane_computation(rows, graph, lane_time);
+                    if return_to_history_after_refresh.take().is_some() {
+                        ref_tree.leave();
+                    }
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "lane-computation-completed");
@@ -1288,6 +1292,9 @@ fn event_loop(
                     );
                     if let Some(successor) = decorated_successor {
                         app.select_commit_after_refresh(successor);
+                    }
+                    if let Some(id) = return_to_history_after_refresh {
+                        app.select_commit_after_refresh(id);
                     }
                     worktree_head_unborn = !repository_is_bare
                         && open_repository(&repository_path, false, false)
@@ -1534,6 +1541,29 @@ fn event_loop(
             match &terminal_event {
                 TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
                     ref_tree::Input::Handled => {
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    ref_tree::Input::PinReferences { id, kinds } => {
+                        let result = open_repository(&repository_path, repository_is_bare, false)
+                            .context("could not open repository to pin ref-tree references")
+                            .and_then(|repository| ref_tree::pin_references(&repository, id, &kinds));
+                        match result {
+                            Ok(pins) if !pins.is_empty() => {
+                                app.select_commit_after_refresh(pins[0].id);
+                                return_to_history_after_refresh = Some(pins[0].id);
+                                app.leave_message(if pins.len() == 1 {
+                                    "pinned selected reference".into()
+                                } else {
+                                    format!("pinned {} selected references", pins.len())
+                                });
+                                refresh_pending = true;
+                                refresh_expand_hidden = true;
+                            }
+                            Ok(_) => ref_tree.leave_message("selected references changed before they could be pinned"),
+                            Err(err) => ref_tree.leave_message(format!("pin selected references: {err:#}")),
+                        }
                         dirty = true;
                         urgent = true;
                         continue;
