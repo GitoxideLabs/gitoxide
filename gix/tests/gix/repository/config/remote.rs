@@ -181,13 +181,15 @@ mod branch_remote {
             assert_eq!(remote.name().expect("named remote").as_bstr(), expected_remote_name);
             assert_eq!(upstream.as_bstr(), "refs/heads/main");
         }
-        let err = repo
+        let (upstream, remote) = repo
             .upstream_branch_and_remote_for_tracking_branch("refs/remotes/with/two/slashes/main".try_into()?)
-            .unwrap_err();
+            .expect("mapping succeeds")
+            .expect("the longest remote prefix maps uniquely");
+        assert_eq!(upstream.as_bstr(), "refs/heads/main");
         assert_eq!(
-            err.to_string(),
-            "Found ambiguous remotes without 1:1 mapping or more than one match: with/two, with/two/slashes",
-            "we aren't very specific report an error just like Git does in case of multi-remote ambiguity"
+            remote.name().expect("named remote").as_bstr(),
+            "with/two/slashes",
+            "the longest configured remote prefix wins"
         );
 
         let (upstream, remote) = repo

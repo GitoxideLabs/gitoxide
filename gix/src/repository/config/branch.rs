@@ -141,7 +141,8 @@ impl crate::Repository {
     /// the side of the remote, also called upstream branch.
     ///
     /// Return `Ok(None)` if there is no remote with fetch-refspecs that would match `tracking_branch` on the right-hand side,
-    /// or `Err` if the matches were ambiguous.
+    /// or `Err` if the matches were ambiguous. If the tracking branch starts with a configured remote name, the longest
+    /// such prefix wins before its fetch refspecs are reverse-mapped. Otherwise all remotes are searched as a fallback.
     ///
     /// ### Limitations
     ///
@@ -158,14 +159,17 @@ impl crate::Repository {
         }
 
         let null = self.object_hash().null();
-        let item_to_search = gix_refspec::match_group::Item {
-            full_ref_name: tracking_branch.as_bstr(),
-            target: &null,
-            object: None,
-        };
+        let remote_names = self.remote_names();
+        let preferred =
+            crate::reference::remote::remote_name_from_tracking_branch(tracking_branch.shorten(), &remote_names)
+                .filter(|name| remote_names.contains(*name))
+                .map(ToOwned::to_owned);
         let mut candidates = Vec::new();
         let mut ambiguous_remotes = Vec::new();
-        for remote_name in self.remote_names() {
+        for remote_name in preferred
+            .iter()
+            .chain(remote_names.iter().filter(|name| Some(*name) != preferred.as_ref()))
+        {
             let remote = self.find_remote(remote_name)?;
             let match_group = gix_refspec::MatchGroup::from_fetch_specs(
                 remote
@@ -173,7 +177,23 @@ impl crate::Repository {
                     .iter()
                     .map(|spec| spec.to_ref()),
             );
-            let out = match_group.match_rhs(Some(item_to_search).into_iter());
+            let out = match_group.match_rhs(
+                Some(gix_refspec::match_group::Item {
+                    full_ref_name: tracking_branch.as_bstr(),
+                    target: &null,
+                    object: None,
+                })
+                .into_iter(),
+            );
+            if preferred.as_ref() == Some(remote_name) {
+                return match &out.mappings[..] {
+                    [] => Ok(None),
+                    [one] => Ok(Some((source_ref_to_full_name(one.lhs.clone())?, remote))),
+                    [..] => Err(Error::AmbiguousRemotes {
+                        remotes: remote.name.into_iter().collect(),
+                    }),
+                };
+            }
             match &out.mappings[..] {
                 [] => {}
                 [one] => candidates.push((remote.clone(), one.lhs.clone().into_owned())),
@@ -183,12 +203,7 @@ impl crate::Repository {
 
         if candidates.len() == 1 {
             let (remote, candidate) = candidates.pop().expect("just checked for one entry");
-            let upstream_branch = match candidate {
-                gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned())?,
-                gix_refspec::match_group::SourceRef::ObjectId(_) => {
-                    unreachable!("Such a reverse mapping isn't ever produced")
-                }
-            };
+            let upstream_branch = source_ref_to_full_name(candidate)?;
             return Ok(Some((upstream_branch, remote)));
         }
         if ambiguous_remotes.len() + candidates.len() > 1 {
@@ -259,6 +274,15 @@ impl crate::Repository {
                     .into(),
                 remote::Name::Symbol(_) => None,
             })
+    }
+}
+
+fn source_ref_to_full_name(source: gix_refspec::match_group::SourceRef<'_>) -> Result<FullName, gix_ref::name::Error> {
+    match source {
+        gix_refspec::match_group::SourceRef::FullName(name) => gix_ref::FullName::try_from(name.into_owned()),
+        gix_refspec::match_group::SourceRef::ObjectId(_) => {
+            unreachable!("Such a reverse mapping isn't ever produced")
+        }
     }
 }
 
