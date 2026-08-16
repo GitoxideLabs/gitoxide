@@ -990,13 +990,31 @@ pub(crate) fn draw_with_worktree(
         footer_spans.push(Span::raw(" · "));
         footer_spans.extend(shortcut("quit", 'q', true));
     }
-    if let Some(message) = app.message() {
+    let mut footer_style = Style::default();
+    if app.rebase_continuation_pending() {
+        footer_spans = vec![Span::raw(if app.rebase_continuation_conflicted() {
+            "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"
+        } else {
+            "REBASE PAUSED · <enter> continue · Esc stop"
+        })];
+        if let Some(message) = app.message() {
+            footer_spans.push(Span::raw(format!(" · {message}")));
+        }
+        footer_style = Style::default()
+            .fg(Color::Black)
+            .bg(if app.rebase_continuation_conflicted() {
+                Color::LightRed
+            } else {
+                Color::Yellow
+            })
+            .add_modifier(Modifier::BOLD);
+    } else if let Some(message) = app.message() {
         footer_spans = vec![Span::raw(message)];
     }
-    if app.unseen_filesystem_redraw {
+    if app.unseen_filesystem_redraw && !app.rebase_continuation_pending() {
         footer_spans = notification_discs(footer_spans);
     }
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    frame.render_widget(Paragraph::new(Line::from(footer_spans)).style(footer_style), footer);
     FrameLayout {
         history: body,
         overlays: changes_panes
@@ -2146,6 +2164,44 @@ mod tests {
             completed,
             "short traversal setup also preserves the completed footer"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn materialized_rebase_continuation_replaces_the_footer_until_cleared() -> Result<(), Box<dyn std::error::Error>> {
+        let mut app = App::new(1);
+        complete(&mut app);
+        app.arm_rebase_continuation();
+        app.set_worktree_conflicted(true);
+        app.leave_message("materialized conflict");
+        let mut terminal = Terminal::new(TestBackend::new(120, 1))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        let footer = rendered_line(&terminal, 0);
+        assert!(
+            footer.starts_with("REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"),
+            "an unresolved continuation owns the footer: {footer:?}"
+        );
+        assert!(
+            footer.contains("materialized conflict"),
+            "messages cannot replace the mode"
+        );
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::LightRed);
+
+        app.update(Action::MoveDown);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(
+            rendered_line(&terminal, 0).starts_with("REBASE PAUSED"),
+            "navigation cannot dismiss the continuation"
+        );
+        app.set_worktree_conflicted(false);
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert_eq!(terminal.backend().buffer()[(0, 0)].bg, Color::Yellow);
+        assert!(rendered_line(&terminal, 0).starts_with("REBASE PAUSED · <enter> continue · Esc stop"));
+
+        app.clear_rebase_continuation();
+        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        assert!(!rendered_line(&terminal, 0).contains("REBASE PAUSED"));
         Ok(())
     }
 

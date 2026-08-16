@@ -530,6 +530,14 @@ space first; changes blocks adapt within the remaining history width.
 - A checked-out unresolved index keeps `C` at `@`, overrides dirty `D`, and
   disables time travel until all conflict stages are resolved. The worktree
   changes block is shown for resolution.
+- A materialized todo conflict keeps a high-contrast `REBASE PAUSED` footer until
+  its in-memory continuation is consumed. The footer changes when the index is
+  resolved but always advertises `<enter>` to continue and `Esc` to stop. History,
+  changes-pane navigation, display toggles, copying, and path-diff inspection stay
+  available; repository-changing actions and refresh are blocked. Pane-local
+  `<enter>`, `Esc`, and `q` retain their inspection and focus behavior. Stopping
+  forgets only the in-memory continuation and leaves the partially applied
+  repository untouched; Ctrl-C still exits immediately.
 
 ### Reviews
 
