@@ -46,8 +46,7 @@ struct Node {
     decorations: Vec<Decoration>,
     is_head: bool,
     is_anchor: bool,
-    is_pinned: bool,
-    can_pin: bool,
+    is_detached_worktree: bool,
     raw_tip: bool,
     sort_key: String,
 }
@@ -127,14 +126,6 @@ pub(crate) enum Input {
     },
     DeleteRemoteReferences {
         groups: Vec<RemoteDeletion>,
-        fallback: SelectionFallback,
-    },
-    Pin {
-        id: ObjectId,
-        include_tags: bool,
-    },
-    Unpin {
-        id: ObjectId,
         fallback: SelectionFallback,
     },
     Quit,
@@ -314,30 +305,6 @@ impl Tree {
             self.toggle_count_anchor();
             return Input::Handled;
         }
-        if key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
-            let Some(node) = self
-                .selected
-                .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
-            else {
-                return Input::Handled;
-            };
-            if node.is_pinned {
-                return Input::Unpin {
-                    id: node.id,
-                    fallback: self
-                        .reference_deletion_fallback()
-                        .expect("a selected pin has a deletion fallback"),
-                };
-            }
-            if !node.can_pin {
-                self.message = Some("no reference at the selected node".into());
-                return Input::Handled;
-            }
-            return Input::Pin {
-                id: node.id,
-                include_tags: !self.hide_tags,
-            };
-        }
         if key.code == KeyCode::Char('G')
             || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::SHIFT)
         {
@@ -514,21 +481,8 @@ impl Tree {
                 || "Space counts:auto".into(),
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
-            let pin = self
-                .selected
-                .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
-                .and_then(|node| {
-                    if node.is_pinned {
-                        Some(" · p unpin")
-                    } else if node.can_pin {
-                        Some(" · p pin")
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
             format!(
-                "tree · {motion} · {counts}{pin} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
+                "tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -751,8 +705,7 @@ impl Overview {
         let mut labels = HashMap::<CommitIndex, Vec<Decoration>>::new();
         let mut heads = HashSet::new();
         let mut anchors = HashSet::new();
-        let mut pinned = HashSet::new();
-        let mut pinnable = HashSet::new();
+        let mut detached_worktrees = HashSet::new();
         for (id, decorations) in decorations {
             let Some(index) = graph.index(*id) else { continue };
             for decoration in decorations {
@@ -762,27 +715,30 @@ impl Overview {
                 if decoration.kind == DecorationKind::Head {
                     heads.insert(index);
                     anchors.insert(index);
-                    pinnable.insert(index);
                 } else if decoration.kind == DecorationKind::Pin {
-                    pinned.insert(index);
-                    anchors.insert(index);
+                    continue;
                 } else if decoration.kind != DecorationKind::Special {
                     labels.entry(index).or_default().push(decoration.clone());
                     anchors.insert(index);
-                    if decoration.kind != DecorationKind::Stash {
-                        pinnable.insert(index);
-                    }
                 }
             }
         }
+        for worktree in refs.worktrees.iter().filter(|worktree| worktree.is_detached) {
+            let Some(index) = graph.index(worktree.id) else {
+                continue;
+            };
+            detached_worktrees.insert(index);
+            anchors.insert(index);
+        }
+        let pin_tips: HashSet<_> = refs.pins.iter().map(|pin| pin.id).collect();
         let raw: HashSet<_> = refs
             .view_tips
             .iter()
             .chain(&refs.hidden_tips)
+            .filter(|id| !pin_tips.contains(*id))
             .filter_map(|id| graph.index(*id))
             .inspect(|index| {
                 anchors.insert(*index);
-                pinnable.insert(*index);
             })
             .collect();
         if anchors.is_empty() {
@@ -849,8 +805,7 @@ impl Overview {
                     decorations,
                     is_head: heads.contains(&commit),
                     is_anchor: anchors.contains(&commit),
-                    is_pinned: pinned.contains(&commit),
-                    can_pin: pinnable.contains(&commit),
+                    is_detached_worktree: detached_worktrees.contains(&commit),
                     raw_tip: raw.contains(&commit),
                     sort_key,
                 }
@@ -1249,7 +1204,7 @@ fn rail_label(node: &Node, count: Option<usize>) -> String {
         out.push(' ');
     }
     out.push_str(&suffix);
-    if node.is_pinned {
+    if node.is_detached_worktree {
         if !out.is_empty() {
             out.push(' ');
         }
@@ -1262,7 +1217,17 @@ fn node_label(node: &Node) -> String {
     let labels: Vec<_> = node
         .decorations
         .iter()
-        .map(|decoration| decoration.name.to_str_lossy())
+        .map(|decoration| {
+            let name = decoration.name.to_str_lossy();
+            match decoration.kind {
+                DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached => {
+                    format!("@{name}")
+                }
+                DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => format!("{name}@"),
+                DecorationKind::HeadPinBranch => format!("★{name}"),
+                _ => name.into_owned(),
+            }
+        })
         .collect();
     if !labels.is_empty() {
         labels.join(", ")
@@ -1857,8 +1822,8 @@ mod tests {
     }
 
     #[test]
-    fn pins_are_markers_and_p_toggles_only_reference_nodes() {
-        let (graph, refs, mut decorations) = fixture();
+    fn detached_worktrees_are_pin_markers_while_ordinary_pins_and_p_are_hidden() {
+        let (graph, mut refs, mut decorations) = fixture();
         *decorations.get_mut(&id(5)).expect("topic is decorated") = vec![
             Decoration {
                 name: "pin:first".into(),
@@ -1869,46 +1834,41 @@ mod tests {
                 kind: DecorationKind::Pin,
             },
         ];
+        refs.pins.push(crate::history::Pin {
+            name: "refs/worktree/tix/pins/first".try_into().expect("valid"),
+            target: gix::refs::Target::Object(id(5)),
+            id: id(5),
+        });
+        refs.worktrees.push(crate::history::WorktreeCheckout {
+            id: id(3),
+            label_id: id(6),
+            name: "main".into(),
+            reference: Some("refs/heads/main".try_into().expect("valid")),
+            is_current: true,
+            is_detached: true,
+        });
+        decorations.get_mut(&id(6)).expect("main is decorated")[0].kind = DecorationKind::HeadPinBranch;
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        let topic =
-            tree.overview.as_ref().expect("overview exists").by_commit[&graph.index(id(5)).expect("topic exists")];
-        tree.selected = Some(topic);
-
-        assert!(matches!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Input::Unpin { id: selected, .. } if selected == id(5)
-        ));
         let overview = tree.overview.as_ref().expect("overview exists");
         assert!(
-            overview.nodes[topic].decorations.is_empty(),
-            "pin-only tips need no label"
+            !overview.nodes.iter().any(|node| node.id == id(5)),
+            "ordinary pin-only tips are absent"
         );
         let unicode = render_overview(overview, true);
         let ascii = render_overview(overview, false);
-        assert_eq!(unicode.matches('📌').count(), 1, "multiple pins share one marker");
-        assert!(ascii.contains("[pin]"), "ASCII diagnostics retain the pin marker");
-        assert!(!unicode.contains("pin:"), "internal pin names are hidden");
-
-        let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
-        tree.selected = Some(main);
-        assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
-            Input::Pin {
-                id: id(6),
-                include_tags: true,
-            },
-            "an unpinned reference offers pin creation"
+        assert_eq!(unicode.matches('📌').count(), 1, "detached HEAD has one marker");
+        assert!(
+            unicode.contains("★main"),
+            "the remembered branch stays at its actual tip"
         );
-        let fork =
-            tree.overview.as_ref().expect("overview exists").by_commit[&graph.index(id(2)).expect("fork exists")];
-        tree.selected = Some(fork);
+        assert!(ascii.contains("[pin]"), "ASCII diagnostics retain detached state");
+        assert!(!unicode.contains("pin:"), "ordinary pin names remain hidden");
         assert_eq!(
             tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             Input::Handled,
-            "structural-only nodes cannot be pinned"
+            "the tree has no pin action"
         );
-        assert_eq!(tree.message.as_deref(), Some("no reference at the selected node"));
     }
 
     #[test]

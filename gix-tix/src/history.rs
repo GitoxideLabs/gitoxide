@@ -34,6 +34,7 @@ pub(crate) enum DecorationKind {
     Stash,
     Review,
     CurrentWorktreeBranch,
+    CurrentWorktreeDetached,
     WorktreeBranch,
     WorktreeDetached,
     Local,
@@ -67,9 +68,11 @@ impl Pin {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WorktreeCheckout {
     pub id: ObjectId,
+    pub label_id: ObjectId,
     pub name: BString,
     pub reference: Option<gix::refs::FullName>,
     pub is_current: bool,
+    pub is_detached: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1213,7 +1216,7 @@ pub(crate) fn tree_revisions(repo: &gix::Repository, include_tags: bool) -> Resu
         };
         let name = reference.name().as_bstr().to_owned();
         let kind = decoration_kind(&name);
-        if kind == DecorationKind::Special
+        if matches!(kind, DecorationKind::Special | DecorationKind::Pin)
             || matches!(kind, DecorationKind::Tag) && !include_tags
             || name.starts_with(STASH_PREFIX)
             || name.starts_with(REVIEW_STASH_PREFIX)
@@ -1299,6 +1302,7 @@ pub(crate) fn worktree_checkouts(repo: &gix::Repository) -> Vec<WorktreeCheckout
     }
     out.sort_by(|a, b| {
         a.id.cmp(&b.id)
+            .then_with(|| a.label_id.cmp(&b.label_id))
             .then_with(|| a.name.cmp(&b.name))
             .then_with(|| a.reference.cmp(&b.reference))
     });
@@ -1320,7 +1324,8 @@ fn add_worktree_checkout(
             return;
         }
     };
-    let reference = head.referent_name().map(ToOwned::to_owned);
+    let is_detached = head.is_detached();
+    let head_reference = head.referent_name().map(ToOwned::to_owned);
     let id = match head.try_peel_to_id() {
         Ok(Some(id)) => id.detach(),
         Ok(None) => return,
@@ -1329,6 +1334,12 @@ fn add_worktree_checkout(
             return;
         }
     };
+    let remembered = is_detached
+        .then(|| remembered_worktree_branch(repo, worktree))
+        .flatten();
+    let (reference, label_id) = remembered
+        .or_else(|| head_reference.map(|reference| (reference, id)))
+        .map_or((None, id), |(reference, id)| (Some(reference), id));
     let name = match &reference {
         Some(reference) => reference.shorten().to_owned(),
         None => match detached_name {
@@ -1341,10 +1352,49 @@ fn add_worktree_checkout(
     };
     out.push(WorktreeCheckout {
         id,
+        label_id,
         name,
         reference,
         is_current,
+        is_detached,
     });
+}
+
+fn remembered_worktree_branch(repo: &gix::Repository, worktree: &BStr) -> Option<(gix::refs::FullName, ObjectId)> {
+    let mut pin = match repo.try_find_reference(HEAD_PIN_NAME.as_bstr()) {
+        Ok(Some(pin)) => pin,
+        Ok(None) => return None,
+        Err(err) => {
+            tracing::warn!(%worktree, error = %err, "ignoring unreadable worktree HEAD pin");
+            return None;
+        }
+    };
+    let Some(reference) = pin.target().try_name().map(ToOwned::to_owned) else {
+        tracing::warn!(%worktree, "ignoring direct worktree HEAD pin");
+        return None;
+    };
+    if !reference.as_bstr().starts_with(b"refs/heads/") {
+        tracing::warn!(%worktree, name = %reference, "ignoring non-branch worktree HEAD pin");
+        return None;
+    }
+    let id = match pin.peel_to_id() {
+        Ok(id) => id.detach(),
+        Err(err) => {
+            tracing::warn!(%worktree, name = %reference, error = %err, "ignoring unresolved worktree HEAD pin");
+            return None;
+        }
+    };
+    match repo.find_header(id) {
+        Ok(header) if header.kind() == gix::object::Kind::Commit => Some((reference, id)),
+        Ok(_) => {
+            tracing::warn!(%worktree, name = %reference, "ignoring worktree HEAD pin with a non-commit target");
+            None
+        }
+        Err(err) => {
+            tracing::warn!(%worktree, name = %reference, error = %err, "ignoring unreadable worktree HEAD pin target");
+            None
+        }
+    }
 }
 
 fn worktree_basename(path: &std::path::Path) -> Option<BString> {
@@ -1742,13 +1792,12 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             continue;
         };
         let id = id.detach();
-        if worktrees
-            .iter()
-            .any(|worktree| worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name))
-        {
+        if worktrees.iter().any(|worktree| {
+            worktree.is_current && worktree.label_id == id && worktree.reference.as_ref() == Some(&full_name)
+        }) {
             kind = DecorationKind::CurrentWorktreeBranch;
         } else if worktrees.iter().any(|worktree| {
-            !worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name)
+            !worktree.is_current && worktree.label_id == id && worktree.reference.as_ref() == Some(&full_name)
         }) {
             kind = DecorationKind::WorktreeBranch;
         }
@@ -1775,13 +1824,14 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
         }
         out.entry(id).or_default().push(Decoration { name, kind });
     }
-    for worktree in worktrees.iter().filter(|worktree| !worktree.is_current) {
-        let kind = if worktree.reference.is_some() {
-            DecorationKind::WorktreeBranch
-        } else {
-            DecorationKind::WorktreeDetached
+    for worktree in worktrees.iter().filter(|worktree| worktree.reference.is_none()) {
+        let kind = match (worktree.is_current, worktree.is_detached) {
+            (true, true) => DecorationKind::CurrentWorktreeDetached,
+            (true, false) => DecorationKind::CurrentWorktreeBranch,
+            (false, true) => DecorationKind::WorktreeDetached,
+            (false, false) => DecorationKind::WorktreeBranch,
         };
-        let decorations = out.entry(worktree.id).or_default();
+        let decorations = out.entry(worktree.label_id).or_default();
         if !decorations
             .iter()
             .any(|decoration| decoration.kind == kind && decoration.name == worktree.name)
@@ -2094,8 +2144,10 @@ mod tests {
         let worktrees = worktree_checkouts(&repo);
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == main
+                && worktree.label_id == main
                 && worktree.name == "main"
                 && worktree.is_current
+                && !worktree.is_detached
                 && worktree
                     .reference
                     .as_ref()
@@ -2103,8 +2155,10 @@ mod tests {
         }));
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == topic
+                && worktree.label_id == topic
                 && worktree.name == "topic"
                 && !worktree.is_current
+                && !worktree.is_detached
                 && worktree
                     .reference
                     .as_ref()
@@ -2112,9 +2166,11 @@ mod tests {
         }));
         assert!(worktrees.iter().any(|worktree| {
             worktree.id == root
+                && worktree.label_id == root
                 && worktree.name == "detached-wt"
                 && worktree.reference.is_none()
                 && !worktree.is_current
+                && worktree.is_detached
         }));
         assert_eq!(worktrees.len(), 3, "the malformed worktree is ignored");
 
@@ -2181,14 +2237,43 @@ mod tests {
             .find(|worktree| worktree.is_current)
             .expect("the current detached worktree is discovered");
         assert!(current.reference.is_none());
+        assert!(current.is_detached);
+        assert_eq!(current.label_id, current.id);
         let detached_decorations = decorations(&detached_repo, &[], &detached_worktrees)?;
+        assert!(detached_decorations.get(&current.id).is_some_and(|decorations| {
+            decorations.iter().any(|decoration| {
+                decoration.kind == DecorationKind::CurrentWorktreeDetached && decoration.name == current.name
+            })
+        }));
+
+        let symbolic = Command::new("git")
+            .current_dir(&linked_path)
+            .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/topic"])
+            .status()?;
+        assert!(symbolic.success(), "git remembers the detached worktree's branch");
+        let remembered_repo = crate::test_repository::open(&linked_path)?;
+        let remembered_worktrees = worktree_checkouts(&remembered_repo);
+        let current = remembered_worktrees
+            .iter()
+            .find(|worktree| worktree.is_current)
+            .expect("the remembered detached worktree is discovered");
+        assert_ne!(current.id, topic, "the worktree remains detached away from its branch");
+        assert_eq!(current.label_id, topic, "the label follows the remembered branch tip");
+        assert_eq!(current.name, "topic");
+        assert!(current.is_detached);
         assert!(
-            !detached_decorations
-                .get(&current.id)
-                .is_some_and(|decorations| decorations.iter().any(|decoration| {
-                    decoration.kind == DecorationKind::WorktreeDetached && decoration.name == current.name
-                }))
+            current
+                .reference
+                .as_ref()
+                .is_some_and(|name| name.as_bstr() == b"refs/heads/topic")
         );
+        let remembered_pins = applicable_pins(&remembered_repo)?;
+        let remembered_decorations = decorations(&remembered_repo, &remembered_pins, &remembered_worktrees)?;
+        assert!(remembered_decorations.get(&topic).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::HeadPinBranch && decoration.name == "topic")
+        }));
         Ok(())
     }
 
@@ -2531,8 +2616,14 @@ mod tests {
 
     #[test]
     fn tree_revisions_cover_normal_refs_and_optionally_tags() -> gix_testtools::Result {
-        let fixture = fixture()?;
-        let repo = crate::test_repository::open(&fixture)?;
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        repo.reference(
+            "refs/worktree/tix/pins/test",
+            repo.head_id()?,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test tree revisions",
+        )?;
         let names = |include_tags| {
             tree_revisions(&repo, include_tags).map(|revisions| {
                 revisions
@@ -2555,6 +2646,12 @@ mod tests {
         assert!(
             without_tags.iter().all(|name| !name.starts_with("refs/tags/")),
             "tagless rendering does not traverse tag-only history"
+        );
+        assert!(
+            with_tags
+                .iter()
+                .all(|name| !name.starts_with("refs/worktree/tix/pins/")),
+            "ordinary pins never become tree traversal tips"
         );
         Ok(())
     }

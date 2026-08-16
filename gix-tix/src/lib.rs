@@ -1571,40 +1571,6 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
-                    tree::Input::Pin { id, include_tags } => {
-                        match open_repository(&repository_path, repository_is_bare, false) {
-                            Ok(repository) => match edit::time_travel::create_tree_pin(&repository, id, include_tags) {
-                                Ok((pin, created)) => {
-                                    let label = edit::time_travel::pin_label(&pin);
-                                    tree.leave_message(if created {
-                                        format!("created {label}")
-                                    } else {
-                                        format!("already pinned as {label}")
-                                    });
-                                    refresh_pending |= created;
-                                }
-                                Err(err) => tree.leave_message(format!("pin: {err:#}")),
-                            },
-                            Err(err) => tree.leave_message(format!("pin: {err:#}")),
-                        }
-                        dirty = true;
-                        urgent = true;
-                        continue;
-                    }
-                    tree::Input::Unpin { id, fallback } => {
-                        match edit::time_travel::remove_pins(&repository_path, repository_is_bare, id) {
-                            Ok(0) => tree.leave_message("no pins removed"),
-                            Ok(count) => {
-                                tree.leave_message(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
-                                tree.select_after_reference_deletion(fallback);
-                                refresh_pending = true;
-                            }
-                            Err(err) => tree.leave_message(format!("unpin: {err:#}")),
-                        }
-                        dirty = true;
-                        urgent = true;
-                        continue;
-                    }
                     tree::Input::Quit => return Ok(None),
                 },
                 TerminalEvent::Mouse(mouse) if tree.handle_mouse(mouse.kind, 1) => {

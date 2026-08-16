@@ -136,11 +136,12 @@ without trading responsiveness for metadata that is not visible.
   visible. If it has visible descendants, its unselected non-whitespace content
   is underlined and `@` is bold; a selected row keeps only bold `@`.
 - Local branches checked out in other worktrees are displayed as `short-name@`
-  in light blue instead of their plain branch decoration. Other detached
-  worktrees use their checkout directory basename. The current worktree's
-  symbolic branch is displayed as `@short-name` in the local-reference color;
-  if its HEAD is detached, a branch that happens to point at the same commit
-  remains an ordinary branch label. Identical labels are deduplicated.
+  in light blue instead of their plain branch decoration. The current worktree's
+  symbolic branch is displayed as `@short-name` in the local-reference color.
+  A detached worktree with a symbolic HEAD pin labels the remembered branch at
+  that branch's actual tip, even when the checkout is elsewhere; otherwise its
+  checkout directory basename labels the detached commit. Identical labels are
+  deduplicated.
 - When reference labels are hidden, worktree labels are visible only on the
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.
@@ -228,19 +229,20 @@ without trading responsiveness for metadata that is not visible.
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
-- Ordinary pins use the history view's single blue `📌`, without exposing their
-  internal ref names. `p` removes all ordinary pins at a pinned node or creates one
-  at a visible reference/raw tip. A sole visible reference produces a symbolic pin;
-  ambiguous or unnamed targets produce a direct pin. Hidden tags do not participate.
-- After deleting selected branches or pins, refresh keeps the commit when it remains
-  a tree node, otherwise selects the next surviving node row or the nearest previous
-  row when nothing below survives.
+- Worktree branch labels keep the history view's `@branch`, `branch@`, and
+  `★branch` forms at the branch's actual tip. Every detached worktree checkout is
+  additionally shown with one `📌`; ordinary tix pins neither anchor nor decorate
+  the tree. A detached worktree without a usable remembered branch falls back to
+  its checkout directory basename.
+- After deleting selected local or remote references, refresh keeps the commit
+  when it remains a tree node, otherwise selects the next surviving node row or
+  the nearest previous row when nothing below survives.
 
 ### Tree diagnostics
 
 - `tix tree` prints the entire reference projection to standard output without
-  terminal colors, selection state, counts, or viewport clipping. Pins render as
-  `[pin]` in ASCII output and `📌` with `--unicode`. It traverses
+  terminal colors, selection state, counts, or viewport clipping. Detached
+  worktrees render as `[pin]` in ASCII output and `📌` with `--unicode`. It traverses
   all normal references by default; positional revisions scope traversal.
 - `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
   corresponding tree inputs. Output uses ASCII lines and `o` nodes by default;
