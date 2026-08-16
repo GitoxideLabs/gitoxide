@@ -1168,18 +1168,13 @@ pub(crate) fn snapshot_ignoring_pin(
         .into_iter()
         .filter(|pin| ignored_pin != Some(pin.name.as_bstr()))
         .collect::<Vec<_>>();
-    let reviews = all_reviews(repo)?;
     let worktrees = worktree_checkouts(repo);
     let mut view = referenced_refs(repo, revisions)?;
     for pin in &pins {
         insert_ref_chain(repo, pin.name.as_bstr(), &mut view)?;
     }
-    for review in &reviews {
-        insert_ref_chain(repo, review.name.as_bstr(), &mut view)?;
-    }
     let mut view_tips = resolve_tips(repo, revisions)?.unwrap_or_default();
     view_tips.extend(pins.iter().map(|pin| pin.id));
-    view_tips.extend(reviews.iter().map(|review| review.id));
     if include_worktrees {
         view_tips.extend(worktrees.iter().map(|worktree| worktree.id));
     }
@@ -2463,26 +2458,28 @@ mod tests {
     }
 
     #[test]
-    fn review_stashes_are_not_history_tips_or_decorations() -> gix_testtools::Result {
+    fn review_resources_are_not_history_tips_and_stashes_are_not_decorations() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
-        let head = repo.head_id()?.detach();
-        let stash = repo.rev_parse_single("topic")?.detach();
+        let review = repo.rev_parse_single("topic")?.detach();
         repo.reference(
             "refs/worktree/tix/review/1",
-            head,
+            review,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test review",
         )?;
         repo.reference(
             "refs/worktree/tix/review/stashes/1",
-            stash,
+            review,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test review stash",
         )?;
 
         assert_eq!(all_reviews(&repo)?.len(), 1);
-        assert!(!snapshot(&repo, &[], &[], false)?.view_tips.contains(&stash));
+        assert!(
+            !snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
+            "review resources do not retain history"
+        );
         assert!(
             decorations(&repo, &[], &worktree_checkouts(&repo))?
                 .values()

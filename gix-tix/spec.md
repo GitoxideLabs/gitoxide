@@ -538,18 +538,18 @@ space first; changes blocks adapt within the remaining history width.
   files, and non-pending reviewed-tip and base commits. Only after confirmation,
   tix creates the first unused direct `refs/worktree/tix/review/N` ref at the
   reviewed tip and an unsigned ordinary `review` commit at the base with
-  `tix-rebase: onto refs/worktree/tix/review/N`. A `tix-review-return-to` header
-  names the departure pin, or the checked-out branch when no pin is needed. HEAD
-  is detached at that commit,
+  `tix-rebase: onto refs/worktree/tix/review/N`. Starting always creates or reuses
+  a normal worktree-local tix pin for the departure, symbolic for an attached
+  branch and direct for a detached checkout, and names it in the
+  `tix-review-return-to` header. HEAD is detached at the review commit,
   its base tree fills the index, and the reviewed tip tree remains in the worktree
-  as unstaged changes. Leaving a different HEAD preserves that departure with a
-  normal worktree-local tix pin, symbolic for an attached branch and direct for a
-  detached checkout, so descendants above the reviewed commit remain visible.
+  as unstaged changes. The pin keeps the departure and its ancestry visible.
   Finishing maps the recorded return target through the rewrite and uses normal
   time-travel checkout semantics to restore attached or detached HEAD and consume
   its pin. Existing symbolic review refs remain readable.
-- Review refs are always traversal tips and remain visible in every ref mode. One
-  active ref is shown as `review`; multiple refs are shown as `review:N`. Review
+- Review refs are resources, not traversal tips; pins alone retain history. They
+  remain visible in every ref mode: one active ref is shown as `review`, while
+  multiple refs are shown as `review:N`. Review
   commits replace the signature disc with a filled diamond while retaining independent
   signature state. Ordinary edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
