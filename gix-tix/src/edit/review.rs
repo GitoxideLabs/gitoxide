@@ -291,7 +291,13 @@ mod tests {
     use super::*;
 
     fn run(path: &Path, args: &[&str]) -> gix_testtools::Result<Vec<u8>> {
-        let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .env("GIT_AUTHOR_DATE", "2001-01-01T00:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2001-01-01T00:00:00 +0000")
+            .output()?;
         if !output.status.success() {
             return Err(format!(
                 "git {} failed: {}",
@@ -462,6 +468,124 @@ mod tests {
         assert!(
             repo.try_find_reference(stash_ref.as_ref())?.is_none(),
             "finishing also removes saved review worktree state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_changed_review_and_its_successors_are_spliced_before_target_successors() -> gix_testtools::Result {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        run(fixture.path(), &["init", "-q", "-b", "main"])?;
+        run(fixture.path(), &["config", "user.name", "reviewer"])?;
+        run(fixture.path(), &["config", "user.email", "reviewer@example.com"])?;
+        run(
+            fixture.path(),
+            &["config", "gitoxide.commit.authorDate", "2001-01-01T00:00:00 +0000"],
+        )?;
+        run(
+            fixture.path(),
+            &["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000"],
+        )?;
+        std::fs::write(fixture.path().join("file"), "base\n")?;
+        run(fixture.path(), &["add", "file"])?;
+        run(
+            fixture.path(),
+            &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "base"],
+        )?;
+        let base = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+        std::fs::write(fixture.path().join("file"), "B\n")?;
+        run(fixture.path(), &["-c", "commit.gpgSign=false", "commit", "-qam", "B"])?;
+        let reviewed = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+        std::fs::write(fixture.path().join("successor"), "A\n")?;
+        run(fixture.path(), &["add", "successor"])?;
+        run(
+            fixture.path(),
+            &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "A"],
+        )?;
+        let old_successor = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+
+        let open = || {
+            gix::open_opts(
+                fixture.path(),
+                gix::open::Options::isolated().config_overrides([
+                    "user.name=reviewer".to_owned(),
+                    "user.email=reviewer@example.com".to_owned(),
+                    "commit.gpgSign=false".to_owned(),
+                ]),
+            )
+        };
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        start(fixture.path(), false, &graph, reviewed, base)?;
+
+        std::fs::write(fixture.path().join("reviewed"), "new review change\n")?;
+        run(fixture.path(), &["add", "file", "reviewed"])?;
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let review = super::super::head::perform(repo, &graph, super::super::head::Kind::Amend, None)?
+            .expect("the staged review change amends the review commit");
+        let review_successor = ObjectId::from_hex(
+            run(
+                fixture.path(),
+                &[
+                    "-c",
+                    "commit.gpgSign=false",
+                    "commit-tree",
+                    &format!("{review}^{{tree}}"),
+                    "-p",
+                    &review.to_string(),
+                    "-m",
+                    "review successor",
+                ],
+            )?
+            .trim(),
+        )?;
+        run(
+            fixture.path(),
+            &[
+                "update-ref",
+                "refs/heads/review-successor",
+                &review_successor.to_string(),
+            ],
+        )?;
+
+        let repo = open()?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let finished = finish(repo, &graph, review)?;
+        let repo = open()?;
+        let successor = repo.find_reference("refs/heads/main")?.id().detach();
+        assert_ne!(successor, old_successor, "the branch successor is rewritten");
+        assert_eq!(
+            repo.find_commit(finished)?.parent_ids().next().map(gix::Id::detach),
+            Some(reviewed),
+            "the finished review is inserted directly after B"
+        );
+        assert_eq!(
+            repo.find_commit(successor)?.parent_ids().next().map(gix::Id::detach),
+            Some(repo.find_reference("refs/heads/review-successor")?.id().detach()),
+            "A remains the branch tip and follows the review-side history"
+        );
+        let review_successor = repo.find_reference("refs/heads/review-successor")?.id().detach();
+        assert_eq!(
+            repo.find_commit(review_successor)?
+                .parent_ids()
+                .next()
+                .map(gix::Id::detach),
+            Some(finished),
+            "the review successor is inserted before the target history successor"
+        );
+        assert_eq!(
+            repo.find_commit(successor)?.message_raw()?,
+            b"A\n".as_bstr(),
+            "the target history successor is retained"
+        );
+        assert!(super::super::rebase::has_marker(
+            &repo.find_commit(successor)?.decode()?.into_owned()?
+        ));
+        insta::assert_snapshot!(
+            "changed-review-with-successors",
+            gix_testtools::repository::snapshot(fixture.path())?.to_string()
         );
         Ok(())
     }
