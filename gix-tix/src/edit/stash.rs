@@ -403,13 +403,13 @@ mod tests {
         std::fs::write(fixture.path().join("untracked"), "untracked\n")?;
         std::fs::write(fixture.path().join("ignored"), "ignored\n")?;
 
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let repository_path = repo.git_dir().to_owned();
         drop(repo);
         let notice = save_manual(&repository_path, false, head)?;
         assert!(notice.contains("stashed changes"));
 
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
         let name = reference(head)?;
         assert!(repo.try_find_reference(name.as_ref())?.is_some());
@@ -433,7 +433,7 @@ mod tests {
             b"existing worktree change\n",
             "unstashing leaves unrelated worktree changes intact"
         );
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), ordinary);
         Ok(())

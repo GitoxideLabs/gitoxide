@@ -2053,14 +2053,9 @@ mod tests {
     use super::*;
 
     fn open(path: &Path) -> gix_testtools::Result<gix::Repository> {
-        Ok(gix::open_opts(
+        Ok(crate::test_repository::open_with(
             path,
-            gix::open::Options::isolated().config_overrides([
-                "user.name=rebasing committer".to_owned(),
-                "user.email=rebasing@example.com".to_owned(),
-                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
-                "commit.gpgSign=false".to_owned(),
-            ]),
+            ["user.name=rebasing committer", "user.email=rebasing@example.com"],
         )?)
     }
 
@@ -2783,9 +2778,9 @@ mod tests {
         }
         let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
+            [
                 "user.name=rebasing committer".to_owned(),
                 "user.email=rebasing@example.com".to_owned(),
                 "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
@@ -2796,7 +2791,7 @@ mod tests {
                     "gpg.ssh.allowedSignersFile={}",
                     gix_testtools::signature::fixture("ssh-allowed-signers").display()
                 ),
-            ]),
+            ],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let base = repo.rev_parse_single("HEAD~2")?.detach();

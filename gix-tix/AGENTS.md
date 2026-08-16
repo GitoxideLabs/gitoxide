@@ -12,6 +12,13 @@
   or resource-ownership change to tix. Update the specification and its
   regression coverage in the same semantic patch as the implementation.
 
+## Test repositories
+
+- Open fixture repositories through `crate::test_repository::open()` or
+  `open_with()`. They isolate configuration and provide deterministic author,
+  committer, signing, editor, and date defaults; pass only behavior-specific
+  overrides to `open_with()`, which take precedence over those defaults.
+
 ## Commit authorship
 
 - Create one commit per semantically distinct change. Do not combine independent

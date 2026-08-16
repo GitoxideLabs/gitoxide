@@ -695,7 +695,7 @@ mod tests {
             &["update-ref", name.as_bstr().to_str_lossy().as_ref(), "refs/stash"],
         )?;
         git(fixture.path(), &["stash", "drop", "-q", "stash@{0}"])?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let repository_path = repo.git_dir().to_owned();
         let target = repo.find_reference(name.as_ref())?.target().into_owned();
         Ok((
@@ -758,7 +758,7 @@ mod tests {
             &["stash", "push", "--include-untracked", "-q", "-m", "existing"],
         )?;
         let existing_stash = ObjectId::from_hex(git(fixture.path(), &["rev-parse", "refs/stash"])?.trim())?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let graph = loaded_graph(&repo, &[])?;
         drop(repo);
         let started = super::super::review::start(fixture.path(), false, &graph, tip, base)?;
@@ -786,7 +786,7 @@ mod tests {
             fixture.path(),
             &["update-ref", "refs/worktree/tix/pins/child", &child.to_string()],
         )?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let repository_path = repo.git_dir().to_owned();
         let graph = loaded_graph(&repo, &[])?;
         assert_eq!(
@@ -807,14 +807,14 @@ mod tests {
         );
         let stash_name = super::super::review::stash_reference(started.reference.as_bstr())?;
         assert!(
-            crate::open_test_repository(fixture.path())?
+            crate::test_repository::open(fixture.path())?
                 .try_find_reference(stash_name.as_ref())?
                 .is_none(),
             "no stash is created inside the review tree"
         );
 
         perform(&repository_path, false, tip, &graph, &[started.commit], &[], false)?.complete()?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_some());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
         assert!(
@@ -829,7 +829,7 @@ mod tests {
             before,
             "returning through any review descendant restores exact review state"
         );
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(stash_name.as_ref())?.is_none());
         assert_eq!(repo.find_reference("refs/stash")?.id().detach(), existing_stash);
         Ok(())
@@ -845,7 +845,7 @@ mod tests {
         )?;
         let notice = apply_review_stash(&repository_path, false, fixture.path(), stash.clone())?;
         assert!(notice.contains("needs attention"), "the conflict is reported: {notice}");
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert!(repo.try_find_reference(stash.name.as_ref())?.is_none());
         assert!(
             repo.index_or_empty()?
@@ -863,7 +863,7 @@ mod tests {
             "the fatal apply failure is reported: {notice}"
         );
         assert!(
-            crate::open_test_repository(fixture.path())?
+            crate::test_repository::open(fixture.path())?
                 .try_find_reference(stash.name.as_ref())?
                 .is_none(),
             "the review stash ref is consumed even when Git cannot apply it"
@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn nested_review_trees_use_the_nearest_review_root() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let original = repo.head_id()?.detach();
         let mut commit = repo.find_commit(original)?.decode()?.into_owned()?;
         commit.parents = [original].into_iter().collect();
@@ -919,7 +919,7 @@ mod tests {
     #[test]
     fn travels_with_symbolic_and_direct_pins_and_returns() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let root = repository.rev_parse_single("main~2")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
@@ -938,7 +938,7 @@ mod tests {
             .complete()?
             .context("time-travel changed HEAD")?;
         assert!(notice.contains("saved pin:"), "{notice}");
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
         assert_eq!(repository.head_id()?.detach(), root);
         let pins = history::all_pins(&repository)?;
@@ -962,7 +962,7 @@ mod tests {
         drop(repository);
 
         perform(&repository_path, false, topic, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_name()?.map(|name| name.as_bstr().to_owned()),
             Some(b"refs/heads/main".into()),
@@ -976,14 +976,14 @@ mod tests {
             .args(["checkout", "--detach", &main.to_hex().to_string()])
             .status()?;
         assert!(detach.success());
-        let graph = loaded_graph(&crate::open_test_repository(fixture.path())?, &[])?;
+        let graph = loaded_graph(&crate::test_repository::open(fixture.path())?, &[])?;
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
-        let pin = history::all_pins(&crate::open_test_repository(fixture.path())?)?
+        let pin = history::all_pins(&crate::test_repository::open(fixture.path())?)?
             .pop()
             .context("direct pin is present")?;
         assert_eq!(pin.target.try_id().map(ToOwned::to_owned), Some(main));
         perform(&repository_path, false, main, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert!(
             repository.head()?.is_detached(),
             "a direct pin returns to detached HEAD"
@@ -996,7 +996,7 @@ mod tests {
     #[test]
     fn returning_to_a_commit_restores_its_manual_stash() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let head = repository.head_id()?.detach();
         let parent = repository
@@ -1019,7 +1019,7 @@ mod tests {
         perform(&repository_path, false, head, &graph, &[], &[], false)?.complete()?;
         assert_eq!(std::fs::read(fixture.path().join("manual-stash"))?, b"saved\n");
         assert!(
-            crate::open_test_repository(fixture.path())?
+            crate::test_repository::open(fixture.path())?
                 .try_find_reference(super::super::stash::reference(head)?.as_ref())?
                 .is_none(),
             "returning consumes the manual stash association"
@@ -1030,7 +1030,7 @@ mod tests {
     #[test]
     fn removes_every_pin_at_the_selected_commit() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let selected = repository.rev_parse_single("main")?.detach();
         let other = repository.rev_parse_single("topic")?.detach();
@@ -1044,7 +1044,7 @@ mod tests {
         drop(repository);
 
         assert_eq!(remove_pins(&repository_path, false, selected)?, 2);
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             history::all_pins(&repository)?
                 .into_iter()
@@ -1059,7 +1059,7 @@ mod tests {
     #[test]
     fn sideways_travel_preserves_an_unreferenced_departure() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let main = repository.rev_parse_single("main")?.detach();
         let topic = repository.rev_parse_single("topic")?.detach();
@@ -1083,7 +1083,7 @@ mod tests {
         );
 
         perform(&repository_path, false, topic, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), topic);
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "sideways travel retains the otherwise lost departure");
@@ -1098,7 +1098,7 @@ mod tests {
     #[test]
     fn explicit_tips_avoid_redundant_pins_and_failed_checkouts_clean_up() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let root = repository.rev_parse_single("main~2")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
@@ -1108,7 +1108,7 @@ mod tests {
 
         perform(&repository_path, false, root, &graph, &[], &revisions, false)?.complete()?;
         assert!(
-            history::all_pins(&crate::open_test_repository(fixture.path())?)?.is_empty(),
+            history::all_pins(&crate::test_repository::open(fixture.path())?)?.is_empty(),
             "an explicit tip already retains the former HEAD"
         );
 
@@ -1131,7 +1131,7 @@ mod tests {
             .and_then(Perform::complete)
             .expect_err("Git rejects a conflicting checkout");
         assert!(format!("{err:#}").contains("git checkout failed"));
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), main, "failed checkout retains HEAD");
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "the destination pin survives a failed checkout");
@@ -1150,7 +1150,7 @@ mod tests {
                 .status()?
                 .success()
         );
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let repository_path = repository.git_dir().to_owned();
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         std::fs::write(fixture.path().join("after"), "after\n")?;
@@ -1186,7 +1186,7 @@ mod tests {
         let tip = repository.find_reference("refs/heads/main")?.id().detach();
         drop(repository);
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let graph = super::super::loaded_graph(&repository)?;
         let before = gix_testtools::repository::snapshot(fixture.path())?;
 
@@ -1200,7 +1200,7 @@ mod tests {
         );
 
         let (_notice, conflict_id) = conflict.accept()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_id()?.detach(),
             conflict_id,
@@ -1277,7 +1277,8 @@ mod tests {
                 allowed_signers.to_string_lossy().as_ref(),
             ],
         )?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let open = || crate::test_repository::open_with(fixture.path(), ["commit.gpgSign=true"]);
+        let repository = open()?;
         let repository_path = repository.git_dir().to_owned();
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         let root = repository.rev_parse_single("HEAD~2")?.detach();
@@ -1299,7 +1300,7 @@ mod tests {
             &["checkout", "-q", "--detach", &signed_middle.to_string()],
         )?;
 
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = open()?;
         let graph = super::super::loaded_graph(&repository)?;
         let pending_middle =
             super::super::head::perform(repository.clone(), &graph, super::super::head::Kind::Spill, None)?
@@ -1325,10 +1326,10 @@ mod tests {
         assert!(super::super::rebase::has_marker(&tip_commit));
         drop(repository);
 
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = open()?;
         let graph = super::super::loaded_graph(&repository)?;
         perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = open()?;
         assert_eq!(repository.find_reference("refs/heads/main")?.id().detach(), pending_tip);
         assert!(super::super::rebase::is_pending(
             &repository.find_commit(pending_middle)?.decode()?.into_owned()?
@@ -1341,7 +1342,7 @@ mod tests {
 
         perform(&repository_path, false, pending_middle, &graph, &[], &[], false)?.complete()?;
 
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = open()?;
         let materialized_middle = repository.head_id()?.detach();
         let still_pending_tip = repository.find_reference("refs/heads/main")?.id().detach();
         assert_ne!(materialized_middle, pending_middle);
@@ -1371,7 +1372,7 @@ mod tests {
         drop(repository);
 
         perform(&repository_path, false, still_pending_tip, &graph, &[], &[], false)?.complete()?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = open()?;
         let tip_commit = repository.find_commit(repository.head_id()?)?;
         assert!(!super::super::rebase::is_pending(&tip_commit.decode()?.into_owned()?));
         assert!(

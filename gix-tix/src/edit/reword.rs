@@ -294,14 +294,12 @@ mod tests {
     #[test]
     fn document_does_not_repeat_existing_agent_trailers() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let repository = gix::open_opts(
+        let repository = crate::test_repository::open_with(
             fixture,
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=:".to_owned(),
-                "committer.name=Current Committer".to_owned(),
-                "committer.email=current@example.com".to_owned(),
-                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
-            ]),
+            [
+                "committer.name=Current Committer",
+                "committer.email=current@example.com",
+            ],
         )?;
         let topic = repository.find_reference("refs/heads/topic")?.id().detach();
         let (editor, document) = document(&repository, topic)?;
@@ -370,14 +368,12 @@ mod tests {
     #[test]
     fn marks_only_reworded_descendants_for_lazy_replay() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repository = gix::open_opts(
+        let repository = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=:".to_owned(),
-                "committer.name=Current Committer".to_owned(),
-                "committer.email=current@example.com".to_owned(),
-                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
-            ]),
+            [
+                "committer.name=Current Committer",
+                "committer.email=current@example.com",
+            ],
         )?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         let (_, document) = document(&repository, middle)?;
@@ -416,9 +412,9 @@ mod tests {
         }
         let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repository = gix::open_opts(
+        let repository = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
+            [
                 "commit.gpgSign=true".to_owned(),
                 "gpg.format=ssh".to_owned(),
                 format!("user.signingKey={}", key.display()),
@@ -426,7 +422,7 @@ mod tests {
                     "gpg.ssh.allowedSignersFile={}",
                     gix_testtools::signature::fixture("ssh-allowed-signers").display()
                 ),
-            ]),
+            ],
         )?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         let (_, document) = document(&repository, middle)?;
@@ -462,7 +458,7 @@ mod tests {
         }
         let (_key_home, key) = gix_testtools::signature::ssh_private_key()?;
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let old_id = crate::open_test_repository(fixture.path())?.head_id()?.detach();
+        let old_id = crate::test_repository::open(fixture.path())?.head_id()?.detach();
         let git = |args: &[&str]| -> std::io::Result<std::process::ExitStatus> {
             Command::new("git").arg("-C").arg(fixture.path()).args(args).status()
         };
@@ -473,9 +469,9 @@ mod tests {
             );
         }
 
-        let repository = gix::open_opts(
+        let repository = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
+            [
                 "commit.gpgSign=true".to_owned(),
                 "gpg.format=ssh".to_owned(),
                 format!("user.signingKey={}", key.display()),
@@ -483,7 +479,7 @@ mod tests {
                     "gpg.ssh.allowedSignersFile={}",
                     gix_testtools::signature::fixture("ssh-allowed-signers").display()
                 ),
-            ]),
+            ],
         )?;
         let edited = b"Author: New Author <new-author@example.com>\n\
                        AuthorDate: 2026-08-12 10:20:30 +0200\n\
