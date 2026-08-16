@@ -187,12 +187,13 @@ without trading responsiveness for metadata that is not visible.
   can be made, and cache completed results. They must never reopen a repository
   merely because selection moved.
 
-### Tree overviews
+### Ref-tree overviews
 
-- After traversal completes, `t` toggles history and a rounded rail tree.
-  `Escape` also returns directly to history. The tree cursor and viewport are
-  independent of the history selection and panes, and the tree provides
-  navigation only. The direct tree action appears in the `?` information group.
+- After traversal completes, `t` toggles history and a rounded rail ref-tree.
+  `Escape` also returns directly to history. The ref-tree cursor and viewport are
+  independent of the history selection and panes, and the ref-tree provides
+  navigation only. The direct ref-tree action appears in the `?` information group.
+  “Tree” without the `ref-` prefix refers to Git tree objects and tree diffs.
 - The overview uses normal references and raw revision tips already present in
   the completed graph, including traversed hidden history; it never causes more
   repository traversal. Special refs are excluded. First-parent paths form a
@@ -202,7 +203,7 @@ without trading responsiveness for metadata that is not visible.
   projection.
 - The component containing `HEAD` sorts first. Children sort by their smallest
   reference label and then object ID. Initial selection is `HEAD`, then a raw
-  tip, then the first node; refresh and re-entry preserve the tree cursor when
+  tip, then the first node; refresh and re-entry preserve the ref-tree cursor when
   its commit remains available.
 - The selected node shows the exact number of commits reachable
   through all parents. Other reference and raw-tip nodes show the number reachable
@@ -213,7 +214,7 @@ without trading responsiveness for metadata that is not visible.
   dimmed, and exclusive history remains normal. A non-selectable `●` splits a
   contracted edge where it becomes reachable. Exact exclusive counts are computed
   and cached only for reference rows visible in the viewport.
-- The tree orders tips above roots and renders one retained or boundary
+- The ref-tree orders tips above roots and renders one retained or boundary
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
   disk is the node marker, so counts do not repeat it.
 - Rendering clips lanes and node labels to the viewport.
@@ -221,9 +222,9 @@ without trading responsiveness for metadata that is not visible.
   Nearest movement chooses the closest node in the requested screen direction.
   Topological Up moves toward leaves, Down toward roots, and Left/Right chooses
   a remembered child; `i/n` and an emphasized edge show the choice.
-- `g` selects the top tree node, and `Shift-G` selects the root of the current
-  component. Shift-modified directions pan the tree viewport; mouse and the existing
-  Ctrl/Page keys scroll without moving the tree cursor.
+- `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
+  component. Shift-modified directions pan the ref-tree viewport; mouse and the existing
+  Ctrl/Page keys scroll without moving the ref-tree cursor.
 - `e` opens node-level reference editing. `d` deletes every eligible local branch
   immediately. `e r` is offered only when selected remote-tracking references
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
@@ -232,21 +233,21 @@ without trading responsiveness for metadata that is not visible.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
   `★branch` forms at the branch's actual tip. Every detached worktree checkout is
   additionally shown with one `📌`; ordinary tix pins neither anchor nor decorate
-  the tree. A detached worktree without a usable remembered branch falls back to
+  the ref-tree. A detached worktree without a usable remembered branch falls back to
   its checkout directory basename.
 - After deleting selected local or remote references, refresh keeps the commit
-  when it remains a tree node, otherwise selects the next surviving node row or
+  when it remains a ref-tree node, otherwise selects the next surviving node row or
   the nearest previous row when nothing below survives.
 
-### Tree diagnostics
+### Ref-tree diagnostics
 
-- `tix tree` prints the entire reference projection to standard output without
+- `tix ref-tree` prints the entire reference projection to standard output without
   terminal colors, selection state, counts, or viewport clipping. Detached
   worktrees render as `[pin]` in ASCII output and `📌` with `--unicode`. It traverses
   all normal references by default; positional revisions scope traversal.
 - `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
-  corresponding tree inputs. Output uses ASCII lines and `o` nodes by default;
-  `--unicode` uses the interactive tree's rounded line and node glyphs.
+  corresponding ref-tree inputs. Output uses ASCII lines and `o` nodes by default;
+  `--unicode` uses the interactive ref-tree's rounded line and node glyphs.
 
 ## Interaction
 
@@ -261,7 +262,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. Its actions remain direct shortcuts. |
-| `t` | Toggle the rounded tree overview. |
+| `t` | Toggle the rounded ref-tree overview. |
 | `[` | Toggle graph/metadata alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Toggle committer dates. |
