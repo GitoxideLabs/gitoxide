@@ -288,7 +288,7 @@ pub(crate) enum Action {
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
-    ToggleTree,
+    ToggleRefTree,
     ToggleEdit,
     ToggleInformation,
     ToggleAlign,
@@ -846,7 +846,7 @@ impl App {
                 | Action::ToggleAlign
                 | Action::ToggleCommit
                 | Action::ToggleChanges
-                | Action::ToggleTree
+                | Action::ToggleRefTree
         ) {
             self.information_expanded = false;
         }
@@ -3495,7 +3495,7 @@ mod tests {
             Action::ToggleCommit,
             Action::ToggleChanges,
             Action::VerifySignatures,
-            Action::ToggleTree,
+            Action::ToggleRefTree,
         ] {
             app.update(action);
             assert!(app.information_expanded, "information actions keep the group open");

@@ -969,7 +969,7 @@ pub(crate) fn draw_with_worktree(
         }
         ordered.push(toggle("[ align", app.align_metadata));
         ordered.push(Span::raw(" · "));
-        ordered.extend(shortcut("tree", 't', false));
+        ordered.extend(shortcut("ref-tree", 't', false));
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("message", 'm', app.show_commit));
         ordered.push(Span::raw(" · "));
@@ -3049,14 +3049,14 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         assert!(
             footer.starts_with(
-                    "0 commits · view · edit · copy · refs · ? ([ align · tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                    "0 commits · view · edit · copy · refs · ? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
         );
         assert_reversed_group(
             &terminal,
             1,
-            "? ([ align · tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
+            "? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
         );
         Ok(())
     }
@@ -4130,7 +4130,7 @@ mod tests {
         })?;
         assert!(
             rendered_line(&footer_terminal, 15).contains(
-                "? ([ align · tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                "? ([ align · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
             ),
             "the expanded information prefix contains every following action except quit"
         );

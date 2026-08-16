@@ -395,7 +395,7 @@ impl Tree {
         let [body, footer] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
         frame.render_widget(Clear, frame.area());
         let Some(overview) = self.overview.as_ref() else {
-            frame.render_widget(Paragraph::new("tree overview unavailable"), body);
+            frame.render_widget(Paragraph::new("ref-tree overview unavailable"), body);
             return;
         };
         if self.placed.is_none() {
@@ -454,7 +454,7 @@ impl Tree {
         } else if self.edit_expanded {
             let branches = self.selected_local_branches();
             if branches.is_empty() && self.remote_deletions.is_empty() {
-                "tree · e edit (no actions)".into()
+                "ref-tree · e edit (no actions)".into()
             } else {
                 let mut actions = Vec::new();
                 if !branches.is_empty() {
@@ -466,7 +466,7 @@ impl Tree {
                         short_remote_deletion_list(&self.remote_deletions)
                     ));
                 }
-                format!("tree · e edit ({})", actions.join(" · "))
+                format!("ref-tree · e edit ({})", actions.join(" · "))
             }
         } else {
             let motion = match self.motion {
@@ -479,7 +479,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
+                "ref-tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -1539,7 +1539,7 @@ mod tests {
         ]);
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        assert!(tree.toggle(), "the tree opens");
+        assert!(tree.toggle(), "the ref-tree opens");
 
         let Input::ResolveRemoteReferences(remote) =
             tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
@@ -1670,11 +1670,11 @@ mod tests {
     }
 
     #[test]
-    fn escape_cancels_the_edit_prefix_without_leaving_the_tree() {
+    fn escape_cancels_the_edit_prefix_without_leaving_the_ref_tree() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        assert!(tree.toggle(), "the tree opens");
+        assert!(tree.toggle(), "the ref-tree opens");
 
         tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
         tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -1861,7 +1861,7 @@ mod tests {
         assert_eq!(
             tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             Input::Handled,
-            "the tree has no pin action"
+            "the ref-tree has no pin action"
         );
     }
 
@@ -2076,7 +2076,7 @@ mod tests {
         ]);
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
-        assert!(tree.toggle(), "the available tree opens");
+        assert!(tree.toggle(), "the available ref-tree opens");
         let tagged = graph.index(id(3)).expect("tagged commit exists");
         assert!(
             tree.overview
@@ -2140,7 +2140,7 @@ mod tests {
     }
 
     #[test]
-    fn interactive_tree_renders_exact_visible_counts() -> gix_testtools::Result {
+    fn interactive_ref_tree_renders_exact_visible_counts() -> gix_testtools::Result {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
@@ -2155,9 +2155,9 @@ mod tests {
             .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("main"), "the rounded tree shows main");
-        assert!(rendered.contains("topic"), "the rounded tree shows topic");
-        assert!(rendered.contains("tree ·"), "the footer identifies the tree");
+        assert!(rendered.contains("main"), "the rounded ref-tree shows main");
+        assert!(rendered.contains("topic"), "the rounded ref-tree shows topic");
+        assert!(rendered.contains("ref-tree ·"), "the footer identifies the ref-tree");
         assert!(
             rendered.contains("5 main"),
             "the selected reference shows its exact count"
@@ -2174,7 +2174,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_toggle_opens_and_closes_the_single_layout() {
+    fn ref_tree_toggle_opens_and_closes_the_single_layout() {
         let (graph, refs, decorations) = fixture();
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
