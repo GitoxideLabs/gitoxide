@@ -1753,7 +1753,9 @@ fn metadata_line<'a>(
                 selected
                     && matches!(
                         decoration.kind,
-                        DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+                        DecorationKind::WorktreeBranch
+                            | DecorationKind::WorktreeDetached
+                            | DecorationKind::CurrentWorktreeDetached
                     )
             }
         })
@@ -1773,7 +1775,10 @@ fn metadata_line<'a>(
                     format!("{name}@").into()
                 } else if decoration.kind == DecorationKind::HeadPinBranch {
                     format!("★{name}").into()
-                } else if decoration.kind == DecorationKind::CurrentWorktreeBranch {
+                } else if matches!(
+                    decoration.kind,
+                    DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached
+                ) {
                     format!("@{name}").into()
                 } else {
                     name
@@ -1951,7 +1956,9 @@ pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
         DecorationKind::HeadPinBranch => Style::default().fg(Color::Cyan),
         DecorationKind::Stash => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
-        DecorationKind::CurrentWorktreeBranch => Style::default().fg(Color::Cyan),
+        DecorationKind::CurrentWorktreeBranch | DecorationKind::CurrentWorktreeDetached => {
+            Style::default().fg(Color::Cyan)
+        }
         DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached => Style::default().fg(Color::LightBlue),
         DecorationKind::Local => Style::default().fg(Color::Cyan),
         DecorationKind::Remote => Style::default().fg(Color::Yellow),
