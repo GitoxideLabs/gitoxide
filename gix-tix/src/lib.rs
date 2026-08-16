@@ -10,6 +10,7 @@ mod history;
 mod logging;
 #[cfg(test)]
 mod test_repository;
+mod tree;
 mod ui;
 
 use std::{
@@ -949,6 +950,7 @@ fn event_loop(
         }
     }
     let mut decorations = Decorations::new();
+    let mut tree = tree::Tree::default();
     let mut motion = MotionState::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
@@ -967,6 +969,7 @@ fn event_loop(
         &mut line_diff_pool,
         &mut motion,
         focused,
+        &mut tree,
         &mut filesystem_responses,
     )?;
     let mut last_draw = Instant::now();
@@ -1247,8 +1250,9 @@ fn event_loop(
                 Ok((graph, result)) => {
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
-                    history_graph = Some(graph);
                     let result = result?;
+                    tree.rebuild(&graph, &result.refs, &result.decorations);
+                    history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "history-refresh-completed");
@@ -1373,6 +1377,7 @@ fn event_loop(
                 &mut line_diff_pool,
                 &mut motion,
                 focused,
+                &mut tree,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1411,6 +1416,7 @@ fn event_loop(
                     history_finished = true;
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
+                    tree.rebuild(&graph, &ref_snapshot, &decorations);
                     history_graph = Some(graph);
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
@@ -1441,6 +1447,7 @@ fn event_loop(
                 &mut line_diff_pool,
                 &mut motion,
                 focused,
+                &mut tree,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1480,6 +1487,24 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
+        if tree.is_active() {
+            match &terminal_event {
+                TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match tree.handle_key(*key) {
+                    tree::Input::Handled => {
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    tree::Input::Quit => return Ok(None),
+                },
+                TerminalEvent::Mouse(mouse) if tree.handle_mouse(mouse.kind, 1) => {
+                    dirty = true;
+                    urgent = true;
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let key_pressed = is_key_press(&terminal_event);
         let (action, repeats_history, is_repeat, throttles_draw) = match terminal_event {
             TerminalEvent::Key(key) => {
@@ -1767,6 +1792,13 @@ fn event_loop(
         let Some(action) = action else {
             continue;
         };
+        if action == Action::ToggleTree {
+            tree.toggle();
+            app.history_display_expanded = false;
+            dirty = true;
+            urgent = true;
+            continue;
+        }
         let action = copy_selected_path_action(
             action,
             &app,
@@ -2675,10 +2707,26 @@ fn draw(
     line_diff_pool: &mut Option<LineDiffPool>,
     motion: &mut MotionState,
     focused: bool,
+    tree: &mut tree::Tree,
     filesystem_responses: &mut logging::FilesystemResponses,
 ) -> Result<()> {
     let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
+        return Ok(());
+    }
+    if tree.is_active() {
+        motion.cancel_pending();
+        terminal
+            .autoresize()
+            .context("could not resize the terminal before drawing")?;
+        {
+            let mut frame = terminal.get_frame();
+            tree.draw(&mut frame, history_graph.as_ref());
+        }
+        terminal
+            .apply_buffer_with_cursor(None)
+            .context("could not draw tree overview")?;
+        filesystem_responses.frame_presented();
         return Ok(());
     }
     app.unseen_filesystem_redraw = unseen_filesystem_redraw(
@@ -3831,32 +3879,36 @@ fn load_changes_without_lines(repository: &gix::Repository, target: app::TreeDif
         return Ok(changes);
     };
     let commit = repository.find_commit(id).context("could not load changed paths")?;
-    let parents: Vec<_> = commit.parent_ids().collect();
+    let marked_parent = {
+        let decoded = commit.decode().context("could not decode changed commit")?;
+        edit::rebase::marked_parent_ref(&decoded)?
+    };
+    let parents: Vec<_> = commit.parent_ids().map(gix::Id::detach).collect();
     let parent_index = requested_parent.checked_rem(parents.len()).unwrap_or_default();
-    let parent = parents.get(parent_index).copied();
+    let selected_parent = parents.get(parent_index).copied();
+    let (parent, compared_parent) = match marked_parent {
+        Some(parent) => (parent, None),
+        None => (
+            selected_parent,
+            (parents.len() > 1).then(|| ComparedParent {
+                index: parent_index,
+                total: parents.len(),
+                id: selected_parent.expect("a merge has parents"),
+            }),
+        ),
+    };
     let new_tree = commit.tree().context("could not load changed commit tree")?;
     let old_tree = match parent {
         Some(parent) => Some(
-            parent
-                .object()
+            repository
+                .find_commit(parent)
                 .context("could not load parent commit")?
-                .try_into_commit()
-                .context("parent is not a commit")?
                 .tree()
                 .context("could not load parent commit tree")?,
         ),
         None => None,
     };
-    load_tree_changes_without_lines(
-        repository,
-        old_tree.as_ref(),
-        &new_tree,
-        (parents.len() > 1).then(|| ComparedParent {
-            index: parent_index,
-            total: parents.len(),
-            id: parent.expect("a merge has parents").detach(),
-        }),
-    )
+    load_tree_changes_without_lines(repository, old_tree.as_ref(), &new_tree, compared_parent)
 }
 
 fn load_tree_changes_without_lines(
@@ -4420,6 +4472,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
+        KeyCode::Char('t') => Some(Action::ToggleTree),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
@@ -4780,6 +4833,71 @@ mod tests {
             graph.selection_relation(topic, &refs, &[]),
             Some(SelectionRelation::Tracking { ahead: 1, behind: 2 }),
             "the dynamically scheduled upstream has enough cached ancestry for comparison"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_rebase_changes_use_the_recorded_parent() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let actual_parent = repository.rev_parse_single("main")?.detach();
+
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let mut marked = repository.find_commit(topic)?.decode()?.into_owned()?;
+        let original_parent = marked.parents[0];
+        marked.parents = [actual_parent].into_iter().collect();
+        marked
+            .extra_headers
+            .push(("tix-rebase-parent".into(), original_parent.to_hex().to_string().into()));
+        let marked_topic = repository.write_object(&marked)?.detach();
+        let changes = load_changes_without_lines(
+            &repository,
+            app::TreeDiffTarget::Commit {
+                id: marked_topic,
+                parent: 0,
+            },
+        )?;
+        assert_eq!(
+            changes
+                .paths
+                .iter()
+                .map(|change| change.path.as_bstr())
+                .collect::<Vec<_>>(),
+            ["topic", "topic-extra"],
+            "the recorded parent preserves the commit's original changes"
+        );
+        assert_eq!(
+            changes.parent, None,
+            "the actual parent isn't presented as the comparison base"
+        );
+
+        let root = repository.rev_parse_single("v1^{}")?.detach();
+        let mut marked_root = repository.find_commit(root)?.decode()?.into_owned()?;
+        marked_root.parents = [actual_parent].into_iter().collect();
+        marked_root.extra_headers.push((
+            "tix-rebase-parent".into(),
+            gix::ObjectId::null(repository.object_hash())
+                .to_hex()
+                .to_string()
+                .into(),
+        ));
+        let marked_root = repository.write_object(&marked_root)?.detach();
+        let changes = load_changes_without_lines(
+            &repository,
+            app::TreeDiffTarget::Commit {
+                id: marked_root,
+                parent: 0,
+            },
+        )?;
+        assert_eq!(
+            changes
+                .paths
+                .iter()
+                .map(|change| change.path.as_bstr())
+                .collect::<Vec<_>>(),
+            ["root"],
+            "a recorded null parent compares the pending root to the empty tree"
         );
         Ok(())
     }
@@ -5350,7 +5468,10 @@ mod tests {
             action(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
             Some(Action::ToggleRefs)
         );
-        assert_eq!(action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
+            Some(Action::ToggleTree)
+        );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)),
             Some(Action::TimeTravel),
@@ -5439,8 +5560,8 @@ mod tests {
         }
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE), false, true),
-            None,
-            "time travel is no longer part of the edit prefix"
+            Some(Action::ToggleTree),
+            "the direct tree key remains available while edit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE), false, true),
@@ -5492,6 +5613,21 @@ mod tests {
             Some(Action::ForceQuit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)), None);
+    }
+
+    #[test]
+    fn tree_is_direct_while_trailers_remain_scoped_to_the_view_prefix() {
+        let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+        assert_eq!(
+            action_with_shortcut_groups(key, true, false),
+            Some(Action::ToggleTrailers),
+            "v t retains its trailer action"
+        );
+        assert_eq!(
+            action_with_shortcut_groups(key, false, false),
+            Some(Action::ToggleTree),
+            "plain t toggles the tree"
+        );
     }
 
     #[test]

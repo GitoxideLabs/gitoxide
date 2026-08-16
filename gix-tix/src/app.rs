@@ -288,6 +288,7 @@ pub(crate) enum Action {
     Refresh,
     ToggleHidden,
     ToggleHistoryDisplay,
+    ToggleTree,
     ToggleEdit,
     ToggleInformation,
     ToggleAlign,
@@ -845,6 +846,7 @@ impl App {
                 | Action::ToggleAlign
                 | Action::ToggleCommit
                 | Action::ToggleChanges
+                | Action::ToggleTree
         ) {
             self.information_expanded = false;
         }
@@ -2191,7 +2193,7 @@ impl RenderedLanes {
 }
 
 #[derive(Default)]
-struct LaneState {
+pub(crate) struct LaneState {
     columns: Vec<ObjectId>,
     next: Vec<ObjectId>,
     parents: Vec<(ObjectId, Option<usize>, usize)>,
@@ -2201,14 +2203,28 @@ struct LaneState {
 
 impl LaneState {
     fn advance(&mut self, row: &CommitRow, out: Option<&mut String>) -> Option<Range<usize>> {
+        self.advance_ids(row.id, row.parent_ids.iter().copied(), out, '●')
+    }
+
+    pub(crate) fn advance_ids(
+        &mut self,
+        id: ObjectId,
+        parent_ids: impl IntoIterator<Item = ObjectId>,
+        out: Option<&mut String>,
+        marker: char,
+    ) -> Option<Range<usize>> {
         let render = out.is_some();
-        let current = self.columns.iter().position(|id| *id == row.id).unwrap_or_else(|| {
-            self.columns.push(row.id);
-            self.columns.len() - 1
-        });
+        let current = self
+            .columns
+            .iter()
+            .position(|candidate| *candidate == id)
+            .unwrap_or_else(|| {
+                self.columns.push(id);
+                self.columns.len() - 1
+            });
 
         self.parents.clear();
-        for parent in row.parent_ids.iter().copied() {
+        for parent in parent_ids {
             if !self.parents.iter().any(|(id, _, _)| *id == parent) {
                 self.parents
                     .push((parent, self.columns.iter().position(|id| *id == parent), 0));
@@ -2260,10 +2276,26 @@ impl LaneState {
                 &self.edges,
                 &mut self.cells,
                 out,
+                marker,
             )
         });
         std::mem::swap(&mut self.columns, &mut self.next);
         range
+    }
+
+    pub(crate) fn node_line(&self, id: ObjectId, marker: char) -> String {
+        let current = self
+            .columns
+            .iter()
+            .position(|candidate| *candidate == id)
+            .unwrap_or(self.columns.len());
+        let mut cells = vec![' '; self.columns.len().max(current + 1) * 2 - 1];
+        for column in 0..self.columns.len() {
+            cells[column * 2] = '│';
+        }
+        cells[current * 2] = marker;
+        cells.push(' ');
+        cells.into_iter().collect()
     }
 }
 
@@ -2274,6 +2306,7 @@ fn transition(
     edges: &[(usize, usize)],
     cells: &mut Vec<u8>,
     out: &mut String,
+    marker: char,
 ) -> Range<usize> {
     const UP: u8 = 1;
     const DOWN: u8 = 2;
@@ -2317,7 +2350,7 @@ fn transition(
     let start = out.len();
     for (index, cell) in cells.iter().copied().enumerate() {
         out.push(if index == current * 2 {
-            '●'
+            marker
         } else {
             match cell {
                 0 => ' ',
@@ -3462,6 +3495,7 @@ mod tests {
             Action::ToggleCommit,
             Action::ToggleChanges,
             Action::VerifySignatures,
+            Action::ToggleTree,
         ] {
             app.update(action);
             assert!(app.information_expanded, "information actions keep the group open");

@@ -186,6 +186,52 @@ without trading responsiveness for metadata that is not visible.
   can be made, and cache completed results. They must never reopen a repository
   merely because selection moved.
 
+### Tree overviews
+
+- After traversal completes, `t` toggles history and a rounded rail tree.
+  `Escape` also returns directly to history. The tree cursor and viewport are
+  independent of the history selection and panes, and the tree provides
+  navigation only. The direct tree action appears in the `?` information group.
+- The overview uses normal references and raw revision tips already present in
+  the completed graph, including traversed hidden history; it never causes more
+  repository traversal. Special refs are excluded. First-parent paths form a
+  forest whose referenced commits, forks, roots, shallow boundaries, and raw
+  tips remain as nodes while linear runs are contracted. `Shift-T` toggles
+  tags; when hidden, tag labels and tag-only anchors are removed before this
+  projection.
+- The component containing `HEAD` sorts first. Children sort by their smallest
+  reference label and then object ID. Initial selection is `HEAD`, then a raw
+  tip, then the first node; refresh and re-entry preserve the tree cursor when
+  its commit remains available.
+- The selected node shows the exact number of commits reachable
+  through all parents. Other reference and raw-tip nodes show the number reachable
+  from them but not from the selection as `N●`; multiple labels at one commit
+  share one count. Selected first-parent ancestry is emphasized, other reachable
+  history is dimmed, and exclusive history remains normal. A non-selectable `●`
+  splits a contracted edge where it becomes reachable. Reachability and boundaries
+  are computed when selection changes; exact exclusive counts are computed and
+  cached only for reference rows visible in the viewport.
+- The tree orders tips above roots and renders one retained or boundary
+  node per row. Rounded ancestry lanes precede aligned counts and labels; their
+  disk is the node marker, so counts do not repeat it.
+- Rendering clips lanes and node labels to the viewport.
+- `Tab` switches nearest-direction and topological movement.
+  Nearest movement chooses the closest node in the requested screen direction.
+  Topological Up moves toward leaves, Down toward roots, and Left/Right chooses
+  a remembered child; `i/n` and an emphasized edge show the choice.
+- `g` selects the top tree node, and `Shift-G` selects the root of the current
+  component. Shift-modified directions pan the tree viewport; mouse and the existing
+  Ctrl/Page keys scroll without moving the tree cursor.
+
+### Tree diagnostics
+
+- `tix tree` prints the entire reference projection to standard output without
+  terminal colors, selection state, counts, or viewport clipping. It traverses
+  all normal references by default; positional revisions scope traversal.
+- `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
+  corresponding tree inputs. Output uses ASCII lines and `o` nodes by default;
+  `--unicode` uses the interactive tree's rounded line and node glyphs.
+
 ## Interaction
 
 ### Navigation and display controls
@@ -199,6 +245,7 @@ without trading responsiveness for metadata that is not visible.
 | `Ctrl-b`/`Ctrl-f`, `PageUp`/`PageDown` | Move a page; scroll an overflowing commit message when applicable. |
 | `g`/Home, `G`/End | Select the newest/top or oldest/bottom selectable item. |
 | `?` | Toggle the information key group. Its actions remain direct shortcuts. |
+| `t` | Toggle the rounded tree overview. |
 | `[` | Toggle graph/metadata alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
 | `v d` | Toggle committer dates. |
@@ -698,20 +745,25 @@ space first; changes blocks adapt within the remaining history width.
   sole editable representation.
   Existing displayed names may be moved or removed, and new unqualified names
   create local branches; explicit editable `refs/...` names are also accepted.
+  Existing editable direct refs outside the generated todo are imported with
+  their current target as compare-and-swap state and may be placed the same way.
   Short names follow the history display, ambiguous names expand to full names,
   and Git quoting preserves arbitrary bytes. Tags, remote-tracking refs, general
-  symbolic refs, tix pins, and review resources remain hidden and unchanged.
+  symbolic refs, tix pins, stashes, and review resources remain hidden and
+  unchanged.
 - Pick lines use display-only state symbols documented in the footer: `↻` for a
   lazy rebase, `◌` for an invalidated signature awaiting signing, `◐` for an
   unverified signature, and `○` for an unsigned commit. Applicable states may be
   combined without changing plan semantics.
 - `@pick`, `@squash`, or `@empty` chooses the post-rebase commit. A generated
   todo keeps this marker even when `HEAD` is attached, but shows its branch as an
-  ordinary ref. Versioned state remembers that attachment while the branch stays
+  ordinary ref. Versioned state remembers that attachment while the ref stays
   at the marked result. Moving it elsewhere detaches `HEAD`; adding `@` to one
-  local branch explicitly attaches it and is valid only at the marked result.
-  Removing the name deletes the branch. Checkout markers are invalid without a
-  worktree. Todo generation and application reject an unborn `HEAD`.
+  editable ref explicitly attaches it and is valid only at the marked result.
+  The ref may be imported from outside the generated todo and is moved before
+  `HEAD` is made symbolic to it. Removing the name deletes the ref. Checkout
+  markers are invalid without a worktree. Todo generation and application
+  reject an unborn `HEAD`.
 - Within the ancestry ending at `@`, unchanged picks whose original parent is
   still their planned parent retain their IDs. Eager cherry-picking and re-signing
   starts at the first pending or structurally changed commit. Any descendants
