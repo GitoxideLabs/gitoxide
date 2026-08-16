@@ -32,8 +32,8 @@ pub struct Platform {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
-    /// Print the complete reference tree without opening the terminal UI.
-    Tree(Tree),
+    /// Print the complete ref-tree without opening the terminal UI.
+    RefTree(RefTree),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend,
     /// Move the changes introduced by HEAD into the worktree.
@@ -52,7 +52,7 @@ enum Command {
 }
 
 #[derive(Debug, clap::Args)]
-struct Tree {
+struct RefTree {
     /// Print help.
     #[arg(long, action = clap::ArgAction::HelpLong)]
     help: Option<bool>,
@@ -65,7 +65,7 @@ struct Tree {
     /// Hide this revision and every commit reachable from it.
     #[arg(long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
-    /// Use the tree view's Unicode line and node glyphs instead of ASCII.
+    /// Use the ref-tree view's Unicode line and node glyphs instead of ASCII.
     #[arg(long)]
     unicode: bool,
     /// Revisions to traverse instead of all normal references.
@@ -122,12 +122,12 @@ impl Platform {
 
         let repository = repository.to_thread_local();
         let command = match command {
-            Command::Tree(args) => return print_tree(&repository, args),
+            Command::RefTree(args) => return print_ref_tree(&repository, args),
             command => command,
         };
         let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         match command {
-            Command::Tree(_) => unreachable!("tree commands return before logging"),
+            Command::RefTree(_) => unreachable!("ref-tree commands return before logging"),
             Command::Amend => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?;
@@ -149,13 +149,13 @@ impl Platform {
     }
 }
 
-fn print_tree(repository: &gix::Repository, args: Tree) -> Result<()> {
+fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
     let revisions = if args.revisions.is_empty() {
-        crate::history::tree_revisions(repository, !args.no_tags)?
+        crate::history::ref_tree_revisions(repository, !args.no_tags)?
     } else {
         args.revisions
     };
-    let rendered = crate::tree::render_full(
+    let rendered = crate::ref_tree::render_full(
         repository,
         &revisions,
         &args.hide,
@@ -163,7 +163,8 @@ fn print_tree(repository: &gix::Repository, args: Tree) -> Result<()> {
         !args.no_tags,
         args.unicode,
     )?;
-    std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes()).context("could not write tree")?;
+    std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
+        .context("could not write ref-tree")?;
     Ok(())
 }
 
@@ -283,9 +284,9 @@ mod tests {
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
 
-        let tree = Cli::try_parse_from([
+        let ref_tree = Cli::try_parse_from([
             "tix",
-            "tree",
+            "ref-tree",
             "--no-tags",
             "--worktrees",
             "--hide",
@@ -294,23 +295,31 @@ mod tests {
             "main",
             "topic",
         ])
-        .expect("tree options parse")
+        .expect("ref-tree options parse")
         .platform
         .command;
-        let Some(Command::Tree(tree)) = tree else {
-            panic!("tree was expected")
+        let Some(Command::RefTree(ref_tree)) = ref_tree else {
+            panic!("ref-tree was expected")
         };
-        assert!(tree.help.is_none());
-        assert!(tree.no_tags);
-        assert!(tree.worktrees);
-        assert_eq!(tree.hide, ["private"]);
-        assert!(tree.unicode);
-        assert_eq!(tree.revisions, ["main", "topic"]);
+        assert!(ref_tree.help.is_none());
+        assert!(ref_tree.no_tags);
+        assert!(ref_tree.worktrees);
+        assert_eq!(ref_tree.hide, ["private"]);
+        assert!(ref_tree.unicode);
+        assert_eq!(ref_tree.revisions, ["main", "topic"]);
 
         assert!(
-            Cli::try_parse_from(["tix", "tree", "--layout", "rail"]).is_err(),
+            Cli::try_parse_from(["tix", "ref-tree", "--layout", "rail"]).is_err(),
             "the removed layout selector is rejected"
         );
+        let old_name = Cli::try_parse_from(["tix", "tree"])
+            .expect("tree remains a valid revision")
+            .platform;
+        assert!(
+            old_name.command.is_none(),
+            "the old tree command has no compatibility alias"
+        );
+        assert_eq!(old_name.revisions, ["tree"]);
 
         assert!(matches!(
             Cli::try_parse_from(["tix", "amend"])

@@ -8,9 +8,9 @@ pub mod command;
 mod edit;
 mod history;
 mod logging;
+mod ref_tree;
 #[cfg(test)]
 mod test_repository;
-mod tree;
 mod ui;
 
 use std::{
@@ -950,7 +950,7 @@ fn event_loop(
         }
     }
     let mut decorations = Decorations::new();
-    let mut tree = tree::Tree::default();
+    let mut ref_tree = ref_tree::Tree::default();
     let mut motion = MotionState::default();
     let mut filesystem_responses = logging::FilesystemResponses::default();
     let mut focused = true;
@@ -969,7 +969,7 @@ fn event_loop(
         &mut line_diff_pool,
         &mut motion,
         focused,
-        &mut tree,
+        &mut ref_tree,
         &mut filesystem_responses,
     )?;
     let mut last_draw = Instant::now();
@@ -1251,7 +1251,7 @@ fn event_loop(
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     let result = result?;
-                    tree.rebuild(&graph, &result.refs, &result.decorations);
+                    ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
@@ -1377,7 +1377,7 @@ fn event_loop(
                 &mut line_diff_pool,
                 &mut motion,
                 focused,
-                &mut tree,
+                &mut ref_tree,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1416,7 +1416,7 @@ fn event_loop(
                     history_finished = true;
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
-                    tree.rebuild(&graph, &ref_snapshot, &decorations);
+                    ref_tree.rebuild(&graph, &ref_snapshot, &decorations);
                     history_graph = Some(graph);
                     update_hidden_branch_updates(&mut app, history_graph.as_ref(), &ref_snapshot);
                     selection_relation = None;
@@ -1447,7 +1447,7 @@ fn event_loop(
                 &mut line_diff_pool,
                 &mut motion,
                 focused,
-                &mut tree,
+                &mut ref_tree,
                 &mut filesystem_responses,
             )?;
             last_draw = Instant::now();
@@ -1487,26 +1487,26 @@ fn event_loop(
         let Some(terminal_event) = terminal_event else {
             continue;
         };
-        if tree.is_active() {
+        if ref_tree.is_active() {
             match &terminal_event {
-                TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match tree.handle_key(*key) {
-                    tree::Input::Handled => {
+                TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => match ref_tree.handle_key(*key) {
+                    ref_tree::Input::Handled => {
                         dirty = true;
                         urgent = true;
                         continue;
                     }
-                    tree::Input::ResolveRemoteReferences(names) => {
+                    ref_tree::Input::ResolveRemoteReferences(names) => {
                         match open_repository(&repository_path, repository_is_bare, false) {
                             Ok(repository) => {
-                                tree.set_remote_deletions(tree::resolve_remote_deletions(&repository, names));
+                                ref_tree.set_remote_deletions(ref_tree::resolve_remote_deletions(&repository, names));
                             }
-                            Err(err) => tree.leave_message(format!("remote edit: {err:#}")),
+                            Err(err) => ref_tree.leave_message(format!("remote edit: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
                         continue;
                     }
-                    tree::Input::DeleteLocalBranches { names, fallback } => {
+                    ref_tree::Input::DeleteLocalBranches { names, fallback } => {
                         let label = {
                             let names = names
                                 .iter()
@@ -1522,34 +1522,34 @@ fn event_loop(
                         match open_repository(&repository_path, repository_is_bare, false) {
                             Ok(mut repository) => match repository.delete_local_branches(names) {
                                 Ok(()) => {
-                                    tree.leave_message(format!("deleted {label}"));
+                                    ref_tree.leave_message(format!("deleted {label}"));
                                     deleted = true;
                                     refresh_pending = true;
                                 }
                                 Err(err) => {
                                     let changed =
                                         matches!(&err, gix::repository::branch::delete::Error::Cleanup { .. });
-                                    tree.leave_message(format!("delete {label}: {err}"));
+                                    ref_tree.leave_message(format!("delete {label}: {err}"));
                                     deleted = changed;
                                     refresh_pending |= changed;
                                 }
                             },
-                            Err(err) => tree.leave_message(format!("delete {label}: {err:#}")),
+                            Err(err) => ref_tree.leave_message(format!("delete {label}: {err:#}")),
                         }
                         if deleted {
-                            tree.select_after_reference_deletion(fallback);
+                            ref_tree.select_after_reference_deletion(fallback);
                         }
                         dirty = true;
                         urgent = true;
                         continue;
                     }
-                    tree::Input::DeleteRemoteReferences { groups, fallback } => {
+                    ref_tree::Input::DeleteRemoteReferences { groups, fallback } => {
                         match with_suspended_terminal(terminal, enhanced_keyboard, || {
                             Ok(push_remote_deletions(&repository_path, &groups))
                         }) {
                             Ok(outcome) => {
                                 if outcome.deleted != 0 {
-                                    tree.select_after_reference_deletion(fallback);
+                                    ref_tree.select_after_reference_deletion(fallback);
                                     refresh_pending = true;
                                 }
                                 let deleted = format!(
@@ -1557,7 +1557,7 @@ fn event_loop(
                                     outcome.deleted,
                                     if outcome.deleted == 1 { "" } else { "s" }
                                 );
-                                tree.leave_message(if outcome.failures.is_empty() {
+                                ref_tree.leave_message(if outcome.failures.is_empty() {
                                     deleted
                                 } else if outcome.deleted == 0 {
                                     format!("delete on remote: {}", outcome.failures.join("; "))
@@ -1565,15 +1565,15 @@ fn event_loop(
                                     format!("{deleted}; failed: {}", outcome.failures.join("; "))
                                 });
                             }
-                            Err(err) => tree.leave_message(format!("delete on remote: {err:#}")),
+                            Err(err) => ref_tree.leave_message(format!("delete on remote: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
                         continue;
                     }
-                    tree::Input::Quit => return Ok(None),
+                    ref_tree::Input::Quit => return Ok(None),
                 },
-                TerminalEvent::Mouse(mouse) if tree.handle_mouse(mouse.kind, 1) => {
+                TerminalEvent::Mouse(mouse) if ref_tree.handle_mouse(mouse.kind, 1) => {
                     dirty = true;
                     urgent = true;
                     continue;
@@ -1868,8 +1868,8 @@ fn event_loop(
         let Some(action) = action else {
             continue;
         };
-        if action == Action::ToggleTree {
-            tree.toggle();
+        if action == Action::ToggleRefTree {
+            ref_tree.toggle();
             app.history_display_expanded = false;
             dirty = true;
             urgent = true;
@@ -2783,25 +2783,25 @@ fn draw(
     line_diff_pool: &mut Option<LineDiffPool>,
     motion: &mut MotionState,
     focused: bool,
-    tree: &mut tree::Tree,
+    ref_tree: &mut ref_tree::Tree,
     filesystem_responses: &mut logging::FilesystemResponses,
 ) -> Result<()> {
     let render_rows = terminal.get_frame().area().height.saturating_sub(1) as usize;
     if !history_is_ready_to_draw(app.state, app.rows.len()) {
         return Ok(());
     }
-    if tree.is_active() {
+    if ref_tree.is_active() {
         motion.cancel_pending();
         terminal
             .autoresize()
             .context("could not resize the terminal before drawing")?;
         {
             let mut frame = terminal.get_frame();
-            tree.draw(&mut frame, history_graph.as_ref());
+            ref_tree.draw(&mut frame, history_graph.as_ref());
         }
         terminal
             .apply_buffer_with_cursor(None)
-            .context("could not draw tree overview")?;
+            .context("could not draw ref-tree overview")?;
         filesystem_responses.frame_presented();
         return Ok(());
     }
@@ -3837,7 +3837,7 @@ struct RemoteDeleteOutcome {
     failures: Vec<String>,
 }
 
-fn push_remote_deletions(repository_path: &Path, groups: &[tree::RemoteDeletion]) -> RemoteDeleteOutcome {
+fn push_remote_deletions(repository_path: &Path, groups: &[ref_tree::RemoteDeletion]) -> RemoteDeleteOutcome {
     let mut outcome = RemoteDeleteOutcome {
         deleted: 0,
         failures: Vec::new(),
@@ -4579,7 +4579,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('m') => Some(Action::ToggleCommit),
         KeyCode::Char('r') => Some(Action::ToggleRefs),
         KeyCode::Char('s') => Some(Action::VerifySignatures),
-        KeyCode::Char('t') => Some(Action::ToggleTree),
+        KeyCode::Char('t') => Some(Action::ToggleRefTree),
         KeyCode::Char('v') => Some(Action::ToggleHistoryDisplay),
         KeyCode::Char('e') => Some(Action::ToggleEdit),
         KeyCode::Char('?') => Some(Action::ToggleInformation),
@@ -5577,7 +5577,7 @@ mod tests {
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE)),
-            Some(Action::ToggleTree)
+            Some(Action::ToggleRefTree)
         );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE)),
@@ -5667,8 +5667,8 @@ mod tests {
         }
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE), false, true),
-            Some(Action::ToggleTree),
-            "the direct tree key remains available while edit is expanded"
+            Some(Action::ToggleRefTree),
+            "the direct ref-tree key remains available while edit is expanded"
         );
         assert_eq!(
             action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('@'), KeyModifiers::NONE), false, true),
@@ -5732,8 +5732,8 @@ mod tests {
         );
         assert_eq!(
             action_with_shortcut_groups(key, false, false),
-            Some(Action::ToggleTree),
-            "plain t toggles the tree"
+            Some(Action::ToggleRefTree),
+            "plain t toggles the ref-tree"
         );
     }
 

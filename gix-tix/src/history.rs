@@ -1201,7 +1201,7 @@ pub(crate) fn snapshot(
     snapshot_ignoring_pin(repo, revisions, hidden, include_worktrees, None)
 }
 
-pub(crate) fn tree_revisions(repo: &gix::Repository, include_tags: bool) -> Result<Vec<OsString>> {
+pub(crate) fn ref_tree_revisions(repo: &gix::Repository, include_tags: bool) -> Result<Vec<OsString>> {
     let mut out = Vec::new();
     for reference in repo
         .references()
@@ -2615,7 +2615,7 @@ mod tests {
     }
 
     #[test]
-    fn tree_revisions_cover_normal_refs_and_optionally_tags() -> gix_testtools::Result {
+    fn ref_tree_revisions_cover_normal_refs_and_optionally_tags() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         repo.reference(
@@ -2625,7 +2625,7 @@ mod tests {
             "test tree revisions",
         )?;
         let names = |include_tags| {
-            tree_revisions(&repo, include_tags).map(|revisions| {
+            ref_tree_revisions(&repo, include_tags).map(|revisions| {
                 revisions
                     .into_iter()
                     .map(|revision| revision.to_string_lossy().into_owned())
