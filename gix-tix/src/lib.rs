@@ -1495,7 +1495,7 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
-                    tree::Input::DeleteLocalBranches(names) => {
+                    tree::Input::DeleteLocalBranches { names, fallback } => {
                         let label = {
                             let names = names
                                 .iter()
@@ -1507,20 +1507,60 @@ fn event_loop(
                                 format!("branches {}", names.join(", "))
                             }
                         };
+                        let mut deleted = false;
                         match open_repository(&repository_path, repository_is_bare, false) {
                             Ok(mut repository) => match repository.delete_local_branches(names) {
                                 Ok(()) => {
                                     tree.leave_message(format!("deleted {label}"));
+                                    deleted = true;
                                     refresh_pending = true;
                                 }
                                 Err(err) => {
                                     let changed =
                                         matches!(&err, gix::repository::branch::delete::Error::Cleanup { .. });
                                     tree.leave_message(format!("delete {label}: {err}"));
+                                    deleted = changed;
                                     refresh_pending |= changed;
                                 }
                             },
                             Err(err) => tree.leave_message(format!("delete {label}: {err:#}")),
+                        }
+                        if deleted {
+                            tree.select_after_reference_deletion(fallback);
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    tree::Input::Pin { id, include_tags } => {
+                        match open_repository(&repository_path, repository_is_bare, false) {
+                            Ok(repository) => match edit::time_travel::create_tree_pin(&repository, id, include_tags) {
+                                Ok((pin, created)) => {
+                                    let label = edit::time_travel::pin_label(&pin);
+                                    tree.leave_message(if created {
+                                        format!("created {label}")
+                                    } else {
+                                        format!("already pinned as {label}")
+                                    });
+                                    refresh_pending |= created;
+                                }
+                                Err(err) => tree.leave_message(format!("pin: {err:#}")),
+                            },
+                            Err(err) => tree.leave_message(format!("pin: {err:#}")),
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    tree::Input::Unpin { id, fallback } => {
+                        match edit::time_travel::remove_pins(&repository_path, repository_is_bare, id) {
+                            Ok(0) => tree.leave_message("no pins removed"),
+                            Ok(count) => {
+                                tree.leave_message(format!("removed {count} pin{}", if count == 1 { "" } else { "s" }));
+                                tree.select_after_reference_deletion(fallback);
+                                refresh_pending = true;
+                            }
+                            Err(err) => tree.leave_message(format!("unpin: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;

@@ -206,11 +206,12 @@ without trading responsiveness for metadata that is not visible.
 - The selected node shows the exact number of commits reachable
   through all parents. Other reference and raw-tip nodes show the number reachable
   from them but not from the selection as `N●`; multiple labels at one commit
-  share one count. Selected first-parent ancestry is emphasized, other reachable
-  history is dimmed, and exclusive history remains normal. A non-selectable `●`
-  splits a contracted edge where it becomes reachable. Reachability and boundaries
-  are computed when selection changes; exact exclusive counts are computed and
-  cached only for reference rows visible in the viewport.
+  share one count. Space fixes this count anchor at the selected node or clears it
+  when pressed there again, so cursor navigation can reuse reachability and layout
+  caches. Selected first-parent ancestry is emphasized, other reachable history is
+  dimmed, and exclusive history remains normal. A non-selectable `●` splits a
+  contracted edge where it becomes reachable. Exact exclusive counts are computed
+  and cached only for reference rows visible in the viewport.
 - The tree orders tips above roots and renders one retained or boundary
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
   disk is the node marker, so counts do not repeat it.
@@ -222,11 +223,19 @@ without trading responsiveness for metadata that is not visible.
 - `g` selects the top tree node, and `Shift-G` selects the root of the current
   component. Shift-modified directions pan the tree viewport; mouse and the existing
   Ctrl/Page keys scroll without moving the tree cursor.
+- Ordinary pins use the history view's single blue `📌`, without exposing their
+  internal ref names. `p` removes all ordinary pins at a pinned node or creates one
+  at a visible reference/raw tip. A sole visible reference produces a symbolic pin;
+  ambiguous or unnamed targets produce a direct pin. Hidden tags do not participate.
+- After deleting selected branches or pins, refresh keeps the commit when it remains
+  a tree node, otherwise selects the next surviving node row or the nearest previous
+  row when nothing below survives.
 
 ### Tree diagnostics
 
 - `tix tree` prints the entire reference projection to standard output without
-  terminal colors, selection state, counts, or viewport clipping. It traverses
+  terminal colors, selection state, counts, or viewport clipping. Pins render as
+  `[pin]` in ASCII output and `📌` with `--unicode`. It traverses
   all normal references by default; positional revisions scope traversal.
 - `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
   corresponding tree inputs. Output uses ASCII lines and `o` nodes by default;
