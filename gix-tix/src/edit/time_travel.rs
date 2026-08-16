@@ -210,7 +210,19 @@ where
         return Ok(None);
     }
     let destination_pin = selected_pin(&repository, selected)?;
-    let provisional = departure
+    let checkout_detaches = reference.is_none()
+        && destination_pin
+            .as_ref()
+            .is_none_or(|pin| pin.target.try_name().is_none());
+    let head_pin = head_ref
+        .as_ref()
+        .filter(|name| checkout_detaches && name.as_bstr().starts_with(b"refs/heads/"))
+        .map(|name| create_or_update_head_pin(&repository, name, head_id))
+        .transpose()?;
+    let provisional = head_pin
+        .is_none()
+        .then_some(departure)
+        .flatten()
         .filter(|departure| *departure != selected)
         .map(|departure| {
             let target = head_ref.clone().map_or(Target::Object(departure), Target::Symbolic);
@@ -219,12 +231,15 @@ where
         .transpose()?;
     drop(repository);
     let checkout = match (reference, &destination_pin) {
-        (Some(reference), _) => checkout_branch(&workdir, reference),
+        (Some(reference), _) => checkout_branch(&workdir, reference.as_ref()),
         (None, Some(pin)) => checkout_pin(&workdir, pin),
         (None, None) => checkout_detached(&workdir, selected),
     };
     if let Err(checkout) = checkout {
-        if let Some((pin, true)) = provisional.as_ref() {
+        let cleanup_pin = head_pin
+            .as_ref()
+            .or_else(|| provisional.as_ref().and_then(|(pin, created)| created.then_some(pin)));
+        if let Some(pin) = cleanup_pin {
             let cleanup = open_repository(repository_path, bare, false)
                 .context("could not reopen repository to remove a provisional pin")
                 .and_then(|repository| delete_pin(&repository, pin));
@@ -253,14 +268,17 @@ where
     {
         notice = format!("{notice}; destination pin remains: {err:#}");
     }
-    let snapshot = history::snapshot_ignoring_pin(
-        &repository,
-        revisions,
-        &[],
-        include_worktrees,
-        provisional.as_ref().map(|(pin, _)| pin.name.as_bstr()),
-    )?;
+    if let Some(addition) = reconcile_head_pin(&repository, &workdir)? {
+        notice = format!("{notice}; {addition}");
+    }
     if let Some((provisional, _)) = provisional {
+        let snapshot = history::snapshot_ignoring_pin(
+            &repository,
+            revisions,
+            &[],
+            include_worktrees,
+            Some(provisional.name.as_bstr()),
+        )?;
         if snapshot
             .view_tips
             .iter()
@@ -505,7 +523,7 @@ fn pending_base(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
 fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Option<history::Pin>> {
     let mut pins: Vec<_> = history::all_pins(repository)?
         .into_iter()
-        .filter(|pin| pin.id == selected)
+        .filter(|pin| !pin.is_head() && pin.id == selected)
         .collect();
     pins.sort_by(|a, b| {
         a.target
@@ -517,6 +535,69 @@ fn selected_pin(repository: &gix::Repository, selected: ObjectId) -> Result<Opti
     Ok(pins.into_iter().next())
 }
 
+fn create_or_update_head_pin(
+    repository: &gix::Repository,
+    branch: &gix::refs::FullName,
+    id: ObjectId,
+) -> Result<history::Pin> {
+    let name: gix::refs::FullName = history::HEAD_PIN_NAME
+        .as_bstr()
+        .try_into()
+        .context("the HEAD pin name is valid")?;
+    let expected = repository
+        .try_find_reference(name.as_ref())
+        .context("could not read the existing HEAD pin")?
+        .map_or(PreviousValue::MustNotExist, |reference| {
+            PreviousValue::MustExistAndMatch(reference.target().into_owned())
+        });
+    let target = Target::Symbolic(branch.clone());
+    repository
+        .edit_references([RefEdit {
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "tix remember HEAD branch".into(),
+                },
+                expected,
+                new: target.clone(),
+            },
+            name: name.clone(),
+            deref: false,
+        }])
+        .context("could not remember the branch HEAD was attached to")?;
+    Ok(history::Pin { name, target, id })
+}
+
+fn reconcile_head_pin(repository: &gix::Repository, workdir: &Path) -> Result<Option<String>> {
+    let Some(pin) = history::all_pins(repository)?.into_iter().find(history::Pin::is_head) else {
+        return Ok(None);
+    };
+    let head = repository.head().context("could not read HEAD after time-travel")?;
+    let detached = head.is_detached();
+    let head_id = head.id().map(gix::Id::detach);
+    drop(head);
+    if !detached {
+        return Ok(delete_pin(repository, &pin)
+            .err()
+            .map(|err| format!("HEAD pin remains: {err:#}")));
+    }
+    if head_id != Some(pin.id) {
+        return Ok(None);
+    }
+    let branch = pin.target.try_name().context("the HEAD pin is not symbolic")?;
+    if let Err(err) = checkout_branch(workdir, branch) {
+        return Ok(Some(format!(
+            "could not reattach HEAD to {}: {err:#}; HEAD pin remains",
+            branch.shorten()
+        )));
+    }
+    Ok(Some(match delete_pin(repository, &pin) {
+        Ok(()) => format!("reattached HEAD to {}", branch.shorten()),
+        Err(err) => format!("reattached HEAD to {}; HEAD pin remains: {err:#}", branch.shorten()),
+    }))
+}
+
 pub(crate) fn create_or_reuse_pin(
     repository: &gix::Repository,
     target: Target,
@@ -524,7 +605,7 @@ pub(crate) fn create_or_reuse_pin(
     reflog_message: &str,
 ) -> Result<(history::Pin, bool)> {
     let pins = history::all_pins(repository)?;
-    if let Some(pin) = pins.iter().find(|pin| pin.target == target) {
+    if let Some(pin) = pins.iter().find(|pin| !pin.is_head() && pin.target == target) {
         return Ok((pin.clone(), false));
     }
     let hex = id.to_hex().to_string();
@@ -584,7 +665,7 @@ pub(crate) fn remove_pins(repository_path: &Path, bare: bool, selected: ObjectId
         open_repository(repository_path, bare, false).context("could not open repository to remove pins")?;
     let pins: Vec<_> = history::all_pins(&repository)?
         .into_iter()
-        .filter(|pin| pin.id == selected)
+        .filter(|pin| !pin.is_head() && pin.id == selected)
         .collect();
     if pins.is_empty() {
         return Ok(0);
@@ -625,7 +706,7 @@ fn delete_deferred_refs(repository_path: &Path, bare: bool, refs: &[(gix::refs::
     Ok(())
 }
 
-fn checkout_branch(workdir: &Path, name: &gix::refs::FullName) -> Result<()> {
+fn checkout_branch(workdir: &Path, name: &gix::refs::FullNameRef) -> Result<()> {
     let branch = name
         .as_bstr()
         .strip_prefix(b"refs/heads/")
@@ -976,12 +1057,17 @@ mod tests {
         let notice = perform(&repository_path, false, root, &graph, &[], &[], false)?
             .complete()?
             .context("time-travel changed HEAD")?;
-        assert!(notice.contains("saved pin:"), "{notice}");
+        assert!(notice.contains("time-travelled"), "{notice}");
         let repository = crate::test_repository::open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "travel detaches HEAD");
         assert_eq!(repository.head_id()?.detach(), root);
         let pins = history::all_pins(&repository)?;
         assert_eq!(pins.len(), 1, "the lost branch tip gets one pin");
+        assert_eq!(
+            pins[0].name.as_bstr(),
+            b"refs/worktree/tix/pins/HEAD".as_bstr(),
+            "an attached departure uses the singleton HEAD pin"
+        );
         assert_eq!(
             pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
             Some(b"refs/heads/main".as_bstr())
@@ -992,6 +1078,15 @@ mod tests {
                 .view_tips
                 .contains(&main)
         );
+
+        let middle = repository.rev_parse_single("main~1")?.detach();
+        drop(repository);
+        perform(&repository_path, false, middle, &graph, &[], &[], false)?.complete()?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(repository.head()?.is_detached(), "further travel remains detached");
+        let pins = history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "further travel keeps only the singleton HEAD pin");
+        assert!(pins[0].is_head());
 
         repository
             .find_reference("refs/heads/main")?
@@ -1029,6 +1124,69 @@ mod tests {
         );
         assert_eq!(repository.head_id()?.detach(), main);
         assert!(history::all_pins(&repository)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_attachment_clears_the_head_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let topic = repository.rev_parse_single("topic")?.detach();
+        let topic_ref = repository.find_reference("refs/heads/topic")?.name().to_owned();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        move_head_to(&repository_path, false, topic, Some(&topic_ref), &[], false, Some)?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert_eq!(
+            repository.head_name()?.map(|name| name.as_bstr().to_owned()),
+            Some(topic_ref.into())
+        );
+        assert!(
+            history::all_pins(&repository)?.iter().all(|pin| !pin.is_head()),
+            "an explicit attachment clears the remembered branch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_reattachment_keeps_the_head_pin() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let repository_path = repository.git_dir().to_owned();
+        let root = repository.rev_parse_single("main~2")?.detach();
+        let main = repository.rev_parse_single("main")?.detach();
+        let graph = loaded_graph(&repository, &[])?;
+        drop(repository);
+
+        perform(&repository_path, false, root, &graph, &[], &[], false)?.complete()?;
+        let linked = fixture.path().join("main-wt");
+        let worktree = Command::new("git")
+            .arg("-C")
+            .arg(fixture.path())
+            .args(["worktree", "add", "-q"])
+            .arg(&linked)
+            .arg("main")
+            .status()?;
+        assert!(worktree.success(), "another worktree checks out the remembered branch");
+
+        let notice = perform(&repository_path, false, main, &graph, &[], &[], false)?
+            .complete()?
+            .context("travel reports the failed reattachment")?;
+        assert!(notice.contains("could not reattach HEAD to main"), "{notice}");
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(
+            repository.head()?.is_detached(),
+            "the successful detached checkout is retained"
+        );
+        assert_eq!(repository.head_id()?.detach(), main);
+        assert!(
+            history::all_pins(&repository)?.iter().any(history::Pin::is_head),
+            "the HEAD pin remains available for a later retry"
+        );
         Ok(())
     }
 
@@ -1080,18 +1238,22 @@ mod tests {
         ] {
             repository.reference(name, target, PreviousValue::MustNotExist, "test pin removal")?;
         }
+        let main = repository.find_reference("refs/heads/main")?.name().to_owned();
+        create_or_update_head_pin(&repository, &main, selected)?;
+        let (manual, created) = create_or_reuse_pin(
+            &repository,
+            Target::Symbolic(main),
+            selected,
+            "test ordinary symbolic pin",
+        )?;
+        assert!(created && !manual.is_head(), "manual pins never reuse the HEAD pin");
         drop(repository);
 
-        assert_eq!(remove_pins(&repository_path, false, selected)?, 2);
+        assert_eq!(remove_pins(&repository_path, false, selected)?, 3);
         let repository = crate::test_repository::open(fixture.path())?;
-        assert_eq!(
-            history::all_pins(&repository)?
-                .into_iter()
-                .map(|pin| pin.id)
-                .collect::<Vec<_>>(),
-            [other],
-            "pins on other commits remain"
-        );
+        let pins = history::all_pins(&repository)?;
+        assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
+        assert!(pins.iter().any(|pin| pin.id == other), "pins on other commits remain");
         Ok(())
     }
 
@@ -1146,10 +1308,13 @@ mod tests {
         drop(repository);
 
         perform(&repository_path, false, root, &graph, &[], &revisions, false)?.complete()?;
-        assert!(
-            history::all_pins(&crate::test_repository::open(fixture.path())?)?.is_empty(),
-            "an explicit tip already retains the former HEAD"
+        let pins = history::all_pins(&crate::test_repository::open(fixture.path())?)?;
+        assert_eq!(
+            pins.len(),
+            1,
+            "the singleton is retained even when the branch is an explicit tip"
         );
+        assert!(pins[0].is_head());
 
         let checkout = Command::new("git")
             .arg("-C")

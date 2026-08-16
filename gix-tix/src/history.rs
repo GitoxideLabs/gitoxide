@@ -30,6 +30,7 @@ pub(crate) struct Decoration {
 pub(crate) enum DecorationKind {
     Head,
     Pin,
+    HeadPinBranch,
     Stash,
     Review,
     CurrentWorktreeBranch,
@@ -45,6 +46,7 @@ pub(crate) enum DecorationKind {
 pub(crate) type Decorations = HashMap<ObjectId, Vec<Decoration>>;
 
 pub(crate) const PIN_PREFIX: &[u8] = b"refs/worktree/tix/pins/";
+pub(crate) const HEAD_PIN_NAME: &[u8] = b"refs/worktree/tix/pins/HEAD";
 pub(crate) const STASH_PREFIX: &[u8] = b"refs/tix/stash/";
 pub(crate) const REVIEW_PREFIX: &[u8] = b"refs/worktree/tix/review/";
 pub(crate) const REVIEW_STASH_PREFIX: &[u8] = b"refs/worktree/tix/review/stashes/";
@@ -54,6 +56,12 @@ pub(crate) struct Pin {
     pub name: gix::refs::FullName,
     pub target: gix::refs::Target,
     pub id: ObjectId,
+}
+
+impl Pin {
+    pub(crate) fn is_head(&self) -> bool {
+        self.name.as_bstr() == HEAD_PIN_NAME
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -387,7 +395,10 @@ impl HistoryGraph {
             .map(|decoration| {
                 let upstream = if matches!(
                     decoration.kind,
-                    DecorationKind::Local | DecorationKind::CurrentWorktreeBranch | DecorationKind::WorktreeBranch
+                    DecorationKind::Local
+                        | DecorationKind::HeadPinBranch
+                        | DecorationKind::CurrentWorktreeBranch
+                        | DecorationKind::WorktreeBranch
                 ) {
                     tracked
                         .into_iter()
@@ -1316,6 +1327,14 @@ fn refs_with_commit_targets(repo: &gix::Repository, prefix: &[u8], label: &str) 
         }
         let name = reference.name().to_owned();
         let target = reference.target().into_owned();
+        if name.as_bstr() == HEAD_PIN_NAME
+            && !target
+                .try_name()
+                .is_some_and(|name| name.as_bstr().starts_with(b"refs/heads/"))
+        {
+            tracing::warn!(name = %name, "ignoring malformed HEAD pin");
+            continue;
+        }
         let id = match reference.peel_to_id() {
             Ok(id) => id.detach(),
             Err(err) => {
@@ -1354,7 +1373,8 @@ pub(crate) fn applicable_pins(repo: &gix::Repository) -> Result<Vec<Pin>> {
     Ok(pins
         .into_iter()
         .filter(|pin| {
-            pin.id != head_id
+            !pin.is_head()
+                && pin.id != head_id
                 && repo
                     .merge_base(head_id, pin.id)
                     .is_ok_and(|base| base.as_ref() == head_id)
@@ -1599,6 +1619,11 @@ impl Authors {
 
 pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[WorktreeCheckout]) -> Result<Decorations> {
     let mut out = Decorations::new();
+    let head_pin_branch = pins
+        .iter()
+        .find(|pin| pin.is_head())
+        .and_then(|pin| pin.target.try_name())
+        .map(ToOwned::to_owned);
     let pins: HashSet<_> = pins.iter().map(|pin| pin.name.as_bstr()).collect();
     let review_count = all_reviews(repo)?.len();
     for reference in repo
@@ -1613,6 +1638,9 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
         };
         let full_name = reference.name().to_owned();
+        if full_name.as_bstr() == HEAD_PIN_NAME {
+            continue;
+        }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
             continue;
         }
@@ -1659,6 +1687,9 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             !worktree.is_current && worktree.id == id && worktree.reference.as_ref() == Some(&full_name)
         }) {
             kind = DecorationKind::WorktreeBranch;
+        }
+        if head_pin_branch.as_ref() == Some(&full_name) {
+            kind = DecorationKind::HeadPinBranch;
         }
         let mut name = pin_suffix.map_or_else(
             || {
@@ -2452,8 +2483,45 @@ mod tests {
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test non-commit pin",
         )?;
+        repo.reference(
+            HEAD_PIN_NAME.as_bstr(),
+            head,
+            gix::refs::transaction::PreviousValue::MustNotExist,
+            "test non-symbolic HEAD pin",
+        )?;
 
         assert!(all_pins(&repo)?.is_empty(), "invalid pins never enter history");
+        Ok(())
+    }
+
+    #[test]
+    fn head_pin_marks_its_branch_without_an_ordinary_pin_decoration() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let symbolic = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["symbolic-ref", "refs/worktree/tix/pins/HEAD", "refs/heads/main"])
+            .status()?;
+        assert!(symbolic.success(), "git creates the symbolic HEAD pin");
+        let detached = Command::new("git")
+            .current_dir(fixture.path())
+            .args(["checkout", "-q", "--detach", "main~2"])
+            .status()?;
+        assert!(detached.success(), "git detaches HEAD below the remembered branch");
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        let main = repo.rev_parse_single("main")?.detach();
+        let snapshot = snapshot(&repo, &[], &[], false)?;
+        assert!(snapshot.view_tips.contains(&main), "the HEAD pin retains its branch");
+        let decorations = decorations(&repo, &snapshot.pins, &snapshot.worktrees)?;
+        let main = decorations.get(&main).expect("the remembered branch is decorated");
+        assert!(
+            main.iter()
+                .any(|decoration| { decoration.kind == DecorationKind::HeadPinBranch && decoration.name == "main" })
+        );
+        assert!(
+            main.iter().all(|decoration| decoration.kind != DecorationKind::Pin),
+            "the HEAD pin has no ordinary pin marker"
+        );
         Ok(())
     }
 
