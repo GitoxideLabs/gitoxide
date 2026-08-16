@@ -533,7 +533,7 @@ pub(crate) fn create_or_reuse_pin(
     Ok((history::Pin { name, target, id }, true))
 }
 
-fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
+pub(super) fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
     repository
         .edit_references([delete_pin_edit(pin)])
         .context("could not remove tix pin")?;
