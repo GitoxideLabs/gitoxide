@@ -259,10 +259,7 @@ impl Tree {
         }
         if self.edit_expanded {
             self.edit_expanded = false;
-            if (key.code == KeyCode::Char('D')
-                || key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::SHIFT))
-                && !self.remote_deletions.is_empty()
-            {
+            if key.code == KeyCode::Char('r') && key.modifiers.is_empty() && !self.remote_deletions.is_empty() {
                 return Input::DeleteRemoteReferences {
                     groups: std::mem::take(&mut self.remote_deletions),
                     fallback: self
@@ -465,7 +462,7 @@ impl Tree {
                 }
                 if !self.remote_deletions.is_empty() {
                     actions.push(format!(
-                        "D delete on remote {}",
+                        "r delete on remote {}",
                         short_remote_deletion_list(&self.remote_deletions)
                     ));
                 }
@@ -1565,7 +1562,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_d_deletes_every_resolved_remote_reference_without_confirmation() {
+    fn e_r_deletes_every_resolved_remote_reference_without_confirmation() {
         let (graph, refs, mut decorations) = fixture();
         decorations
             .get_mut(&id(6))
@@ -1591,7 +1588,7 @@ mod tests {
         tree.set_remote_deletions(groups.clone());
 
         assert!(matches!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+            tree.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
             Input::DeleteRemoteReferences { groups: submitted, .. } if submitted == groups
         ));
         assert!(!tree.edit_expanded);
