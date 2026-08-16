@@ -2,12 +2,11 @@
 source: gix-tix/src/edit/review.rs
 expression: "gix_testtools::repository::snapshot(fixture.path())?.to_string()"
 ---
-HEAD detached C2
+HEAD refs/heads/main -> C4
 
 [refs]
 refs/heads/main = C4
 refs/heads/review-successor = C3
-refs/worktree/tix/pins/2eab5bd4 = -> refs/heads/main
 
 [commits]
 C0
@@ -51,13 +50,13 @@ C4
   A
 
 [index]
-tree = T3
+tree = T2
 100644 B0 stage=0 "file"
-100644 B1 stage=0 "reviewed"
+100644 B1 stage=0 "successor"
 
 [worktree]
 100644 file "file" = "B\n"
-100644 file "reviewed" = "new review change\n"
+100644 file "successor" = "A\n"
 
 [objects]
 C2 = 066adf4b205850540218e32e44576bcb33249572
@@ -67,7 +66,7 @@ T0 = 2e457f998ff6a6163f89e091bc4d6b92c8ed2a28
 C4 = 4ec5d7b25bc7415d9243067e231d934cc6952501
 T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
 T2 = 74c148aa829dcd83ad2608b6d0862ae1e6981501
-B1 = 8ab2a145f1f16e50d78eaced3311ac16027db494
 T3 = 93664bfc7cc096fcc0d1ac962596031e10f26906
 C0 = c38a9f7427b84ed8ba5e187ec385489d82d71695
 C3 = e0b1ce8b2ac673ea0cc153ca4b8958a3aa315dd0
+B1 = f70f10e4db19068f79bc43844b49f3eece45c4e8

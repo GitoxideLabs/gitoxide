@@ -693,6 +693,7 @@ pub(super) fn finish_review(
     tip: ObjectId,
     review_ref: gix::refs::FullName,
     delete_refs: Vec<(gix::refs::FullName, Target)>,
+    checkout: Option<(ObjectId, Option<gix::refs::FullName>)>,
 ) -> Result<Outcome> {
     let mut repo = repo.clone();
     let signing = repo
@@ -744,6 +745,7 @@ pub(super) fn finish_review(
             commit.extra_headers.retain(|(name, value)| {
                 !(name.as_slice() == MARKER
                     && value.as_slice().strip_prefix(b"onto ") == Some(review_ref.as_bstr().as_ref()))
+                    && name.as_slice() != super::review::RETURN_TO
             });
         }
         let new = write_commit(
@@ -802,19 +804,22 @@ pub(super) fn finish_review(
         rewritten.insert(old, Some(new));
     }
 
+    let (selected, checkout_reference) = checkout.map_or((finished_review, None), |(old, reference)| {
+        (rewritten.get(&old).copied().flatten().unwrap_or(old), reference)
+    });
     let mut prepared = Prepared {
         repo,
         root: Some(review),
         reset_index: false,
         reset_index_paths: None,
         skip_worktree_transitions: false,
-        selected: Some(finished_review),
+        selected: Some(selected),
         stash_rewritten: rewritten.clone(),
         rewritten,
         removed: HashSet::new(),
         committer,
         expected_refs: None,
-        checkout_reference: None,
+        checkout_reference,
         checkout_after_finish: false,
         pins: Vec::new(),
         delete_refs,

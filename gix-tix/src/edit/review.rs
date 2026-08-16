@@ -11,11 +11,17 @@ use crate::{history, open_repository};
 
 const HEADER: &[u8] = b"tix-rebase";
 const ONTO: &[u8] = b"onto ";
+pub(super) const RETURN_TO: &[u8] = b"tix-review-return-to";
 
 #[derive(Debug)]
 pub(crate) struct Started {
     pub commit: ObjectId,
     pub reference: gix::refs::FullName,
+}
+
+pub(crate) struct Finished {
+    pub commit: ObjectId,
+    pub outcome: super::rebase::Outcome,
 }
 
 pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
@@ -40,6 +46,17 @@ pub(crate) fn reference(commit: &gix::objs::Commit) -> Result<Option<gix::refs::
 
 pub(crate) fn is_review(commit: &gix::objs::Commit) -> bool {
     reference(commit).ok().flatten().is_some()
+}
+
+fn return_to(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
+    commit
+        .extra_headers
+        .iter()
+        .find(|(name, _)| name.as_slice() == RETURN_TO)
+        .map(|(_, value)| {
+            gix::refs::FullName::try_from(value.clone()).context("review commit names an invalid return reference")
+        })
+        .transpose()
 }
 
 pub(super) fn deletions(
@@ -92,7 +109,6 @@ pub(crate) fn start(
         head.referent_name().map(ToOwned::to_owned),
         head.id().map(gix::Id::detach),
     );
-    let reattach = (restore.1 == Some(tip)).then(|| restore.0.clone()).flatten();
     if tip == base || !graph.is_ancestor(base, tip) {
         anyhow::bail!("the review base must be an ancestor of the reviewed commit");
     }
@@ -142,6 +158,15 @@ pub(crate) fn start(
     commit
         .extra_headers
         .push((HEADER.into(), format!("onto {name}").into()));
+    let return_to = departure_pin
+        .as_ref()
+        .map(|(pin, _)| pin.name.clone())
+        .or_else(|| (restore.1 == Some(tip)).then(|| restore.0.clone()).flatten());
+    if let Some(return_to) = return_to {
+        commit
+            .extra_headers
+            .push((RETURN_TO.into(), return_to.as_bstr().to_owned()));
+    }
     let id = repo
         .write_object(&commit)
         .context("could not write review commit")?
@@ -153,17 +178,7 @@ pub(crate) fn start(
         return Err(err.context("could not check out the reviewed commit"));
     }
     let review_name = name.as_bstr().to_str_lossy();
-    let create_ref = match reattach.as_ref() {
-        Some(target) => git(
-            &workdir,
-            [
-                "symbolic-ref",
-                review_name.as_ref(),
-                target.as_bstr().to_str_lossy().as_ref(),
-            ],
-        ),
-        None => git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]),
-    };
+    let create_ref = git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]);
     if let Err(err) = create_ref {
         restore_checkout(&workdir, &restore)?;
         remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
@@ -195,7 +210,7 @@ pub(crate) fn start(
 }
 
 #[tracing::instrument(skip_all, fields(%review))]
-pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, review: ObjectId) -> Result<ObjectId> {
+pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, review: ObjectId) -> Result<Finished> {
     let workdir = repo
         .workdir()
         .context("finishing review requires a worktree")?
@@ -214,35 +229,47 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
     let mut reference = repo
         .find_reference(review_ref.as_ref())
         .context("the review reference is missing")?;
-    let reattach = reference.target().try_name().map(ToOwned::to_owned);
+    let legacy_reattach = reference.target().try_name().map(ToOwned::to_owned);
     let tip = reference
         .peel_to_id()
         .context("the review reference does not resolve")?
         .detach();
     let delete_refs = resources(&repo, review_ref.clone())?;
+    let return_to = return_to(&commit)?.or(legacy_reattach);
+    let checkout = return_to
+        .map(|name| {
+            let mut reference = repo
+                .find_reference(name.as_ref())
+                .context("the review return reference is missing")?;
+            let id = reference
+                .peel_to_id()
+                .context("the review return reference does not resolve")?
+                .detach();
+            if !graph.is_ancestor(tip, id) {
+                anyhow::bail!("the review return reference no longer descends from the reviewed commit");
+            }
+            let checkout_reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
+                reference.target().try_name().map(ToOwned::to_owned)
+            } else {
+                Some(name)
+            };
+            Ok((id, checkout_reference))
+        })
+        .transpose()?;
     for (label, id) in [("reviewed commit", tip), ("review base", base)] {
         let endpoint = repo.find_commit(id)?.decode()?.into_owned()?;
         if super::rebase::is_pending(&endpoint) {
             anyhow::bail!("{label} has a pending rebase");
         }
     }
-    let finished = super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs)?
-        .selected
+    let outcome = super::rebase::finish_review(&repo, graph, review, tip, review_ref, delete_refs, checkout)?;
+    let finished = outcome
+        .map(review)
         .context("finishing review did not produce a commit")?;
-    if let Some(reattach) = reattach {
-        let mut reference = repo
-            .find_reference(reattach.as_ref())
-            .context("the branch to restore after review is missing")?;
-        if reference.peel_to_id()?.detach() != finished {
-            anyhow::bail!("the branch to restore after review no longer points to the finished commit");
-        }
-        git(
-            &workdir,
-            ["symbolic-ref", "HEAD", reattach.as_bstr().to_str_lossy().as_ref()],
-        )
-        .context("could not reattach HEAD after review")?;
-    }
-    Ok(finished)
+    Ok(Finished {
+        commit: finished,
+        outcome,
+    })
 }
 
 pub(super) fn ensure_clean(workdir: &Path) -> Result<()> {
@@ -384,12 +411,17 @@ mod tests {
         );
         let review_ref = repo.find_reference(started.reference.as_ref())?;
         assert_eq!(
-            review_ref.target().try_name().map(gix::refs::FullNameRef::as_bstr),
-            Some(BStr::new(b"refs/heads/main")),
-            "the review resource remembers the branch to restore"
+            review_ref.id().detach(),
+            tip,
+            "the review resource remains anchored to the reviewed commit"
         );
         let commit = repo.find_commit(started.commit)?.decode()?.into_owned()?;
         assert_eq!(reference(&commit)?, Some(started.reference.clone()));
+        assert_eq!(
+            return_to(&commit)?.as_ref().map(gix::refs::FullName::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "the review commit records the checkout to restore"
+        );
         assert_eq!(
             std::fs::read(fixture.path().join("file"))?,
             b"tip\n",
@@ -414,7 +446,13 @@ mod tests {
             fixture.path(),
             ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
-        assert!(is_review(&repo.find_commit(amended)?.decode()?.into_owned()?));
+        let amended_commit = repo.find_commit(amended)?.decode()?.into_owned()?;
+        assert!(is_review(&amended_commit));
+        assert_eq!(
+            return_to(&amended_commit)?.as_ref().map(gix::refs::FullName::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "review amendments preserve the return action"
+        );
         assert!(run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty());
         let child = run(
             fixture.path(),
@@ -450,6 +488,8 @@ mod tests {
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let finished = finish(repo, &graph, amended)?;
+        super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
+        let finished = finished.commit;
         let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.head_id()?.detach(), finished);
         assert_eq!(
@@ -462,6 +502,10 @@ mod tests {
             Some(tip)
         );
         assert!(!is_review(&repo.find_commit(finished)?.decode()?.into_owned()?));
+        assert!(
+            return_to(&repo.find_commit(finished)?.decode()?.into_owned()?)?.is_none(),
+            "finished commits contain no review return action"
+        );
         let child = repo.find_reference("refs/heads/review-child")?.id().detach();
         assert_eq!(
             repo.find_commit(child)?.parent_ids().next().map(gix::Id::detach),
@@ -574,8 +618,24 @@ mod tests {
         let repo = open()?;
         let graph = super::super::loaded_graph(&repo)?;
         let finished = finish(repo, &graph, review)?;
+        super::super::time_travel::checkout_plan(fixture.path(), false, &finished.outcome, &[], false)?;
+        let finished = finished.commit;
         let repo = open()?;
         let successor = repo.find_reference("refs/heads/main")?.id().detach();
+        assert_eq!(
+            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "finishing returns to the branch that contained the reviewed commit"
+        );
+        assert_eq!(repo.head_id()?.detach(), successor);
+        assert!(
+            history::all_pins(&repo)?.is_empty(),
+            "returning consumes the departure pin"
+        );
+        assert!(
+            run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+            "the restored branch has a matching index and worktree"
+        );
         assert_ne!(successor, old_successor, "the branch successor is rewritten");
         assert_eq!(
             repo.find_commit(finished)?.parent_ids().next().map(gix::Id::detach),
