@@ -22,14 +22,17 @@ without trading responsiveness for metadata that is not visible.
   rules. Replay conflicts change nothing unless explicitly materialized; an
   accepted conflict writes the checkout and unmerged index, then exits with an
   error so resolution cannot be mistaken for completion.
-- `tix reword REVSPEC [-m MESSAGE ... | -f FILE]` applies the same signing,
+- `tix reword REVSPEC [--author "Name <email>"] [-m MESSAGE ... | -f FILE]`
+  applies the same signing,
   lazy-rebase, mutable-ref, and worktree-safety rules as the TUI. Without either
   message option it opens the standard Markdown reword document. Repeated
   `-m/--message` values form paragraphs; `-f/--file` reads the complete message
   from a file, or from standard input when given `-`. Explicit sources bypass
-  the editor and do not add suggested trailers. An attached `HEAD` may reword
-  itself without a pin. Every other target requires an existing current-worktree
-  tix pin at that commit or a descendant;
+  the editor and do not add suggested trailers. `--author` replaces the author
+  actor while preserving its date. Without an explicit message it prefills the
+  normal editor document; with one it is applied non-interactively. An attached
+  `HEAD` may reword itself without a pin. Every other target requires an existing
+  current-worktree tix pin at that commit or a descendant;
   every such covering pin participates so retained forks are rewritten together.
   Eligibility is checked before the editor opens, and an unchanged document is
   an explicit no-op.
