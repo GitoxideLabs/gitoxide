@@ -30,9 +30,13 @@
   the conversation that produced it.
 - Keep each change's implementation, tests, snapshots, and corresponding
   `spec.md` updates in that change's commit.
-- A commit created or materially rewritten by an AI agent must use that agent's own name and email as its author. Do not silently inherit the repository owner's configured identity.
+- A commit created or materially rewritten by an AI agent must use that agent's
+  own name and email as its author. Set it explicitly when necessary, for example
+  with `tix reword --author "Agent Name <agent@example.com>"`; do not silently
+  inherit the repository owner's configured identity.
+- Never impersonate the repository owner, user, or another person when authoring
+  an agent-created or materially agent-rewritten commit.
 - Preserve the author of an existing commit when the agent is not responsible for its contents.
-- Use another author's identity only when the user explicitly requests it for that particular commit.
 - Keep this provenance in commit metadata so reviewers can distinguish agent-authored changes without relying on commit-message trailers.
 
 ## Repository lifetime
