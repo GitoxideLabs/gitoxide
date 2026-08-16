@@ -2113,10 +2113,30 @@ fn event_loop(
                         .context("forget requires a completed history graph")
                         .and_then(|graph| forget_commit(&repository_path, repository_is_bare, graph, id));
                     match result {
-                        Ok(parent) => {
-                            app.leave_message(format!("forgot {}", id.to_hex_with_len(7)));
-                            if let Some(parent) = parent {
-                                app.select_commit(parent);
+                        Ok(outcome) => {
+                            let returned = outcome.review_return.as_ref().map(|name| {
+                                edit::time_travel::checkout_review_return(
+                                    &repository_path,
+                                    repository_is_bare,
+                                    name,
+                                    &revisions,
+                                    worktrees,
+                                )
+                            });
+                            match returned.transpose() {
+                                Ok(Some((selected, _))) => {
+                                    app.leave_message("cancelled review");
+                                    app.select_commit_after_refresh(selected);
+                                }
+                                Err(err) => {
+                                    app.leave_message(format!("review cancelled, return checkout failed: {err:#}"));
+                                }
+                                Ok(None) => {
+                                    app.leave_message(format!("forgot {}", id.to_hex_with_len(7)));
+                                    if let Some(selected) = outcome.selected {
+                                        app.select_commit(selected);
+                                    }
+                                }
                             }
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
@@ -3573,7 +3593,7 @@ fn forget_commit(
     bare: bool,
     graph: &HistoryGraph,
     id: gix::ObjectId,
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<edit::forget::Outcome> {
     let mut repository =
         open_repository(repository_path, bare, false).context("could not open repository before forgetting commit")?;
     repository.object_cache_size(None);
