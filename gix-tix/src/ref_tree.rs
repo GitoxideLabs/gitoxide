@@ -5,6 +5,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+use anyhow::Context;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use gix::{ObjectId, bstr::ByteSlice};
 use ratatui::{
@@ -119,6 +120,10 @@ enum Direction {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
+    PinReferences {
+        id: ObjectId,
+        kinds: Vec<DecorationKind>,
+    },
     ResolveRemoteReferences(Vec<gix::refs::FullName>),
     DeleteLocalBranches {
         names: Vec<gix::refs::FullName>,
@@ -297,6 +302,11 @@ impl Tree {
         if key.code == KeyCode::Esc {
             self.leave();
             return Input::Handled;
+        }
+        if key.code == KeyCode::Enter {
+            return self
+                .selected_pin_target()
+                .map_or(Input::Handled, |(id, kinds)| Input::PinReferences { id, kinds });
         }
         if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() {
             self.toggle_count_anchor();
@@ -479,7 +489,7 @@ impl Tree {
                 |id| format!("Space counts:{}", self.node_label(id)),
             );
             format!(
-                "ref-tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
+                "ref-tree · {motion} · {counts} · g top · G root · T tags:{tags} · Shift+directions pan · <enter> pin · e edit · t/Esc history"
             )
         };
         frame.render_widget(
@@ -502,6 +512,22 @@ impl Tree {
                     .expect("local decorations originate from valid local branch names")
             })
             .collect()
+    }
+
+    fn selected_pin_target(&self) -> Option<(ObjectId, Vec<DecorationKind>)> {
+        let node = self
+            .selected
+            .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))?;
+        let mut kinds = Vec::new();
+        for decoration in &node.decorations {
+            let Some(kind) = pinnable_kind(decoration.kind) else {
+                continue;
+            };
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+        (!kinds.is_empty()).then_some((node.id, kinds))
     }
 
     fn selected_remote_references(&self) -> Vec<gix::refs::FullName> {
@@ -695,6 +721,65 @@ impl Tree {
     fn offset(&self) -> &Offset {
         &self.offset
     }
+}
+
+fn pinnable_kind(kind: DecorationKind) -> Option<DecorationKind> {
+    match kind {
+        DecorationKind::Local
+        | DecorationKind::CurrentWorktreeBranch
+        | DecorationKind::WorktreeBranch
+        | DecorationKind::HeadPinBranch => Some(DecorationKind::Local),
+        DecorationKind::Tag | DecorationKind::AnnotatedTag => Some(DecorationKind::Tag),
+        DecorationKind::Remote | DecorationKind::Review => Some(kind),
+        _ => None,
+    }
+}
+
+pub(crate) fn pin_references(
+    repository: &gix::Repository,
+    id: ObjectId,
+    kinds: &[DecorationKind],
+) -> anyhow::Result<Vec<crate::history::Pin>> {
+    let mut names = Vec::new();
+    for reference in repository
+        .references()
+        .context("could not open references while pinning the ref-tree selection")?
+        .all()
+        .context("could not iterate references while pinning the ref-tree selection")?
+    {
+        let mut reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if crate::history::is_missing_ref(&*err) => continue,
+            Err(err) => return Err(anyhow::anyhow!("could not read reference to pin: {err}")),
+        };
+        let Some(kind) = pinnable_kind(crate::history::decoration_kind(reference.name().as_bstr())) else {
+            continue;
+        };
+        if !kinds.contains(&kind) {
+            continue;
+        }
+        let Ok(target) = reference.peel_to_id() else {
+            continue;
+        };
+        if target.as_ref() != id {
+            continue;
+        }
+        names.push(reference.name().to_owned());
+    }
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            crate::edit::time_travel::create_or_reuse_pin(
+                repository,
+                gix::refs::Target::Symbolic(name),
+                id,
+                "tix ref-tree",
+            )
+            .map(|(pin, _created)| pin)
+        })
+        .collect()
 }
 
 impl Overview {
@@ -2055,6 +2140,73 @@ mod tests {
         tree.selected = Some(main);
         tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT));
         assert_eq!(tree.selected, Some(root), "shift-modified lowercase g reaches the root");
+    }
+
+    #[test]
+    fn enter_pins_every_visible_reference_kind_but_not_synthetic_nodes() {
+        let (graph, refs, mut decorations) = fixture();
+        decorations.get_mut(&id(6)).expect("main is decorated").extend([
+            Decoration {
+                name: "tag: release".into(),
+                kind: DecorationKind::Tag,
+            },
+            Decoration {
+                name: "origin/main".into(),
+                kind: DecorationKind::Remote,
+            },
+        ]);
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Input::PinReferences {
+                id: id(6),
+                kinds: vec![DecorationKind::Local, DecorationKind::Remote, DecorationKind::Tag],
+            },
+            "Enter retains every displayed reference namespace"
+        );
+
+        tree.selected = tree
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.by_commit.get(&graph.index(id(2))?).copied());
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Input::Handled,
+            "fork-only nodes have no pin action"
+        );
+    }
+
+    #[test]
+    fn pin_references_uses_all_requested_refs_and_makes_symbolic_pins_visible() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let old = repo.rev_parse_single("main~2")?.detach();
+        for name in ["refs/heads/old", "refs/tags/old", "refs/remotes/origin/old"] {
+            repo.reference(
+                name,
+                old,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "prepare ref-tree pin test",
+            )?;
+        }
+
+        let pins = pin_references(&repo, old, &[DecorationKind::Local, DecorationKind::Remote])?;
+        let targets: Vec<_> = pins
+            .iter()
+            .filter_map(|pin| pin.target.try_name().map(|name| name.as_bstr().to_owned()))
+            .collect();
+        assert!(targets.contains(&b"refs/heads/old".as_bstr().to_owned()));
+        assert!(targets.contains(&b"refs/remotes/origin/old".as_bstr().to_owned()));
+        assert!(!targets.contains(&b"refs/tags/old".as_bstr().to_owned()));
+        assert!(
+            crate::history::snapshot(&repo, &[], &[], false)?
+                .view_tips
+                .contains(&old),
+            "a symbolic reference pin augments attached history even below HEAD"
+        );
+        Ok(())
     }
 
     #[test]

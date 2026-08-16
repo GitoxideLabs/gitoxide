@@ -2527,6 +2527,46 @@ mod tests {
     }
 
     #[test]
+    fn ref_tree_pin_refresh_adds_cached_branch_ancestry_and_selects_its_tip() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(3, &[2]), row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+
+        let rows = app
+            .start_refresh(
+                vec![row_with_parents(5, &[4]), row_with_parents(4, &[2])].into(),
+                &[id(3)],
+                &[],
+                false,
+            )
+            .expect("ref-tree expansion caches its branch while retaining history tips");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(3), id(2), id(1)],
+            "worktree expansion does not broaden history"
+        );
+
+        app.select_commit_after_refresh(id(5));
+        let rows = app
+            .start_refresh(Vec::<LoadedCommit>::new().into(), &[id(3), id(5)], &[], false)
+            .expect("the new pin reprojects already cached commits");
+        let (rows, graph, time) = compute_lanes(rows);
+        app.finish_lane_computation(rows, graph, time);
+        assert_eq!(
+            app.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [id(3), id(5), id(4), id(2), id(1)],
+            "the pinned branch and its shared base appear without restarting"
+        );
+        assert_eq!(
+            app.selected.map(|index| app.rows[index].id),
+            Some(id(5)),
+            "the first frame of the refreshed history selects the pinned entry"
+        );
+    }
+
+    #[test]
     fn lane_computation_keeps_cached_parents_outside_the_current_view() {
         let mut app = App::new(3);
         app.extend_commits(vec![row_with_parents(2, &[1])]);
