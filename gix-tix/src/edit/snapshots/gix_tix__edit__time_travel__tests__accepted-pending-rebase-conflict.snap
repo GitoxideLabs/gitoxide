@@ -6,7 +6,7 @@ HEAD detached C1
 
 [refs]
 refs/heads/main = C2
-refs/worktree/tix/pins/9dabf957 = -> refs/heads/main
+refs/worktree/tix/pins/HEAD = -> refs/heads/main
 
 [commits]
 C0

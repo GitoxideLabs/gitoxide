@@ -18,7 +18,7 @@ without trading responsiveness for metadata that is not visible.
   TUI time travel. Travelling to the current `HEAD` is a no-op. A detached
   source may travel to a descendant without a pin, but travelling to an ancestor
   or unrelated commit requires an existing current-worktree pin at `HEAD` or a
-  descendant. An attached source is preserved through the normal symbolic-pin
+  descendant. An attached source is preserved through the singleton HEAD-pin
   rules. Replay conflicts change nothing unless explicitly materialized; an
   accepted conflict writes the checkout and unmerged index, then exits with an
   error so resolution cannot be mistaken for completion.
@@ -240,23 +240,30 @@ The Enter key is written as `<enter>` throughout.
 
 - On a completed, focused history in a worktree repository, `@` on a non-`HEAD`
   row runs `git checkout --detach <commit>` without forcing local changes.
-- Before every move, tix provisionally retains the previous `HEAD` with a
-  `refs/worktree/tix/pins/<suffix>` ref. Git stores these refs privately for the
-  current worktree. After a successful checkout it removes that pin
-  when the old `HEAD` remains reachable from another view tip, and retains it
-  otherwise. Pins use at least four alphanumeric characters;
-  generated pins start with eight hexadecimal characters from the saved commit.
-- A pin is symbolic when the previous `HEAD` named a local branch, so later branch
-  advances move the pinned tip. An already detached `HEAD` receives a direct pin.
+- When tix detaches an attached local branch, it records that branch symbolically
+  in the singleton `refs/worktree/tix/pins/HEAD` ref. Git stores this HEAD pin
+  privately for the current worktree, and later branch advances move its tip.
+  Further detached travel preserves the singleton. After each successful tix
+  checkout, landing on the remembered branch tip reattaches `HEAD` to that branch
+  and removes the HEAD pin; explicitly attaching another branch also removes it.
+  A failed automatic reattachment leaves both detached `HEAD` and the HEAD pin
+  intact and reports a warning. External Git checkouts do not reconcile it.
+- Other departures are provisionally retained with ordinary
+  `refs/worktree/tix/pins/<suffix>` refs. An already detached `HEAD` receives a
+  direct pin. After a successful checkout tix removes that pin when the old
+  `HEAD` remains reachable from another view tip, and retains it otherwise. Pins
+  use at least four alphanumeric characters; generated pins start with eight
+  hexadecimal characters from the saved commit.
 - When a rebase rewrites a detached departure, checkout applies the rebase mapping
   before deciding whether to pin it. A departure rewritten into the selected `@`
   successor is not pinned; a distinct departure preserves its rewritten identity.
-- While `HEAD` is detached, every valid pin from the current worktree augments
-  implicit and explicit revision tips. While it is attached, only pins at strict
-  descendants of `HEAD` do so, preserving rewritten leaves after a history rebase
-  moves the checked-out branch down its stack. Pins from other worktrees,
-  dangling, malformed, and non-commit pins do not
-  enter the view or its decorations. Normal hidden-revision exclusions still apply.
+- While `HEAD` is detached, every valid pin, including the HEAD pin, from the
+  current worktree augments implicit and explicit revision tips. While it is
+  attached, only pins at strict descendants of `HEAD` do so and the HEAD pin is
+  inactive, preserving rewritten leaves after a history rebase moves the
+  checked-out branch down its stack. Pins from other worktrees, dangling,
+  malformed, and non-commit pins do not enter the view or its decorations.
+  Normal hidden-revision exclusions still apply.
 - One or more worktree pins at a commit are shown as a single blue `📌`
   resource marker immediately after the hash and outside ordinary reference
   decorations. It remains visible when references are hidden, and internal pin
@@ -264,6 +271,9 @@ The Enter key is written as `<enter>` throughout.
   tip checks out its underlying branch, or its direct commit in detached mode,
   then removes that one pin. Multiple matching pins prefer symbolic targets and
   then lexical ref-name order.
+- The HEAD pin instead marks its target branch as `★branch` in the local-branch
+  style. It has no `📌`, is never selected as a return destination, and does not
+  offer `unpin`; its branch keeps normal tracking-relation behavior.
 - The edit menu offers `unpin` on a pinned row. It atomically removes every pin
   for that commit in the current worktree and retains that row's selection.
 - `tix pin <REVSPEC>...` resolves every argument before writing and deduplicates
@@ -272,11 +282,12 @@ The Enter key is written as `<enter>` throughout.
   revisions and object IDs remain fixed direct pins. Each unique target prints
   as `pin:<suffix> <short-id>`, and targets at the same commit remain distinct.
 - Checkout failures retain the original `HEAD`, remove only a newly created
-  source pin, and leave destination pins intact. Successful travel consumes a
-  destination pin and applies the same source-pin reconciliation for ancestor,
-  descendant, and sideways moves. Conflict acceptance, history-rebase checkout,
-  and automatic fork travel use this same primitive. Successful travel preserves
-  the selected row, refreshes history directly, and invalidates worktree status.
+  source or HEAD pin, and leave destination pins intact. Successful travel
+  consumes a destination pin and applies the same source-pin reconciliation for
+  ancestor, descendant, and sideways moves. Conflict acceptance, history-rebase
+  checkout, and automatic fork travel use this same primitive. Successful travel
+  preserves the selected row, refreshes history directly, and invalidates
+  worktree status.
 - Active review commits define review trees containing all of their descendants.
   Time travel within one review tree keeps ordinary checkout behavior and never
   creates or restores a stash. Crossing out of a dirty review tree saves tracked,

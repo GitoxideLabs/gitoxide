@@ -498,10 +498,10 @@ mod tests {
         let repository = open(fixture.path())?;
         assert!(repository.head()?.is_detached(), "automatic fork travel detaches HEAD");
         assert_eq!(repository.head_id()?.detach(), fork);
-        assert!(
-            crate::history::all_pins(&repository)?.is_empty(),
-            "the checkout consumes the fork pin and does not retain a redundant source pin"
-        );
+        let pins = crate::history::all_pins(&repository)?;
+        assert_eq!(pins.len(), 1, "the checkout consumes the temporary fork pin");
+        assert!(pins[0].is_head(), "the singleton remembers the departed branch");
+        assert_eq!(pins[0].id, main);
         Ok(())
     }
 
@@ -559,8 +559,8 @@ mod tests {
                 .into_iter()
                 .map(|pin| pin.id)
                 .collect::<std::collections::HashSet<_>>(),
-            [first].into_iter().collect(),
-            "every non-current tip has one private pin"
+            [first, base].into_iter().collect(),
+            "the first fork and remembered branch have private pins"
         );
         Ok(())
     }

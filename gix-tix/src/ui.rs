@@ -1769,6 +1769,8 @@ fn metadata_line<'a>(
                     DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
                 ) {
                     format!("{name}@").into()
+                } else if decoration.kind == DecorationKind::HeadPinBranch {
+                    format!("★{name}").into()
                 } else if decoration.kind == DecorationKind::CurrentWorktreeBranch {
                     format!("@{name}").into()
                 } else {
@@ -1944,6 +1946,7 @@ fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
+        DecorationKind::HeadPinBranch => Style::default().fg(Color::Cyan),
         DecorationKind::Stash => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::Review => Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
         DecorationKind::CurrentWorktreeBranch => Style::default().fg(Color::Cyan),
@@ -2972,6 +2975,24 @@ mod tests {
 
         decorations.remove(&selected);
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
+        assert!(!rendered_line(&terminal, 1).contains("unpin"));
+
+        app.ref_mode = RefMode::Default;
+        decorations.insert(
+            selected,
+            vec![Decoration {
+                name: "main".into(),
+                kind: DecorationKind::HeadPinBranch,
+            }],
+        );
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        assert!(
+            row.contains("★main"),
+            "the remembered branch has its dedicated marker: {row:?}"
+        );
+        assert!(!row.contains("📌"), "the HEAD pin is not an ordinary pin: {row:?}");
         assert!(rendered_line(&terminal, 1).contains(" · @ travel · copy"));
         assert!(!rendered_line(&terminal, 1).contains("unpin"));
         Ok(())
