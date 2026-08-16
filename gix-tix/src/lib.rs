@@ -1495,6 +1495,37 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
+                    tree::Input::DeleteLocalBranches(names) => {
+                        let label = {
+                            let names = names
+                                .iter()
+                                .map(|name| name.shorten().to_str_lossy().into_owned())
+                                .collect::<Vec<_>>();
+                            if names.len() == 1 {
+                                format!("branch {}", names[0])
+                            } else {
+                                format!("branches {}", names.join(", "))
+                            }
+                        };
+                        match open_repository(&repository_path, repository_is_bare, false) {
+                            Ok(mut repository) => match repository.delete_local_branches(names) {
+                                Ok(()) => {
+                                    tree.leave_message(format!("deleted {label}"));
+                                    refresh_pending = true;
+                                }
+                                Err(err) => {
+                                    let changed =
+                                        matches!(&err, gix::repository::branch::delete::Error::Cleanup { .. });
+                                    tree.leave_message(format!("delete {label}: {err}"));
+                                    refresh_pending |= changed;
+                                }
+                            },
+                            Err(err) => tree.leave_message(format!("delete {label}: {err:#}")),
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     tree::Input::Quit => return Ok(None),
                 },
                 TerminalEvent::Mouse(mouse) if tree.handle_mouse(mouse.kind, 1) => {

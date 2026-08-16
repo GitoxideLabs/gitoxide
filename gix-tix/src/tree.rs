@@ -115,8 +115,10 @@ enum Direction {
     Right,
 }
 
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
+    DeleteLocalBranches(Vec<gix::refs::FullName>),
     Quit,
 }
 
@@ -133,6 +135,8 @@ pub(crate) struct Tree {
     placed: Option<Placed>,
     ensure_visible: bool,
     hide_tags: bool,
+    edit_expanded: bool,
+    message: Option<String>,
 }
 
 impl Tree {
@@ -151,6 +155,11 @@ impl Tree {
 
     pub(crate) fn leave(&mut self) {
         self.active = false;
+        self.edit_expanded = false;
+    }
+
+    pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
+        self.message = Some(message.into());
     }
 
     pub(crate) fn rebuild(&mut self, graph: &HistoryGraph, refs: &RefSnapshot, decorations: &Decorations) {
@@ -200,10 +209,28 @@ impl Tree {
     }
 
     pub(crate) fn handle_key(&mut self, key: KeyEvent) -> Input {
+        self.message = None;
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)
             || key.code == KeyCode::Char('q')
         {
             return Input::Quit;
+        }
+        if self.edit_expanded {
+            self.edit_expanded = false;
+            if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
+                let branches = self.selected_local_branches();
+                if branches.is_empty() {
+                    self.message = Some("no deletable local branches at the selected node".into());
+                    return Input::Handled;
+                }
+                return Input::DeleteLocalBranches(branches);
+            }
+            if key.code == KeyCode::Esc {
+                return Input::Handled;
+            }
+        } else if key.code == KeyCode::Char('e') && key.modifiers.is_empty() {
+            self.edit_expanded = true;
+            return Input::Handled;
         }
         if key.code == KeyCode::Esc {
             self.leave();
@@ -351,18 +378,43 @@ impl Tree {
             self.motion,
             &self.choices,
         );
-        let motion = match self.motion {
-            Motion::Nearest => "nearest",
-            Motion::Topological => "topo ↑ leaves · ↓ roots · ←/→ branch",
+        let footer_text = if let Some(message) = &self.message {
+            message.clone()
+        } else if self.edit_expanded {
+            let branches = self.selected_local_branches();
+            if branches.is_empty() {
+                "tree · e edit (no actions)".into()
+            } else {
+                format!("tree · e edit (d delete {})", short_branch_list(&branches))
+            }
+        } else {
+            let motion = match self.motion {
+                Motion::Nearest => "nearest",
+                Motion::Topological => "topo ↑ leaves · ↓ roots · ←/→ branch",
+            };
+            let tags = if self.hide_tags { "off" } else { "on" };
+            format!("tree · {motion} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history")
         };
-        let tags = if self.hide_tags { "off" } else { "on" };
         frame.render_widget(
-            Paragraph::new(format!(
-                "tree · {motion} · g top · G root · T tags:{tags} · Shift+directions pan · t/Esc history"
-            ))
-            .style(Style::default().add_modifier(Modifier::DIM)),
+            Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
             footer,
         );
+    }
+
+    fn selected_local_branches(&self) -> Vec<gix::refs::FullName> {
+        self.selected
+            .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+            .into_iter()
+            .flat_map(|node| &node.decorations)
+            .filter(|decoration| decoration.kind == DecorationKind::Local)
+            .map(|decoration| {
+                let mut name = b"refs/heads/".to_vec();
+                name.extend_from_slice(&decoration.name);
+                gix::bstr::BString::from(name)
+                    .try_into()
+                    .expect("local decorations originate from valid local branch names")
+            })
+            .collect()
     }
 
     fn navigate(&mut self, direction: Direction) {
@@ -960,6 +1012,14 @@ fn rail_label(node: &Node, count: Option<usize>) -> String {
     out
 }
 
+fn short_branch_list(names: &[gix::refs::FullName]) -> String {
+    names
+        .iter()
+        .map(|name| name.shorten().to_str_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn edge_style(overview: &Overview, overlay: Option<&Overlay>, edge: &Edge) -> Style {
     let Some(overlay) = overlay else {
         return Style::default();
@@ -1186,6 +1246,85 @@ mod tests {
             ),
         ]);
         (graph, refs, decorations)
+    }
+
+    #[test]
+    fn e_arms_immediate_deletion_of_all_ordinary_local_branches() {
+        let (graph, refs, mut decorations) = fixture();
+        decorations.get_mut(&id(6)).expect("main is decorated").extend([
+            Decoration {
+                name: "also-main".into(),
+                kind: DecorationKind::Local,
+            },
+            Decoration {
+                name: "checked-out".into(),
+                kind: DecorationKind::WorktreeBranch,
+            },
+            Decoration {
+                name: "remembered".into(),
+                kind: DecorationKind::HeadPinBranch,
+            },
+            Decoration {
+                name: "origin/main".into(),
+                kind: DecorationKind::Remote,
+            },
+        ]);
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.toggle(), "the tree opens");
+
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            Input::Handled,
+            "e arms the edit prefix"
+        );
+        assert!(tree.edit_expanded);
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Input::DeleteLocalBranches(vec![
+                "refs/heads/also-main".try_into().expect("valid"),
+                "refs/heads/main".try_into().expect("valid"),
+            ]),
+            "d immediately submits every ordinary local branch and no protected decoration"
+        );
+        assert!(!tree.edit_expanded);
+    }
+
+    #[test]
+    fn escape_cancels_the_edit_prefix_without_leaving_the_tree() {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.toggle(), "the tree opens");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        tree.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(tree.is_active(), "Escape cancels the armed prefix first");
+        assert!(!tree.edit_expanded);
+    }
+
+    #[test]
+    fn protected_branches_leave_no_delete_action() {
+        let (graph, refs, mut decorations) = fixture();
+        decorations.get_mut(&id(5)).expect("topic is decorated")[0].kind = DecorationKind::HeadPinBranch;
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.selected = tree.overview.as_ref().and_then(|overview| {
+            graph
+                .index(id(5))
+                .and_then(|index| overview.by_commit.get(&index).copied())
+        });
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+            Input::Handled
+        );
+        assert_eq!(
+            tree.message.as_deref(),
+            Some("no deletable local branches at the selected node")
+        );
     }
 
     #[test]
