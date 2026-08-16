@@ -23,17 +23,22 @@ pub(super) struct Edit<'a> {
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std::ffi::OsString, Vec<u8>)> {
     let editor = repo.editor().context("no Git editor is available")?;
-    let mut commit = repo
+    let commit = repo
         .find_commit(id)
         .context("could not find commit to reword")?
         .decode()
         .context("could not decode commit to reword")?
         .into_owned()
         .context("could not own commit to reword")?;
-    commit.committer.time = gix::date::Time::now_local_or_utc();
+    let committer = repo
+        .committer()
+        .context("no Git committer is configured")?
+        .context("could not resolve the Git committer")?
+        .to_owned()
+        .context("could not own the Git committer")?;
 
     let mut out = Vec::new();
-    write_headers(&mut out, &commit.author, &commit.committer)?;
+    write_headers(&mut out, &commit.author, &committer)?;
     out.push(b'\n');
     out.extend_from_slice(&commit.message);
     if !out.ends_with(b"\n") {
@@ -114,7 +119,6 @@ pub(crate) fn apply_message(
     if commit.message == message {
         return Ok(None);
     }
-    commit.committer.time = gix::date::Time::now_local_or_utc();
     commit.message = message;
     apply_commit(&repo, graph, old_id, commit)
 }
@@ -292,11 +296,25 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
         let repository = gix::open_opts(
             fixture,
-            gix::open::Options::isolated().config_overrides(["core.editor=:".to_owned()]),
+            gix::open::Options::isolated().config_overrides([
+                "core.editor=:".to_owned(),
+                "committer.name=Current Committer".to_owned(),
+                "committer.email=current@example.com".to_owned(),
+                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
+            ]),
         )?;
         let topic = repository.find_reference("refs/heads/topic")?.id().detach();
         let (editor, document) = document(&repository, topic)?;
         assert_eq!(editor, ":", "the configured editor is returned");
+        let edit = parse(&document)?;
+        assert_eq!(
+            edit.committer, b"Current Committer <current@example.com>",
+            "the template shows the repository's current committer"
+        );
+        assert_eq!(
+            edit.committer_time.seconds, 978_307_200,
+            "the configured committer date is shown"
+        );
         assert!(
             document
                 .windows(b"CommentChar: ;\n\n".len())
@@ -354,14 +372,32 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let repository = gix::open_opts(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides(["core.editor=:".to_owned()]),
+            gix::open::Options::isolated().config_overrides([
+                "core.editor=:".to_owned(),
+                "committer.name=Current Committer".to_owned(),
+                "committer.email=current@example.com".to_owned(),
+                "gitoxide.commit.committerDate=2001-01-01T00:00:00 +0000".to_owned(),
+            ]),
         )?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         let (_, document) = document(&repository, middle)?;
-        let edited = document.replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
+        let edited = document
+            .replacen(
+                b"Committer: Current Committer <current@example.com>",
+                b"Committer: Edited Committer <edited@example.com>",
+                1,
+            )
+            .replacen(b"\nmiddle\n", b"\nrewritten middle\n", 1);
         let graph = super::super::loaded_graph(&repository)?;
         let new_middle = apply(repository.clone(), &graph, middle, &edited)?.expect("the message changed");
         let new_tip = repository.head_id()?.detach();
+        let rewritten = repository.find_commit(new_middle)?.decode()?.into_owned()?;
+        assert_eq!(rewritten.committer.name, b"Current Committer".as_bstr());
+        assert_eq!(rewritten.committer.email, b"current@example.com".as_bstr());
+        assert_eq!(
+            rewritten.committer.time.seconds, 978_307_200,
+            "edited committer fields cannot override the current repository committer"
+        );
         assert!(
             !rebase::is_pending(&repository.find_commit(new_middle)?.decode()?.into_owned()?),
             "the reworded commit already has its final tree, parent, and signature"

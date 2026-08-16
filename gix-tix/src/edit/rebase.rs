@@ -510,7 +510,13 @@ fn perform_inner(
     if inserted || forked {
         let mut commit = replacement.clone().context("an inserted commit is required")?;
         commit.parents = root.into_iter().collect();
-        let id = write_commit(&repo, commit, CommitState::Unmarked(signature), signing.clone())?;
+        let id = write_commit(
+            &repo,
+            commit,
+            &committer,
+            CommitState::Unmarked(signature),
+            signing.clone(),
+        )?;
         selected = Some(id);
         if inserted {
             if let Some(root) = root {
@@ -559,9 +565,6 @@ fn perform_inner(
             .iter()
             .filter_map(|parent| rewritten.get(parent).copied().unwrap_or(Some(*parent)))
             .collect();
-        if Some(old_id) != root || repeat {
-            commit.committer = committer.clone();
-        }
         let recorded_parent = has_marker(&commit).then(|| marked_parent(&commit)).transpose()?;
         let original_parents =
             recorded_parent.map_or_else(|| old_parents.clone(), |parent| parent.into_iter().collect::<Vec<_>>());
@@ -617,7 +620,7 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let new_id = write_commit(&repo, commit, state, signing.clone())?;
+        let new_id = write_commit(&repo, commit, &committer, state, signing.clone())?;
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
@@ -628,6 +631,7 @@ fn perform_inner(
                 let upper_id = write_commit(
                     &repo,
                     upper,
+                    &committer,
                     CommitState::Unmarked(Signature::RedoIfNeeded),
                     signing.clone(),
                 )?;
@@ -736,7 +740,6 @@ pub(super) fn finish_review(
                 .collect()
         };
         commit.parents = new_parents.into_iter().collect();
-        commit.committer = committer.clone();
         if *old == review {
             commit.extra_headers.retain(|(name, value)| {
                 !(name.as_slice() == MARKER
@@ -746,6 +749,7 @@ pub(super) fn finish_review(
         let new = write_commit(
             &repo,
             commit,
+            &committer,
             CommitState::Unmarked(Signature::RedoIfNeeded),
             signing.clone(),
         )?;
@@ -786,10 +790,10 @@ pub(super) fn finish_review(
             })
             .collect();
         commit.parents = new_parents.into_iter().collect();
-        commit.committer = committer.clone();
         let new = write_commit(
             &repo,
             commit,
+            &committer,
             CommitState::Pending {
                 original_parent: old_parents.first().copied(),
             },
@@ -1030,7 +1034,6 @@ pub(crate) fn perform_plan_with_progress(
             squash_message(&repo, &mut commit, &squashed[..applied])?;
         }
         commit.parents = [parent].into_iter().collect();
-        commit.committer = committer.clone();
         let state = if step_conflict.is_some() {
             CommitState::Unmarked(Signature::InvalidateExisting)
         } else if eager {
@@ -1041,7 +1044,7 @@ pub(crate) fn perform_plan_with_progress(
                 original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
             }
         };
-        let (new_id, signing_time) = write_commit_timed(&repo, commit, state, signing.clone())?;
+        let (new_id, signing_time) = write_commit_timed(&repo, commit, &committer, state, signing.clone())?;
         if let Some(elapsed) = signing_time {
             progress.signed += 1;
             progress.signing_time += elapsed;
@@ -1696,18 +1699,21 @@ pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
 fn write_commit(
     repo: &gix::Repository,
     commit: gix::objs::Commit,
+    committer: &gix::actor::Signature,
     state: CommitState,
     signing: Option<gix::objs::commit::signature::Options>,
 ) -> Result<ObjectId> {
-    Ok(write_commit_timed(repo, commit, state, signing)?.0)
+    Ok(write_commit_timed(repo, commit, committer, state, signing)?.0)
 }
 
 fn write_commit_timed(
     repo: &gix::Repository,
     mut commit: gix::objs::Commit,
+    committer: &gix::actor::Signature,
     state: CommitState,
     signing: Option<gix::objs::commit::signature::Options>,
 ) -> Result<(ObjectId, Option<Duration>)> {
+    commit.committer = committer.clone();
     let signature = match state {
         CommitState::Unmarked(signature) => {
             marker(&mut commit, false, None);
@@ -2090,6 +2096,15 @@ mod tests {
             old_tip_tree,
             "a reword preserves descendant trees"
         );
+        for id in [new_middle, new_tip] {
+            let commit = repo.find_commit(id)?.decode()?.into_owned()?;
+            assert_eq!(commit.committer.name, b"rebasing committer".as_bstr());
+            assert_eq!(commit.committer.email, b"rebasing@example.com".as_bstr());
+            assert_eq!(
+                commit.committer.time.seconds, 978_307_200,
+                "every rewritten commit receives the operation's current committer date"
+            );
+        }
         insta::assert_snapshot!(
             "reworded-middle-stack",
             gix_testtools::repository::snapshot(fixture.path())?.to_string()
