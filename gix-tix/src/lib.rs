@@ -742,8 +742,12 @@ pub struct Options {
     pub quit_on_finish: bool,
     /// Revisions whose reachable commits should initially be hidden.
     pub hide: Vec<OsString>,
-    /// Add every successfully resolved worktree HEAD as a visible traversal tip.
-    pub worktrees: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RefreshKind {
+    History,
+    RefTree { enter: bool },
 }
 
 fn detect_commit_pane_background() -> Option<(u8, u8, u8)> {
@@ -797,7 +801,6 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     tracing::info!(
         revision_count = revisions.len(),
         hidden_revision_count = options.hide.len(),
-        include_worktrees = options.worktrees,
         "starting tix"
     );
     let commit_pane_background = detect_commit_pane_background();
@@ -860,11 +863,7 @@ fn event_loop(
     enhanced_keyboard: bool,
     commit_pane_background: Option<(u8, u8, u8)>,
 ) -> Result<Option<Duration>> {
-    let Options {
-        quit_on_finish,
-        hide,
-        worktrees,
-    } = options;
+    let Options { quit_on_finish, hide } = options;
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (mut view_repository, recovered_at_startup) = open_history_repository(&mut repository_path, &common_dir)?;
@@ -872,7 +871,7 @@ fn event_loop(
     let (mut repository_is_bare, mut mailmap, mut ref_snapshot, mut worktree_head_unborn) = {
         let bare = view_repository.workdir().is_none();
         let mailmap = view_repository.open_mailmap();
-        let refs = history::snapshot(&view_repository, &revisions, &hide, worktrees)?;
+        let refs = history::snapshot(&view_repository, &revisions, &hide, false)?;
         let unborn = !bare && view_repository.head()?.is_unborn();
         (bare, mailmap, refs, unborn)
     };
@@ -897,7 +896,7 @@ fn event_loop(
         repository,
         &revisions,
         &hide,
-        worktrees,
+        false,
         gix::features::threading::OwnShared::clone(&authors),
     );
 
@@ -908,8 +907,9 @@ fn event_loop(
         app.leave_message("worktree removed; using the common repository without worktree changes");
     }
     let mut lane_receiver = None;
-    let mut refresh_receiver: Option<mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)>> = None;
+    let mut refresh_receiver: Option<mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)>> = None;
     let mut refresh_pending = false;
+    let mut ref_tree_refresh_pending = false;
     let mut refresh_from_filesystem = false;
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
@@ -1247,13 +1247,32 @@ fn event_loop(
         }
         if let Some(result) = refresh_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
-                Ok((graph, result)) => {
+                Ok((kind, graph, result)) => {
                     app.set_known_descendants(graph.commits_with_descendants());
                     app.set_known_merge_descendants(graph.commits_with_merge_descendants());
                     let result = result?;
                     ref_tree.rebuild(&graph, &result.refs, &result.decorations);
                     history_graph = Some(graph);
                     tracing::info!(commit_count = result.commits.rows.len(), "history refresh completed");
+                    if let RefreshKind::RefTree { enter } = kind {
+                        let hidden_tips = if app.show_hidden {
+                            &[][..]
+                        } else {
+                            ref_snapshot.hidden_tips.as_slice()
+                        };
+                        if let Some(rows) =
+                            app.start_refresh(result.commits, &ref_snapshot.view_tips, hidden_tips, false)
+                        {
+                            lane_receiver = Some(start_lane_worker(rows));
+                        }
+                        if enter {
+                            ref_tree.toggle();
+                            app.history_display_expanded = false;
+                        }
+                        refresh_receiver = None;
+                        dirty = true;
+                        continue;
+                    }
                     let response_ids = filesystem_responses.active_reference_ids().to_vec();
                     filesystem_responses.phase(&response_ids, "history-refresh-completed");
                     filesystem_responses.queue_frame(&response_ids, "history-refresh-completed");
@@ -1293,6 +1312,29 @@ fn event_loop(
                 Err(mpsc::TryRecvError::Disconnected) => anyhow::bail!("history refresh worker stopped unexpectedly"),
             }
         }
+        if ref_tree_refresh_pending
+            && refresh_receiver.is_none()
+            && lane_receiver.is_none()
+            && history_graph.is_some()
+            && matches!(app.state, State::Complete | State::Cancelled)
+        {
+            ref_tree_refresh_pending = false;
+            refresh_receiver = Some(start_history_refresh(
+                repository_path.clone(),
+                repository_is_bare,
+                revisions.clone(),
+                if app.show_hidden { Vec::new() } else { hide.clone() },
+                true,
+                Default::default(),
+                gix::features::threading::OwnShared::clone(&authors),
+                history_graph
+                    .take()
+                    .expect("ref-tree refresh starts only with a cached history graph"),
+                RefreshKind::RefTree { enter: true },
+            ));
+            app.deferred_history_state = Some(app.state);
+            app.state = State::Loading;
+        }
         if refresh_pending
             && refresh_receiver.is_none()
             && lane_receiver.is_none()
@@ -1306,9 +1348,9 @@ fn event_loop(
                 Err(_err) if worktree_repository_is_gone(&repository_path) => continue,
                 Err(err) => return Err(err).context("could not inspect changed references"),
             };
-            let next = history::snapshot(&repository, &revisions, &hide, worktrees)?;
+            let next = history::snapshot(&repository, &revisions, &hide, false)?;
             let hidden_changed = next.hidden != ref_snapshot.hidden;
-            let worktree_tips_changed = worktrees && next.worktrees != ref_snapshot.worktrees;
+            let worktree_tips_changed = ref_tree.is_active() && next.worktrees != ref_snapshot.worktrees;
             let tips_changed = next.view != ref_snapshot.view || hidden_changed || worktree_tips_changed;
             let from_filesystem = std::mem::take(&mut refresh_from_filesystem);
             if tips_changed && from_filesystem {
@@ -1335,12 +1377,13 @@ fn event_loop(
                 repository_is_bare,
                 revisions.clone(),
                 hidden,
-                worktrees,
+                false,
                 expand,
                 gix::features::threading::OwnShared::clone(&authors),
                 history_graph
                     .take()
                     .expect("refresh starts only with a cached history graph"),
+                RefreshKind::History,
             ));
             refresh_expand_hidden = false;
             app.deferred_history_state = Some(app.state);
@@ -1753,7 +1796,7 @@ fn event_loop(
                     &repository_path,
                     repository_is_bare,
                     &revisions,
-                    worktrees,
+                    false,
                 ) {
                     Ok((notice, id)) => {
                         pending_todo_rebase_plan = Some(plan);
@@ -1820,7 +1863,7 @@ fn event_loop(
                                 repository_is_bare,
                                 selected,
                                 &revisions,
-                                worktrees,
+                                false,
                             )
                         })
                         .transpose()
@@ -1869,8 +1912,11 @@ fn event_loop(
             continue;
         };
         if action == Action::ToggleRefTree {
-            ref_tree.toggle();
-            app.history_display_expanded = false;
+            if ref_tree.is_active() {
+                ref_tree.leave();
+            } else {
+                ref_tree_refresh_pending = !ref_tree_refresh_pending;
+            }
             dirty = true;
             urgent = true;
             continue;
@@ -2086,7 +2132,7 @@ fn event_loop(
                                         &graph,
                                         &review_roots,
                                         &revisions,
-                                        worktrees,
+                                        false,
                                     )
                                 });
                             match travel {
@@ -2250,7 +2296,7 @@ fn event_loop(
                                     repository_is_bare,
                                     name,
                                     &revisions,
-                                    worktrees,
+                                    false,
                                 )
                             });
                             match returned.transpose() {
@@ -2315,7 +2361,7 @@ fn event_loop(
                                     repository_is_bare,
                                     &outcome,
                                     &revisions,
-                                    worktrees,
+                                    false,
                                 )
                             } else {
                                 Ok(None)
@@ -2391,7 +2437,7 @@ fn event_loop(
                                 repository_is_bare,
                                 &finished.outcome,
                                 &revisions,
-                                worktrees,
+                                false,
                             );
                             match checkout {
                                 Ok(_) => app.leave_message(format!(
@@ -2424,7 +2470,7 @@ fn event_loop(
                                 graph,
                                 &review_roots,
                                 &revisions,
-                                worktrees,
+                                false,
                             )
                         });
                     match result {
@@ -2569,7 +2615,8 @@ fn start_history_refresh(
     expand: std::collections::HashSet<gix::ObjectId>,
     authors: SharedAuthors,
     mut graph: HistoryGraph,
-) -> mpsc::Receiver<(HistoryGraph, Result<history::Refresh>)> {
+    kind: RefreshKind,
+) -> mpsc::Receiver<(RefreshKind, HistoryGraph, Result<history::Refresh>)> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
         let result = open_repository(&repository_path, bare, true)
@@ -2585,7 +2632,7 @@ fn start_history_refresh(
                     &authors,
                 )
             });
-        let _ = sender.send((graph, result));
+        let _ = sender.send((kind, graph, result));
     });
     receiver
 }

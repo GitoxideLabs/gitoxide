@@ -18,9 +18,6 @@ pub struct Platform {
     /// Exit once all commits and graph lanes have been computed.
     #[arg(long)]
     quit_on_finish: bool,
-    /// Add all worktree HEADs and remembered branch tips as visible traversal tips.
-    #[arg(short = 'w', long)]
-    worktrees: bool,
     /// Hide this revision and every commit reachable from it.
     #[arg(short = 'h', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
@@ -59,9 +56,6 @@ struct RefTree {
     /// Omit tags as labels, traversal tips, and topology anchors.
     #[arg(long)]
     no_tags: bool,
-    /// Include detached and linked-worktree HEADs and remembered branch tips as traversal tips.
-    #[arg(short = 'w', long)]
-    worktrees: bool,
     /// Hide this revision and every commit reachable from it.
     #[arg(long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
@@ -103,21 +97,12 @@ impl Platform {
         let Platform {
             help: _,
             quit_on_finish,
-            worktrees,
             hide,
             command,
             revisions,
         } = self;
         let Some(command) = command else {
-            return crate::run(
-                repository,
-                revisions,
-                crate::Options {
-                    quit_on_finish,
-                    hide,
-                    worktrees,
-                },
-            );
+            return crate::run(repository, revisions, crate::Options { quit_on_finish, hide });
         };
 
         let repository = repository.to_thread_local();
@@ -155,14 +140,7 @@ fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
     } else {
         args.revisions
     };
-    let rendered = crate::ref_tree::render_full(
-        repository,
-        &revisions,
-        &args.hide,
-        args.worktrees,
-        !args.no_tags,
-        args.unicode,
-    )?;
+    let rendered = crate::ref_tree::render_full(repository, &revisions, &args.hide, !args.no_tags, args.unicode)?;
     std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes())
         .context("could not write ref-tree")?;
     Ok(())
@@ -272,10 +250,9 @@ mod tests {
 
     #[test]
     fn parses_tui_options_and_top_level_commands() {
-        let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-w", "-h", "main", "--hide", "tag", "topic"])
+        let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-h", "main", "--hide", "tag", "topic"])
             .expect("TUI arguments parse");
         assert!(cli.platform.quit_on_finish);
-        assert!(cli.platform.worktrees);
         assert_eq!(cli.platform.hide, ["main", "tag"], "hide options append");
         assert_eq!(
             cli.platform.revisions,
@@ -288,7 +265,6 @@ mod tests {
             "tix",
             "ref-tree",
             "--no-tags",
-            "--worktrees",
             "--hide",
             "private",
             "--unicode",
@@ -303,10 +279,18 @@ mod tests {
         };
         assert!(ref_tree.help.is_none());
         assert!(ref_tree.no_tags);
-        assert!(ref_tree.worktrees);
         assert_eq!(ref_tree.hide, ["private"]);
         assert!(ref_tree.unicode);
         assert_eq!(ref_tree.revisions, ["main", "topic"]);
+
+        assert!(
+            Cli::try_parse_from(["tix", "--worktrees"]).is_err(),
+            "the removed TUI worktree option is rejected"
+        );
+        assert!(
+            Cli::try_parse_from(["tix", "ref-tree", "-w"]).is_err(),
+            "the removed diagnostic worktree option is rejected"
+        );
 
         assert!(
             Cli::try_parse_from(["tix", "ref-tree", "--layout", "rail"]).is_err(),

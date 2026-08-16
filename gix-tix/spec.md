@@ -38,10 +38,6 @@ without trading responsiveness for metadata that is not visible.
   an explicit no-op.
 - `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
-- `-w/--worktrees` adds every successfully resolved main and linked worktree
-  `HEAD` plus every valid symbolic `refs/worktree/tix/pins/HEAD` target to the
-  visible traversal tips, in addition to implicit or explicit revisions. Hidden
-  revisions still exclude matching ancestry.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
 - `tix rebase todo -h HIDDEN... [--onto REV] [TIP...]` writes a self-contained
@@ -195,9 +191,10 @@ without trading responsiveness for metadata that is not visible.
   independent of the history selection and panes, and the ref-tree provides
   navigation only. The direct ref-tree action appears in the `?` information group.
   “Tree” without the `ref-` prefix refers to Git tree objects and tree diffs.
-- The overview uses normal references and raw revision tips already present in
-  the completed graph, including traversed hidden history; it never causes more
-  repository traversal. Special refs are excluded. First-parent paths form a
+- Entering the overview expands its completed graph with every successfully
+  resolved main and linked worktree `HEAD` plus every valid symbolic
+  `refs/worktree/tix/pins/HEAD` target. This does not add those commits to the
+  history view. Special refs are excluded. First-parent paths form a
   forest whose referenced commits, forks, roots, shallow boundaries, and raw
   tips remain as nodes while linear runs are contracted. `Shift-T` toggles
   tags; when hidden, tag labels and tag-only anchors are removed before this
@@ -247,8 +244,8 @@ without trading responsiveness for metadata that is not visible.
   current worktree renders as `[pin]` in ASCII output and `📌` with `--unicode`.
   It traverses
   all normal references by default; positional revisions scope traversal.
-- `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
-  corresponding ref-tree inputs. Output uses ASCII lines and `o` nodes by default;
+- Worktree traversal is always enabled. `--no-tags` and repeatable
+  `--hide <revision>` match the corresponding ref-tree inputs. Output uses ASCII lines and `o` nodes by default;
   `--unicode` uses the interactive ref-tree's rounded line and node glyphs.
 
 ## Interaction
