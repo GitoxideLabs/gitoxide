@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use gix::{
     ObjectId,
     bstr::{BStr, BString, ByteSlice},
+    refs::Target,
 };
 
 use crate::{history, open_repository};
@@ -88,7 +89,7 @@ pub(crate) fn start(
     let workdir = repo.workdir().context("review requires a worktree")?.to_owned();
     let head = repo.head().context("could not read HEAD before review")?;
     let restore = (
-        head.referent_name().map(|name| name.as_bstr().to_owned()),
+        head.referent_name().map(ToOwned::to_owned),
         head.id().map(gix::Id::detach),
     );
     let reattach = (restore.1 == Some(tip)).then(|| restore.0.clone()).flatten();
@@ -106,6 +107,19 @@ pub(crate) fn start(
         }
     }
     ensure_clean(&workdir)?;
+
+    let departure_pin = match restore.1.filter(|id| *id != tip) {
+        Some(id) => {
+            let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
+            Some(super::time_travel::create_or_reuse_pin(
+                &repo,
+                target,
+                id,
+                "tix review departure",
+            )?)
+        }
+        None => None,
+    };
 
     let name = next_reference(&repo)?;
     let mut commit = gix::objs::Commit {
@@ -134,18 +148,25 @@ pub(crate) fn start(
         .detach();
     drop(repo);
 
-    git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()])
-        .context("could not check out the reviewed commit")?;
+    if let Err(err) = git(&workdir, ["checkout", "--quiet", "--detach", &tip.to_string()]) {
+        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
+        return Err(err.context("could not check out the reviewed commit"));
+    }
     let review_name = name.as_bstr().to_str_lossy();
     let create_ref = match reattach.as_ref() {
         Some(target) => git(
             &workdir,
-            ["symbolic-ref", review_name.as_ref(), target.to_str_lossy().as_ref()],
+            [
+                "symbolic-ref",
+                review_name.as_ref(),
+                target.as_bstr().to_str_lossy().as_ref(),
+            ],
         ),
         None => git(&workdir, ["update-ref", review_name.as_ref(), &tip.to_string()]),
     };
     if let Err(err) = create_ref {
         restore_checkout(&workdir, &restore)?;
+        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
         return Err(err.context("could not create review reference"));
     }
     if let Err(err) = git(
@@ -154,6 +175,7 @@ pub(crate) fn start(
     ) {
         let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
+        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
         return Err(err.context("could not attach the worktree to the review commit"));
     }
     if let Err(err) = git(&workdir, ["read-tree", &id.to_string()]) {
@@ -163,6 +185,7 @@ pub(crate) fn start(
         );
         let _ = git(&workdir, ["update-ref", "--no-deref", "-d", review_name.as_ref()]);
         restore_checkout(&workdir, &restore)?;
+        remove_new_departure_pin(repository_path, bare, departure_pin.as_ref())?;
         return Err(err.context("could not reset the index to the review base"));
     }
     Ok(Started {
@@ -263,12 +286,19 @@ fn git<const N: usize>(workdir: &Path, args: [&str; N]) -> Result<()> {
     }
 }
 
-fn restore_checkout(workdir: &Path, restore: &(Option<BString>, Option<ObjectId>)) -> Result<()> {
+fn remove_new_departure_pin(repository_path: &Path, bare: bool, pin: Option<&(history::Pin, bool)>) -> Result<()> {
+    let Some((pin, true)) = pin else { return Ok(()) };
+    let repo =
+        open_repository(repository_path, bare, false).context("could not reopen repository to remove review pin")?;
+    super::time_travel::delete_pin(&repo, pin).context("could not remove review departure pin")
+}
+
+fn restore_checkout(workdir: &Path, restore: &(Option<gix::refs::FullName>, Option<ObjectId>)) -> Result<()> {
     let mut command = Command::new("git");
     command.arg("-C").arg(workdir).args(["checkout", "--quiet", "--force"]);
     match restore {
         (Some(name), _) => {
-            let name = gix::path::from_bstr(name);
+            let name = gix::path::from_bstr(name.as_bstr());
             command.arg(name.as_ref());
         }
         (None, Some(id)) => {
@@ -499,6 +529,16 @@ mod tests {
         let graph = super::super::loaded_graph(&repo)?;
         drop(repo);
         start(fixture.path(), false, &graph, reviewed, base)?;
+        let repo = open()?;
+        let pins = history::all_pins(&repo)?;
+        assert_eq!(pins.len(), 1, "review start preserves the checked-out descendant tip");
+        assert_eq!(pins[0].id, old_successor);
+        assert_eq!(
+            pins[0].target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "an attached review departure remains attached through a symbolic pin"
+        );
+        drop(repo);
 
         std::fs::write(fixture.path().join("reviewed"), "new review change\n")?;
         run(fixture.path(), &["add", "file", "reviewed"])?;

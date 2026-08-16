@@ -7,6 +7,7 @@ HEAD detached C2
 [refs]
 refs/heads/main = C4
 refs/heads/review-successor = C3
+refs/worktree/tix/pins/2eab5bd4 = -> refs/heads/main
 
 [commits]
 C0
