@@ -16,6 +16,7 @@ pub(crate) struct Commit<T> {
     pub id: ObjectId,
     pub parent_ids: ParentIds,
     pub committer_time: gix::date::Time,
+    pub author_time: gix::date::Time,
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
@@ -28,6 +29,7 @@ pub(crate) struct Commit<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Metadata<T> {
     pub committer_time: gix::date::Time,
+    pub author_time: gix::date::Time,
     pub author: &'static Author,
     pub attributions: Range<usize>,
     pub title: T,
@@ -257,6 +259,14 @@ pub(crate) enum NameMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum DateMode {
+    #[default]
+    Author,
+    Committer,
+    None,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CopyKind {
     Id,
@@ -393,7 +403,7 @@ pub(crate) struct App {
     pub(crate) deferred_history_state: Option<State>,
     pub viewport_rows: usize,
     pub lane_time: Option<Duration>,
-    pub show_committer_date: bool,
+    pub date_mode: DateMode,
     pub name_mode: NameMode,
     pub show_emails: bool,
     pub show_trailers: bool,
@@ -484,7 +494,7 @@ impl App {
             deferred_history_state: None,
             viewport_rows,
             lane_time: None,
-            show_committer_date: true,
+            date_mode: DateMode::default(),
             name_mode: NameMode::All,
             show_emails: false,
             show_trailers: true,
@@ -702,6 +712,7 @@ impl App {
                     id: row.id,
                     parent_ids: row.parent_ids,
                     committer_time: row.committer_time,
+                    author_time: row.author_time,
                     author: row.author,
                     attributions: attribution_base + row.attributions.start..attribution_base + row.attributions.end,
                     title: start..self.titles.len(),
@@ -744,6 +755,7 @@ impl App {
         let row = Arc::make_mut(row);
         let Metadata {
             committer_time,
+            author_time,
             author,
             attributions,
             title,
@@ -756,6 +768,7 @@ impl App {
         let attribution_start = self.attributions.len();
         self.attributions.extend(new_attributions);
         row.committer_time = committer_time;
+        row.author_time = author_time;
         row.author = author;
         row.attributions = attribution_start + attributions.start..attribution_start + attributions.end;
         row.title = title_start..self.titles.len();
@@ -922,7 +935,13 @@ impl App {
                 self.follow_tail = self.state == State::Loading;
                 self.ensure_visible();
             }
-            Action::ToggleDate => self.show_committer_date = !self.show_committer_date,
+            Action::ToggleDate => {
+                self.date_mode = match self.date_mode {
+                    DateMode::Author => DateMode::Committer,
+                    DateMode::Committer => DateMode::None,
+                    DateMode::None => DateMode::Author,
+                };
+            }
             Action::ToggleEmail => self.show_emails = !self.show_emails,
             Action::ToggleName => {
                 let start = self.offset.min(self.rows.len());
@@ -1387,6 +1406,7 @@ impl App {
                         row.id,
                         Metadata {
                             committer_time: row.committer_time,
+                            author_time: row.author_time,
                             author: row.author,
                             attributions: row.attributions.clone(),
                             title: row.title.clone(),
@@ -2386,6 +2406,7 @@ mod tests {
         Commit {
             id: id(n.into()),
             parent_ids: ParentIds::new(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: Box::leak(Box::new(Author {
                 name: b"author".as_bstr(),
@@ -2935,6 +2956,7 @@ mod tests {
         app.set_metadata(
             0,
             Metadata {
+                author_time: gix::date::Time::default(),
                 committer_time: gix::date::Time::default(),
                 author: row(1).author,
                 attributions: 0..0,
@@ -3429,7 +3451,11 @@ mod tests {
         app.update(Action::CycleChangesParent);
         app.update(Action::ToggleChanges);
 
-        assert!(!app.show_committer_date);
+        assert_eq!(app.date_mode, DateMode::Committer);
+        app.update(Action::ToggleDate);
+        assert_eq!(app.date_mode, DateMode::None);
+        app.update(Action::ToggleDate);
+        assert_eq!(app.date_mode, DateMode::Author);
         assert!(app.show_emails);
         assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
