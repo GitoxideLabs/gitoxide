@@ -720,7 +720,11 @@ impl Overview {
                 }
             }
         }
-        for worktree in refs.worktrees.iter().filter(|worktree| worktree.is_detached) {
+        for worktree in refs
+            .worktrees
+            .iter()
+            .filter(|worktree| worktree.is_current && worktree.is_detached)
+        {
             let Some(index) = graph.index(worktree.id) else {
                 continue;
             };
@@ -1816,7 +1820,7 @@ mod tests {
     }
 
     #[test]
-    fn detached_worktrees_are_pin_markers_while_ordinary_pins_and_p_are_hidden() {
+    fn only_the_current_detached_worktree_is_a_pin_marker() {
         let (graph, mut refs, mut decorations) = fixture();
         *decorations.get_mut(&id(5)).expect("topic is decorated") = vec![
             Decoration {
@@ -1836,12 +1840,24 @@ mod tests {
         refs.worktrees.push(crate::history::WorktreeCheckout {
             id: id(3),
             label_id: id(6),
-            name: "main".into(),
+            checkout_name: "main-wt".into(),
             reference: Some("refs/heads/main".try_into().expect("valid")),
             is_current: true,
             is_detached: true,
         });
+        refs.worktrees.push(crate::history::WorktreeCheckout {
+            id: id(4),
+            label_id: id(6),
+            checkout_name: "foreign-wt".into(),
+            reference: Some("refs/heads/main".try_into().expect("valid")),
+            is_current: false,
+            is_detached: true,
+        });
         decorations.get_mut(&id(6)).expect("main is decorated")[0].kind = DecorationKind::HeadPinBranch;
+        decorations.entry(id(4)).or_default().push(Decoration {
+            name: "foreign-wt".into(),
+            kind: DecorationKind::WorktreeDetached,
+        });
         let mut tree = Tree::default();
         tree.rebuild(&graph, &refs, &decorations);
         let overview = tree.overview.as_ref().expect("overview exists");
@@ -1856,7 +1872,15 @@ mod tests {
             unicode.contains("★main"),
             "the remembered branch stays at its actual tip"
         );
-        assert!(ascii.contains("[pin]"), "ASCII diagnostics retain detached state");
+        assert!(
+            unicode.contains("foreign-wt@"),
+            "the foreign checkout identifies its actual HEAD"
+        );
+        assert_eq!(
+            ascii.matches("[pin]").count(),
+            1,
+            "only current detached state is marked"
+        );
         assert!(!unicode.contains("pin:"), "ordinary pin names remain hidden");
         assert_eq!(
             tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),

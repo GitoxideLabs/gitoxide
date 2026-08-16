@@ -18,7 +18,7 @@ pub struct Platform {
     /// Exit once all commits and graph lanes have been computed.
     #[arg(long)]
     quit_on_finish: bool,
-    /// Add all worktree HEADs as visible traversal tips.
+    /// Add all worktree HEADs and remembered branch tips as visible traversal tips.
     #[arg(short = 'w', long)]
     worktrees: bool,
     /// Hide this revision and every commit reachable from it.
@@ -59,7 +59,7 @@ struct RefTree {
     /// Omit tags as labels, traversal tips, and topology anchors.
     #[arg(long)]
     no_tags: bool,
-    /// Include detached and linked-worktree HEADs as traversal tips.
+    /// Include detached and linked-worktree HEADs and remembered branch tips as traversal tips.
     #[arg(short = 'w', long)]
     worktrees: bool,
     /// Hide this revision and every commit reachable from it.

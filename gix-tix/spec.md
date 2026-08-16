@@ -39,8 +39,9 @@ without trading responsiveness for metadata that is not visible.
 - `-h/--hide REVSPEC` excludes the revision and its reachable ancestry. The
   option may be repeated.
 - `-w/--worktrees` adds every successfully resolved main and linked worktree
-  `HEAD` to the visible traversal tips, in addition to implicit or explicit
-  revisions. Hidden revisions still exclude matching ancestry.
+  `HEAD` plus every valid symbolic `refs/worktree/tix/pins/HEAD` target to the
+  visible traversal tips, in addition to implicit or explicit revisions. Hidden
+  revisions still exclude matching ancestry.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
 - `tix rebase todo -h HIDDEN... [--onto REV] [TIP...]` writes a self-contained
@@ -138,10 +139,10 @@ without trading responsiveness for metadata that is not visible.
 - Local branches checked out in other worktrees are displayed as `short-name@`
   in light blue instead of their plain branch decoration. The current worktree's
   symbolic branch is displayed as `@short-name` in the local-reference color.
-  A detached worktree with a symbolic HEAD pin labels the remembered branch at
-  that branch's actual tip, even when the checkout is elsewhere; otherwise its
-  checkout directory basename labels the detached commit. Identical labels are
-  deduplicated.
+  A detached foreign worktree is shown as `directory@` at its actual `HEAD`,
+  without a pin marker. Its symbolic HEAD pin is shown separately as `★branch`
+  at that branch's actual tip. The worktree administration name is used when no
+  directory basename is available. Identical labels are deduplicated.
 - When reference labels are hidden, worktree labels are visible only on the
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.
@@ -231,10 +232,10 @@ without trading responsiveness for metadata that is not visible.
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
 - Worktree branch labels keep the history view's `@branch`, `branch@`, and
-  `★branch` forms at the branch's actual tip. Every detached worktree checkout is
-  additionally shown with one `📌`; ordinary tix pins neither anchor nor decorate
-  the ref-tree. A detached worktree without a usable remembered branch falls back to
-  its checkout directory basename.
+  `★branch` forms at the branch's actual tip. A detached current worktree is
+  additionally shown with one `📌`; a detached foreign worktree instead uses
+  `directory@` at its actual `HEAD`. Ordinary tix pins neither anchor nor
+  decorate the ref-tree.
 - After deleting selected local or remote references, refresh keeps the commit
   when it remains a ref-tree node, otherwise selects the next surviving node row or
   the nearest previous row when nothing below survives.
@@ -242,8 +243,9 @@ without trading responsiveness for metadata that is not visible.
 ### Ref-tree diagnostics
 
 - `tix ref-tree` prints the entire reference projection to standard output without
-  terminal colors, selection state, counts, or viewport clipping. Detached
-  worktrees render as `[pin]` in ASCII output and `📌` with `--unicode`. It traverses
+  terminal colors, selection state, counts, or viewport clipping. A detached
+  current worktree renders as `[pin]` in ASCII output and `📌` with `--unicode`.
+  It traverses
   all normal references by default; positional revisions scope traversal.
 - `--no-tags`, `--worktrees`, and repeatable `--hide <revision>` match the
   corresponding ref-tree inputs. Output uses ASCII lines and `o` nodes by default;
