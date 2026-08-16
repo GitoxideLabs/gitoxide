@@ -3636,6 +3636,7 @@ fn preview_todo_rebase_conflict(
             id,
             parent_ids,
             committer_time: metadata.committer_time,
+            author_time: metadata.author_time,
             author: metadata.author,
             attributions: attribution_start..attribution_start + attribution_len,
             title: metadata.title,

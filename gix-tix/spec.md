@@ -120,7 +120,7 @@ without trading responsiveness for metadata that is not visible.
 ### Row content and visual states
 
 - A row contains graph lanes, a seven-character object ID, optional references,
-  committer date, author and attribution information, markers, and title.
+  author date by default, author and attribution information, markers, and title.
 - The commit marker is blue when unsigned, orange when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the
@@ -270,7 +270,7 @@ without trading responsiveness for metadata that is not visible.
 | `t` | Toggle the rounded ref-tree overview. |
 | `[` | Toggle graph/metadata alignment. |
 | `v` | Toggle the history-display key group. Pressing `v` again closes it. |
-| `v d` | Toggle committer dates. |
+| `v d` | Cycle author dates, committer dates, and no dates. |
 | `v e` | Toggle full actors/emails and titles. |
 | `v n` | Cycle all attribution, author only, and no names, skipping inert states. |
 | `v t` | Toggle attribution trailers. |

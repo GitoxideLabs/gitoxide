@@ -722,6 +722,7 @@ impl HistoryGraph {
                 let metadata_loaded = metadata.is_some();
                 let Metadata {
                     committer_time,
+                    author_time,
                     author,
                     attributions: row_attributions,
                     title,
@@ -730,6 +731,7 @@ impl HistoryGraph {
                     signature,
                 } = metadata.unwrap_or_else(|| Metadata {
                     committer_time: Default::default(),
+                    author_time: Default::default(),
                     author: &EMPTY_AUTHOR,
                     attributions: 0..0,
                     title: BString::default(),
@@ -741,6 +743,7 @@ impl HistoryGraph {
                     id,
                     parent_ids: parent_ids.clone(),
                     committer_time,
+                    author_time,
                     author,
                     attributions: row_attributions,
                     title,
@@ -1072,6 +1075,7 @@ pub(crate) fn load(
             let metadata_loaded = metadata.is_some();
             let Metadata {
                 committer_time,
+                author_time,
                 author,
                 attributions: row_attributions,
                 title,
@@ -1080,6 +1084,7 @@ pub(crate) fn load(
                 signature,
             } = metadata.unwrap_or_else(|| Metadata {
                 committer_time: Default::default(),
+                author_time: Default::default(),
                 author: &EMPTY_AUTHOR,
                 attributions: 0..0,
                 title: BString::default(),
@@ -1094,6 +1099,7 @@ pub(crate) fn load(
                 id,
                 parent_ids: parent_ids.clone(),
                 committer_time,
+                author_time,
                 author,
                 attributions: row_attributions,
                 title,
@@ -1157,6 +1163,7 @@ pub(crate) fn load(
             let parent_ids = object.parent_ids().map(gix::Id::detach).collect();
             let Metadata {
                 committer_time,
+                author_time,
                 author,
                 attributions: row_attributions,
                 title,
@@ -1168,6 +1175,7 @@ pub(crate) fn load(
                 id,
                 parent_ids,
                 committer_time,
+                author_time,
                 author,
                 attributions: row_attributions,
                 title,
@@ -1554,6 +1562,7 @@ fn decode_metadata<'a>(
     attributions: &mut Vec<Attribution>,
 ) -> Result<Metadata<BString>> {
     let mut committer_time = None;
+    let mut author_time = None;
     let mut author = None;
     let attribution_start = attributions.len();
     let mut title = None;
@@ -1563,6 +1572,7 @@ fn decode_metadata<'a>(
     for token in tokens {
         match token.context("could not decode commit")? {
             Token::Author { signature } => {
+                author_time = Some(signature.time().context("could not decode author time")?);
                 let signature = signature.trim();
                 author = Some(authors.intern_author(signature.name, signature.email));
             }
@@ -1616,6 +1626,7 @@ fn decode_metadata<'a>(
     }
     Ok(Metadata {
         committer_time: committer_time.context("commit has no committer time")?,
+        author_time: author_time.context("commit has no author time")?,
         author: author.context("commit has no author")?,
         attributions: attribution_start..attributions.len(),
         title: title.context("commit has no message")?,
@@ -2320,7 +2331,7 @@ mod tests {
         let commit = Command::new("git")
             .current_dir(fixture_path)
             .env("GIT_AUTHOR_DATE", "2000-01-05T00:00:00 +0000")
-            .env("GIT_COMMITTER_DATE", "2000-01-05T00:00:00 +0000")
+            .env("GIT_COMMITTER_DATE", "2000-01-06T00:00:00 +0000")
             .args(["-c", "commit.gpgSign=false", "commit", "-q", "-m", "new"])
             .status()?;
         assert!(commit.success(), "a commit newer than the graph is created");
@@ -2337,6 +2348,16 @@ mod tests {
         let newest = rows.first().expect("the new commit is walked first");
         assert!(newest.metadata_loaded, "ODB commits are decoded during the walk");
         assert_eq!(newest.title, "new");
+        assert_eq!(
+            newest.author_time.format_or_unix(gix::date::time::format::SHORT),
+            "2000-01-05",
+            "author dates are retained independently"
+        );
+        assert_eq!(
+            newest.committer_time.format_or_unix(gix::date::time::format::SHORT),
+            "2000-01-06",
+            "committer dates remain available"
+        );
         let deferred = rows
             .iter()
             .find(|row| !row.metadata_loaded)
