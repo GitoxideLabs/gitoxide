@@ -22,14 +22,25 @@ pub(super) struct Edit<'a> {
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
 pub(crate) fn document(repo: &gix::Repository, id: gix::ObjectId) -> Result<(std::ffi::OsString, Vec<u8>)> {
+    document_with_author(repo, id, None)
+}
+
+pub(crate) fn document_with_author(
+    repo: &gix::Repository,
+    id: gix::ObjectId,
+    author: Option<&[u8]>,
+) -> Result<(std::ffi::OsString, Vec<u8>)> {
     let editor = repo.editor().context("no Git editor is available")?;
-    let commit = repo
+    let mut commit = repo
         .find_commit(id)
         .context("could not find commit to reword")?
         .decode()
         .context("could not decode commit to reword")?
         .into_owned()
         .context("could not own commit to reword")?;
+    if let Some(author) = author {
+        commit.author = actor(author, commit.author.time, "author")?;
+    }
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
@@ -104,6 +115,7 @@ pub(crate) fn apply_message(
     graph: &crate::history::HistoryGraph,
     old_id: gix::ObjectId,
     message: &[u8],
+    author: Option<&[u8]>,
 ) -> Result<Option<gix::ObjectId>> {
     let message = cleanup_message(message, None);
     if message.is_empty() {
@@ -116,8 +128,14 @@ pub(crate) fn apply_message(
         .context("could not decode commit to reword")?
         .into_owned()
         .context("could not own commit to reword")?;
-    if commit.message == message {
+    let changed_author = author
+        .map(|author| actor(author, commit.author.time, "author"))
+        .transpose()?;
+    if commit.message == message && changed_author.as_ref().is_none_or(|author| *author == commit.author) {
         return Ok(None);
+    }
+    if let Some(author) = changed_author {
+        commit.author = author;
     }
     commit.message = message;
     apply_commit(&repo, graph, old_id, commit)

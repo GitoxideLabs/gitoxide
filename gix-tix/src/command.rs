@@ -284,14 +284,29 @@ mod tests {
         assert_eq!(reword.revision, "HEAD~2");
         assert!(reword.message.is_empty());
         assert!(reword.file.is_none());
-        let reword = Cli::try_parse_from(["tix", "reword", "HEAD~2", "-m", "title", "-m", "body"])
-            .expect("reword messages parse")
-            .platform
-            .command;
+        assert!(reword.author.is_none());
+        let reword = Cli::try_parse_from([
+            "tix",
+            "reword",
+            "HEAD~2",
+            "--author",
+            "Agent <agent@example.com>",
+            "-m",
+            "title",
+            "-m",
+            "body",
+        ])
+        .expect("reword messages parse")
+        .platform
+        .command;
         let Some(Command::Reword(reword)) = reword else {
             panic!("reword was expected")
         };
         assert_eq!(reword.message, ["title", "body"]);
+        assert_eq!(
+            reword.author.as_deref(),
+            Some(std::ffi::OsStr::new("Agent <agent@example.com>"))
+        );
         assert!(
             Cli::try_parse_from(["tix", "reword", "HEAD", "-m", "message", "-f", "message.txt"]).is_err(),
             "message and file inputs are mutually exclusive"

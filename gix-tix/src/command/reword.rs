@@ -17,6 +17,9 @@ pub(super) struct Args {
     /// Read the new message from this file, or from standard input with `-`.
     #[arg(short = 'f', long, value_name = "FILE", conflicts_with = "message")]
     pub(super) file: Option<PathBuf>,
+    /// Set the author actor while preserving the original author date.
+    #[arg(long, value_name = "NAME <EMAIL>")]
+    pub(super) author: Option<OsString>,
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
@@ -47,24 +50,39 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         anyhow::bail!("the reword target or one of its descendants must be pinned");
     }
 
+    let author = args
+        .author
+        .as_deref()
+        .map(gix::path::os_str_into_bstr)
+        .transpose()
+        .context("author is not valid UTF-8")?;
+
     if let Some(message) = explicit_message(&args, std::io::stdin())? {
         return finish(crate::edit::reword::apply_message(
-            repository, &graph, target, &message,
+            repository,
+            &graph,
+            target,
+            &message,
+            author.map(AsRef::as_ref),
         )?);
     }
 
     let repository_path = repository.git_dir().to_owned();
     let bare = repository.is_bare();
-    let (editor, document) = crate::edit::reword::document(&repository, target)?;
+    let (editor, document) = crate::edit::reword::document_with_author(&repository, target, author.map(AsRef::as_ref))?;
     drop(repository);
-    let Some(edited) = crate::edit::edit_document_without_terminal(
+    let edited = crate::edit::edit_document_without_terminal(
         &editor,
         &document,
         &format!("tix-reword-{}-{}.md", std::process::id(), target.to_hex_with_len(7)),
-    )?
-    else {
-        println!("no reword performed: the editor document was unchanged");
-        return Ok(());
+    )?;
+    let edited = match edited {
+        Some(edited) => edited,
+        None if author.is_some() => document,
+        None => {
+            println!("no reword performed: the editor document was unchanged");
+            return Ok(());
+        }
     };
 
     let mut repository = crate::open_repository(&repository_path, bare, false)
@@ -139,6 +157,7 @@ mod tests {
             revision: revision.into(),
             message: Vec::new(),
             file: None,
+            author: None,
         }
     }
 
@@ -178,12 +197,18 @@ mod tests {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
         let mut initial = args("HEAD");
         initial.message = vec!["replacement title".into(), ";literal body".into()];
+        initial.author = Some("Agent <agent@example.com>".into());
         run(open(fixture.path(), "false")?, initial)?;
 
         assert_eq!(
             git(fixture.path(), &["log", "-1", "--format=%B"])?,
             b"replacement title\n\n;literal body\n\n",
             "an explicit message bypasses the editor and retains editor-comment-looking lines"
+        );
+        assert_eq!(
+            git(fixture.path(), &["log", "-1", "--format=%an <%ae>"])?,
+            b"Agent <agent@example.com>\n",
+            "an explicit message applies the author without opening an editor"
         );
         let rewritten = git(fixture.path(), &["rev-parse", "HEAD"])?;
         let mut same = args("HEAD");
@@ -200,6 +225,32 @@ mod tests {
         let err = run(open(fixture.path(), "false")?, empty)
             .expect_err("an empty cleaned message must not replace the commit message");
         assert!(format!("{err:#}").contains("message is empty"));
+        Ok(())
+    }
+
+    #[test]
+    fn author_prefills_the_editor_and_preserves_message_and_date() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
+        let message = git(fixture.path(), &["log", "-1", "--format=%B"])?;
+        let author_date = git(fixture.path(), &["log", "-1", "--format=%aI"])?;
+        let mut reword = args("HEAD");
+        reword.author = Some("Agent <agent@example.com>".into());
+        run(open(fixture.path(), ":")?, reword)?;
+
+        assert_eq!(git(fixture.path(), &["log", "-1", "--format=%B"])?, message);
+        assert_eq!(git(fixture.path(), &["log", "-1", "--format=%aI"])?, author_date);
+        assert_eq!(
+            git(fixture.path(), &["log", "-1", "--format=%an <%ae>"])?,
+            b"Agent <agent@example.com>\n"
+        );
+
+        let old = git(fixture.path(), &["rev-parse", "HEAD"])?;
+        let mut invalid = args("HEAD");
+        invalid.author = Some("missing-email".into());
+        let err = run(open(fixture.path(), "false")?, invalid)
+            .expect_err("an invalid author is rejected before invoking the editor");
+        assert!(format!("{err:#}").contains("author identity"));
+        assert_eq!(git(fixture.path(), &["rev-parse", "HEAD"])?, old);
         Ok(())
     }
 
