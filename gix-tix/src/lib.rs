@@ -1657,6 +1657,7 @@ fn event_loop(
                     Ok((notice, id)) => {
                         pending_todo_rebase_plan = Some(plan);
                         app.begin_conflict_resolution();
+                        app.arm_rebase_continuation();
                         app.leave_message(format!("{notice}; resolve the index, then press <enter>"));
                         app.select_commit_after_refresh(id);
                     }
@@ -1679,6 +1680,19 @@ fn event_loop(
             refresh_pending = true;
             dirty = true;
             urgent = true;
+        }
+        if key_pressed
+            && action == Some(Action::Cancel)
+            && app.changes_focus.is_none()
+            && pending_todo_rebase_plan.is_some()
+        {
+            drop(pending_todo_rebase_plan.take());
+            app.clear_rebase_continuation();
+            app.leave_message("stopped rebase continuation; the partially applied repository remains unchanged");
+            tracing::info!("stopped materialized rebase continuation without rolling back repository state");
+            dirty = true;
+            urgent = true;
+            continue;
         }
         if key_pressed
             && action == Some(Action::OpenDiff)
@@ -1711,6 +1725,7 @@ fn event_loop(
                         .transpose()
                         .map(Option::flatten);
                     app.clear_rebase_conflict();
+                    app.clear_rebase_continuation();
                     app.set_worktree_conflicted(false);
                     app.leave_message(
                         notice
@@ -1738,6 +1753,13 @@ fn event_loop(
                 }
             }
             invalidate_worktree_changes(&mut worktree_changes);
+            dirty = true;
+            urgent = true;
+            continue;
+        }
+        if pending_todo_rebase_plan.is_some()
+            && !action_allowed_during_rebase_continuation(action.as_ref(), app.changes_focus.is_some())
+        {
             dirty = true;
             urgent = true;
             continue;
@@ -4299,6 +4321,45 @@ fn action(key: KeyEvent) -> Option<Action> {
     action_with_shortcut_groups(key, false, false)
 }
 
+fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_focused: bool) -> bool {
+    matches!(
+        action,
+        None | Some(
+            Action::MoveUp
+                | Action::MoveDown
+                | Action::MoveUpBy(_)
+                | Action::MoveDownBy(_)
+                | Action::ScrollLeft
+                | Action::ScrollRight
+                | Action::HalfPageUp
+                | Action::HalfPageDown
+                | Action::PageUp
+                | Action::PageDown
+                | Action::First
+                | Action::Last
+                | Action::ToggleDate
+                | Action::ToggleName
+                | Action::ToggleEmail
+                | Action::ToggleTrailers
+                | Action::ToggleMailmap
+                | Action::CycleRefs
+                | Action::ToggleRefs
+                | Action::ToggleHidden
+                | Action::ToggleHistoryDisplay
+                | Action::ToggleInformation
+                | Action::ToggleAlign
+                | Action::ToggleCommit
+                | Action::ToggleChanges
+                | Action::ToggleChangesFocus
+                | Action::CycleChangesParent
+                | Action::Copy
+                | Action::CopyPath(_)
+                | Action::CopyAuthor
+                | Action::ForceQuit
+        )
+    ) || (changes_focused && matches!(action, Some(Action::OpenDiff | Action::Cancel | Action::Quit)))
+}
+
 fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, edit_expanded: bool) -> Option<Action> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -5477,6 +5538,47 @@ mod tests {
         assert!(is_key_press(&key(KeyEventKind::Press)));
         assert!(is_key_press(&key(KeyEventKind::Repeat)));
         assert!(!is_key_press(&key(KeyEventKind::Release)));
+    }
+
+    #[test]
+    fn materialized_rebases_allow_inspection_but_block_repository_changes() {
+        for action in [
+            Action::MoveDown,
+            Action::ToggleChangesFocus,
+            Action::ToggleCommit,
+            Action::Copy,
+            Action::ForceQuit,
+        ] {
+            assert!(action_allowed_during_rebase_continuation(Some(&action), false));
+        }
+        for action in [
+            Action::Refresh,
+            Action::ToggleEdit,
+            Action::Amend,
+            Action::Rebase,
+            Action::TimeTravel,
+            Action::VerifySignatures,
+            Action::Quit,
+        ] {
+            assert!(
+                !action_allowed_during_rebase_continuation(Some(&action), false),
+                "{action:?} cannot invalidate a materialized rebase"
+            );
+        }
+        for action in [Action::OpenDiff, Action::Cancel, Action::Quit] {
+            assert!(
+                action_allowed_during_rebase_continuation(Some(&action), true),
+                "{action:?} retains its changes-pane behavior"
+            );
+        }
+        assert!(
+            !action_allowed_during_rebase_continuation(Some(&Action::OpenDiff), false),
+            "history Enter is reserved for continuation"
+        );
+        assert!(
+            !action_allowed_during_rebase_continuation(Some(&Action::Cancel), false),
+            "history Escape is reserved for stopping"
+        );
     }
 
     #[test]

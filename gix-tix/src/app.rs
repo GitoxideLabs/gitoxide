@@ -441,6 +441,7 @@ pub(crate) struct App {
     worktree_head_has_descendants: bool,
     worktree_head_unborn: bool,
     pending_rebase_conflict: Option<ObjectId>,
+    rebase_continuation_pending: bool,
     worktree_conflicted: bool,
     amend_available: bool,
     stash_available: bool,
@@ -531,6 +532,7 @@ impl App {
             worktree_head_has_descendants: false,
             worktree_head_unborn: false,
             pending_rebase_conflict: None,
+            rebase_continuation_pending: false,
             worktree_conflicted: false,
             amend_available: false,
             stash_available: false,
@@ -585,6 +587,7 @@ impl App {
             "rebase suspended on conflict; press <enter> to checkout for resolution"
         );
         self.pending_rebase_conflict = Some(id);
+        self.rebase_continuation_pending = false;
         self.leave_message("rebase conflict · <enter> checkout for resolution · any other key cancel");
     }
 
@@ -602,6 +605,22 @@ impl App {
         self.worktree_conflicted = true;
         self.changes_mode = Some(ChangesMode::Both);
         self.changes_focus = None;
+    }
+
+    pub(crate) fn arm_rebase_continuation(&mut self) {
+        self.rebase_continuation_pending = true;
+    }
+
+    pub(crate) fn clear_rebase_continuation(&mut self) {
+        self.rebase_continuation_pending = false;
+    }
+
+    pub(crate) fn rebase_continuation_pending(&self) -> bool {
+        self.rebase_continuation_pending
+    }
+
+    pub(crate) fn rebase_continuation_conflicted(&self) -> bool {
+        self.rebase_continuation_pending && self.worktree_conflicted
     }
 
     pub(crate) fn set_worktree_conflicted(&mut self, conflicted: bool) {
