@@ -1495,6 +1495,17 @@ fn event_loop(
                         urgent = true;
                         continue;
                     }
+                    tree::Input::ResolveRemoteReferences(names) => {
+                        match open_repository(&repository_path, repository_is_bare, false) {
+                            Ok(repository) => {
+                                tree.set_remote_deletions(tree::resolve_remote_deletions(&repository, names));
+                            }
+                            Err(err) => tree.leave_message(format!("remote edit: {err:#}")),
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
                     tree::Input::DeleteLocalBranches { names, fallback } => {
                         let label = {
                             let names = names
@@ -1527,6 +1538,34 @@ fn event_loop(
                         }
                         if deleted {
                             tree.select_after_reference_deletion(fallback);
+                        }
+                        dirty = true;
+                        urgent = true;
+                        continue;
+                    }
+                    tree::Input::DeleteRemoteReferences { groups, fallback } => {
+                        match with_suspended_terminal(terminal, enhanced_keyboard, || {
+                            Ok(push_remote_deletions(&repository_path, &groups))
+                        }) {
+                            Ok(outcome) => {
+                                if outcome.deleted != 0 {
+                                    tree.select_after_reference_deletion(fallback);
+                                    refresh_pending = true;
+                                }
+                                let deleted = format!(
+                                    "deleted {} remote reference{}",
+                                    outcome.deleted,
+                                    if outcome.deleted == 1 { "" } else { "s" }
+                                );
+                                tree.leave_message(if outcome.failures.is_empty() {
+                                    deleted
+                                } else if outcome.deleted == 0 {
+                                    format!("delete on remote: {}", outcome.failures.join("; "))
+                                } else {
+                                    format!("{deleted}; failed: {}", outcome.failures.join("; "))
+                                });
+                            }
+                            Err(err) => tree.leave_message(format!("delete on remote: {err:#}")),
                         }
                         dirty = true;
                         urgent = true;
@@ -3821,6 +3860,37 @@ fn with_suspended_terminal<T>(
     let value = result?;
     restore.context("could not restore terminal after external program")?;
     Ok(value)
+}
+
+struct RemoteDeleteOutcome {
+    deleted: usize,
+    failures: Vec<String>,
+}
+
+fn push_remote_deletions(repository_path: &Path, groups: &[tree::RemoteDeletion]) -> RemoteDeleteOutcome {
+    let mut outcome = RemoteDeleteOutcome {
+        deleted: 0,
+        failures: Vec::new(),
+    };
+    for group in groups {
+        let mut command = Command::new("git");
+        command
+            .arg("-C")
+            .arg(repository_path)
+            .arg("push")
+            .arg(gix::path::from_bstr(group.remote.as_bstr()).as_ref());
+        for reference in &group.references {
+            let mut refspec = b":".to_vec();
+            refspec.extend_from_slice(reference.as_bstr());
+            command.arg(gix::path::from_bstr(refspec.as_bstr()).as_ref());
+        }
+        match command.status() {
+            Ok(status) if status.success() => outcome.deleted += group.references.len(),
+            Ok(status) => outcome.failures.push(format!("{} exited with {status}", group.remote)),
+            Err(err) => outcome.failures.push(format!("{}: {err}", group.remote)),
+        }
+    }
+    outcome
 }
 
 fn external_diff_status(status: ExitStatus) -> Result<()> {
