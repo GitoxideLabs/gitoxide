@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
     fmt::Write,
     sync::atomic::AtomicBool,
@@ -120,8 +120,13 @@ enum Direction {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
+    ResolveRemoteReferences(Vec<gix::refs::FullName>),
     DeleteLocalBranches {
         names: Vec<gix::refs::FullName>,
+        fallback: SelectionFallback,
+    },
+    DeleteRemoteReferences {
+        groups: Vec<RemoteDeletion>,
         fallback: SelectionFallback,
     },
     Pin {
@@ -133,6 +138,12 @@ pub(crate) enum Input {
         fallback: SelectionFallback,
     },
     Quit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RemoteDeletion {
+    pub remote: gix::bstr::BString,
+    pub references: Vec<gix::refs::FullName>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -157,6 +168,7 @@ pub(crate) struct Tree {
     ensure_visible: bool,
     hide_tags: bool,
     edit_expanded: bool,
+    remote_deletions: Vec<RemoteDeletion>,
     message: Option<String>,
 }
 
@@ -256,6 +268,18 @@ impl Tree {
         }
         if self.edit_expanded {
             self.edit_expanded = false;
+            if (key.code == KeyCode::Char('D')
+                || key.code == KeyCode::Char('d') && key.modifiers.contains(KeyModifiers::SHIFT))
+                && !self.remote_deletions.is_empty()
+            {
+                return Input::DeleteRemoteReferences {
+                    groups: std::mem::take(&mut self.remote_deletions),
+                    fallback: self
+                        .reference_deletion_fallback()
+                        .expect("a selected remote reference has a deletion fallback"),
+                };
+            }
+            self.remote_deletions.clear();
             if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
                 let branches = self.selected_local_branches();
                 if branches.is_empty() {
@@ -274,7 +298,13 @@ impl Tree {
             }
         } else if key.code == KeyCode::Char('e') && key.modifiers.is_empty() {
             self.edit_expanded = true;
-            return Input::Handled;
+            self.remote_deletions.clear();
+            let references = self.selected_remote_references();
+            return if references.is_empty() {
+                Input::Handled
+            } else {
+                Input::ResolveRemoteReferences(references)
+            };
         }
         if key.code == KeyCode::Esc {
             self.leave();
@@ -459,10 +489,20 @@ impl Tree {
             message.clone()
         } else if self.edit_expanded {
             let branches = self.selected_local_branches();
-            if branches.is_empty() {
+            if branches.is_empty() && self.remote_deletions.is_empty() {
                 "tree · e edit (no actions)".into()
             } else {
-                format!("tree · e edit (d delete {})", short_branch_list(&branches))
+                let mut actions = Vec::new();
+                if !branches.is_empty() {
+                    actions.push(format!("d delete {}", short_branch_list(&branches)));
+                }
+                if !self.remote_deletions.is_empty() {
+                    actions.push(format!(
+                        "D delete on remote {}",
+                        short_remote_deletion_list(&self.remote_deletions)
+                    ));
+                }
+                format!("tree · e edit ({})", actions.join(" · "))
             }
         } else {
             let motion = match self.motion {
@@ -511,6 +551,28 @@ impl Tree {
                     .expect("local decorations originate from valid local branch names")
             })
             .collect()
+    }
+
+    fn selected_remote_references(&self) -> Vec<gix::refs::FullName> {
+        self.selected
+            .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+            .into_iter()
+            .flat_map(|node| &node.decorations)
+            .filter(|decoration| decoration.kind == DecorationKind::Remote)
+            .map(|decoration| {
+                let mut name = b"refs/remotes/".to_vec();
+                name.extend_from_slice(&decoration.name);
+                gix::bstr::BString::from(name)
+                    .try_into()
+                    .expect("remote decorations originate from valid remote-tracking names")
+            })
+            .collect()
+    }
+
+    pub(crate) fn set_remote_deletions(&mut self, deletions: Vec<RemoteDeletion>) {
+        if self.edit_expanded {
+            self.remote_deletions = deletions;
+        }
     }
 
     pub(crate) fn select_after_reference_deletion(&mut self, fallback: SelectionFallback) {
@@ -1221,6 +1283,44 @@ fn short_branch_list(names: &[gix::refs::FullName]) -> String {
         .join(", ")
 }
 
+fn short_remote_deletion_list(groups: &[RemoteDeletion]) -> String {
+    groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .references
+                .iter()
+                .map(|reference| format!("{}/{}", group.remote.to_str_lossy(), reference.shorten().to_str_lossy()))
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+pub(crate) fn resolve_remote_deletions(
+    repository: &gix::Repository,
+    tracking_references: Vec<gix::refs::FullName>,
+) -> Vec<RemoteDeletion> {
+    let mut groups = BTreeMap::<gix::bstr::BString, Vec<gix::refs::FullName>>::new();
+    for tracking in tracking_references {
+        match repository.upstream_branch_and_remote_for_tracking_branch(tracking.as_ref()) {
+            Ok(Some((upstream, remote))) => {
+                let Some(name) = remote.name() else { continue };
+                groups.entry(name.as_bstr().to_owned()).or_default().push(upstream);
+            }
+            Ok(None) => {}
+            Err(err) => tracing::warn!(name = %tracking, error = %err, "remote reference is not editable"),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(remote, mut references)| {
+            references.sort();
+            references.dedup();
+            RemoteDeletion { remote, references }
+        })
+        .collect()
+}
+
 fn edge_style(overview: &Overview, overlay: Option<&Overlay>, edge: &Edge) -> Style {
     let Some(overlay) = overlay else {
         return Style::default();
@@ -1479,11 +1579,12 @@ mod tests {
         tree.rebuild(&graph, &refs, &decorations);
         assert!(tree.toggle(), "the tree opens");
 
-        assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
-            Input::Handled,
-            "e arms the edit prefix"
-        );
+        let Input::ResolveRemoteReferences(remote) =
+            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+        else {
+            panic!("e should request remote resolution")
+        };
+        assert_eq!(remote, ["refs/remotes/origin/main".try_into().expect("valid")]);
         assert!(tree.edit_expanded);
         let Input::DeleteLocalBranches { names, .. } =
             tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
@@ -1499,6 +1600,114 @@ mod tests {
             "d immediately submits every ordinary local branch and no protected decoration"
         );
         assert!(!tree.edit_expanded);
+    }
+
+    #[test]
+    fn shift_d_deletes_every_resolved_remote_reference_without_confirmation() {
+        let (graph, refs, mut decorations) = fixture();
+        decorations
+            .get_mut(&id(6))
+            .expect("main is decorated")
+            .push(Decoration {
+                name: "origin/main".into(),
+                kind: DecorationKind::Remote,
+            });
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        assert!(tree.toggle());
+        assert!(matches!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+            Input::ResolveRemoteReferences(_)
+        ));
+        let groups = vec![RemoteDeletion {
+            remote: "origin".into(),
+            references: vec![
+                "refs/heads/main".try_into().expect("valid"),
+                "refs/heads/other".try_into().expect("valid"),
+            ],
+        }];
+        tree.set_remote_deletions(groups.clone());
+
+        assert!(matches!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT)),
+            Input::DeleteRemoteReferences { groups: submitted, .. } if submitted == groups
+        ));
+        assert!(!tree.edit_expanded);
+    }
+
+    #[test]
+    fn resolves_only_remote_tracking_refs_with_an_upstream_mapping() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        for args in [
+            &["config", "remote.origin.url", "."][..],
+            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"][..],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(fixture.path())
+                    .args(args)
+                    .status()?
+                    .success()
+            );
+        }
+        let repository = crate::test_repository::open(fixture.path())?;
+        let groups = resolve_remote_deletions(
+            &repository,
+            vec![
+                "refs/remotes/origin/topic".try_into()?,
+                "refs/remotes/missing/topic".try_into()?,
+            ],
+        );
+        assert_eq!(
+            groups,
+            [RemoteDeletion {
+                remote: "origin".into(),
+                references: vec!["refs/heads/topic".try_into()?],
+            }],
+            "only uniquely reverse-mapped remote references are editable"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remote_deletion_continues_after_a_failed_remote() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let git = |args: &[&str]| -> gix_testtools::Result<()> {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(fixture.path())
+                .args(args)
+                .status()?;
+            assert!(status.success(), "git {} succeeds", args.join(" "));
+            Ok(())
+        };
+        git(&["remote", "add", "z-working", "."])?;
+        git(&["fetch", "z-working", "topic"])?;
+        git(&["remote", "add", "a-broken", "./missing"])?;
+
+        let outcome = crate::push_remote_deletions(
+            fixture.path(),
+            &[
+                RemoteDeletion {
+                    remote: "a-broken".into(),
+                    references: vec!["refs/heads/topic".try_into()?],
+                },
+                RemoteDeletion {
+                    remote: "z-working".into(),
+                    references: vec!["refs/heads/topic".try_into()?],
+                },
+            ],
+        );
+        assert_eq!(outcome.deleted, 1, "the later working remote is still attempted");
+        assert_eq!(outcome.failures.len(), 1, "the failed remote is reported");
+        let repository = crate::test_repository::open(fixture.path())?;
+        assert!(repository.try_find_reference("refs/heads/topic")?.is_none());
+        assert!(
+            repository.try_find_reference("refs/remotes/z-working/topic")?.is_none(),
+            "git push removes the corresponding tracking reference"
+        );
+        Ok(())
     }
 
     #[test]
