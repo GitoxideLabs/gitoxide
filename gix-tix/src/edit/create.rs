@@ -99,7 +99,7 @@ fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: boo
     )?;
     let line_counts = add_line_counts(&repo, &mut changes)?;
     let mut document = Vec::new();
-    reword::write_headers(&mut document, &author, &committer)?;
+    reword::write_headers(&mut document, &author, &committer, Some(reword::WIP_AUTHOR))?;
     document.extend_from_slice(b"\nwhat\n\nwhy\n");
     for trailer in reword::missing_agent_trailers(b"what\n\nwhy\n").into_iter().flatten() {
         document.extend_from_slice(b"\n;");
@@ -338,6 +338,13 @@ mod tests {
         let before = gix_testtools::repository::snapshot(fixture.path())?;
         let objects_before = object_count(fixture.path())?;
         let prepared = prepare(open(fixture.path())?, Some(parent))?;
+        assert!(
+            prepared
+                .document
+                .windows(b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>".len())
+                .any(|window| window == b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>"),
+            "new-commit editors offer the provisional author"
+        );
         assert!(
             prepared
                 .document
