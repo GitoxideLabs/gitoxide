@@ -1819,7 +1819,7 @@ fn is_missing_ref(mut err: &(dyn std::error::Error + 'static)) -> bool {
     }
 }
 
-fn decoration_kind(name: &[u8]) -> DecorationKind {
+pub(crate) fn decoration_kind(name: &[u8]) -> DecorationKind {
     if name.starts_with(PIN_PREFIX) {
         DecorationKind::Pin
     } else if name.starts_with(STASH_PREFIX) {
