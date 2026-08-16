@@ -46,6 +46,8 @@ struct Node {
     decorations: Vec<Decoration>,
     is_head: bool,
     is_anchor: bool,
+    is_pinned: bool,
+    can_pin: bool,
     raw_tip: bool,
     sort_key: String,
 }
@@ -118,8 +120,25 @@ enum Direction {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Input {
     Handled,
-    DeleteLocalBranches(Vec<gix::refs::FullName>),
+    DeleteLocalBranches {
+        names: Vec<gix::refs::FullName>,
+        fallback: SelectionFallback,
+    },
+    Pin {
+        id: ObjectId,
+        include_tags: bool,
+    },
+    Unpin {
+        id: ObjectId,
+        fallback: SelectionFallback,
+    },
     Quit,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct SelectionFallback {
+    selected: ObjectId,
+    candidates: Vec<ObjectId>,
 }
 
 #[derive(Default)]
@@ -130,6 +149,8 @@ pub(crate) struct Tree {
     alternate_overview: Option<Overview>,
     overlay: Option<Overlay>,
     selected: Option<usize>,
+    count_anchor: Option<ObjectId>,
+    selection_after_reference_deletion: Option<SelectionFallback>,
     choices: Vec<usize>,
     offset: Offset,
     placed: Option<Placed>,
@@ -174,6 +195,10 @@ impl Tree {
         } else {
             (with_tags, without_tags)
         };
+        let fallback = self
+            .selection_after_reference_deletion
+            .take()
+            .filter(|fallback| Some(fallback.selected) == selected);
         let head = overview
             .nodes
             .iter()
@@ -199,7 +224,21 @@ impl Tree {
                     .index(id)
                     .and_then(|index| overview.by_commit.get(&index).copied())
             })
+            .or_else(|| {
+                fallback.and_then(|fallback| {
+                    fallback
+                        .candidates
+                        .into_iter()
+                        .find_map(|id| overview.nodes.iter().position(|node| node.id == id))
+                })
+            })
             .or(head);
+        if self
+            .count_anchor
+            .is_some_and(|id| !overview.nodes.iter().any(|node| node.id == id))
+        {
+            self.count_anchor = None;
+        }
         self.choices = vec![0; overview.nodes.len()];
         self.overview = Some(overview);
         self.alternate_overview = Some(alternate_overview);
@@ -223,7 +262,12 @@ impl Tree {
                     self.message = Some("no deletable local branches at the selected node".into());
                     return Input::Handled;
                 }
-                return Input::DeleteLocalBranches(branches);
+                return Input::DeleteLocalBranches {
+                    names: branches,
+                    fallback: self
+                        .reference_deletion_fallback()
+                        .expect("a selected branch has a deletion fallback"),
+                };
             }
             if key.code == KeyCode::Esc {
                 return Input::Handled;
@@ -235,6 +279,34 @@ impl Tree {
         if key.code == KeyCode::Esc {
             self.leave();
             return Input::Handled;
+        }
+        if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() {
+            self.toggle_count_anchor();
+            return Input::Handled;
+        }
+        if key.code == KeyCode::Char('p') && key.modifiers.is_empty() {
+            let Some(node) = self
+                .selected
+                .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+            else {
+                return Input::Handled;
+            };
+            if node.is_pinned {
+                return Input::Unpin {
+                    id: node.id,
+                    fallback: self
+                        .reference_deletion_fallback()
+                        .expect("a selected pin has a deletion fallback"),
+                };
+            }
+            if !node.can_pin {
+                self.message = Some("no reference at the selected node".into());
+                return Input::Handled;
+            }
+            return Input::Pin {
+                id: node.id,
+                include_tags: !self.hide_tags,
+            };
         }
         if key.code == KeyCode::Char('G')
             || key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::SHIFT)
@@ -309,12 +381,17 @@ impl Tree {
     }
 
     pub(crate) fn draw(&mut self, frame: &mut Frame<'_>, graph: Option<&HistoryGraph>) {
+        let overlay_selected = self
+            .count_anchor
+            .and_then(|id| self.overview.as_ref()?.nodes.iter().position(|node| node.id == id))
+            .or(self.selected);
         if self.overlay.as_ref().map(|overlay| overlay.selected)
             != self
-                .selected
-                .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+                .overview
+                .as_ref()
+                .and_then(|overview| overlay_selected.and_then(|selected| overview.nodes.get(selected)))
                 .map(|node| node.commit)
-            && let (Some(graph), Some(selected)) = (graph, self.selected)
+            && let (Some(graph), Some(selected)) = (graph, overlay_selected)
         {
             self.overlay = self
                 .overview
@@ -393,7 +470,26 @@ impl Tree {
                 Motion::Topological => "topo ↑ leaves · ↓ roots · ←/→ branch",
             };
             let tags = if self.hide_tags { "off" } else { "on" };
-            format!("tree · {motion} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history")
+            let counts = self.count_anchor.map_or_else(
+                || "Space counts:auto".into(),
+                |id| format!("Space counts:{}", self.node_label(id)),
+            );
+            let pin = self
+                .selected
+                .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+                .and_then(|node| {
+                    if node.is_pinned {
+                        Some(" · p unpin")
+                    } else if node.can_pin {
+                        Some(" · p pin")
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            format!(
+                "tree · {motion} · {counts}{pin} · g top · G root · T tags:{tags} · Shift+directions pan · e edit · t/Esc history"
+            )
         };
         frame.render_widget(
             Paragraph::new(footer_text).style(Style::default().add_modifier(Modifier::DIM)),
@@ -415,6 +511,66 @@ impl Tree {
                     .expect("local decorations originate from valid local branch names")
             })
             .collect()
+    }
+
+    pub(crate) fn select_after_reference_deletion(&mut self, fallback: SelectionFallback) {
+        self.selection_after_reference_deletion = Some(fallback);
+    }
+
+    fn selected_id(&self) -> Option<ObjectId> {
+        self.selected
+            .and_then(|selected| self.overview.as_ref()?.nodes.get(selected))
+            .map(|node| node.id)
+    }
+
+    fn reference_deletion_fallback(&self) -> Option<SelectionFallback> {
+        let overview = self.overview.as_ref()?;
+        let selected = self.selected?;
+        let temporary;
+        let placed = match self.placed.as_ref() {
+            Some(placed) => placed,
+            None => {
+                temporary = place_rail(overview, self.overlay.as_ref());
+                &temporary
+            }
+        };
+        let mut rows: Vec<_> = overview
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (placed.nodes[index].y, node.id))
+            .collect();
+        rows.sort_by_key(|(row, _)| *row);
+        let position = rows.iter().position(|(_, id)| *id == overview.nodes[selected].id)?;
+        let candidates = rows[position + 1..]
+            .iter()
+            .map(|(_, id)| *id)
+            .chain(rows[..position].iter().rev().map(|(_, id)| *id))
+            .collect();
+        Some(SelectionFallback {
+            selected: overview.nodes[selected].id,
+            candidates,
+        })
+    }
+
+    fn toggle_count_anchor(&mut self) {
+        let Some(selected) = self.selected_id() else { return };
+        let previous = self.count_anchor.unwrap_or(selected);
+        self.count_anchor = (self.count_anchor != Some(selected)).then_some(selected);
+        let current = self.count_anchor.unwrap_or(selected);
+        if previous != current {
+            self.overlay = None;
+            self.placed = None;
+        }
+    }
+
+    fn node_label(&self, id: ObjectId) -> String {
+        self.overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.iter().find(|node| node.id == id))
+            .map(node_label)
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| id.to_hex_with_len(7).to_string())
     }
 
     fn navigate(&mut self, direction: Direction) {
@@ -445,8 +601,7 @@ impl Tree {
         };
         if let Some(next) = next {
             self.selected = Some(next);
-            self.overlay = None;
-            self.placed = None;
+            self.selection_changed();
             self.ensure_visible = true;
         }
     }
@@ -459,8 +614,7 @@ impl Tree {
             selected = parent;
         }
         self.selected = Some(selected);
-        self.overlay = None;
-        self.placed = None;
+        self.selection_changed();
         self.ensure_visible = true;
     }
 
@@ -475,8 +629,7 @@ impl Tree {
             selected = child;
         }
         self.selected = Some(selected);
-        self.overlay = None;
-        self.placed = None;
+        self.selection_changed();
         self.ensure_visible = true;
     }
 
@@ -496,10 +649,23 @@ impl Tree {
             .or_else(|| overview.nodes.iter().position(|node| node.raw_tip))
             .or((!overview.nodes.is_empty()).then_some(0));
         self.hide_tags = !self.hide_tags;
+        if self
+            .count_anchor
+            .is_some_and(|id| !overview.nodes.iter().any(|node| node.id == id))
+        {
+            self.count_anchor = None;
+        }
         self.choices = vec![0; overview.nodes.len()];
         self.overlay = None;
         self.placed = None;
         self.ensure_visible = true;
+    }
+
+    fn selection_changed(&mut self) {
+        if self.count_anchor.is_none() {
+            self.overlay = None;
+            self.placed = None;
+        }
     }
 
     fn pan(&mut self, direction: Direction, amount: usize) {
@@ -523,6 +689,8 @@ impl Overview {
         let mut labels = HashMap::<CommitIndex, Vec<Decoration>>::new();
         let mut heads = HashSet::new();
         let mut anchors = HashSet::new();
+        let mut pinned = HashSet::new();
+        let mut pinnable = HashSet::new();
         for (id, decorations) in decorations {
             let Some(index) = graph.index(*id) else { continue };
             for decoration in decorations {
@@ -532,9 +700,16 @@ impl Overview {
                 if decoration.kind == DecorationKind::Head {
                     heads.insert(index);
                     anchors.insert(index);
+                    pinnable.insert(index);
+                } else if decoration.kind == DecorationKind::Pin {
+                    pinned.insert(index);
+                    anchors.insert(index);
                 } else if decoration.kind != DecorationKind::Special {
                     labels.entry(index).or_default().push(decoration.clone());
                     anchors.insert(index);
+                    if decoration.kind != DecorationKind::Stash {
+                        pinnable.insert(index);
+                    }
                 }
             }
         }
@@ -545,6 +720,7 @@ impl Overview {
             .filter_map(|id| graph.index(*id))
             .inspect(|index| {
                 anchors.insert(*index);
+                pinnable.insert(*index);
             })
             .collect();
         if anchors.is_empty() {
@@ -611,6 +787,8 @@ impl Overview {
                     decorations,
                     is_head: heads.contains(&commit),
                     is_anchor: anchors.contains(&commit),
+                    is_pinned: pinned.contains(&commit),
+                    can_pin: pinnable.contains(&commit),
                     raw_tip: raw.contains(&commit),
                     sort_key,
                 }
@@ -986,17 +1164,45 @@ fn draw_nodes(
             &text,
             style,
         );
+        if let Some(pin) = text.chars().position(|symbol| symbol == '📌') {
+            put(
+                frame,
+                area,
+                offset,
+                Point {
+                    x: placed.rail_width + pin,
+                    y: point.y,
+                },
+                '📌',
+                decoration_style(DecorationKind::Pin),
+            );
+        }
     }
 }
 
 fn rail_label(node: &Node, count: Option<usize>) -> String {
     let mut out = count.map_or_else(String::new, |count| count.to_string());
+    let suffix = node_label(node);
+    if !out.is_empty() && !suffix.is_empty() {
+        out.push(' ');
+    }
+    out.push_str(&suffix);
+    if node.is_pinned {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('📌');
+    }
+    out
+}
+
+fn node_label(node: &Node) -> String {
     let labels: Vec<_> = node
         .decorations
         .iter()
         .map(|decoration| decoration.name.to_str_lossy())
         .collect();
-    let suffix = if !labels.is_empty() {
+    if !labels.is_empty() {
         labels.join(", ")
     } else if node.raw_tip {
         node.id.to_hex_with_len(7).to_string()
@@ -1004,12 +1210,7 @@ fn rail_label(node: &Node, count: Option<usize>) -> String {
         "<root>".into()
     } else {
         String::new()
-    };
-    if !out.is_empty() && !suffix.is_empty() {
-        out.push(' ');
     }
-    out.push_str(&suffix);
-    out
 }
 
 fn short_branch_list(names: &[gix::refs::FullName]) -> String {
@@ -1103,7 +1304,12 @@ fn render_overview(overview: &Overview, unicode: bool) -> String {
         out.push_str(&lane);
         out.extend(std::iter::repeat_n(' ', placed.rail_width.saturating_sub(width)));
         if let Some(node) = node {
-            out.push_str(&rail_label(&overview.nodes[node], None));
+            let label = rail_label(&overview.nodes[node], None);
+            if unicode {
+                out.push_str(&label);
+            } else {
+                out.push_str(&label.replace('📌', "[pin]"));
+            }
         }
         while out.ends_with(' ') {
             out.pop();
@@ -1279,12 +1485,14 @@ mod tests {
             "e arms the edit prefix"
         );
         assert!(tree.edit_expanded);
+        let Input::DeleteLocalBranches { names, .. } =
+            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+        else {
+            panic!("d should submit branch deletion")
+        };
         assert_eq!(
-            tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
-            Input::DeleteLocalBranches(vec![
-                "refs/heads/also-main".try_into().expect("valid"),
-                "refs/heads/main".try_into().expect("valid"),
-            ]),
+            names,
+            ["refs/heads/also-main", "refs/heads/main"],
             "d immediately submits every ordinary local branch and no protected decoration"
         );
         assert!(!tree.edit_expanded);
@@ -1367,6 +1575,263 @@ mod tests {
         let stamp = overlay.stamp;
         overlay.compute_visible_counts(&graph, &overview, &rail, topic_row..topic_row + 1);
         assert_eq!(overlay.stamp, stamp, "a cached visible count is not traversed again");
+    }
+
+    #[test]
+    fn space_keeps_counts_anchored_without_rebuilding_while_navigating() -> gix_testtools::Result {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.motion = Motion::Topological;
+        let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        let main = tree
+            .selected
+            .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
+            .map(|node| node.id)
+            .expect("the initial selection exists");
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(tree.count_anchor, Some(main), "Space anchors counts to the cursor");
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(tree.overlay.is_some(), "anchored navigation retains reachability");
+        assert!(tree.placed.is_some(), "anchored navigation retains tree placement");
+        assert_eq!(
+            tree.overlay.as_ref().map(|overlay| overlay.selected),
+            graph.index(main),
+            "the retained overlay still uses the anchored commit"
+        );
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        let footer: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(100)
+            .last()
+            .expect("the terminal has a footer")
+            .iter()
+            .map(ratatui::buffer::Cell::symbol)
+            .collect();
+        assert!(
+            footer.contains("Space counts:main"),
+            "the fixed anchor remains identifiable"
+        );
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(
+            tree.overlay.is_none(),
+            "moving the anchor invalidates reachability once"
+        );
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        let moved = tree
+            .selected
+            .and_then(|selected| tree.overview.as_ref()?.nodes.get(selected))
+            .map(|node| node.id)
+            .expect("the moved selection exists");
+        assert_eq!(tree.count_anchor, Some(moved));
+
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert!(
+            tree.count_anchor.is_none(),
+            "Space on the anchor restores automatic counts"
+        );
+        assert!(tree.overlay.is_some(), "clearing at the cursor reuses the same overlay");
+        tree.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert!(
+            tree.overlay.is_none(),
+            "automatic counts invalidate when the cursor moves"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pins_are_markers_and_p_toggles_only_reference_nodes() {
+        let (graph, refs, mut decorations) = fixture();
+        *decorations.get_mut(&id(5)).expect("topic is decorated") = vec![
+            Decoration {
+                name: "pin:first".into(),
+                kind: DecorationKind::Pin,
+            },
+            Decoration {
+                name: "pin:second".into(),
+                kind: DecorationKind::Pin,
+            },
+        ];
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        let topic =
+            tree.overview.as_ref().expect("overview exists").by_commit[&graph.index(id(5)).expect("topic exists")];
+        tree.selected = Some(topic);
+
+        assert!(matches!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::Unpin { id: selected, .. } if selected == id(5)
+        ));
+        let overview = tree.overview.as_ref().expect("overview exists");
+        assert!(
+            overview.nodes[topic].decorations.is_empty(),
+            "pin-only tips need no label"
+        );
+        let unicode = render_overview(overview, true);
+        let ascii = render_overview(overview, false);
+        assert_eq!(unicode.matches('📌').count(), 1, "multiple pins share one marker");
+        assert!(ascii.contains("[pin]"), "ASCII diagnostics retain the pin marker");
+        assert!(!unicode.contains("pin:"), "internal pin names are hidden");
+
+        let main = overview.by_commit[&graph.index(id(6)).expect("main exists")];
+        tree.selected = Some(main);
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::Pin {
+                id: id(6),
+                include_tags: true,
+            },
+            "an unpinned reference offers pin creation"
+        );
+        let fork =
+            tree.overview.as_ref().expect("overview exists").by_commit[&graph.index(id(2)).expect("fork exists")];
+        tree.selected = Some(fork);
+        assert_eq!(
+            tree.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Input::Handled,
+            "structural-only nodes cannot be pinned"
+        );
+        assert_eq!(tree.message.as_deref(), Some("no reference at the selected node"));
+    }
+
+    #[test]
+    fn count_anchor_survives_refresh_and_clears_with_a_hidden_tag() {
+        let (graph, refs, mut decorations) = fixture();
+        decorations.entry(id(3)).or_default().push(Decoration {
+            name: "v1".into(),
+            kind: DecorationKind::Tag,
+        });
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        let main = tree.count_anchor.expect("main is anchored");
+        tree.rebuild(&graph, &refs, &decorations);
+        assert_eq!(tree.count_anchor, Some(main), "refresh preserves a visible anchor");
+
+        tree.selected = tree.overview.as_ref().and_then(|overview| {
+            graph
+                .index(id(3))
+                .and_then(|commit| overview.by_commit.get(&commit).copied())
+        });
+        tree.handle_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+        assert_eq!(tree.count_anchor, Some(id(3)), "Space moves the anchor to the tag");
+        tree.toggle_tags();
+        assert!(
+            tree.count_anchor.is_none(),
+            "hiding the anchor tag restores automatic counts"
+        );
+    }
+
+    #[test]
+    fn deleted_reference_selection_uses_the_next_surviving_row_then_the_previous() {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        let overview = tree.overview.as_ref().expect("overview exists");
+        let mut rows: Vec<_> = overview
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| (tree.placed.as_ref().expect("placed").nodes[index].y, node.id))
+            .collect();
+        rows.sort_by_key(|(row, _)| *row);
+        let (_, selected) = rows[1];
+        tree.selected = overview.nodes.iter().position(|node| node.id == selected);
+        let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
+        tree.select_after_reference_deletion(fallback);
+
+        let mut without_refs = refs.clone();
+        without_refs.view_tips.retain(|id| *id != selected);
+        let mut without_selected = decorations.clone();
+        without_selected.remove(&selected);
+        tree.rebuild(&graph, &without_refs, &without_selected);
+        assert_eq!(
+            tree.selected_id(),
+            Some(id(1)),
+            "the first surviving row below is preferred"
+        );
+
+        let graph = HistoryGraph::from_test_commits(&[(id(1), vec![]), (id(2), vec![]), (id(3), vec![])]);
+        let refs = RefSnapshot {
+            view: HashMap::new(),
+            hidden: HashMap::new(),
+            view_tips: vec![id(1), id(2), id(3)],
+            hidden_tips: Vec::new(),
+            pins: Vec::new(),
+            worktrees: Vec::new(),
+        };
+        let decorations = HashMap::from([
+            (
+                id(1),
+                vec![
+                    Decoration {
+                        name: "a".into(),
+                        kind: DecorationKind::Local,
+                    },
+                    Decoration {
+                        name: "HEAD".into(),
+                        kind: DecorationKind::Head,
+                    },
+                ],
+            ),
+            (
+                id(2),
+                vec![Decoration {
+                    name: "b".into(),
+                    kind: DecorationKind::Local,
+                }],
+            ),
+            (
+                id(3),
+                vec![Decoration {
+                    name: "c".into(),
+                    kind: DecorationKind::Local,
+                }],
+            ),
+        ]);
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.selected = tree
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
+        tree.select_after_reference_deletion(fallback);
+        let mut remaining_refs = refs.clone();
+        remaining_refs.view_tips.retain(|candidate| *candidate != id(3));
+        let mut remaining_decorations = decorations.clone();
+        remaining_decorations.remove(&id(3));
+        tree.rebuild(&graph, &remaining_refs, &remaining_decorations);
+        assert_eq!(
+            tree.selected_id(),
+            Some(id(2)),
+            "the previous row is used when nothing follows"
+        );
+
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.selected = tree
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(3)));
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        let fallback = tree.reference_deletion_fallback().expect("selection has neighbours");
+        tree.select_after_reference_deletion(fallback);
+        tree.selected = tree
+            .overview
+            .as_ref()
+            .and_then(|overview| overview.nodes.iter().position(|node| node.id == id(1)));
+        tree.rebuild(&graph, &remaining_refs, &remaining_decorations);
+        assert_eq!(
+            tree.selected_id(),
+            Some(id(1)),
+            "moving the cursor before refresh cancels deletion fallback"
+        );
     }
 
     #[test]

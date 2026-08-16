@@ -653,6 +653,42 @@ pub(crate) fn create_or_reuse_pin(
     Ok((history::Pin { name, target, id }, true))
 }
 
+pub(crate) fn create_tree_pin(
+    repository: &gix::Repository,
+    id: ObjectId,
+    include_tags: bool,
+) -> Result<(history::Pin, bool)> {
+    let mut references = Vec::new();
+    for reference in repository
+        .references()
+        .context("could not open references for tree pinning")?
+        .all()
+        .context("could not iterate references for tree pinning")?
+    {
+        let mut reference =
+            reference.map_err(|err| anyhow::anyhow!("could not read a reference for tree pinning: {err}"))?;
+        let name = reference.name().to_owned();
+        let kind = history::decoration_kind(name.as_bstr());
+        if matches!(
+            kind,
+            history::DecorationKind::Pin | history::DecorationKind::Stash | history::DecorationKind::Special
+        ) || !include_tags && matches!(kind, history::DecorationKind::Tag)
+            || name.as_bstr().starts_with(history::REVIEW_STASH_PREFIX)
+        {
+            continue;
+        }
+        let Ok(target) = reference.peel_to_id() else { continue };
+        if target.detach() == id && repository.find_header(target)?.kind() == gix::object::Kind::Commit {
+            references.push(name);
+        }
+    }
+    let target = match references.as_slice() {
+        [name] => Target::Symbolic(name.clone()),
+        _ => Target::Object(id),
+    };
+    create_or_reuse_pin(repository, target, id, "tix tree pin")
+}
+
 pub(super) fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
     repository
         .edit_references([delete_pin_edit(pin)])
@@ -1281,6 +1317,44 @@ mod tests {
         let pins = history::all_pins(&repository)?;
         assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
         assert!(pins.iter().any(|pin| pin.id == other), "pins on other commits remain");
+        Ok(())
+    }
+
+    #[test]
+    fn tree_pins_follow_one_visible_reference_and_freeze_ambiguous_targets() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let main = repository.rev_parse_single("main")?.detach();
+        let (pin, created) = create_tree_pin(&repository, main, true)?;
+        assert!(created, "the first tree pin is created");
+        assert_eq!(
+            pin.target.try_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(b"refs/heads/main".as_bstr()),
+            "one visible reference produces a symbolic pin"
+        );
+        remove_pins(repository.git_dir(), repository.is_bare(), main)?;
+
+        repository.reference(
+            "refs/tags/also-main",
+            main,
+            PreviousValue::MustNotExist,
+            "test ambiguous tree pin",
+        )?;
+        let (pin, created) = create_tree_pin(&repository, main, true)?;
+        assert!(created);
+        assert_eq!(
+            pin.target,
+            Target::Object(main),
+            "multiple visible refs produce a direct pin"
+        );
+        remove_pins(repository.git_dir(), repository.is_bare(), main)?;
+
+        let (pin, created) = create_tree_pin(&repository, main, false)?;
+        assert!(created);
+        assert!(
+            pin.target.try_name().is_some(),
+            "a hidden tag does not make the branch target ambiguous"
+        );
         Ok(())
     }
 
