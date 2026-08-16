@@ -11,7 +11,7 @@ use crate::{
     BuiltInDiff,
     app::{
         App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesLayout, ChangesMode, CommitRow,
-        CopyKind, NameMode, RefMode, SelectionRelation, SignatureState, State,
+        CopyKind, DateMode, NameMode, RefMode, SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -396,7 +396,7 @@ pub(crate) fn draw_with_worktree(
         .min(content.width as usize);
     let align_width = max_lane_width.min(align_limit);
     let align_metadata = app.align_metadata;
-    let show_committer_date = app.show_committer_date;
+    let date_mode = app.date_mode;
     let name_mode = app.name_mode;
     let copy_feedback = app.copy_feedback.take();
     let show_author_name = copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
@@ -414,7 +414,7 @@ pub(crate) fn draw_with_worktree(
                 decorations,
                 mailmap,
                 MetadataOptions {
-                    show_committer_date,
+                    date_mode,
                     show_author_name,
                     show_emails: app.show_emails,
                     show_trailers,
@@ -900,7 +900,12 @@ pub(crate) fn draw_with_worktree(
         view_prefix_spans.push(Span::raw(" · "));
         view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
         view_prefix_spans.push(Span::raw("iew ("));
-        view_prefix_spans.extend(shortcut("date", 'd', app.show_committer_date));
+        let (date_label, date_visible) = match app.date_mode {
+            DateMode::Author => ("author date", true),
+            DateMode::Committer => ("committer date", true),
+            DateMode::None => ("date", false),
+        };
+        view_prefix_spans.extend(shortcut(date_label, 'd', date_visible));
         view_prefix_spans.push(Span::raw(" · "));
         view_prefix_spans.extend(shortcut("emails", 'e', app.show_emails));
         let (name_label, names_visible) = match app.name_mode {
@@ -1671,7 +1676,7 @@ fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
 
 #[derive(Clone, Copy)]
 struct MetadataOptions {
-    show_committer_date: bool,
+    date_mode: DateMode,
     show_author_name: bool,
     show_emails: bool,
     show_trailers: bool,
@@ -1692,7 +1697,7 @@ fn metadata_line<'a>(
 ) -> Line<'a> {
     debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
-        show_committer_date,
+        date_mode,
         show_author_name,
         show_emails,
         show_trailers,
@@ -1790,9 +1795,14 @@ fn metadata_line<'a>(
     } else {
         spans.push(Span::raw(" "));
     }
-    if show_committer_date {
+    let date = match date_mode {
+        DateMode::Author => Some(row.author_time),
+        DateMode::Committer => Some(row.committer_time),
+        DateMode::None => None,
+    };
+    if let Some(date) = date {
         spans.push(Span::styled(
-            format!("{} ", row.committer_time.format_or_unix(gix::date::time::format::SHORT)),
+            format!("{} ", date.format_or_unix(gix::date::time::format::SHORT)),
             color(Color::Blue),
         ));
     }
@@ -1897,7 +1907,7 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
         &decorations,
         mailmap,
         MetadataOptions {
-            show_committer_date: app.show_committer_date,
+            date_mode: app.date_mode,
             show_author_name: app.name_mode != crate::app::NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
@@ -2103,6 +2113,7 @@ mod tests {
                 .map(|byte| Commit {
                     id: gix::ObjectId::Sha1([byte; 20]),
                     parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -2136,7 +2147,8 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
-            committer_time: gix::date::Time::default(),
+            author_time: gix::date::Time::new(0, 0),
+            committer_time: gix::date::Time::new(86_400, 0),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
@@ -2223,6 +2235,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -2352,6 +2365,7 @@ mod tests {
         let row = Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -2465,6 +2479,7 @@ mod tests {
             rows: vec![Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
                 parent_ids: Default::default(),
+                author_time: gix::date::Time::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"Codex", b"codex@openai.com"),
                 attributions: 0..8,
@@ -2594,6 +2609,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -2625,6 +2641,7 @@ mod tests {
             rows: vec![Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
                 parent_ids: Default::default(),
+                author_time: gix::date::Time::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"Author", b"1+author@users.noreply.github.com"),
                 attributions: 0..1,
@@ -2664,7 +2681,8 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
-            committer_time: gix::date::Time::default(),
+            author_time: gix::date::Time::new(0, 0),
+            committer_time: gix::date::Time::new(86_400, 0),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
             title: "subject".into(),
@@ -2696,7 +2714,7 @@ mod tests {
         assert_eq!(
             super::todo_metadata(&app, &app.rows[0], &mailmap),
             "1970-01-01 mapped author subject",
-            "todo commit metadata excludes separately represented refs"
+            "todo commit metadata uses the author date and excludes separately represented refs"
         );
 
         let footer_text = "#1 · view · edit · copy · refs · ? · quit";
@@ -2817,10 +2835,18 @@ mod tests {
         app.update(Action::ToggleMailmap);
 
         app.update(Action::ToggleDate);
+        terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
+        assert!(
+            rendered_row(&terminal).contains("1970-01-02"),
+            "the first d switches to the committer date"
+        );
+        assert!(rendered_line(&terminal, 1).contains("committer date"));
+
+        app.update(Action::ToggleDate);
         app.update(Action::ToggleName);
         terminal.draw(|frame| super::draw(frame, &mut app, &decorations, &mailmap, None, None))?;
         let row = rendered_row(&terminal);
-        assert!(!row.contains("1970-01-01"), "d hides the committer date");
+        assert!(!row.contains("1970-01-0"), "the second d hides dates");
         assert!(
             !row.contains("author"),
             "the first n hides the author when there are no attributions"
@@ -2902,6 +2928,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: selected,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3018,7 +3045,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let footer = rendered_line(&terminal, 1);
-        let view = "view (date · emails · names · mailmap · trailers · refs · show hidden)";
+        let view = "view (author date · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
             footer.starts_with(&format!("0 commits · {view} · copy · refs · ?")),
             "the active view prefix follows the history position"
@@ -3068,6 +3095,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3237,6 +3265,7 @@ mod tests {
         let commit = |id| Commit {
             id,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3310,6 +3339,7 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -3443,6 +3473,7 @@ mod tests {
         let commit = |id: gix::ObjectId, parent: Option<gix::ObjectId>| Commit {
             id,
             parent_ids: parent.into_iter().collect(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3533,6 +3564,7 @@ mod tests {
                 .map(|id| Commit {
                     id,
                     parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -3673,6 +3705,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3724,6 +3757,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3843,6 +3877,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -3924,6 +3959,7 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -4008,6 +4044,7 @@ mod tests {
                 parent_ids: [gix::ObjectId::Sha1([2; 20]), gix::ObjectId::Sha1([3; 20])]
                     .into_iter()
                     .collect(),
+                author_time: gix::date::Time::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"author", b"author@example.com"),
                 attributions: 0..0,
@@ -4020,6 +4057,7 @@ mod tests {
             Commit {
                 id: gix::ObjectId::Sha1([2; 20]),
                 parent_ids: Default::default(),
+                author_time: gix::date::Time::default(),
                 committer_time: gix::date::Time::default(),
                 author: author(b"author", b"author@example.com"),
                 attributions: 0..0,
@@ -4780,6 +4818,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -4838,6 +4877,7 @@ mod tests {
                 .map(|n| Commit {
                     id: gix::ObjectId::Sha1([n; 20]),
                     parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
                     committer_time: gix::date::Time::default(),
                     author: author(b"author", b"author@example.com"),
                     attributions: 0..0,
@@ -4902,6 +4942,7 @@ mod tests {
         let commit = |n: u8| Commit {
             id: gix::ObjectId::Sha1([n; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -5030,6 +5071,7 @@ mod tests {
         let commit = Commit {
             id,
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
@@ -5076,7 +5118,7 @@ mod tests {
             &decorations,
             &mailmap,
             MetadataOptions {
-                show_committer_date: true,
+                date_mode: DateMode::Committer,
                 show_author_name: true,
                 show_emails: false,
                 show_trailers: true,
@@ -5136,6 +5178,7 @@ mod tests {
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
             committer_time: gix::date::Time::default(),
             author: author(b"author", b"author@example.com"),
             attributions: 0..0,
