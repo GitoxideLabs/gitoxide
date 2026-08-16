@@ -1,0 +1,72 @@
+---
+source: gix-tix/src/edit/review.rs
+expression: "gix_testtools::repository::snapshot(fixture.path())?.to_string()"
+---
+HEAD detached C2
+
+[refs]
+refs/heads/main = C4
+refs/heads/review-successor = C3
+
+[commits]
+C0
+  tree T1
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  
+  base
+
+C1
+  tree T0
+  parent C0
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  
+  B
+
+C2
+  tree T3
+  parent C1
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  
+  review
+
+C3
+  tree T3
+  parent C2
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  
+  review successor
+
+C4
+  tree T2
+  parent C3
+  author reviewer <reviewer@example.com> 978307200 +0000
+  committer reviewer <reviewer@example.com> 978307200 +0000
+  tix-rebase-parent 2cb49e443aa675eab8add679938ca6cd303ae353
+  
+  A
+
+[index]
+tree = T3
+100644 B0 stage=0 "file"
+100644 B1 stage=0 "reviewed"
+
+[worktree]
+100644 file "file" = "B\n"
+100644 file "reviewed" = "new review change\n"
+
+[objects]
+C2 = 066adf4b205850540218e32e44576bcb33249572
+B0 = 223b7836fb19fdf64ba2d3cd6173c6a283141f78
+C1 = 2cb49e443aa675eab8add679938ca6cd303ae353
+T0 = 2e457f998ff6a6163f89e091bc4d6b92c8ed2a28
+C4 = 4ec5d7b25bc7415d9243067e231d934cc6952501
+T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
+T2 = 74c148aa829dcd83ad2608b6d0862ae1e6981501
+B1 = 8ab2a145f1f16e50d78eaced3311ac16027db494
+T3 = 93664bfc7cc096fcc0d1ac962596031e10f26906
+C0 = c38a9f7427b84ed8ba5e187ec385489d82d71695
+C3 = e0b1ce8b2ac673ea0cc153ca4b8958a3aa315dd0
