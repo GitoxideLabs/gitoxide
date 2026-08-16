@@ -755,7 +755,7 @@ space first; changes blocks adapt within the remaining history width.
 
 - `e` toggles the edit shortcut group. `e b` rebases an eligible hidden base and
   `e u` rebases it onto the newer hidden branch tip when available,
-  `e r` rewords, `e n` creates a rebased child, `e f` forks an independent child,
+  `e o` rewords, `e n` creates a rebased child, `e f` forks an independent child,
   `e a` amends `@`, `e h` stashes changes at `@`, `e s` spills `@`, `e p` splits staged from unstaged changes,
   and `e d d` confirms forgetting a top commit when each action is available.
 - `@` invokes time travel directly, outside the edit group. Invoking it leaves an

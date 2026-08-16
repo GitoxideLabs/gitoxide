@@ -4403,7 +4403,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Char('R') => Some(Action::Refresh),
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::Refresh),
         KeyCode::Char('r') if history_display_expanded => Some(Action::CycleRefs),
-        KeyCode::Char('r') if edit_expanded => Some(Action::Reword),
+        KeyCode::Char('o') if edit_expanded => Some(Action::Reword),
         KeyCode::Char('n') if edit_expanded => Some(Action::NewCommit),
         KeyCode::Char('m') if edit_expanded => Some(Action::NewEmptyCommit),
         KeyCode::Char('a') if edit_expanded => Some(Action::Amend),
@@ -5416,7 +5416,7 @@ mod tests {
         for (key, expected) in [
             ('b', Action::Rebase),
             ('u', Action::RebaseUpdate),
-            ('r', Action::Reword),
+            ('o', Action::Reword),
             ('n', Action::NewCommit),
             ('m', Action::NewEmptyCommit),
             ('f', Action::ForkCommit),
@@ -5466,6 +5466,11 @@ mod tests {
             Some(Action::ToggleCommit)
         );
         assert_eq!(action(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)), None);
+        assert_eq!(
+            action_with_shortcut_groups(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE), false, true),
+            Some(Action::ToggleRefs),
+            "the old edit shortcut retains its direct reference-toggle behavior"
+        );
         assert_eq!(
             action(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
             Some(Action::CycleChangesParent)
