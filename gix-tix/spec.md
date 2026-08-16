@@ -530,9 +530,10 @@ space first; changes blocks adapt within the remaining history width.
 ### Reviews
 
 - `e v` starts a review from any non-boundary commit without merge descendants.
-  It limits navigation to the selected commit's ancestry; the connected hidden
-  base remains selectable, `<enter>` confirms it, and Escape cancels before any
-  repository change.
+  If exactly one selectable strict ancestor can be the review base, review starts
+  with it immediately. Otherwise tix limits navigation to the selected commit's
+  ancestry; the connected hidden base remains selectable, `<enter>` confirms it,
+  and Escape cancels before any repository change.
 - Starting requires a completely clean index and worktree, including no untracked
   files, and non-pending reviewed-tip and base commits. Only after confirmation,
   tix creates the first unused `refs/worktree/tix/review/N` ref at the reviewed
