@@ -547,7 +547,7 @@ pub(crate) fn draw_with_worktree(
                 lane,
                 graph_offset,
                 highlight,
-                (visible_rows[index].signature, visible_rows[index].is_review),
+                visible_rows[index].signature,
                 head_state,
             );
             let aligned = Rect::new(
@@ -572,7 +572,7 @@ pub(crate) fn draw_with_worktree(
                 lane,
                 horizontal_offset,
                 highlight,
-                (visible_rows[index].signature, visible_rows[index].is_review),
+                visible_rows[index].signature,
                 head_state,
             );
         }
@@ -1697,6 +1697,9 @@ fn metadata_line<'a>(
         },
     )];
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
+    if row.is_review {
+        spans.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
+    }
     if row_decorations
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin)
@@ -1707,9 +1710,10 @@ fn metadata_line<'a>(
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Stash)
     {
-        let marker = if row_decorations
-            .iter()
-            .any(|decoration| decoration.kind == DecorationKind::Pin)
+        let marker = if row.is_review
+            || row_decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Pin)
         {
             "🎁"
         } else {
@@ -1944,10 +1948,9 @@ fn color_graph(
     graph: &str,
     offset: usize,
     highlight: Option<Color>,
-    marker: (SignatureState, bool),
+    signature: SignatureState,
     head: Option<bool>,
 ) {
-    let (signature, review) = marker;
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
             continue;
@@ -1963,9 +1966,7 @@ fn color_graph(
             style = style.add_modifier(Modifier::BOLD);
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
-        if review && symbol == '●' {
-            cell.set_symbol("◆");
-        } else if head.is_some() && symbol == '●' {
+        if head.is_some() && symbol == '●' {
             cell.set_symbol("@");
         }
         cell.set_style(style);
@@ -2888,6 +2889,17 @@ mod tests {
             hash < pin && pin < date,
             "the pin sits between the hash and metadata: {row:?}"
         );
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = true;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let row = rendered_row(&terminal);
+        let review = row.find("◆").expect("a review has its resource marker");
+        let pin = row.find("📌").expect("the row contains its pin");
+        let gift = row.find("🎁").expect("the row contains its stash marker");
+        assert!(
+            review < pin && pin < gift,
+            "review is the first resource marker: {row:?}"
+        );
+        std::sync::Arc::make_mut(&mut app.rows[0]).is_review = false;
         app.ref_mode = RefMode::None;
         terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
         let row = rendered_row(&terminal);
@@ -3299,7 +3311,7 @@ mod tests {
                         "●─",
                         0,
                         Some(signature_color(*state)),
-                        (*state, false),
+                        *state,
                         head.then_some(false),
                     );
                 }
@@ -3319,7 +3331,7 @@ mod tests {
     }
 
     #[test]
-    fn review_commit_uses_a_diamond_instead_of_the_signature_disc() -> Result<(), Box<dyn std::error::Error>> {
+    fn review_commit_at_head_uses_the_head_marker() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(TestBackend::new(2, 1))?;
         terminal.draw(|frame| {
             frame.render_widget(Paragraph::new("●─"), Rect::new(0, 0, 2, 1));
@@ -3329,11 +3341,11 @@ mod tests {
                 "●─",
                 0,
                 None,
-                (SignatureState::Unsigned, true),
+                SignatureState::Unsigned,
                 Some(true),
             );
         })?;
-        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "◆");
+        assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "@");
         assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
         Ok(())
     }

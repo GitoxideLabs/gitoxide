@@ -126,7 +126,8 @@ without trading responsiveness for metadata that is not visible.
   committer date, author and attribution information, markers, and title.
 - The commit marker is blue when unsigned, orange when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
-- The current `HEAD` commit uses `@` instead of the normal commit disc and keeps
+- The current `HEAD` commit, including a review commit, uses `@` instead of the
+  normal commit disc and keeps
   the same signature and selection coloring. It remains visible when textual
   reference labels are hidden, and textual `HEAD` is never rendered alongside it.
 - At startup, the current worktree's `@` row becomes selected as soon as it is
@@ -553,8 +554,9 @@ space first; changes blocks adapt within the remaining history width.
 - Review refs are resources, not traversal tips; pins alone retain history. They
   remain visible in every ref mode: one active ref is shown as `review`, while
   multiple refs are shown as `review:N`. Review
-  commits replace the signature disc with a filled diamond while retaining independent
-  signature state. Ordinary edits preserve the review header and otherwise keep
+  commits show a filled diamond as the first resource marker, before pin and stash
+  markers, while retaining the normal signature disc or `@` at `HEAD`. Ordinary
+  edits preserve the review header and otherwise keep
   their normal signing and lazy-rebase behavior.
 - At a checked-out review commit, amend is offered only for staged changes and
   consumes only the index tree. It leaves worktree bytes and the review header
