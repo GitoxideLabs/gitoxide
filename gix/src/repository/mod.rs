@@ -19,6 +19,8 @@ pub mod attributes;
 ///
 #[cfg(feature = "blame")]
 mod blame;
+/// Local branch operations.
+pub mod branch;
 mod cache;
 #[cfg(feature = "worktree-mutation")]
 mod checkout;
@@ -58,7 +60,7 @@ mod state;
 #[cfg(feature = "attributes")]
 mod submodule;
 mod thread_safe;
-mod worktree;
+pub(crate) mod worktree;
 
 ///
 mod new_commit {

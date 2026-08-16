@@ -418,7 +418,7 @@ gix = { path = ".", default-features = false, features = [
 ] }
 gix-hash = { version = "^0.26.0", path = "../gix-hash" }
 pretty_assertions = "1.4.0"
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
 is_ci = "1.1.1"
 anyhow = "1"
 serial_test = { version = "3.4.0", default-features = false }

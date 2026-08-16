@@ -1,10 +1,40 @@
+use std::{collections::BTreeMap, path::PathBuf};
+
 use crate::bstr::BStr;
 use crate::{Worktree, worktree};
 #[cfg(feature = "worktree-archive")]
 use gix_error::ResultExt;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CheckedOutBranchesError {
+    #[error("Failed to read or iterate worktree directories")]
+    WorktreeListing(#[from] std::io::Error),
+    #[error("Could not open a worktree repository")]
+    OpenWorktreeRepo(#[from] crate::open::Error),
+    #[error("Failed to follow a symbolic reference")]
+    FollowSymref(#[from] gix_ref::file::find::existing::Error),
+}
+
 /// Interact with individual worktrees and their information.
 impl crate::Repository {
+    /// Return all references checked out in this repository's main and linked worktrees.
+    ///
+    /// Each key maps to the worktree directories in which it is checked out. Besides branch names,
+    /// `HEAD` is recorded for every worktree with a readable head, and all symbolic references in
+    /// the chain from `HEAD` to its referent are included. Detached heads therefore contribute only
+    /// a `HEAD` entry. Bare repositories and worktrees whose head cannot be read are ignored.
+    pub(crate) fn checked_out_branches(
+        &self,
+    ) -> Result<BTreeMap<gix_ref::FullName, Vec<PathBuf>>, CheckedOutBranchesError> {
+        let mut map = BTreeMap::new();
+        insert_head(self.head().ok(), &mut map)?;
+        for proxy in self.worktrees()? {
+            let repo = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+            insert_head(repo.head().ok(), &mut map)?;
+        }
+        Ok(map)
+    }
+
     /// Return a list of all **linked** worktrees sorted by private git dir path as a lightweight proxy.
     ///
     /// This means the number is `0` even if there is the main worktree, as it is not counted as linked worktree.
@@ -161,4 +191,28 @@ impl crate::Repository {
         )?;
         Ok(())
     }
+}
+
+/// Record the worktree directory under `HEAD` and every reference in its symbolic referent chain.
+///
+/// Do nothing if `head` is absent or its repository has no worktree, and fail if a symbolic
+/// reference in the chain cannot be followed.
+fn insert_head(
+    head: Option<crate::Head<'_>>,
+    out: &mut BTreeMap<gix_ref::FullName, Vec<PathBuf>>,
+) -> Result<(), CheckedOutBranchesError> {
+    let Some((head, workdir)) = head.and_then(|head| head.repo.workdir().map(|workdir| (head, workdir))) else {
+        return Ok(());
+    };
+    out.entry("HEAD".try_into().expect("valid reference name"))
+        .or_default()
+        .push(workdir.to_owned());
+    let mut cursor = head.try_into_referent();
+    while let Some(reference) = cursor {
+        out.entry(reference.name().to_owned())
+            .or_default()
+            .push(workdir.to_owned());
+        cursor = reference.follow().transpose()?;
+    }
+    Ok(())
 }

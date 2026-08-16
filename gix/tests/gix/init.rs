@@ -16,7 +16,7 @@ mod bare {
             git_dir,
             "the repository is placed into the given directory without added sub-directories"
         );
-        assert_eq!(gix::open(repo.git_dir())?, repo);
+        assert_eq!(gix::open_opts(repo.git_dir(), crate::restricted())?, repo);
         Ok(())
     }
 
@@ -34,7 +34,7 @@ mod bare {
             tmp.path(),
             "the repository is placed into the directory itself"
         );
-        assert_eq!(gix::open(repo.git_dir())?, repo);
+        assert_eq!(gix::open_opts(repo.git_dir(), crate::restricted())?, repo);
         Ok(())
     }
 
@@ -158,8 +158,11 @@ mod non_bare {
             tmp.path().join(".git"),
             "there is a work tree by default"
         );
-        assert_eq!(gix::open(repo.git_dir())?, repo);
-        assert_eq!(gix::open(repo.workdir().as_ref().expect("non-bare repo"))?, repo);
+        assert_eq!(gix::open_opts(repo.git_dir(), crate::restricted())?, repo);
+        assert_eq!(
+            gix::open_opts(repo.workdir().as_ref().expect("non-bare repo"), crate::restricted())?,
+            repo
+        );
         Ok(())
     }
 

@@ -192,11 +192,11 @@ pub fn parse_spec(spec: impl AsRef<str>, repo: &gix::Repository) -> Result<gix::
 
 pub fn repo(name: &str) -> crate::Result<gix::Repository> {
     let base = gix_testtools::scripted_fixture_read_only(FIXTURE_NAME)?;
-    Ok(gix::open(base.join(name))?)
+    Ok(gix::open_opts(base.join(name), crate::restricted())?)
 }
 
 pub fn repo_with_correct_pattern_revision_order(name: &str) -> crate::Result<Option<gix::Repository>> {
     gix_testtools::scripted_fixture_read_only_with_git_version(FIXTURE_NAME, git_has_correct_pattern_revision_order)?
-        .map(|base| gix::open(base.join(name)).map_err(Into::into))
+        .map(|base| gix::open_opts(base.join(name), crate::restricted()).map_err(Into::into))
         .transpose()
 }
