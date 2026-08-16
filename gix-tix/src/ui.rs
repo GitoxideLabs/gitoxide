@@ -819,7 +819,7 @@ pub(crate) fn draw_with_worktree(
                 options.push(("review", 'v'));
             }
             if app.changes_focus.is_none() && app.reword_shortcut_visible() {
-                options.push(("reword", 'r'));
+                options.push(("reword", 'o'));
             }
             if app.changes_focus.is_none() && app.can_create_commit() {
                 options.push(("new", 'n'));
