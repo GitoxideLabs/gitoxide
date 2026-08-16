@@ -157,6 +157,32 @@ impl PartialOrd for GenThenTime {
 }
 
 impl HistoryGraph {
+    #[cfg(test)]
+    pub(crate) fn from_test_commits(commits: &[(ObjectId, Vec<ObjectId>)]) -> Self {
+        let mut graph = HistoryGraph::default();
+        for (id, _) in commits {
+            graph.intern(*id).expect("the test graph fits into u32");
+        }
+        for (id, parents) in commits {
+            let index = graph.index(*id).expect("the test commit was interned");
+            let start = graph.parents.len() as u32;
+            let parents: Vec<_> = parents
+                .iter()
+                .map(|parent| graph.index(*parent).expect("the test parent was interned"))
+                .collect();
+            graph.parents.extend(parents);
+            let end = graph.parents.len() as u32;
+            graph.commits[index.as_usize()] = GraphCommit {
+                id: *id,
+                parents: start..end,
+                commit_time: index.as_usize() as i64,
+                generation: index.as_usize() as u32 + 1,
+                state: NODE_LOADED,
+            };
+        }
+        graph
+    }
+
     pub(crate) fn for_commits(repo: &gix::Repository, ids: &[ObjectId]) -> Result<Self> {
         let mut graph = HistoryGraph::default();
         let shallow: HashSet<_> = repo
@@ -191,7 +217,7 @@ impl HistoryGraph {
         Ok(index)
     }
 
-    fn index(&self, id: ObjectId) -> Option<CommitIndex> {
+    pub(crate) fn index(&self, id: ObjectId) -> Option<CommitIndex> {
         self.by_id.get(&id).copied()
     }
 
@@ -199,9 +225,13 @@ impl HistoryGraph {
         self.commits[index.as_usize()].id
     }
 
-    fn parents(&self, index: CommitIndex) -> &[CommitIndex] {
+    pub(crate) fn parents(&self, index: CommitIndex) -> &[CommitIndex] {
         let range = self.commits[index.as_usize()].parents.clone();
         &self.parents[range.start as usize..range.end as usize]
+    }
+
+    pub(crate) fn commit_count(&self) -> usize {
+        self.commits.len()
     }
 
     pub(crate) fn is_ancestor(&self, ancestor: ObjectId, descendant: ObjectId) -> bool {
@@ -1166,6 +1196,40 @@ pub(crate) fn snapshot(
     include_worktrees: bool,
 ) -> Result<RefSnapshot> {
     snapshot_ignoring_pin(repo, revisions, hidden, include_worktrees, None)
+}
+
+pub(crate) fn tree_revisions(repo: &gix::Repository, include_tags: bool) -> Result<Vec<OsString>> {
+    let mut out = Vec::new();
+    for reference in repo
+        .references()
+        .context("could not open references")?
+        .all()
+        .context("could not iterate references")?
+    {
+        let mut reference = match reference {
+            Ok(reference) => reference,
+            Err(err) if is_missing_ref(&*err) => continue,
+            Err(err) => return Err(anyhow::anyhow!("could not read reference: {err}")),
+        };
+        let name = reference.name().as_bstr().to_owned();
+        let kind = decoration_kind(&name);
+        if kind == DecorationKind::Special
+            || matches!(kind, DecorationKind::Tag) && !include_tags
+            || name.starts_with(STASH_PREFIX)
+            || name.starts_with(REVIEW_STASH_PREFIX)
+        {
+            continue;
+        }
+        let Ok(id) = reference.peel_to_id() else { continue };
+        if repo.find_header(id)?.kind() != gix::object::Kind::Commit {
+            continue;
+        }
+        out.push(gix::path::from_bstr(&name).into_owned().into_os_string());
+    }
+    if repo.head().is_ok_and(|head| head.referent_name().is_none()) {
+        out.push("HEAD".into());
+    }
+    Ok(out)
 }
 
 pub(crate) fn snapshot_ignoring_pin(
@@ -2463,6 +2527,36 @@ mod tests {
         assert_eq!(decoration_kind(b"refs/remotes/origin/main"), DecorationKind::Remote);
         assert_eq!(decoration_kind(b"refs/patches/main/patch"), DecorationKind::Special);
         assert_eq!(decoration_kind(b"refs/stash"), DecorationKind::Special);
+    }
+
+    #[test]
+    fn tree_revisions_cover_normal_refs_and_optionally_tags() -> gix_testtools::Result {
+        let fixture = fixture()?;
+        let repo = crate::test_repository::open(&fixture)?;
+        let names = |include_tags| {
+            tree_revisions(&repo, include_tags).map(|revisions| {
+                revisions
+                    .into_iter()
+                    .map(|revision| revision.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+            })
+        };
+
+        let with_tags = names(true)?;
+        let without_tags = names(false)?;
+        assert!(
+            with_tags.iter().any(|name| name.starts_with("refs/heads/")),
+            "branches are default traversal tips"
+        );
+        assert!(
+            with_tags.iter().any(|name| name.starts_with("refs/tags/")),
+            "tags are included by default"
+        );
+        assert!(
+            without_tags.iter().all(|name| !name.starts_with("refs/tags/")),
+            "tagless rendering does not traverse tag-only history"
+        );
+        Ok(())
     }
 
     #[test]

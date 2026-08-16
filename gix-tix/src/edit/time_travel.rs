@@ -231,7 +231,7 @@ where
         .transpose()?;
     drop(repository);
     let checkout = match (reference, &destination_pin) {
-        (Some(reference), _) => checkout_branch(&workdir, reference.as_ref()),
+        (Some(reference), _) => checkout_reference(repository_path, bare, &workdir, selected, reference),
         (None, Some(pin)) => checkout_pin(&workdir, pin),
         (None, None) => checkout_detached(&workdir, selected),
     };
@@ -718,6 +718,33 @@ fn checkout_branch(workdir: &Path, name: &gix::refs::FullNameRef) -> Result<()> 
             gix::path::from_bstr(branch.as_bstr()).into_owned().into_os_string(),
         ],
     )
+}
+
+fn checkout_reference(
+    repository_path: &Path,
+    bare: bool,
+    workdir: &Path,
+    selected: ObjectId,
+    name: &gix::refs::FullName,
+) -> Result<()> {
+    checkout_detached(workdir, selected)?;
+    open_repository(repository_path, bare, false)
+        .context("could not reopen repository to attach HEAD")?
+        .edit_reference(RefEdit {
+            name: "HEAD".try_into().expect("valid reference name"),
+            deref: false,
+            change: Change::Update {
+                log: LogChange {
+                    mode: RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: "tix attach HEAD".into(),
+                },
+                expected: PreviousValue::MustExistAndMatch(Target::Object(selected)),
+                new: Target::Symbolic(name.clone()),
+            },
+        })
+        .context("could not attach HEAD to the selected reference")?;
+    Ok(())
 }
 
 fn checkout_pin(workdir: &Path, pin: &history::Pin) -> Result<()> {

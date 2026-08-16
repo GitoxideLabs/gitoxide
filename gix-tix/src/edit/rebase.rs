@@ -1677,13 +1677,23 @@ fn marked_parent(commit: &gix::objs::Commit) -> Result<Option<ObjectId>> {
         .extra_headers
         .iter()
         .find(|(name, _)| name.as_slice() == ORIGINAL_PARENT)
-        .map(|(_, value)| {
-            ObjectId::from_hex(value)
-                .context("pending rebase has an invalid original parent")
-                .map(|id| (!id.is_null()).then_some(id))
-        })
+        .map(|(_, value)| parse_marked_parent(value.as_bstr()))
         .transpose()
         .map(Option::flatten)
+}
+
+pub(crate) fn marked_parent_ref(commit: &gix::objs::CommitRef<'_>) -> Result<Option<Option<ObjectId>>> {
+    commit
+        .extra_headers()
+        .find("tix-rebase-parent")
+        .map(parse_marked_parent)
+        .transpose()
+}
+
+fn parse_marked_parent(value: &BStr) -> Result<Option<ObjectId>> {
+    ObjectId::from_hex(value)
+        .context("pending rebase has an invalid original parent")
+        .map(|id| (!id.is_null()).then_some(id))
 }
 
 pub(super) fn has_marker(commit: &gix::objs::Commit) -> bool {

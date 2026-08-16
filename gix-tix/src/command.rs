@@ -32,6 +32,8 @@ pub struct Platform {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
+    /// Print the complete reference tree without opening the terminal UI.
+    Tree(Tree),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend,
     /// Move the changes introduced by HEAD into the worktree.
@@ -47,6 +49,28 @@ enum Command {
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
+}
+
+#[derive(Debug, clap::Args)]
+struct Tree {
+    /// Print help.
+    #[arg(long, action = clap::ArgAction::HelpLong)]
+    help: Option<bool>,
+    /// Omit tags as labels, traversal tips, and topology anchors.
+    #[arg(long)]
+    no_tags: bool,
+    /// Include detached and linked-worktree HEADs as traversal tips.
+    #[arg(short = 'w', long)]
+    worktrees: bool,
+    /// Hide this revision and every commit reachable from it.
+    #[arg(long, value_name = "REVSPEC")]
+    hide: Vec<OsString>,
+    /// Use the tree view's Unicode line and node glyphs instead of ASCII.
+    #[arg(long)]
+    unicode: bool,
+    /// Revisions to traverse instead of all normal references.
+    #[arg(value_name = "REVSPEC")]
+    revisions: Vec<OsString>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -96,9 +120,14 @@ impl Platform {
             );
         };
 
-        let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         let repository = repository.to_thread_local();
+        let command = match command {
+            Command::Tree(args) => return print_tree(&repository, args),
+            command => command,
+        };
+        let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
         match command {
+            Command::Tree(_) => unreachable!("tree commands return before logging"),
             Command::Amend => {
                 let graph = crate::edit::loaded_view_graph(&repository)?;
                 edit_head(repository, &graph, crate::edit::head::Kind::Amend, "amend")?;
@@ -118,6 +147,24 @@ impl Platform {
         }
         Ok(())
     }
+}
+
+fn print_tree(repository: &gix::Repository, args: Tree) -> Result<()> {
+    let revisions = if args.revisions.is_empty() {
+        crate::history::tree_revisions(repository, !args.no_tags)?
+    } else {
+        args.revisions
+    };
+    let rendered = crate::tree::render_full(
+        repository,
+        &revisions,
+        &args.hide,
+        args.worktrees,
+        !args.no_tags,
+        args.unicode,
+    )?;
+    std::io::Write::write_all(&mut std::io::stdout().lock(), rendered.as_bytes()).context("could not write tree")?;
+    Ok(())
 }
 
 fn pin(repository: &gix::Repository, args: Pin) -> Result<()> {
@@ -235,6 +282,35 @@ mod tests {
             "positional revisions remain visible tips"
         );
         assert!(cli.platform.command.is_none(), "omitting a command launches the TUI");
+
+        let tree = Cli::try_parse_from([
+            "tix",
+            "tree",
+            "--no-tags",
+            "--worktrees",
+            "--hide",
+            "private",
+            "--unicode",
+            "main",
+            "topic",
+        ])
+        .expect("tree options parse")
+        .platform
+        .command;
+        let Some(Command::Tree(tree)) = tree else {
+            panic!("tree was expected")
+        };
+        assert!(tree.help.is_none());
+        assert!(tree.no_tags);
+        assert!(tree.worktrees);
+        assert_eq!(tree.hide, ["private"]);
+        assert!(tree.unicode);
+        assert_eq!(tree.revisions, ["main", "topic"]);
+
+        assert!(
+            Cli::try_parse_from(["tix", "tree", "--layout", "rail"]).is_err(),
+            "the removed layout selector is rejected"
+        );
 
         assert!(matches!(
             Cli::try_parse_from(["tix", "amend"])

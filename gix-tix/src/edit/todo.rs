@@ -20,9 +20,9 @@ const HELP: &str = r#"
 - `## fork <id>` starts a stack at an existing commit or an earlier picked commit. The selected hidden boundary is labelled `(base)` with its title; a newer hidden tip used by rebase-update is `(updated-base)`, and an explicit command-line target is `(onto)`. Other fork headings stay terse. Delete a fork heading to continue its commits on the preceding stack; add one to create a fork. A listed commit must be picked before it can be a fork target.
 - `empty <title>` creates an empty commit with the text after the command as its title.
 - Commands may be plain text or enclosed in backticks. Text after a backticked command and text after a fork ID is display-only context.
-- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs. The current attached branch stays attached while it remains at the `@` command. Prefix one local branch with `@` to attach HEAD to it explicitly; it must point to the `@` command.
+- Prefix `pick`, `squash`, or `empty` with `@` to choose the post-rebase checkout. Reference lines like `(main, topic)` point refs at the preceding fork or command; moving, adding, or removing names moves, creates, or deletes refs, including existing editable refs outside the generated todo. The current attached ref stays attached while it remains at the `@` command. Prefix one editable ref with `@` to attach HEAD to it explicitly; it must point to the `@` command.
 - Saving an unchanged document in the history-view editor is a no-op unless the ancestry ending at `@` has a pending rebase. Explicit `tix rebase apply` and `--edit-and-apply` apply valid unchanged plans. Unchanged picks whose parent stays unchanged retain their IDs; replay starts at the first pending or structurally changed commit. Changed commits through `@` are cherry-picked and re-signed, while descendants and other stacks remain lazily rebased with invalidated signatures until time travel reaches them.
-- Tix pins and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A branch checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
+- Tix pins, stashes, and review refs, tags, remote-tracking refs, and symbolic refs stay unchanged and hidden. A ref checked out by another worktree may be moved but not deleted. New unreferenced leaves are pinned.
 - A todo conflict changes nothing unless explicitly accepted. The TUI offers `<enter>` to materialize it; command-line apply requires `--materialize-conflicts [CONTINUE]` and writes a continuation todo. Resolve the ordinary unmerged index, then apply that todo. Concurrent ref changes still abort the update.
 - Commit states are display-only and editing them has no effect: `↻` means a lazy rebase is pending, `◌` an empty signature awaits signing, `◐` a signature is present but unverified, `○` means unsigned, and `🎁` means worktree state is stashed for that commit. Stashes follow rewritten commits automatically; dropping a stashed commit or combining multiple stashes into one result is rejected.
 -->
@@ -716,13 +716,12 @@ fn validate_state(repo: &gix::Repository, state: &State) -> Result<()> {
         }
     }
     if let Some(name) = &state.head_ref
-        && (name.category() != Some(gix::refs::Category::LocalBranch)
-            || !state
-                .expected_refs
-                .iter()
-                .any(|reference| reference.editable && reference.name == *name))
+        && !state
+            .expected_refs
+            .iter()
+            .any(|reference| reference.editable && reference.name == *name)
     {
-        anyhow::bail!("the recorded HEAD ref is not an editable local branch");
+        anyhow::bail!("the recorded HEAD ref is not editable");
     }
     for tip in &state.tips {
         repo.find_commit(*tip).context("could not find a recorded rebase tip")?;
@@ -816,9 +815,6 @@ pub(crate) fn parse(repo: &gix::Repository, edited: &[u8]) -> Result<Option<Pars
                 if marked {
                     if !state.checkout_allowed || repo.workdir().is_none() {
                         anyhow::bail!("the rebase todo cannot select a checkout without a worktree");
-                    }
-                    if name.category() != Some(gix::refs::Category::LocalBranch) {
-                        anyhow::bail!("only a local branch may carry the @ marker");
                     }
                     if explicit_checkout_reference.replace((name, target)).is_some() {
                         anyhow::bail!("the rebase todo contains more than one @ reference");
@@ -1063,6 +1059,7 @@ fn resolve_ref_name(
     };
     let name = gix::refs::FullName::try_from(full).context("the todo contains an invalid reference name")?;
     if name.as_bstr().starts_with(crate::history::PIN_PREFIX)
+        || name.as_bstr().starts_with(crate::history::STASH_PREFIX)
         || name.as_bstr().starts_with(crate::history::REVIEW_PREFIX)
         || matches!(
             name.category(),
@@ -1074,14 +1071,20 @@ fn resolve_ref_name(
     if refs.iter().any(|reference| reference.name == name) {
         anyhow::bail!("the todo cannot edit a hidden reference");
     }
-    if repo.try_find_reference(name.as_ref())?.is_some() {
-        anyhow::bail!("an existing reference outside the editable history cannot be moved");
-    }
+    let old = repo
+        .try_find_reference(name.as_ref())?
+        .map(|reference| {
+            reference
+                .try_id()
+                .map(gix::Id::detach)
+                .context("an existing symbolic reference outside the editable history cannot be moved")
+        })
+        .transpose()?;
     refs.push(rebase::ExpectedRef {
         name: name.clone(),
-        old: None,
-        target: repo.head_id()?.detach(),
-        new: None,
+        old,
+        target: old.unwrap_or(repo.head_id()?.detach()),
+        new: old,
         follows_tip: false,
         editable: true,
         placement: None,
@@ -1698,6 +1701,62 @@ mod tests {
             std::fs::read_to_string(fixture.path().join("tip"))?,
             "tip\n",
             "the detached checkout keeps the selected tree"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reference_lines_import_out_of_scope_refs_and_may_attach_head() -> gix_testtools::Result {
+        let (fixture, repo) = repo()?;
+        let (base, middle, tip, commits) = commits(&repo)?;
+        for name in ["refs/heads/outside", "refs/patches/attach"] {
+            repo.reference(
+                name,
+                base,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "create out-of-scope todo ref",
+            )?;
+        }
+        let prepared = prepare_test(&repo, base, base, &commits, Some(tip))?;
+        let edited = with_state(
+            &prepared,
+            &format!(
+                "## fork {}\npick {}\n(outside)\n@pick {}\n(@refs/patches/attach)\n",
+                base.to_hex_with_len(7),
+                middle.to_hex_with_len(7),
+                tip.to_hex_with_len(7),
+            ),
+        );
+        let plan = parse_plan(&repo, &edited)?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let outcome = rebase::perform_plan(&repo, &graph, plan)?.complete()?;
+        let selected = outcome.selected.context("the todo retains its checkout")?;
+        super::super::time_travel::checkout_plan(repo.git_dir(), false, &outcome, &[], false)?;
+
+        assert_eq!(
+            repo.find_reference("refs/heads/outside")?.id().detach(),
+            outcome.map(middle).context("the middle commit is retained")?,
+            "an unmarked out-of-scope ref moves like a generated ref"
+        );
+        assert_eq!(
+            repo.find_reference("refs/patches/attach")?.id().detach(),
+            selected,
+            "the marked out-of-scope ref moves to the selected result"
+        );
+        assert_eq!(
+            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(b"refs/patches/attach".as_bstr()),
+            "HEAD attaches to an editable ref outside refs/heads"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.path().join("tip"))?,
+            "tip\n",
+            "the selected worktree tree remains checked out"
+        );
+        assert_eq!(
+            gix_testtools::repository::snapshot(fixture.path())?.index_tree,
+            Some(repo.find_commit(selected)?.tree_id()?.detach()),
+            "the index matches the attached commit"
         );
         Ok(())
     }
