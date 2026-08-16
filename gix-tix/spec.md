@@ -540,7 +540,10 @@ space first; changes blocks adapt within the remaining history width.
   tip and an unsigned ordinary `review` commit at the base with
   `tix-rebase: onto refs/worktree/tix/review/N`. HEAD is detached at that commit,
   its base tree fills the index, and the reviewed tip tree remains in the worktree
-  as unstaged changes. If attached HEAD pointed directly to the reviewed tip when
+  as unstaged changes. Leaving a different HEAD preserves that departure with a
+  normal worktree-local tix pin, symbolic for an attached branch and direct for a
+  detached checkout, so descendants above the reviewed commit remain visible.
+  If attached HEAD pointed directly to the reviewed tip when
   starting, the review ref symbolically targets that ref instead. Finishing then
   reattaches HEAD after confirming the ref moved to the finished review commit;
   otherwise the review ref remains a direct anchor and HEAD stays detached.
