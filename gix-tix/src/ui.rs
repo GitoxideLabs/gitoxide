@@ -969,6 +969,8 @@ pub(crate) fn draw_with_worktree(
         }
         ordered.push(toggle("[ align", app.align_metadata));
         ordered.push(Span::raw(" · "));
+        ordered.extend(shortcut("tree", 't', false));
+        ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("message", 'm', app.show_commit));
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("changes", 'c', app.changes_mode.is_some()));
@@ -1942,7 +1944,7 @@ fn author_label(
     }
 }
 
-fn decoration_style(kind: DecorationKind) -> Style {
+pub(crate) fn decoration_style(kind: DecorationKind) -> Style {
     match kind {
         DecorationKind::Head => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         DecorationKind::Pin => Style::default().fg(Color::Blue),
@@ -3040,14 +3042,14 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         assert!(
             footer.starts_with(
-                    "0 commits · view · edit · copy · refs · ? ([ align · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                    "0 commits · view · edit · copy · refs · ? ([ align · tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
         );
         assert_reversed_group(
             &terminal,
             1,
-            "? ([ align · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
+            "? ([ align · tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
         );
         Ok(())
     }
@@ -4121,7 +4123,7 @@ mod tests {
         })?;
         assert!(
             rendered_line(&footer_terminal, 15).contains(
-                "? ([ align · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                "? ([ align · tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
             ),
             "the expanded information prefix contains every following action except quit"
         );
