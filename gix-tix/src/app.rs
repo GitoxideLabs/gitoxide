@@ -1079,6 +1079,18 @@ impl App {
                 self.review_tip = Some(tip);
                 self.reachability_anchor = Some(tip);
                 self.compute_reachable_rows();
+                let mut bases = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, row)| {
+                        row.id != tip && self.is_row_reachable(*index) && self.reachable_row_selectable(*index)
+                    })
+                    .map(|(_, row)| row.id);
+                if let Some(base) = bases.next().filter(|_| bases.next().is_none()) {
+                    self.clear_review_selection();
+                    return vec![Effect::StartReview { tip, base }];
+                }
                 self.leave_message("review base · j/k select ancestor · <enter> start · Esc cancel");
             }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
@@ -2926,6 +2938,24 @@ mod tests {
             app.is_row_reachable(unrelated),
             "confirming restores ordinary navigation"
         );
+    }
+
+    #[test]
+    fn review_starts_immediately_with_only_one_possible_base() {
+        let mut app = App::new(10);
+        app.extend_commits(vec![row_with_parents(2, &[1]), row(1)]);
+        complete(&mut app);
+        app.selected = Some(0);
+
+        assert_eq!(
+            app.update(Action::Review),
+            vec![Effect::StartReview {
+                tip: id(2),
+                base: id(1),
+            }],
+            "the sole strict ancestor needs no separate selection step"
+        );
+        assert!(!app.review_selection_active());
     }
 
     #[test]
