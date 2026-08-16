@@ -225,7 +225,7 @@ without trading responsiveness for metadata that is not visible.
   component. Shift-modified directions pan the tree viewport; mouse and the existing
   Ctrl/Page keys scroll without moving the tree cursor.
 - `e` opens node-level reference editing. `d` deletes every eligible local branch
-  immediately. `Shift-D` is offered only when selected remote-tracking references
+  immediately. `e r` is offered only when selected remote-tracking references
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
   remote reference, grouped into one Git push per remote. Pushes continue after
   individual failures and run with the terminal suspended for output and authentication.
