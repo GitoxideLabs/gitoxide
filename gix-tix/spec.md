@@ -561,7 +561,8 @@ space first; changes blocks adapt within the remaining history width.
 - At a checked-out review commit, amend is offered only for staged changes and
   consumes only the index tree. It leaves worktree bytes and the review header
   intact, removes signatures, and marks only affected descendants for lazy replay.
-- `e v` finishes a checked-out review only when status is completely clean. The
+- `e v` finishes a selected review when status is completely clean and the current
+  worktree HEAD is the review commit or one of its successors. The
   review commit is inserted after its reviewed tip with its exact tree, review
   header removed, updated committer, and configured signature. Review-side
   descendants retain exact trees and are signed without pending markers. With one

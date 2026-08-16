@@ -212,8 +212,9 @@ pub(crate) fn finish(repo: gix::Repository, graph: &history::HistoryGraph, revie
         .workdir()
         .context("finishing review requires a worktree")?
         .to_owned();
-    if repo.head_id()?.detach() != review {
-        anyhow::bail!("the review commit must be checked out before it can be finished");
+    let head = repo.head_id()?.detach();
+    if !graph.is_ancestor(review, head) {
+        anyhow::bail!("HEAD must be the review commit or one of its successors before it can be finished");
     }
     ensure_clean(&workdir)?;
     let commit = repo.find_commit(review)?.decode()?.into_owned()?;
@@ -628,6 +629,7 @@ mod tests {
                 &review_successor.to_string(),
             ],
         )?;
+        run(fixture.path(), &["checkout", "--detach", &review_successor.to_string()])?;
 
         let repo = open()?;
         let graph = super::super::loaded_graph(&repo)?;
