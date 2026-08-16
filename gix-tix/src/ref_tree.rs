@@ -1306,11 +1306,10 @@ pub(crate) fn render_full(
     repository: &gix::Repository,
     revisions: &[OsString],
     hidden: &[OsString],
-    worktrees: bool,
     show_tags: bool,
     unicode: bool,
 ) -> anyhow::Result<String> {
-    let refs = crate::history::snapshot(repository, revisions, hidden, worktrees)?;
+    let refs = crate::history::snapshot(repository, revisions, hidden, true)?;
     let authors = gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(
         crate::history::Authors::default(),
     ));
@@ -1320,7 +1319,7 @@ pub(crate) fn render_full(
         repository,
         revisions,
         hidden,
-        worktrees,
+        true,
         &authors,
         &AtomicBool::new(false),
         |event| {
