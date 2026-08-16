@@ -2235,9 +2235,24 @@ fn event_loop(
                             edit::review::finish(repo, graph, id)
                         });
                     match result {
-                        Ok(new_id) => {
-                            app.leave_message(format!("finished review as {}", new_id.to_hex_with_len(7)));
-                            app.select_commit_after_refresh(new_id);
+                        Ok(finished) => {
+                            let checkout = edit::time_travel::checkout_plan(
+                                &repository_path,
+                                repository_is_bare,
+                                &finished.outcome,
+                                &revisions,
+                                worktrees,
+                            );
+                            match checkout {
+                                Ok(_) => app.leave_message(format!(
+                                    "finished review as {}",
+                                    finished.commit.to_hex_with_len(7)
+                                )),
+                                Err(err) => {
+                                    app.leave_message(format!("review applied, return checkout failed: {err:#}"))
+                                }
+                            }
+                            app.select_commit_after_refresh(finished.outcome.selected.unwrap_or(finished.commit));
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
