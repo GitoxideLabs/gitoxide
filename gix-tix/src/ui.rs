@@ -878,6 +878,7 @@ pub(crate) fn draw_with_worktree(
                 }
             }
             edit_prefix_spans.push(Span::raw(")"));
+            emphasize_prefix(&mut edit_prefix_spans[1..]);
         } else if !app.history_display_expanded {
             edit_prefix_spans.push(Span::raw(" · "));
             edit_prefix_spans.push(Span::styled("e", Style::default().add_modifier(Modifier::UNDERLINED)));
@@ -929,6 +930,7 @@ pub(crate) fn draw_with_worktree(
             ));
         }
         view_prefix_spans.push(Span::raw(")"));
+        emphasize_prefix(&mut view_prefix_spans[1..]);
     } else {
         view_prefix_spans.push(Span::raw(" · "));
         view_prefix_spans.push(Span::styled("v", Style::default().add_modifier(Modifier::UNDERLINED)));
@@ -946,6 +948,7 @@ pub(crate) fn draw_with_worktree(
     ordered.push(Span::raw(" · "));
     ordered.extend(shortcut("refs", 'r', app.ref_mode != RefMode::None));
     ordered.push(Span::raw(" · "));
+    let information_prefix_start = app.information_expanded.then_some(ordered.len());
     ordered.push(Span::styled("?", Style::default().add_modifier(Modifier::UNDERLINED)));
     if app.information_expanded {
         ordered.push(Span::raw(" ("));
@@ -981,6 +984,7 @@ pub(crate) fn draw_with_worktree(
             footer_spans.push(Span::raw(" · <enter> diff"));
         }
         footer_spans.push(Span::raw(")"));
+        emphasize_prefix(&mut footer_spans[information_prefix_start.expect("the prefix is expanded")..]);
     }
     if app.changes_focus.is_none() {
         footer_spans.push(Span::raw(" · "));
@@ -1621,6 +1625,12 @@ fn shortcut(label: &'static str, key: char, enabled: bool) -> Vec<Span<'static>>
         Span::styled(&label[key_start..key_end], style.add_modifier(Modifier::UNDERLINED)),
         Span::styled(&label[key_end..], style),
     ]
+}
+
+fn emphasize_prefix(spans: &mut [Span<'_>]) {
+    for span in spans {
+        span.style = span.style.add_modifier(Modifier::REVERSED);
+    }
 }
 
 fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
@@ -2924,6 +2934,7 @@ mod tests {
                 .contains(Modifier::UNDERLINED),
             "the prefix key is underlined in its verb"
         );
+        assert_reversed_group(&terminal, 1, view);
 
         app.history_display_expanded = false;
         app.edit_expanded = true;
@@ -2932,6 +2943,7 @@ mod tests {
             rendered_line(&terminal, 1).starts_with("0 commits · view · edit (no actions) · copy · refs · ?"),
             "the edit prefix follows the view prefix even when no action is available"
         );
+        assert_reversed_group(&terminal, 1, "edit (no actions)");
 
         app.edit_expanded = false;
         app.information_expanded = true;
@@ -2942,6 +2954,11 @@ mod tests {
                     "0 commits · view · edit · copy · refs · ? ([ align · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
+        );
+        assert_reversed_group(
+            &terminal,
+            1,
+            "? ([ align · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
         );
         Ok(())
     }
@@ -5106,6 +5123,24 @@ mod tests {
             out.push_str(terminal.backend().buffer()[(x, y)].symbol());
             out
         })
+    }
+
+    fn assert_reversed_group(terminal: &Terminal<TestBackend>, y: u16, group: &str) {
+        let line = rendered_line(terminal, y);
+        let start = line[..line.find(group).expect("the active prefix group is visible")]
+            .chars()
+            .count() as u16;
+        let end = start + group.chars().count() as u16;
+        let buffer = terminal.backend().buffer();
+        assert!(
+            (start..end).all(|x| buffer[(x, y)].modifier.contains(Modifier::REVERSED)),
+            "every cell in {group:?} is reversed"
+        );
+        assert!(
+            !buffer[(start - 1, y)].modifier.contains(Modifier::REVERSED)
+                && !buffer[(end, y)].modifier.contains(Modifier::REVERSED),
+            "the active treatment is bounded to {group:?}"
+        );
     }
 
     fn footer_is_dim(terminal: &Terminal<TestBackend>, label: &str) -> bool {
