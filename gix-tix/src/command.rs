@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn pin_follows_direct_references_and_keeps_derived_revisions_fixed() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let revisions = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
         let main = repository.rev_parse_single("main")?.detach();
 
@@ -470,13 +470,8 @@ mod tests {
         }
 
         let fixture = gix_testtools::scripted_fixture_writable("split_commit.sh")?;
-        let repository = gix::open_opts(
-            fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=sed -i.bak -e 's/^what$/split/'".to_owned(),
-                "commit.gpgSign=false".to_owned(),
-            ]),
-        )?;
+        let repository =
+            crate::test_repository::open_with(fixture.path(), ["core.editor=sed -i.bak -e 's/^what$/split/'"])?;
         let graph = crate::edit::loaded_view_graph(&repository)?;
         split(repository, &graph)?;
 

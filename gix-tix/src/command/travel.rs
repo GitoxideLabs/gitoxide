@@ -98,11 +98,11 @@ mod tests {
     #[test]
     fn attached_past_travel_saves_and_returns_to_the_branch() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repository = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         run(repository, args("HEAD~1"))?;
 
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(repository.head_id()?.detach(), middle);
         assert!(repository.head()?.is_detached());
         let pins = crate::history::all_pins(&repository)?;
@@ -114,7 +114,7 @@ mod tests {
         );
 
         run(repository, args("main"))?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head()?.referent_name().map(|name| name.as_bstr().to_owned()),
             Some(b"refs/heads/main".as_bstr().to_owned()),
@@ -122,7 +122,7 @@ mod tests {
         );
         assert!(crate::history::all_pins(&repository)?.is_empty());
         run(repository, args("HEAD"))?;
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert!(
             !repository.head()?.is_detached(),
             "travelling to the current attached HEAD is a no-op"
@@ -139,16 +139,16 @@ mod tests {
         git(path, &["checkout", "-q", "side"])?;
         git(path, &["commit", "-q", "--allow-empty", "-m", "side"])?;
         git(path, &["checkout", "-q", "--detach", "main~1"])?;
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         run(repository, args("main"))?;
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         assert!(repository.head()?.is_detached());
         assert!(crate::history::all_pins(&repository)?.is_empty());
 
         let before_rejected = repository.head_id()?.detach();
         let err = run(repository, args("HEAD~1")).expect_err("past travel from detached HEAD needs a pin");
         assert!(format!("{err:#}").contains("must be pinned"));
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         assert_eq!(
             repository.head_id()?.detach(),
             before_rejected,
@@ -156,7 +156,7 @@ mod tests {
         );
         let err = run(repository, args("side")).expect_err("sideways travel from detached HEAD needs a pin");
         assert!(format!("{err:#}").contains("must be pinned"));
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         let tip = repository.head_id()?.detach();
         repository.reference(
             "refs/worktree/tix/pins/keep",
@@ -176,7 +176,7 @@ mod tests {
             path,
             &["config", "gitoxide.commit.committerDate", "2001-01-01T00:00:00 +0000"],
         )?;
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         let middle = repository.rev_parse_single("HEAD~1")?.detach();
         std::fs::write(path.join("after"), "after\n")?;
         git(path, &["add", "after"])?;
@@ -194,9 +194,9 @@ mod tests {
         let tip = repository.find_reference("refs/heads/main")?.id().detach();
         drop(repository);
 
-        run(crate::open_test_repository(path)?, args(&root.to_string()))?;
+        run(crate::test_repository::open(path)?, args(&root.to_string()))?;
         let before = gix_testtools::repository::snapshot(path)?;
-        let err = run(crate::open_test_repository(path)?, args(&tip.to_string()))
+        let err = run(crate::test_repository::open(path)?, args(&tip.to_string()))
             .expect_err("a conflict needs explicit materialization");
         assert!(format!("{err:#}").contains("--materialize-conflicts"));
         assert_eq!(
@@ -206,7 +206,7 @@ mod tests {
         );
 
         let err = run(
-            crate::open_test_repository(path)?,
+            crate::test_repository::open(path)?,
             Args {
                 materialize_conflicts: true,
                 revision: tip.to_string().into(),
@@ -215,7 +215,7 @@ mod tests {
         .expect_err("a materialized conflict remains an incomplete command");
         assert!(format!("{err:#}").contains("ready to resolve conflicts"));
         assert!(
-            crate::open_test_repository(path)?
+            crate::test_repository::open(path)?
                 .index_or_empty()?
                 .entries()
                 .iter()

@@ -1104,14 +1104,9 @@ mod tests {
 
     fn repo() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=:".to_owned(),
-                "core.abbrev=7".to_owned(),
-                "user.name=todo author".to_owned(),
-                "user.email=todo@example.com".to_owned(),
-            ]),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
         )?;
         Ok((fixture, repo))
     }

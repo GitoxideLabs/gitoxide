@@ -158,7 +158,7 @@ mod tests {
     fn edit_graph_ignores_refs_that_do_not_point_to_commits() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("create_commit.sh")?;
         git(fixture.path(), &["update-ref", "refs/cache/tree", "HEAD^{tree}"])?;
-        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let graph = loaded_graph(&repo)?;
         assert!(graph.parents_of(head).is_some(), "HEAD remains part of the edit graph");
@@ -184,7 +184,7 @@ mod tests {
         git(path, &["update-ref", "refs/heads/unrelated", merge])?;
         git(path, &["checkout", "--detach", head])?;
 
-        let repo = gix::open_opts(path, gix::open::Options::isolated())?;
+        let repo = crate::test_repository::open(path)?;
         let graph = loaded_view_graph(&repo)?;
         let pinned = gix::ObjectId::from_hex(pinned.as_bytes())?;
         let merge = gix::ObjectId::from_hex(merge.as_bytes())?;
