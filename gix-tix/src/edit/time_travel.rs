@@ -103,6 +103,45 @@ pub(crate) fn checkout_without_replay(
     move_head(repository_path, bare, selected, revisions, include_worktrees)
 }
 
+pub(crate) fn checkout_review_return(
+    repository_path: &Path,
+    bare: bool,
+    name: &gix::refs::FullName,
+    revisions: &[OsString],
+    include_worktrees: bool,
+) -> Result<(ObjectId, Option<String>)> {
+    let repository = open_repository(repository_path, bare, false).context("could not open review return checkout")?;
+    let workdir = repository
+        .workdir()
+        .context("review cancellation requires a worktree")?
+        .to_owned();
+    let mut target = repository
+        .find_reference(name.as_ref())
+        .context("the review return reference is missing")?;
+    let selected = target
+        .peel_to_id()
+        .context("the review return reference does not resolve")?
+        .detach();
+    let reference = if name.as_bstr().starts_with(history::PIN_PREFIX) {
+        target.target().try_name().map(ToOwned::to_owned)
+    } else {
+        Some(name.clone())
+    };
+    drop(repository);
+    checkout(&workdir, [OsString::from("--force"), OsString::from("HEAD")])
+        .context("could not discard the cancelled review checkout")?;
+    let notice = move_head_to(
+        repository_path,
+        bare,
+        selected,
+        reference.as_ref(),
+        revisions,
+        include_worktrees,
+        |_| None,
+    )?;
+    Ok((selected, notice))
+}
+
 pub(crate) fn checkout_plan(
     repository_path: &Path,
     bare: bool,

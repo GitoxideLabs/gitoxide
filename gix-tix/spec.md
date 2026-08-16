@@ -564,10 +564,12 @@ space first; changes blocks adapt within the remaining history width.
   after it; with multiple leaves they branch directly after the finished review.
   The review ref is deleted in the same atomic ref/worktree transaction.
 - Forget is unavailable for a review commit with descendants. Forgetting a review
-  leaf, finishing a review, or dropping a review commit through a rebase todo also
-  deletes its review ref and optional saved-worktree ref atomically; reordering or
-  rewriting it preserves the header and resources. Review stash refs are internal:
-  they are neither traversal tips nor decorations.
+  leaf cancels the review: tracked review changes are discarded, its recorded
+  return checkout is restored, and the departure pin is consumed. Finishing a
+  review or dropping one through a rebase todo also deletes its review ref and
+  optional saved-worktree ref atomically; reordering or rewriting it preserves the
+  headers and resources. Review stash refs are internal: they are neither traversal
+  tips nor decorations.
 
 ### Forget commits
 

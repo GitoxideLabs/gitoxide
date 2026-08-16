@@ -48,7 +48,7 @@ pub(crate) fn is_review(commit: &gix::objs::Commit) -> bool {
     reference(commit).ok().flatten().is_some()
 }
 
-fn return_to(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
+pub(super) fn return_to(commit: &gix::objs::Commit) -> Result<Option<gix::refs::FullName>> {
     commit
         .extra_headers
         .iter()
@@ -124,7 +124,7 @@ pub(crate) fn start(
     }
     ensure_clean(&workdir)?;
 
-    let departure_pin = match restore.1.filter(|id| *id != tip) {
+    let departure_pin = match restore.1.filter(|id| *id != tip || restore.0.is_none()) {
         Some(id) => {
             let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
             Some(super::time_travel::create_or_reuse_pin(
@@ -668,6 +668,87 @@ mod tests {
             "changed-review-with-successors",
             gix_testtools::repository::snapshot(fixture.path())?.to_string()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deleting_a_review_returns_to_the_preserved_departure() -> gix_testtools::Result {
+        let fixture = gix_testtools::tempfile::tempdir()?;
+        run(fixture.path(), &["init", "-q", "-b", "main"])?;
+        run(fixture.path(), &["config", "user.name", "reviewer"])?;
+        run(fixture.path(), &["config", "user.email", "reviewer@example.com"])?;
+        std::fs::write(fixture.path().join("file"), "base\n")?;
+        run(fixture.path(), &["add", "file"])?;
+        run(
+            fixture.path(),
+            &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "base"],
+        )?;
+        let base = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+        std::fs::write(fixture.path().join("file"), "reviewed\n")?;
+        run(
+            fixture.path(),
+            &["-c", "commit.gpgSign=false", "commit", "-qam", "reviewed"],
+        )?;
+        let reviewed = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+        std::fs::write(fixture.path().join("tip"), "tip\n")?;
+        run(fixture.path(), &["add", "tip"])?;
+        run(
+            fixture.path(),
+            &["-c", "commit.gpgSign=false", "commit", "-q", "-m", "tip"],
+        )?;
+        let tip = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
+
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
+        )?;
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let started = start(fixture.path(), false, &graph, reviewed, base)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let forgotten = super::super::forget::perform(repo, &graph, started.commit)?;
+        let return_to = forgotten
+            .review_return
+            .context("review deletion has a return checkout")?;
+        let (returned, _) =
+            super::super::time_travel::checkout_review_return(fixture.path(), false, &return_to, &[], false)?;
+
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert_eq!(returned, tip);
+        assert_eq!(repo.head_id()?.detach(), tip);
+        assert_eq!(
+            repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
+            Some(BStr::new(b"refs/heads/main")),
+            "cancelling reattaches the original branch"
+        );
+        assert!(history::all_pins(&repo)?.is_empty(), "the return consumes its pin");
+        assert!(
+            repo.try_find_reference(started.reference.as_ref())?.is_none(),
+            "the cancelled review resource is removed"
+        );
+        assert!(
+            run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty(),
+            "cancelling restores the original checkout without review changes"
+        );
+
+        drop(repo);
+        run(fixture.path(), &["checkout", "-q", "--detach", &tip.to_string()])?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        drop(repo);
+        let started = start(fixture.path(), false, &graph, reviewed, base)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        let graph = super::super::loaded_graph(&repo)?;
+        let forgotten = super::super::forget::perform(repo, &graph, started.commit)?;
+        let return_to = forgotten
+            .review_return
+            .context("detached review deletion has a return checkout")?;
+        super::super::time_travel::checkout_review_return(fixture.path(), false, &return_to, &[], false)?;
+        let repo = crate::test_repository::open(fixture.path())?;
+        assert!(repo.head()?.is_detached(), "cancelling restores detached HEAD");
+        assert_eq!(repo.head_id()?.detach(), tip);
+        assert!(history::all_pins(&repo)?.is_empty());
         Ok(())
     }
 }

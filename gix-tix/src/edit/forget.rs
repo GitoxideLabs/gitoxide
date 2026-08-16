@@ -5,18 +5,33 @@ use gix::{ObjectId, bstr::ByteSlice};
 
 use super::rebase;
 
+pub(crate) struct Outcome {
+    pub selected: Option<ObjectId>,
+    pub review_return: Option<gix::refs::FullName>,
+}
+
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
-pub(crate) fn perform(
-    repo: gix::Repository,
-    graph: &crate::history::HistoryGraph,
-    id: ObjectId,
-) -> Result<Option<ObjectId>> {
+pub(crate) fn perform(repo: gix::Repository, graph: &crate::history::HistoryGraph, id: ObjectId) -> Result<Outcome> {
     let commit = repo
         .find_commit(id)
         .context("could not find the commit to forget")?
         .decode()?
         .into_owned()?;
     let deletions = super::review::deletions(&repo, &commit)?;
+    let review_return = if repo.head_id().ok().map(gix::Id::detach) == Some(id) && !deletions.is_empty() {
+        match super::review::return_to(&commit)? {
+            Some(name) => Some(name),
+            None => {
+                let review = super::review::reference(&commit)?.context("the review return anchor is missing")?;
+                repo.find_reference(review.as_ref())?
+                    .target()
+                    .try_name()
+                    .map(ToOwned::to_owned)
+            }
+        }
+    } else {
+        None
+    };
     let result = if deletions.is_empty() {
         rebase::perform(
             &repo,
@@ -35,7 +50,10 @@ pub(crate) fn perform(
             deletions,
         )
     }?;
-    Ok(result.complete()?.selected)
+    Ok(Outcome {
+        selected: result.complete()?.selected,
+        review_return,
+    })
 }
 
 pub(super) fn preflight_tree_transition(
@@ -129,7 +147,7 @@ mod tests {
             .detach();
 
         let graph = super::super::loaded_graph(&repository)?;
-        assert_eq!(perform(repository.clone(), &graph, top)?, Some(parent));
+        assert_eq!(perform(repository.clone(), &graph, top)?.selected, Some(parent));
         let state = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             state.head,
@@ -211,7 +229,7 @@ mod tests {
         let root = repository.head_id()?.detach();
 
         let graph = super::super::loaded_graph(&repository)?;
-        assert_eq!(perform(repository.clone(), &graph, root)?, None);
+        assert_eq!(perform(repository.clone(), &graph, root)?.selected, None);
         let state = gix_testtools::repository::snapshot(fixture.path())?;
         assert_eq!(
             state.head,
@@ -249,7 +267,7 @@ mod tests {
             .expect("top has a parent")
             .detach();
         let graph = super::super::loaded_graph(&repository)?;
-        assert_eq!(perform(repository.clone(), &graph, top)?, Some(parent));
+        assert_eq!(perform(repository.clone(), &graph, top)?.selected, Some(parent));
         assert_eq!(
             repository.head_id()?.detach(),
             parent,
