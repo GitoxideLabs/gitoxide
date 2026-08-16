@@ -393,7 +393,8 @@ space first; changes blocks adapt within the remaining history width.
 - The configured Git editor receives a document containing `Author`,
   `AuthorDate`, `Committer`, `CommitterDate`, `CommentChar`, and the complete
   message in a temporary `.md` file for syntax highlighting. Author identity and
-  time are retained; committer time defaults to now.
+  time are retained; the committer fields show the repository's configured
+  current committer.
 - `CommentChar` is a non-empty single-line byte prefix, defaults to `;`, and is
   recognized only at column zero. Parsing removes those lines and applies
   Git-style whitespace cleanup.
@@ -408,6 +409,10 @@ space first; changes blocks adapt within the remaining history width.
   time travel; the edited commit itself needs no replay marker.
   Mutable refs follow every rewritten commit; tags and remote-tracking refs remain
   unchanged.
+- Every commit object actually rewritten by an edit receives the repository's
+  current committer identity and date immediately before signing and writing.
+  Edited committer fields cannot override it; untouched commit objects retain
+  their existing identity and object ID.
 - Command-line message inputs replace only the message, retain
   editor-comment-looking lines as content, and are a no-op when their cleaned
   message already matches the commit.
