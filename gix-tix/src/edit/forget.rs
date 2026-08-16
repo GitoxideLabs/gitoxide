@@ -113,13 +113,7 @@ mod tests {
     use super::*;
 
     fn open(path: &Path) -> gix_testtools::Result<gix::Repository> {
-        Ok(gix::open_opts(
-            path,
-            gix::open::Options::isolated().config_overrides([
-                "user.name=author".to_owned(),
-                "user.email=author@example.com".to_owned(),
-            ]),
-        )?)
+        Ok(crate::test_repository::open(path)?)
     }
 
     #[test]

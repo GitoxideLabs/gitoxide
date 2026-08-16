@@ -305,14 +305,7 @@ mod tests {
     use super::*;
 
     fn open(path: &Path) -> gix_testtools::Result<gix::Repository> {
-        Ok(gix::open_opts(
-            path,
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=:".to_owned(),
-                "user.name=author".to_owned(),
-                "user.email=author@example.com".to_owned(),
-            ]),
-        )?)
+        Ok(crate::test_repository::open(path)?)
     }
 
     fn object_count(path: &Path) -> gix_testtools::Result<Vec<u8>> {

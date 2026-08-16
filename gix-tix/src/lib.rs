@@ -8,6 +8,8 @@ pub mod command;
 mod edit;
 mod history;
 mod logging;
+#[cfg(test)]
+mod test_repository;
 mod ui;
 
 use std::{
@@ -4385,11 +4387,6 @@ fn mouse_scroll_action(kind: MouseEventKind, distance: usize) -> Option<Action> 
 }
 
 #[cfg(test)]
-fn open_test_repository(path: impl AsRef<Path>) -> Result<gix::Repository, gix::open::Error> {
-    gix::open_opts(path.as_ref(), gix::open::Options::isolated())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4426,7 +4423,7 @@ mod tests {
     #[test]
     fn reference_watcher_observes_new_loose_refs() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repository = open_test_repository(fixture.path())?;
+        let repository = test_repository::open(fixture.path())?;
         let watcher = start_ref_watcher(repository.git_dir(), repository.common_dir())?;
         let topic = repository.rev_parse_single("topic")?.detach();
         let status = Command::new("git")
@@ -4569,7 +4566,7 @@ mod tests {
     #[test]
     fn loads_commit_messages_from_an_existing_repository() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let repository = open_test_repository(&fixture)?;
+        let repository = test_repository::open(&fixture)?;
         let id = repository.rev_parse_single("topic")?.detach();
 
         assert!(
@@ -4582,7 +4579,7 @@ mod tests {
     #[test]
     fn selection_relation_prefers_tracking_counts_and_handles_missing_upstreams() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let repository = open_test_repository(&fixture)?;
+        let repository = test_repository::open(&fixture)?;
         let topic = repository.rev_parse_single("topic")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
         let authors =
@@ -4654,7 +4651,7 @@ mod tests {
                 .status()?;
             assert!(status.success(), "git config prepares the tracking relationship");
         }
-        let repository = open_test_repository(path)?;
+        let repository = test_repository::open(path)?;
         let topic = repository.rev_parse_single("topic")?.detach();
         let main = repository.rev_parse_single("main")?.detach();
         let status = std::process::Command::new("git")
@@ -4662,7 +4659,7 @@ mod tests {
             .args(["update-ref", "refs/remotes/origin/main", &main.to_hex().to_string()])
             .status()?;
         assert!(status.success(), "the configured tracking ref exists");
-        let repository = open_test_repository(path)?;
+        let repository = test_repository::open(path)?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let mut graph = None;
@@ -4694,7 +4691,7 @@ mod tests {
     #[test]
     fn loads_changes_against_each_merge_parent() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let repository = gix::open_opts(&fixture, gix::open::Options::isolated())?;
+        let repository = crate::test_repository::open(&fixture)?;
         let mut line_diff_pool = None;
         sync_line_diff_pool(&mut line_diff_pool, true, &fixture, false, 2)?;
         assert_eq!(
@@ -4739,10 +4736,7 @@ mod tests {
             FileDiff::Pager { .. } => unreachable!("isolated repositories have no pager"),
         }
 
-        let external_repository = gix::open_opts(
-            &fixture,
-            gix::open::Options::isolated().config_overrides(["diff.external=test --flag"]),
-        )?;
+        let external_repository = crate::test_repository::open_with(&fixture, ["diff.external=test --flag"])?;
         match prepare_file_diff_with_repository(&external_repository, &root.diffs[0], &root.paths[0])? {
             FileDiff::External(command) => assert!(
                 command
@@ -4754,10 +4748,7 @@ mod tests {
             FileDiff::Pager { .. } => unreachable!("configured external diffs take precedence"),
         }
 
-        let pager_repository = gix::open_opts(
-            &fixture,
-            gix::open::Options::isolated().config_overrides(["core.pager=delta --dark"]),
-        )?;
+        let pager_repository = crate::test_repository::open_with(&fixture, ["core.pager=delta --dark"])?;
         match prepare_file_diff_with_repository(&pager_repository, &root.diffs[0], &root.paths[0])? {
             FileDiff::Pager { command, diff } => {
                 assert!(
@@ -4777,7 +4768,7 @@ mod tests {
         }
 
         for setting in ["core.pager=", "core.pager=cat"] {
-            let repository = gix::open_opts(&fixture, gix::open::Options::isolated().config_overrides([setting]))?;
+            let repository = test_repository::open_with(&fixture, [setting])?;
             assert!(
                 matches!(
                     prepare_file_diff_with_repository(&repository, &root.diffs[0], &root.paths[0])?,
@@ -4999,7 +4990,7 @@ mod tests {
     #[test]
     fn configures_a_common_repository_as_bare_for_tree_changes() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let git_dir = open_test_repository(&fixture)?.git_dir().to_owned();
+        let git_dir = test_repository::open(&fixture)?.git_dir().to_owned();
         let repository = open_repository(&git_dir, true, false)?;
 
         assert_eq!(
@@ -5036,7 +5027,7 @@ mod tests {
     #[test]
     fn normalizes_a_common_directory_through_a_missing_per_worktree_directory() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let git_dir = open_test_repository(&fixture)?.git_dir().to_owned();
+        let git_dir = test_repository::open(&fixture)?.git_dir().to_owned();
         let indirect = git_dir.join("worktrees/missing/../..");
         assert!(
             !git_dir.join("worktrees/missing").exists(),
@@ -5079,7 +5070,7 @@ mod tests {
         }
 
         let fixture = gix_testtools::scripted_fixture_read_only("history.sh")?;
-        let git_dir = open_test_repository(&fixture)?.git_dir().canonicalize()?;
+        let git_dir = test_repository::open(&fixture)?.git_dir().canonicalize()?;
         let status = Command::new(std::env::current_exe()?)
             .env(COMMON_DIR, git_dir)
             .args([
@@ -5122,7 +5113,7 @@ mod tests {
         std::fs::write(path.join(".git/info/exclude"), "ignored\n")?;
         std::fs::write(path.join("ignored"), "ignored\n")?;
 
-        let repository = open_test_repository(path)?;
+        let repository = test_repository::open(path)?;
         let mut line_diff_pool = LineDiffPool::new(path, false, 2)?;
         let changes = load_worktree_changes(&repository, &mut line_diff_pool)?;
         let rows: Vec<_> = changes
@@ -5685,7 +5676,7 @@ mod tests {
         std::fs::create_dir_all(root.join("target/nested"))?;
         std::fs::write(root.join(".gitignore"), "target/\nvisible/ignored/\n")?;
 
-        let repository = open_test_repository(root)?;
+        let repository = test_repository::open(root)?;
         let directories = worktree_watch_directories(&repository)?;
         let root = repository.workdir().expect("the fixture has a worktree");
         assert!(directories.contains(root), "the worktree root is always watched");
@@ -5799,13 +5790,9 @@ mod tests {
     #[test]
     fn todo_conflict_preview_selects_the_partial_result_in_memory() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "commit.gpgSign=false".to_owned(),
-                "user.name=preview author".to_owned(),
-                "user.email=preview@example.com".to_owned(),
-            ]),
+            ["user.name=preview author", "user.email=preview@example.com"],
         )?;
         let graph = edit::loaded_graph(&repo)?;
         let base = repo.rev_parse_single("HEAD~2")?.detach();

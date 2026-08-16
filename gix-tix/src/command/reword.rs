@@ -128,10 +128,9 @@ mod tests {
     }
 
     fn open(path: &Path, editor: &str) -> gix_testtools::Result<gix::Repository> {
-        Ok(gix::open_opts(
+        Ok(crate::test_repository::open_with(
             path,
-            gix::open::Options::isolated()
-                .config_overrides([format!("core.editor={editor}"), "commit.gpgSign=false".to_owned()]),
+            [format!("core.editor={editor}")],
         )?)
     }
 
@@ -213,7 +212,7 @@ mod tests {
         )?;
 
         assert_eq!(git(fixture.path(), &["log", "-1", "--format=%s"])?, b"rewritten tip\n");
-        let repository = crate::open_test_repository(fixture.path())?;
+        let repository = crate::test_repository::open(fixture.path())?;
         assert!(!repository.head()?.is_detached());
         assert!(crate::history::all_pins(&repository)?.is_empty());
         Ok(())
@@ -226,7 +225,7 @@ mod tests {
         let err = run(open(fixture.path(), "false")?, args("HEAD"))
             .expect_err("a detached HEAD does not provide a durable rewrite tip");
         assert!(format!("{err:#}").contains("must be pinned"));
-        assert!(crate::history::all_pins(&crate::open_test_repository(fixture.path())?)?.is_empty());
+        assert!(crate::history::all_pins(&crate::test_repository::open(fixture.path())?)?.is_empty());
         Ok(())
     }
 
@@ -237,7 +236,7 @@ mod tests {
         let err = run(open(path, "false")?, args("HEAD~1")).expect_err("an ancestor without a pin is rejected");
         assert!(format!("{err:#}").contains("must be pinned"));
 
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         let old_tip = repository.head_id()?.detach();
         repository.reference(
             "refs/worktree/tix/pins/keep",
@@ -251,7 +250,7 @@ mod tests {
             args("HEAD~1"),
         )?;
 
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         let new_tip = repository.head_id()?.detach();
         assert_ne!(new_tip, old_tip, "the descendant is lazily reparented");
         assert_eq!(
@@ -305,7 +304,7 @@ mod tests {
             "the unrelated checkout stack is untouched"
         );
         assert_eq!(git(path, &["log", "-1", "--format=%s", "side"])?, b"rewritten side\n");
-        let repository = crate::open_test_repository(path)?;
+        let repository = crate::test_repository::open(path)?;
         assert_eq!(
             crate::history::all_pins(&repository)?[0].id,
             repository.rev_parse_single("side")?.detach(),

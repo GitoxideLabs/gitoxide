@@ -334,18 +334,15 @@ mod tests {
         run(fixture.path(), &["branch", "natural"])?;
         run(fixture.path(), &["reset", "--hard", &tip.to_string()])?;
 
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "user.name=reviewer".to_owned(),
-                "user.email=reviewer@example.com".to_owned(),
-            ]),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         drop(repo);
         let started = start(fixture.path(), false, &graph, tip, base)?;
 
-        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repo.head_id()?.detach(),
             started.commit,
@@ -376,24 +373,16 @@ mod tests {
         assert!(run(fixture.path(), &["diff", "--cached", "--name-only"])?.is_empty());
 
         run(fixture.path(), &["add", "file"])?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "user.name=reviewer".to_owned(),
-                "user.email=reviewer@example.com".to_owned(),
-                "commit.gpgSign=false".to_owned(),
-            ]),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let amended = super::super::head::perform(repo, &graph, super::super::head::Kind::Amend, None)?
             .expect("staging the reviewed delta amends it into the review commit");
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "user.name=reviewer".to_owned(),
-                "user.email=reviewer@example.com".to_owned(),
-                "commit.gpgSign=false".to_owned(),
-            ]),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         assert!(is_review(&repo.find_commit(amended)?.decode()?.into_owned()?));
         assert!(run(fixture.path(), &["status", "--porcelain=v1", "--untracked-files=all"])?.is_empty());
@@ -425,17 +414,13 @@ mod tests {
             ],
         )?;
         drop(repo);
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "user.name=reviewer".to_owned(),
-                "user.email=reviewer@example.com".to_owned(),
-                "commit.gpgSign=false".to_owned(),
-            ]),
+            ["user.name=reviewer", "user.email=reviewer@example.com"],
         )?;
         let graph = super::super::loaded_graph(&repo)?;
         let finished = finish(repo, &graph, amended)?;
-        let repo = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         assert_eq!(repo.head_id()?.detach(), finished);
         assert_eq!(
             repo.head()?.referent_name().map(gix::refs::FullNameRef::as_bstr),
@@ -505,13 +490,9 @@ mod tests {
         let old_successor = ObjectId::from_hex(run(fixture.path(), &["rev-parse", "HEAD"])?.trim())?;
 
         let open = || {
-            gix::open_opts(
+            crate::test_repository::open_with(
                 fixture.path(),
-                gix::open::Options::isolated().config_overrides([
-                    "user.name=reviewer".to_owned(),
-                    "user.email=reviewer@example.com".to_owned(),
-                    "commit.gpgSign=false".to_owned(),
-                ]),
+                ["user.name=reviewer", "user.email=reviewer@example.com"],
             )
         };
         let repo = open()?;

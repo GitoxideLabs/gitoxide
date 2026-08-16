@@ -1786,7 +1786,7 @@ mod tests {
         let mut events = Vec::new();
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let repo = crate::open_test_repository(path)?;
+        let repo = crate::test_repository::open(path)?;
         load(
             &repo,
             &revisions.iter().map(OsString::from).collect::<Vec<_>>(),
@@ -1871,7 +1871,7 @@ mod tests {
     #[test]
     fn ignores_missing_hidden_revisions_only_if_another_one_resolves() -> gix_testtools::Result {
         let fixture = fixture()?;
-        let repo = crate::open_test_repository(&fixture)?;
+        let repo = crate::test_repository::open(&fixture)?;
         let revisions = ["unknown".into(), "main".into()];
 
         let (available, unavailable) = available_hidden_revisions(&repo, &revisions)?;
@@ -1963,7 +1963,7 @@ mod tests {
     #[test]
     fn snapshots_references_and_symbolic_targets_from_revisions() -> gix_testtools::Result {
         let fixture = fixture()?;
-        let repo = crate::open_test_repository(fixture)?;
+        let repo = crate::test_repository::open(fixture)?;
         let implicit = snapshot(&repo, &[], &[], false)?;
         assert!(
             implicit.view.contains_key(b"HEAD".as_bstr()),
@@ -1997,7 +1997,7 @@ mod tests {
             "not a ref or object id\n",
         )?;
 
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let main = repo.rev_parse_single("main")?.detach();
         let topic = repo.rev_parse_single("topic")?.detach();
         let root = repo.rev_parse_single("main~2")?.detach();
@@ -2058,7 +2058,7 @@ mod tests {
         assert!(with.view_tips.contains(&root));
 
         let linked_path = fixture.path().join("topic-wt");
-        let linked_repo = crate::open_test_repository(&linked_path)?;
+        let linked_repo = crate::test_repository::open(&linked_path)?;
         let linked_worktrees = worktree_checkouts(&linked_repo);
         assert!(
             linked_worktrees
@@ -2084,7 +2084,7 @@ mod tests {
             .args(["checkout", "-q", "--detach", "main~1"])
             .status()?;
         assert!(status.success(), "git detaches the current linked worktree");
-        let detached_repo = crate::open_test_repository(&linked_path)?;
+        let detached_repo = crate::test_repository::open(&linked_path)?;
         let detached_worktrees = worktree_checkouts(&detached_repo);
         let current = detached_worktrees
             .iter()
@@ -2143,7 +2143,7 @@ mod tests {
             .find(|row| !row.metadata_loaded)
             .expect("older graph commits defer metadata");
 
-        let repo = crate::open_test_repository(fixture_path)?;
+        let repo = crate::test_repository::open(fixture_path)?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let (metadata, _) = load_metadata(&repo, deferred.id, &authors)?;
@@ -2174,7 +2174,7 @@ mod tests {
             let status = Command::new("git").current_dir(fixture.path()).args(args).status()?;
             assert!(status.success(), "git prepares one new commit");
         }
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let first = graph.refresh(&repo, &["main".into()], &[], false, &HashSet::new(), &authors)?;
@@ -2190,7 +2190,7 @@ mod tests {
     #[test]
     fn refresh_stops_at_cached_tracking_ancestry() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let main = crate::open_test_repository(fixture.path())?
+        let main = crate::test_repository::open(fixture.path())?
             .rev_parse_single("main")?
             .detach();
         for args in [
@@ -2211,7 +2211,7 @@ mod tests {
                 _ => None,
             })
             .expect("history loading returns the persistent graph");
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let index = graph.index(main).expect("the tracking tip was scheduled");
         let fake_parent = graph.intern(id(255)).expect("the small test graph fits in u32");
         let mut parents = graph.parents(index).to_vec();
@@ -2255,19 +2255,19 @@ mod tests {
         git(&["config", "commit.gpgsign", "false"])?;
         git(&["switch", "-q", "-c", "relation-base", "main"])?;
         commit("base-0")?;
-        let base = crate::open_test_repository(path)?.rev_parse_single("HEAD")?.detach();
+        let base = crate::test_repository::open(path)?.rev_parse_single("HEAD")?.detach();
         for name in ["base-1", "base-2", "base-3"] {
             commit(name)?;
         }
         git(&["switch", "-q", "-c", "hidden"])?;
         commit("hidden-only")?;
-        let hidden_only = crate::open_test_repository(path)?.rev_parse_single("HEAD")?.detach();
+        let hidden_only = crate::test_repository::open(path)?.rev_parse_single("HEAD")?.detach();
         git(&["switch", "-q", "-c", "local", "relation-base"])?;
         commit("local-only")?;
-        let local = crate::open_test_repository(path)?.rev_parse_single("HEAD")?.detach();
+        let local = crate::test_repository::open(path)?.rev_parse_single("HEAD")?.detach();
         git(&["switch", "-q", "--detach", &base.to_hex().to_string()])?;
         commit("upstream-only")?;
-        let upstream = crate::open_test_repository(path)?.rev_parse_single("HEAD")?.detach();
+        let upstream = crate::test_repository::open(path)?.rev_parse_single("HEAD")?.detach();
         git(&["switch", "-q", "local"])?;
         for args in [
             &["config", "remote.origin.url", "https://example.com/repo"][..],
@@ -2324,7 +2324,7 @@ mod tests {
             "hidden tips do not truncate either side of the tracking relation"
         );
 
-        let repo = crate::open_test_repository(path)?;
+        let repo = crate::test_repository::open(path)?;
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
         let refresh = graph.refresh(&repo, &["local".into()], &[], false, &boundary, &authors)?;
@@ -2367,7 +2367,7 @@ mod tests {
         );
         let expected = String::from_utf8(output.stdout)?.lines().map(str::to_owned).collect();
         assert_eq!(actual, expected, "hidden tips use Git's exclusion semantics");
-        let repo = crate::open_test_repository(&fixture)?;
+        let repo = crate::test_repository::open(&fixture)?;
         let connected: Vec<_> = events
             .iter()
             .flat_map(|event| match event {
@@ -2412,7 +2412,7 @@ mod tests {
         let mut cancelled = Vec::new();
         let authors =
             gix::features::threading::OwnShared::new(gix::features::threading::Mutable::new(Authors::default()));
-        let repo = crate::open_test_repository(&fixture)?;
+        let repo = crate::test_repository::open(&fixture)?;
         load(&repo, &[], &[], false, &authors, &AtomicBool::new(true), |event| {
             cancelled.push(event);
             true
@@ -2442,7 +2442,7 @@ mod tests {
     #[test]
     fn ignores_malformed_and_non_commit_pins() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let blob = repo.write_blob(b"not a commit")?.detach();
         repo.reference(
@@ -2465,7 +2465,7 @@ mod tests {
     #[test]
     fn review_stashes_are_not_history_tips_or_decorations() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let stash = repo.rev_parse_single("topic")?.detach();
         repo.reference(
@@ -2496,7 +2496,7 @@ mod tests {
     #[test]
     fn commit_stashes_decorate_the_associated_commit_without_becoming_tips() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
-        let repo = crate::open_test_repository(fixture.path())?;
+        let repo = crate::test_repository::open(fixture.path())?;
         let head = repo.head_id()?.detach();
         let stash = repo.rev_parse_single("topic")?.detach();
         let name = super::super::edit::stash::reference(head)?;
@@ -2540,8 +2540,8 @@ mod tests {
                 .success(),
             "the linked-worktree fixture is created"
         );
-        let main = crate::open_test_repository(fixture.path())?;
-        let linked = crate::open_test_repository(&linked_path)?;
+        let main = crate::test_repository::open(fixture.path())?;
+        let linked = crate::test_repository::open(&linked_path)?;
         let main_id = main.head_id()?.detach();
         let linked_id = linked.head_id()?.detach();
         for (repo, id) in [(&main, main_id), (&linked, linked_id)] {

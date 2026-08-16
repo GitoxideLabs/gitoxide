@@ -315,14 +315,9 @@ mod tests {
 
     fn repository() -> gix_testtools::Result<(gix_testtools::tempfile::TempDir, gix::Repository)> {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_edit.sh")?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "core.editor=:".to_owned(),
-                "core.abbrev=7".to_owned(),
-                "user.name=todo author".to_owned(),
-                "user.email=todo@example.com".to_owned(),
-            ]),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
         )?;
         Ok((fixture, repo))
     }
@@ -375,13 +370,9 @@ mod tests {
     #[test]
     fn materialized_conflicts_emit_an_applicable_continuation_todo() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("rebase_conflict.sh")?;
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "commit.gpgSign=false".to_owned(),
-                "user.name=todo author".to_owned(),
-                "user.email=todo@example.com".to_owned(),
-            ]),
+            ["user.name=todo author", "user.email=todo@example.com"],
         )?;
         let base = repo.rev_parse_single("HEAD~2")?.detach();
         let middle = repo.rev_parse_single("HEAD~1")?.detach();
@@ -435,7 +426,7 @@ mod tests {
             unresolved.stdout, b"file\n",
             "materialization writes the unmerged index"
         );
-        let materialized = gix::open_opts(fixture.path(), gix::open::Options::isolated())?;
+        let materialized = crate::test_repository::open(fixture.path())?;
         let conflict_commit = materialized.head_commit()?;
         assert_eq!(
             conflict_commit.tree_id()?.detach(),
@@ -458,13 +449,9 @@ mod tests {
                 .status()?
                 .success()
         );
-        let repo = gix::open_opts(
+        let repo = crate::test_repository::open_with(
             fixture.path(),
-            gix::open::Options::isolated().config_overrides([
-                "commit.gpgSign=false".to_owned(),
-                "user.name=todo author".to_owned(),
-                "user.email=todo@example.com".to_owned(),
-            ]),
+            ["user.name=todo author", "user.email=todo@example.com"],
         )?;
         apply_document(repo, &continuation, None)?;
         assert!(
