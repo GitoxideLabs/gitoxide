@@ -130,6 +130,13 @@ mod tests {
         assert!(
             prepared
                 .document
+                .windows(b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>".len())
+                .any(|window| window == b";Author: \xf0\x9f\x9a\xa7WIP\xf0\x9f\x9a\xa7 <wip@invalid>"),
+            "split editors offer the provisional author"
+        );
+        assert!(
+            prepared
+                .document
                 .windows(b"staged".len())
                 .any(|window| window == b"staged"),
             "the upper commit editor describes staged paths"
