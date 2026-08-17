@@ -642,6 +642,12 @@ space first; changes blocks adapt within the remaining history width.
 - Command-line edits use the same default HEAD, applicable pin, and review tips
   as the history view. Unrelated refs do not broaden their descendant rewrite
   scope, while mutable refs pointing into that scope are still retargeted.
+- After any command-line amend, spill, split, reword, new, rebase, or pending
+  time-travel replay, successfully retargeted commit refs are printed after the
+  command's existing result as sorted `full/ref/name: old-id -> new-id` lines.
+  IDs use the same seven-character display as other command results. Ref
+  creations, deletions, unchanged refs, and unreferenced replayed commits add no
+  mapping line.
 - With a path selected in the focused tree-changes block, the main `e` prefix
   offers `spill` and `e s` spills only that path against the displayed parent.
   The CLI intentionally supports only whole-commit spilling.

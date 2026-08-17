@@ -65,7 +65,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         .context("author is not valid UTF-8")?;
 
     if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
-        return finish(crate::edit::reword::apply_message(
+        return finish(crate::edit::reword::apply_message_reporting(
             repository,
             &graph,
             target,
@@ -128,11 +128,12 @@ pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Resu
     }
 }
 
-fn finish(outcome: Option<gix::ObjectId>) -> Result<()> {
-    match outcome {
+fn finish(outcome: crate::edit::reword::Outcome) -> Result<()> {
+    match outcome.commit {
         Some(id) => println!("{}", id.to_hex_with_len(7)),
         None => println!("no reword performed: the edited commit was unchanged"),
     }
+    super::print_ref_rewrites(&outcome.ref_rewrites);
     Ok(())
 }
 
@@ -142,6 +143,7 @@ fn finish_editor(outcome: crate::edit::reword::Outcome, original: gix::ObjectId)
         (None, Some(_)) => println!("{}", original.to_hex_with_len(7)),
         (None, None) => println!("no reword performed: the edited commit was unchanged"),
     }
+    super::print_ref_rewrites(&outcome.ref_rewrites);
     Ok(())
 }
 

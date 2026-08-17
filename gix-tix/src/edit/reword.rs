@@ -27,6 +27,7 @@ pub(super) struct Edit<'a> {
 pub(crate) struct Outcome {
     pub commit: Option<gix::ObjectId>,
     pub enrichment: Option<crate::enrich::Enrichment>,
+    pub ref_rewrites: Vec<rebase::RefRewrite>,
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %id))]
@@ -115,26 +116,34 @@ pub(crate) fn apply(
         .context("could not own commit after editing")?;
     let author = actor(edit.author, edit.author_time, "author")?;
     let commit_changed = author != commit.author || edit.message != commit.message;
-    let commit = if commit_changed {
+    let rebased = if commit_changed {
         commit.author = author;
         commit.committer = actor(edit.committer, edit.committer_time, "committer")?;
         commit.message = edit.message;
-        apply_commit(&repo, graph, old_id, commit)?
+        Some(apply_commit(&repo, graph, old_id, commit)?)
     } else {
         None
     };
+    let commit = rebased
+        .as_ref()
+        .and_then(|outcome| outcome.selected)
+        .filter(|new_id| *new_id != old_id);
     let enrichment = crate::enrich::apply_headers(&repo, commit.unwrap_or(old_id), &edit.enrichment)?;
-    Ok(Outcome { commit, enrichment })
+    Ok(Outcome {
+        commit,
+        enrichment,
+        ref_rewrites: rebased.map_or_else(Vec::new, |outcome| outcome.ref_rewrites),
+    })
 }
 
 #[tracing::instrument(skip_all, fields(commit_id = %old_id))]
-pub(crate) fn apply_message(
+pub(crate) fn apply_message_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     old_id: gix::ObjectId,
     message: &[u8],
     author: Option<&[u8]>,
-) -> Result<Option<gix::ObjectId>> {
+) -> Result<Outcome> {
     let message = cleanup_message(message, None);
     if message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
@@ -150,13 +159,22 @@ pub(crate) fn apply_message(
         .map(|author| actor(author, commit.author.time, "author"))
         .transpose()?;
     if commit.message == message && changed_author.as_ref().is_none_or(|author| *author == commit.author) {
-        return Ok(None);
+        return Ok(Outcome {
+            commit: None,
+            enrichment: None,
+            ref_rewrites: Vec::new(),
+        });
     }
     if let Some(author) = changed_author {
         commit.author = author;
     }
     commit.message = message;
-    apply_commit(&repo, graph, old_id, commit)
+    let outcome = apply_commit(&repo, graph, old_id, commit)?;
+    Ok(Outcome {
+        commit: outcome.selected.filter(|new_id| *new_id != old_id),
+        enrichment: None,
+        ref_rewrites: outcome.ref_rewrites,
+    })
 }
 
 fn apply_commit(
@@ -164,16 +182,15 @@ fn apply_commit(
     graph: &crate::history::HistoryGraph,
     old_id: gix::ObjectId,
     commit: gix::objs::Commit,
-) -> Result<Option<gix::ObjectId>> {
-    let outcome = rebase::perform(
+) -> Result<rebase::Outcome> {
+    rebase::perform(
         repo,
         graph,
         rebase::Edit::Replace { target: old_id, commit },
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
     )?
-    .complete()?;
-    Ok(outcome.selected.filter(|new_id| *new_id != old_id))
+    .complete()
 }
 
 pub(super) fn write_headers(
