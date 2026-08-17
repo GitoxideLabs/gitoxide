@@ -363,21 +363,21 @@ impl Tree {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             let amount = self.offset().page_height.max(1);
             match key.code {
-                KeyCode::Char('u') => self.pan(Direction::Up, (amount / 2).max(1)),
-                KeyCode::Char('d') => self.pan(Direction::Down, (amount / 2).max(1)),
-                KeyCode::Char('b') => self.pan(Direction::Up, amount),
-                KeyCode::Char('f') => self.pan(Direction::Down, amount),
+                KeyCode::Char('u') => self.page(Direction::Up, (amount / 2).max(1)),
+                KeyCode::Char('d') => self.page(Direction::Down, (amount / 2).max(1)),
+                KeyCode::Char('b') => self.page(Direction::Up, amount),
+                KeyCode::Char('f') => self.page(Direction::Down, amount),
                 _ => return Input::Handled,
             }
             return Input::Handled;
         }
         match key.code {
             KeyCode::PageUp => {
-                self.pan(Direction::Up, self.offset().page_height.max(1));
+                self.page(Direction::Up, self.offset().page_height.max(1));
                 return Input::Handled;
             }
             KeyCode::PageDown => {
-                self.pan(Direction::Down, self.offset().page_height.max(1));
+                self.page(Direction::Down, self.offset().page_height.max(1));
                 return Input::Handled;
             }
             _ => {}
@@ -746,6 +746,46 @@ impl Tree {
             Direction::Right => offset.x = offset.x.saturating_add(amount).min(offset.max_x),
         }
         self.ensure_visible = false;
+    }
+
+    fn page(&mut self, direction: Direction, amount: usize) {
+        let (Some(overview), Some(selected)) = (self.overview.as_ref(), self.selected) else {
+            return;
+        };
+        let temporary;
+        let placed = match self.placed.as_ref() {
+            Some(placed) => placed,
+            None => {
+                temporary = place_rail(overview, self.overlay.as_ref());
+                &temporary
+            }
+        };
+        let source = placed.nodes[selected];
+        let target = match direction {
+            Direction::Up => source.y.saturating_sub(amount),
+            Direction::Down => source.y.saturating_add(amount),
+            Direction::Left | Direction::Right => return,
+        };
+        let next = placed
+            .nodes
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(index, point)| {
+                *index != selected
+                    && match direction {
+                        Direction::Up => point.y < source.y,
+                        Direction::Down => point.y > source.y,
+                        Direction::Left | Direction::Right => false,
+                    }
+            })
+            .min_by_key(|(index, point)| (point.y.abs_diff(target), point.x.abs_diff(source.x), *index))
+            .map(|(index, _)| index);
+        if let Some(next) = next {
+            self.selected = Some(next);
+            self.selection_changed();
+            self.ensure_visible = true;
+        }
     }
 
     fn offset(&self) -> &Offset {
@@ -2191,6 +2231,42 @@ mod tests {
         tree.selected = Some(main);
         tree.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::SHIFT));
         assert_eq!(tree.selected, Some(root), "shift-modified lowercase g reaches the root");
+    }
+
+    #[test]
+    fn page_keys_move_the_cursor_while_mouse_scrolling_only_pans() {
+        let (graph, refs, decorations) = fixture();
+        let mut tree = Tree::default();
+        tree.rebuild(&graph, &refs, &decorations);
+        tree.placed = tree.overview.as_ref().map(|overview| place_rail(overview, None));
+        tree.offset.page_height = 4;
+        let points = tree.placed.as_ref().expect("the ref-tree is placed").nodes.clone();
+        let first = points
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, point)| point.y)
+            .map(|(index, _)| index)
+            .expect("the fixture has nodes");
+        tree.selected = Some(first);
+        let first_y = points[first].y;
+
+        tree.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        let full_page = tree.selected.expect("PageDown retains a selection");
+        let full_page_y = points[full_page].y;
+        assert!(full_page_y > first_y, "PageDown advances the ref-tree cursor");
+        assert!(tree.ensure_visible, "page navigation keeps the new cursor visible");
+
+        tree.selected = Some(first);
+        tree.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let half_page_y = points[tree.selected.expect("Ctrl-d retains a selection")].y;
+        assert!(
+            half_page_y > first_y && half_page_y <= full_page_y,
+            "half-page navigation advances no farther than a full page"
+        );
+
+        let selected = tree.selected;
+        tree.handle_mouse(MouseEventKind::ScrollDown, 2);
+        assert_eq!(tree.selected, selected, "mouse scrolling remains viewport-only");
     }
 
     #[test]
