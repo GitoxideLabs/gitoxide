@@ -131,7 +131,7 @@ impl Platform {
             Command::Show(args) => return show(&repository, args),
             command => command,
         };
-        let _log_guard = crate::logging::init().context("could not initialize tix diagnostics")?;
+        let _log_guard = crate::logging::init();
         match command {
             Command::RefTree(_) | Command::Show(_) => unreachable!("display commands return before logging"),
             Command::Amend(args) => {
