@@ -127,12 +127,10 @@ pub(crate) fn start(
     let departure_pin = match restore.1 {
         Some(id) => {
             let target = restore.0.clone().map_or(Target::Object(id), Target::Symbolic);
-            Some(super::time_travel::create_or_reuse_pin(
-                &repo,
-                target,
-                id,
-                "tix review departure",
-            )?)
+            Some((
+                super::time_travel::create_pin(&repo, target, id, "tix review departure")?,
+                true,
+            ))
         }
         None => None,
     };

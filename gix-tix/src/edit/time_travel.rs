@@ -608,6 +608,15 @@ pub(crate) fn create_or_reuse_pin(
     if let Some(pin) = pins.iter().find(|pin| !pin.is_head() && pin.target == target) {
         return Ok((pin.clone(), false));
     }
+    Ok((create_pin(repository, target, id, reflog_message)?, true))
+}
+
+pub(crate) fn create_pin(
+    repository: &gix::Repository,
+    target: Target,
+    id: ObjectId,
+    reflog_message: &str,
+) -> Result<history::Pin> {
     let hex = id.to_hex().to_string();
     let mut suffix_len = 8.min(hex.len());
     let mut number = 2;
@@ -650,7 +659,7 @@ pub(crate) fn create_or_reuse_pin(
             deref: false,
         }])
         .context("could not create tix pin")?;
-    Ok((history::Pin { name, target, id }, true))
+    Ok(history::Pin { name, target, id })
 }
 
 pub(super) fn delete_pin(repository: &gix::Repository, pin: &history::Pin) -> Result<()> {
@@ -1297,6 +1306,24 @@ mod tests {
         let pins = history::all_pins(&repository)?;
         assert!(pins.iter().any(history::Pin::is_head), "unpin preserves the HEAD pin");
         assert!(pins.iter().any(|pin| pin.id == other), "pins on other commits remain");
+        Ok(())
+    }
+
+    #[test]
+    fn explicitly_created_pins_have_independent_lifetimes() -> gix_testtools::Result {
+        let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
+        let repository = crate::test_repository::open(fixture.path())?;
+        let selected = repository.rev_parse_single("main")?.detach();
+        let target = Target::Object(selected);
+        let first = create_pin(&repository, target.clone(), selected, "first review")?;
+        let second = create_pin(&repository, target, selected, "second review")?;
+
+        assert_ne!(first.name, second.name, "reviews never share ownership of a return pin");
+        delete_pin(&repository, &first)?;
+        assert!(
+            repository.try_find_reference(second.name.as_ref())?.is_some(),
+            "consuming one review's pin leaves the other review's return pin intact"
+        );
         Ok(())
     }
 
