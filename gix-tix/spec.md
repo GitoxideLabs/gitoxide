@@ -995,7 +995,8 @@ space first; changes blocks adapt within the remaining history width.
 - Filesystem responses receive correlated IDs in daily tracing logs, including
   semantic trigger, coalesced paths, phases, presentation count, elapsed time,
   and outcome. Logs use the platform application-log directory, retain seven
-  days, and are best-effort.
+  days, and are best-effort. Failure to create or open the log is silently
+  ignored and never prevents either command-line or interactive operation.
 - After every event-loop wait, tix assumes that the original worktree and process
   working directory may have disappeared. Before processing filesystem events or
   redrawing, it lexically normalizes and enters the common repository, reopens it
