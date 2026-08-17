@@ -29,6 +29,16 @@ without trading responsiveness for metadata that is not visible.
   error so resolution cannot be mistaken for completion.
 - `tix stash` saves the index and worktree state at `HEAD` through the same
   commit-stash operation as the TUI.
+- `tix new [--index | --worktree] [--allow-empty] [--author "Name <email>"]
+  [-m MESSAGE ... | -f FILE]` creates a child of `HEAD`, or a root commit for
+  unborn `HEAD`, with the same signing, editor, enrichment, lazy-rebase, and
+  worktree-safety rules as `e n`. By default a changed index wins and tracked
+  worktree changes are used only when the index is unchanged. `--index` uses
+  only the index delta; `--worktree` applies only unstaged tracked-worktree
+  changes to the `HEAD` tree and omits staged-only changes. An unchanged
+  selected tree is rejected unless `--allow-empty` is given. Message files,
+  repeated messages, standard input, editor bypass, and `--author` follow
+  `tix reword`; the author uses the prepared new-commit date.
 - `tix reword REVSPEC [--author "Name <email>"] [-m MESSAGE ... | -f FILE]`
   applies the same signing,
   lazy-rebase, mutable-ref, and worktree-safety rules as the TUI. Without either

@@ -5,6 +5,7 @@ use clap::Parser;
 use gix::prelude::{ObjectIdExt, ReferenceExt};
 use ratatui::text::Line;
 
+mod new;
 mod rebase;
 mod reword;
 mod travel;
@@ -45,6 +46,8 @@ enum Command {
     Travel(travel::Args),
     /// Edit a commit and lazily rebase every descendant retained by a tix pin.
     Reword(reword::Args),
+    /// Create a new commit at HEAD.
+    New(new::Args),
     /// Generate or apply a self-contained history-rebase todo.
     #[command(subcommand)]
     Rebase(rebase::Command),
@@ -164,6 +167,7 @@ impl Platform {
             Command::Pin(args) => pin(&repository, args)?,
             Command::Travel(args) => return travel::run(repository, args),
             Command::Reword(args) => return reword::run(repository, args),
+            Command::New(args) => return new::run(repository, args),
             Command::Rebase(command) => return rebase::run(repository, command),
         }
         Ok(())
@@ -549,9 +553,9 @@ mod tests {
             panic!("reword was expected")
         };
         assert_eq!(reword.revision, "HEAD~2");
-        assert!(reword.message.is_empty());
-        assert!(reword.file.is_none());
-        assert!(reword.author.is_none());
+        assert!(reword.edit.message.is_empty());
+        assert!(reword.edit.file.is_none());
+        assert!(reword.edit.author.is_none());
         let reword = Cli::try_parse_from([
             "tix",
             "reword",
@@ -569,15 +573,37 @@ mod tests {
         let Some(Command::Reword(reword)) = reword else {
             panic!("reword was expected")
         };
-        assert_eq!(reword.message, ["title", "body"]);
+        assert_eq!(reword.edit.message, ["title", "body"]);
         assert_eq!(
-            reword.author.as_deref(),
+            reword.edit.author.as_deref(),
             Some(std::ffi::OsStr::new("Agent <agent@example.com>"))
         );
         assert!(
             Cli::try_parse_from(["tix", "reword", "HEAD", "-m", "message", "-f", "message.txt"]).is_err(),
             "message and file inputs are mutually exclusive"
         );
+        let new = Cli::try_parse_from([
+            "tix",
+            "new",
+            "--index",
+            "--allow-empty",
+            "--author",
+            "Agent <agent@example.com>",
+            "-m",
+            "title",
+        ])
+        .expect("new options parse")
+        .platform
+        .command;
+        let Some(Command::New(new)) = new else {
+            panic!("new was expected")
+        };
+        assert!(new.index);
+        assert!(!new.worktree);
+        assert!(new.allow_empty);
+        assert_eq!(new.edit.message, ["title"]);
+        assert!(Cli::try_parse_from(["tix", "new", "--index", "--worktree", "-m", "title"]).is_err());
+        assert!(Cli::try_parse_from(["tix", "new", "HEAD", "-m", "title"]).is_err());
         assert!(matches!(
             Cli::try_parse_from([
                 "tix",
