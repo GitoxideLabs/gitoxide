@@ -275,16 +275,27 @@ pub(crate) fn apply(
     prepared: Prepared,
     edited: &[u8],
 ) -> Result<ObjectId> {
+    apply_reporting(repo, graph, prepared, edited)?
+        .selected
+        .context("inserting a commit did not produce a selection")
+}
+
+pub(crate) fn apply_reporting(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edited: &[u8],
+) -> Result<rebase::Outcome> {
     let edit = commit_from_edit(&prepared, edited)?;
     apply_commit(repo, graph, prepared, edit)
 }
 
-pub(crate) fn apply_message(
+pub(crate) fn apply_message_reporting(
     repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     prepared: Prepared,
     message: &[u8],
-) -> Result<ObjectId> {
+) -> Result<rebase::Outcome> {
     let mut edit = reword::parse(&prepared.document)?;
     edit.message = reword::cleanup_message(message, None);
     let commit = commit_from_parsed_edit(&prepared, edit)?;
@@ -296,11 +307,11 @@ fn apply_commit(
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     (commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
-) -> Result<ObjectId> {
+) -> Result<rebase::Outcome> {
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let id = rebase::perform(
+    let outcome = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Insert {
@@ -311,13 +322,14 @@ fn apply_commit(
         rebase::Signature::RedoIfNeeded,
         rebase::Tree::LeaveAsIsAndMark,
     )?
-    .complete()?
-    .selected
-    .context("inserting a commit did not produce a selection")?;
+    .complete()?;
+    let id = outcome
+        .selected
+        .context("inserting a commit did not produce a selection")?;
     drop(repo);
     crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
         .context("the commit was created, but its enrichment could not be saved")?;
-    Ok(id)
+    Ok(outcome)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]

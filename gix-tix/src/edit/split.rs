@@ -68,18 +68,29 @@ pub(crate) fn prepare(mut repo: gix::Repository) -> Result<Prepared> {
 
 #[tracing::instrument(skip_all, fields(target = %prepared.target))]
 pub(crate) fn apply(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edited: &[u8],
+) -> Result<ObjectId> {
+    apply_reporting(repo, graph, prepared, edited)?
+        .selected
+        .context("splitting HEAD did not produce a selection")
+}
+
+pub(crate) fn apply_reporting(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
     edited: &[u8],
-) -> Result<ObjectId> {
+) -> Result<rebase::Outcome> {
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects
         .set_object_memory(std::mem::take(&mut prepared.create.objects));
     let (mut upper, enrichment) = create::commit_from_edit(&prepared.create, edited)?;
     upper.tree = prepared.tree;
-    let id = rebase::perform(
+    let outcome = rebase::perform(
         &repo,
         graph,
         rebase::Edit::Split {
@@ -90,13 +101,12 @@ pub(crate) fn apply(
         rebase::Signature::InvalidateExisting,
         rebase::Tree::LeaveAsIsAndMark,
     )?
-    .complete()?
-    .selected
-    .context("splitting HEAD did not produce a selection")?;
+    .complete()?;
+    let id = outcome.selected.context("splitting HEAD did not produce a selection")?;
     drop(repo);
     crate::enrich::apply_headers(&crate::open_repository(&repository_path, bare, false)?, id, &enrichment)
         .context("the commit was split, but its enrichment could not be saved")?;
-    Ok(id)
+    Ok(outcome)
 }
 
 #[cfg(test)]

@@ -22,7 +22,10 @@ use crate::{history, open_repository};
 use super::stash::SavedStash;
 
 pub(crate) enum Perform {
-    Complete(Option<String>),
+    Complete {
+        notice: Option<String>,
+        ref_rewrites: Vec<super::rebase::RefRewrite>,
+    },
     Conflict(Conflict),
 }
 
@@ -30,7 +33,7 @@ impl Perform {
     #[cfg(test)]
     pub(crate) fn complete(self) -> Result<Option<String>> {
         match self {
-            Perform::Complete(notice) => Ok(notice),
+            Perform::Complete { notice, .. } => Ok(notice),
             Perform::Conflict(_) => anyhow::bail!("time-travel unexpectedly suspended on a conflict"),
         }
     }
@@ -42,6 +45,7 @@ pub(crate) struct Conflict {
     bare: bool,
     revisions: Vec<OsString>,
     include_worktrees: bool,
+    ref_rewrites: Vec<super::rebase::RefRewrite>,
 }
 
 impl Conflict {
@@ -50,8 +54,10 @@ impl Conflict {
     }
 
     #[tracing::instrument(skip_all, fields(commit_id = %self.rebase.original()))]
-    pub(crate) fn accept(self) -> Result<(String, ObjectId)> {
+    pub(crate) fn accept(self) -> Result<(String, ObjectId, Vec<super::rebase::RefRewrite>)> {
         let mut conflict = self.rebase.persist()?;
+        let mut ref_rewrites = self.ref_rewrites;
+        ref_rewrites.append(&mut conflict.ref_rewrites);
         let notice = move_head_to(
             &self.repository_path,
             self.bare,
@@ -64,7 +70,11 @@ impl Conflict {
         .unwrap_or_else(|| format!("checked out {}", conflict.commit.to_hex_with_len(7)));
         delete_deferred_refs(&self.repository_path, self.bare, &conflict.deferred_ref_deletions)?;
         conflict.materialize()?;
-        Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
+        Ok((
+            format!("{notice}; ready to resolve conflicts"),
+            conflict.commit,
+            ref_rewrites,
+        ))
     }
 }
 
@@ -75,7 +85,7 @@ pub(crate) fn materialize_plan_conflict(
     bare: bool,
     revisions: &[OsString],
     include_worktrees: bool,
-) -> Result<(String, ObjectId)> {
+) -> Result<(String, ObjectId, Vec<super::rebase::RefRewrite>)> {
     let original = conflict.original();
     let mut conflict = conflict.into_conflict().persist()?;
     let notice = move_head_to(
@@ -91,7 +101,11 @@ pub(crate) fn materialize_plan_conflict(
     delete_deferred_refs(repository_path, bare, &conflict.deferred_ref_deletions)?;
     conflict.materialize()?;
     tracing::warn!(commit_id = %original, rewritten_id = %conflict.commit, "materialized rebase-todo conflict");
-    Ok((format!("{notice}; ready to resolve conflicts"), conflict.commit))
+    Ok((
+        format!("{notice}; ready to resolve conflicts"),
+        conflict.commit,
+        conflict.ref_rewrites,
+    ))
 }
 
 pub(crate) fn checkout_without_replay(
@@ -353,6 +367,7 @@ pub(crate) fn perform_reporting_rebased(
     let mut completed_graph = None;
     let mut original_ids = HashMap::new();
     let mut review_roots = review_roots.to_vec();
+    let mut ref_rewrites = Vec::new();
     while let Some(base) = pending_base(&repository, selected)? {
         let mut rebased = Vec::new();
         let outcome = super::rebase::perform_reporting_rebased(
@@ -379,9 +394,11 @@ pub(crate) fn perform_reporting_rebased(
                     bare,
                     revisions: revisions.to_vec(),
                     include_worktrees,
+                    ref_rewrites,
                 }));
             }
         };
+        ref_rewrites.extend(outcome.ref_rewrites.iter().cloned());
         for (old, original) in rebased {
             if let Some(new) = outcome.map(old) {
                 original_ids.insert(new, original);
@@ -459,7 +476,7 @@ pub(crate) fn perform_reporting_rebased(
             super::stash::apply(repository_path, bare, &workdir, stash)?,
         );
     }
-    Ok(Perform::Complete(notice))
+    Ok(Perform::Complete { notice, ref_rewrites })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1512,7 +1529,7 @@ mod tests {
             "preparing the exact merge result changes no repository state"
         );
 
-        let (_notice, conflict_id) = conflict.accept()?;
+        let (_notice, conflict_id, _) = conflict.accept()?;
         let repository = crate::test_repository::open(fixture.path())?;
         assert_eq!(
             repository.head_id()?.detach(),

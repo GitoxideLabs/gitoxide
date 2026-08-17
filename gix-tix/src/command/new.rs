@@ -49,11 +49,11 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     }
 
     let explicit = super::reword::explicit_message(&args.edit, std::io::stdin())?;
-    let id = if let Some(message) = explicit {
+    let outcome = if let Some(message) = explicit {
         let mut repository = crate::open_repository(&repository_path, bare, false)
             .context("could not reopen repository before creating commit")?;
         repository.object_cache_size(None);
-        crate::edit::create::apply_message(repository, &graph, prepared, &message)?
+        crate::edit::create::apply_message_reporting(repository, &graph, prepared, &message)?
     } else {
         let Some(edited) = crate::edit::edit_document_without_terminal(
             &prepared.editor,
@@ -67,9 +67,16 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
         let mut repository = crate::open_repository(&repository_path, bare, false)
             .context("could not reopen repository after editing commit")?;
         repository.object_cache_size(None);
-        crate::edit::create::apply(repository, &graph, prepared, &edited)?
+        crate::edit::create::apply_reporting(repository, &graph, prepared, &edited)?
     };
-    println!("{}", id.to_hex_with_len(7));
+    println!(
+        "{}",
+        outcome
+            .selected
+            .context("creating a commit did not produce a selection")?
+            .to_hex_with_len(7)
+    );
+    super::print_ref_rewrites(&outcome.ref_rewrites);
     Ok(())
 }
 

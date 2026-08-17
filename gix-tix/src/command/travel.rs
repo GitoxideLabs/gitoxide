@@ -57,12 +57,16 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     let bare = repository.is_bare();
     drop(repository);
     match crate::edit::time_travel::perform(&repository_path, bare, selected, &graph, &reviews, &[], false)? {
-        crate::edit::time_travel::Perform::Complete(Some(notice)) => println!("{notice}"),
-        crate::edit::time_travel::Perform::Complete(None) => {
-            println!("already at {}", selected.to_hex_with_len(7));
+        crate::edit::time_travel::Perform::Complete { notice, ref_rewrites } => {
+            println!(
+                "{}",
+                notice.unwrap_or_else(|| format!("already at {}", selected.to_hex_with_len(7)))
+            );
+            super::print_ref_rewrites(&ref_rewrites);
         }
         crate::edit::time_travel::Perform::Conflict(conflict) if args.materialize_conflicts => {
-            let (notice, _) = conflict.accept()?;
+            let (notice, _, ref_rewrites) = conflict.accept()?;
+            super::print_ref_rewrites(&ref_rewrites);
             anyhow::bail!("{notice}");
         }
         crate::edit::time_travel::Perform::Conflict(_) => {

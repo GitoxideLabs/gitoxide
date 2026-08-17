@@ -1820,7 +1820,7 @@ fn event_loop(
                     .expect("a pending conflict was checked before accepting it");
                 let original = conflict.original();
                 match conflict.accept() {
-                    Ok((notice, id)) => {
+                    Ok((notice, id, _)) => {
                         tracing::info!(commit_id = %original, rewritten_id = %id, "accepted suspended rebase conflict");
                         app.begin_conflict_resolution();
                         app.leave_attention(notice);
@@ -1876,7 +1876,7 @@ fn event_loop(
                     &revisions,
                     false,
                 ) {
-                    Ok((notice, id)) => {
+                    Ok((notice, id, _)) => {
                         pending_todo_rebase_plan = Some(plan);
                         app.begin_conflict_resolution();
                         app.arm_rebase_continuation();
@@ -2224,7 +2224,7 @@ fn event_loop(
                                     )
                                 });
                             match travel {
-                                Ok(edit::time_travel::Perform::Complete(notice)) => {
+                                Ok(edit::time_travel::Perform::Complete { notice, .. }) => {
                                     app.leave_success(notice.map_or_else(
                                         || format!("created fork {}", new_id.to_hex_with_len(7)),
                                         |notice| format!("created fork {}; {notice}", new_id.to_hex_with_len(7)),
@@ -2597,7 +2597,9 @@ fn event_loop(
                             )
                         });
                     match result {
-                        Ok(edit::time_travel::Perform::Complete(Some(notice))) => {
+                        Ok(edit::time_travel::Perform::Complete {
+                            notice: Some(notice), ..
+                        }) => {
                             tracing::info!(selected = %id, %notice, "completed time-travel action");
                             app.leave_success(notice);
                             if let Ok(head) = open_repository(&repository_path, repository_is_bare, false)
@@ -2608,7 +2610,7 @@ fn event_loop(
                             invalidate_worktree_changes(&mut worktree_changes);
                             refresh_pending = true;
                         }
-                        Ok(edit::time_travel::Perform::Complete(None)) => {}
+                        Ok(edit::time_travel::Perform::Complete { notice: None, .. }) => {}
                         Ok(edit::time_travel::Perform::Conflict(conflict)) => {
                             let original = conflict.original();
                             app.arm_rebase_conflict(original);
@@ -4056,11 +4058,11 @@ fn create_commit(
     let mut repository =
         open_repository(repository_path, bare, false).context("could not reopen repository after editing commit")?;
     repository.object_cache_size(None);
-    match mode {
-        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited),
-        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited),
-    }
-    .map(Some)
+    let id = match mode {
+        CreateMode::Insert | CreateMode::InsertEmpty => edit::create::apply(repository, graph, prepared, &edited)?,
+        CreateMode::Fork => edit::create::apply_fork(repository, graph, prepared, &edited)?,
+    };
+    Ok(Some(id))
 }
 
 #[tracing::instrument(skip_all)]
