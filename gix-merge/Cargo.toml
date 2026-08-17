@@ -53,7 +53,8 @@ document-features = { version = "0.2.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-gix-testtools = { path = "../tests/tools" }
+gix-merge = { path = ".", features = ["sha1", "sha256"] }
+gix-testtools = { path = "../tests/tools", features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb" }
 gix-utils = { path = "../gix-utils" }
 termtree = "1.0.0"

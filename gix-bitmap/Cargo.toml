@@ -19,4 +19,4 @@ test = true
 gix-error = { version = "^0.2.5", path = "../gix-error" }
 
 [dev-dependencies]
-gix-testtools = { path = "../tests/tools" }
+gix-testtools = { path = "../tests/tools", default-features = false }

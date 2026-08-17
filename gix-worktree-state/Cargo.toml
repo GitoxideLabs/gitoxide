@@ -43,7 +43,7 @@ gix-filter = { path = "../gix-filter" }
 gix-index = { path = "../gix-index", features = ["sha1", "sha256"] }
 gix-hash = { path = "../gix-hash", features = ["sha1", "sha256"] }
 gix-fs = { path = "../gix-fs" }
-gix-testtools = { path = "../tests/tools", default-features = false }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 walkdir = "2.3.2"
 

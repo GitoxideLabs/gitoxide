@@ -76,7 +76,7 @@ gix-tempfile = { version = "^24.0.0", default-features = false, path = "../gix-t
 
 [dev-dependencies]
 gix-pack = { path = ".", features = ["sha1", "sha256", "pack-cache-lru-dynamic", "pack-cache-lru-static", "object-cache-dynamic", "serde"] }
-gix-testtools = { path = "../tests/tools", default-features = false }
+gix-testtools = { path = "../tests/tools", default-features = false, features = ["sha1", "sha256"] }
 gix-odb = { path = "../gix-odb", features = ["sha1", "sha256"] }
 gix-object = { path = "../gix-object" }
 gix-traverse = { path = "../gix-traverse" }
