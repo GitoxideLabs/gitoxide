@@ -20,17 +20,39 @@ pub(crate) struct Prepared {
     pub(super) reset_index: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum Source {
+    Default,
+    Index,
+    Worktree,
+}
+
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
-    prepare_inner(repo, parent, false)
+    prepare_inner(repo, parent, false, Source::Default, None)
 }
 
 #[tracing::instrument(skip_all, fields(parent = ?parent))]
 pub(crate) fn prepare_empty(repo: gix::Repository, parent: Option<ObjectId>) -> Result<Prepared> {
-    prepare_inner(repo, parent, true)
+    prepare_inner(repo, parent, true, Source::Default, None)
 }
 
-fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: bool) -> Result<Prepared> {
+pub(crate) fn prepare_from(
+    repo: gix::Repository,
+    parent: Option<ObjectId>,
+    source: Source,
+    author: Option<&gix::bstr::BStr>,
+) -> Result<Prepared> {
+    prepare_inner(repo, parent, false, source, author)
+}
+
+fn prepare_inner(
+    mut repo: gix::Repository,
+    parent: Option<ObjectId>,
+    empty: bool,
+    source: Source,
+    author_override: Option<&gix::bstr::BStr>,
+) -> Result<Prepared> {
     repo.workdir().context("creating a commit requires a worktree")?;
     let head = repo.head().context("could not read HEAD before creating a commit")?;
     let head_id = head.id().map(gix::Id::detach);
@@ -45,12 +67,15 @@ fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: boo
         head.referent_name().context("an unborn HEAD must point to a branch")?;
     }
     let editor = repo.editor().context("no Git editor is available")?;
-    let author = repo
+    let mut author = repo
         .author()
         .context("no Git author is configured")?
         .context("could not resolve the Git author")?
         .to_owned()
         .context("could not own the Git author")?;
+    if let Some(value) = author_override {
+        author = reword::actor(value, author.time, "author")?;
+    }
     let committer = repo
         .committer()
         .context("no Git committer is configured")?
@@ -80,14 +105,14 @@ fn prepare_inner(mut repo: gix::Repository, parent: Option<ObjectId>, empty: boo
     }
     let index_tree = index_tree(&repo, &index)?;
     let based_on_parent = head_id == parent;
-    let tree = if empty {
+    let tree = if empty || !based_on_parent {
         baseline.id
-    } else if based_on_parent && index_tree != baseline.id {
-        index_tree
-    } else if based_on_parent {
-        worktree_tree_tracked(&repo, &baseline, &index)?
     } else {
-        baseline.id
+        match source {
+            Source::Default if index_tree != baseline.id => index_tree,
+            Source::Default | Source::Worktree => worktree_tree_tracked(&repo, &baseline, &index)?,
+            Source::Index => index_tree,
+        }
     };
 
     let new_tree = repo.find_tree(tree).context("could not load the candidate tree")?;
@@ -243,15 +268,36 @@ fn worktree_tree_with_changes_inner(
 
 #[tracing::instrument(skip_all, fields(parent = ?prepared.parent))]
 pub(crate) fn apply(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    edited: &[u8],
+) -> Result<ObjectId> {
+    let edit = commit_from_edit(&prepared, edited)?;
+    apply_commit(repo, graph, prepared, edit)
+}
+
+pub(crate) fn apply_message(
+    repo: gix::Repository,
+    graph: &crate::history::HistoryGraph,
+    prepared: Prepared,
+    message: &[u8],
+) -> Result<ObjectId> {
+    let mut edit = reword::parse(&prepared.document)?;
+    edit.message = reword::cleanup_message(message, None);
+    let commit = commit_from_parsed_edit(&prepared, edit)?;
+    apply_commit(repo, graph, prepared, commit)
+}
+
+fn apply_commit(
     mut repo: gix::Repository,
     graph: &crate::history::HistoryGraph,
     mut prepared: Prepared,
-    edited: &[u8],
+    (commit, enrichment): (gix::objs::Commit, crate::enrich::Headers),
 ) -> Result<ObjectId> {
     let repository_path = repo.git_dir().to_owned();
     let bare = repo.is_bare();
     repo.objects.set_object_memory(std::mem::take(&mut prepared.objects));
-    let (commit, enrichment) = commit_from_edit(&prepared, edited)?;
     let id = rebase::perform(
         &repo,
         graph,
@@ -305,6 +351,13 @@ pub(super) fn commit_from_edit(
     edited: &[u8],
 ) -> Result<(gix::objs::Commit, crate::enrich::Headers)> {
     let edit = reword::parse(edited)?;
+    commit_from_parsed_edit(prepared, edit)
+}
+
+fn commit_from_parsed_edit(
+    prepared: &Prepared,
+    edit: reword::Edit<'_>,
+) -> Result<(gix::objs::Commit, crate::enrich::Headers)> {
     if edit.message.is_empty() {
         anyhow::bail!("the edited commit message is empty");
     }

@@ -7,10 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 
 #[derive(Debug, clap::Args)]
-pub(super) struct Args {
-    /// Revision resolving to the commit whose message should be edited.
-    #[arg(value_name = "REVSPEC")]
-    pub(super) revision: OsString,
+pub(super) struct MessageArgs {
     /// Use this message instead of opening an editor; repeat to add paragraphs.
     #[arg(short = 'm', long, value_name = "MESSAGE", conflicts_with = "file")]
     pub(super) message: Vec<OsString>,
@@ -20,6 +17,15 @@ pub(super) struct Args {
     /// Set the author actor while preserving the original author date.
     #[arg(long, value_name = "NAME <EMAIL>")]
     pub(super) author: Option<OsString>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(super) struct Args {
+    /// Revision resolving to the commit whose message should be edited.
+    #[arg(value_name = "REVSPEC")]
+    pub(super) revision: OsString,
+    #[command(flatten)]
+    pub(super) edit: MessageArgs,
 }
 
 pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
@@ -51,13 +57,14 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     }
 
     let author = args
+        .edit
         .author
         .as_deref()
         .map(gix::path::os_str_into_bstr)
         .transpose()
         .context("author is not valid UTF-8")?;
 
-    if let Some(message) = explicit_message(&args, std::io::stdin())? {
+    if let Some(message) = explicit_message(&args.edit, std::io::stdin())? {
         return finish(crate::edit::reword::apply_message(
             repository,
             &graph,
@@ -91,7 +98,7 @@ pub(super) fn run(repository: gix::Repository, args: Args) -> Result<()> {
     finish_editor(crate::edit::reword::apply(repository, &graph, target, &edited)?, target)
 }
 
-fn explicit_message(args: &Args, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
+pub(super) fn explicit_message(args: &MessageArgs, mut stdin: impl Read) -> Result<Option<Vec<u8>>> {
     if !args.message.is_empty() {
         let mut out = Vec::new();
         for (index, message) in args.message.iter().enumerate() {
@@ -164,26 +171,28 @@ mod tests {
     fn args(revision: &str) -> Args {
         Args {
             revision: revision.into(),
-            message: Vec::new(),
-            file: None,
-            author: None,
+            edit: MessageArgs {
+                message: Vec::new(),
+                file: None,
+                author: None,
+            },
         }
     }
 
     #[test]
     fn explicit_message_sources_are_complete_and_git_like() -> gix_testtools::Result {
         let mut message_args = args("HEAD");
-        message_args.message = vec!["title".into(), "body".into()];
+        message_args.edit.message = vec!["title".into(), "body".into()];
         assert_eq!(
-            explicit_message(&message_args, &b"ignored"[..])?,
+            explicit_message(&message_args.edit, &b"ignored"[..])?,
             Some(b"title\n\nbody".to_vec()),
             "repeated messages become paragraphs without reading stdin"
         );
 
         let mut file_args = args("HEAD");
-        file_args.file = Some("-".into());
+        file_args.edit.file = Some("-".into());
         assert_eq!(
-            explicit_message(&file_args, &b"from stdin\n"[..])?,
+            explicit_message(&file_args.edit, &b"from stdin\n"[..])?,
             Some(b"from stdin\n".to_vec()),
             "a dash reads the entire message from stdin"
         );
@@ -192,9 +201,9 @@ mod tests {
         let path = fixture.path().join("message.md");
         std::fs::write(&path, b"from file\n\nbody\n")?;
         let mut file_args = args("HEAD");
-        file_args.file = Some(path);
+        file_args.edit.file = Some(path);
         assert_eq!(
-            explicit_message(&file_args, &b"ignored"[..])?,
+            explicit_message(&file_args.edit, &b"ignored"[..])?,
             Some(b"from file\n\nbody\n".to_vec()),
             "a file supplies the complete message"
         );
@@ -209,8 +218,8 @@ mod tests {
         crate::enrich::toggle(&repository, original)?;
         crate::enrich::set_note(&repository, original, Some(b"kept\n\nbody"))?;
         let mut initial = args("HEAD");
-        initial.message = vec!["replacement title".into(), ";literal body".into()];
-        initial.author = Some("Agent <agent@example.com>".into());
+        initial.edit.message = vec!["replacement title".into(), ";literal body".into()];
+        initial.edit.author = Some("Agent <agent@example.com>".into());
         run(open(fixture.path(), "false")?, initial)?;
 
         assert_eq!(
@@ -238,7 +247,7 @@ mod tests {
         );
         let rewritten = git(fixture.path(), &["rev-parse", "HEAD"])?;
         let mut same = args("HEAD");
-        same.message = vec!["replacement title\n\n;literal body".into()];
+        same.edit.message = vec!["replacement title\n\n;literal body".into()];
         run(open(fixture.path(), "false")?, same)?;
         assert_eq!(
             git(fixture.path(), &["rev-parse", "HEAD"])?,
@@ -247,7 +256,7 @@ mod tests {
         );
 
         let mut empty = args("HEAD");
-        empty.message = vec!["   ".into()];
+        empty.edit.message = vec!["   ".into()];
         let err = run(open(fixture.path(), "false")?, empty)
             .expect_err("an empty cleaned message must not replace the commit message");
         assert!(format!("{err:#}").contains("message is empty"));
@@ -260,7 +269,7 @@ mod tests {
         let message = git(fixture.path(), &["log", "-1", "--format=%B"])?;
         let author_date = git(fixture.path(), &["log", "-1", "--format=%aI"])?;
         let mut reword = args("HEAD");
-        reword.author = Some("Agent <agent@example.com>".into());
+        reword.edit.author = Some("Agent <agent@example.com>".into());
         run(open(fixture.path(), ":")?, reword)?;
 
         assert_eq!(git(fixture.path(), &["log", "-1", "--format=%B"])?, message);
@@ -272,7 +281,7 @@ mod tests {
 
         let old = git(fixture.path(), &["rev-parse", "HEAD"])?;
         let mut invalid = args("HEAD");
-        invalid.author = Some("missing-email".into());
+        invalid.edit.author = Some("missing-email".into());
         let err = run(open(fixture.path(), "false")?, invalid)
             .expect_err("an invalid author is rejected before invoking the editor");
         assert!(format!("{err:#}").contains("author identity"));
