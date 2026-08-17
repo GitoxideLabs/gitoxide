@@ -22,6 +22,7 @@ C1
   parent C0
   author author <author@example.com> 946771200 +0000
   committer rebasing committer <rebasing@example.com> 978307200 +0000
+  change-id wtvpqoumovpvzypqrpsxxlkvxmltvtlxvomlzyxs
   
   rewritten middle
 
@@ -30,6 +31,7 @@ C2
   parent C1
   author author <author@example.com> 946857600 +0000
   committer rebasing committer <rebasing@example.com> 978307200 +0000
+  change-id zvoumlrryyvtnnxxqnmrnlxnvtlmnvwlynmuuvux
   
   tip
 
@@ -45,12 +47,12 @@ tree = T1
 100644 file "tip" = "tip\n"
 
 [objects]
+C1 = 1583a183c3a57fce524e7acdd5a1c007d5f0f9a9
 C0 = 5295d5ce934d18b6a1f48c3b7d836d53b55304e5
 T0 = 559dc660acc84805fedbcb75588371240372c173
 T1 = 569961a34e2a909d8c7a2940ed4ad365504e64ed
-C2 = 5d165c738be9924177bbbcd2e6a6060b488828ca
-C1 = 77dcc6c97954f7c6ffada274193c390913821435
 T2 = 8552142164d268c95f60dabb74465a2f4ffb51b7
+C2 = 91e50045e3c98994aebc74a28953fc04ce49cacf
 B0 = b218ebde2fc5b78f14aa04eeb42a74b17e2e367d
 B1 = df967b96a579e45a18b8251732d16804b2e56a55
 B2 = ea1a2ae6cdab2b53dee8943ca555c4312a0b798a

@@ -191,8 +191,23 @@ mod tests {
             repository.find_commit(upper)?.message_raw()?,
             b"upper\n\nreason\n".as_bstr()
         );
+        let source_commit = repository.find_commit(source)?.decode()?.into_owned()?;
+        assert_eq!(
+            crate::change_id::effective(source, source_commit.extra_headers().find_all(crate::change_id::HEADER)),
+            old.into(),
+            "the rewritten lower commit inherits the original identity"
+        );
+        assert_eq!(
+            repository
+                .find_commit(upper)?
+                .decode()?
+                .extra_headers()
+                .find(crate::change_id::HEADER),
+            None,
+            "the newly created upper commit remains headerless"
+        );
         assert!(
-            !super::super::rebase::is_pending(&repository.find_commit(source)?.decode()?.into_owned()?),
+            !super::super::rebase::is_pending(&source_commit),
             "the unsigned source already has its final tree and parent"
         );
         assert!(

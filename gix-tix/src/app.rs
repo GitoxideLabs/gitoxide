@@ -8,6 +8,7 @@ use std::{
 use gix::{
     ObjectId,
     bstr::{BStr, BString, ByteSlice},
+    hash::ChangeId,
     traverse::commit::ParentIds,
 };
 
@@ -267,6 +268,14 @@ pub(crate) enum DateMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum IdMode {
+    Commit,
+    Change,
+    #[default]
+    Off,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CopyKind {
     Id,
@@ -289,6 +298,7 @@ pub(crate) enum Action {
     First,
     Last,
     ToggleDate,
+    CycleIds,
     ToggleName,
     ToggleEmail,
     ToggleTrailers,
@@ -407,6 +417,7 @@ pub(crate) struct App {
     pub viewport_rows: usize,
     pub lane_time: Option<Duration>,
     pub date_mode: DateMode,
+    pub id_mode: IdMode,
     pub name_mode: NameMode,
     pub show_emails: bool,
     pub show_trailers: bool,
@@ -474,6 +485,8 @@ pub(crate) struct App {
     signature_verification_running: bool,
     pub(crate) selection_relation: Option<SelectionRelation>,
     hidden_branch_updates: HashMap<ObjectId, (usize, ObjectId)>,
+    change_ids: HashMap<ObjectId, ChangeId>,
+    duplicate_change_ids: HashSet<ObjectId>,
 }
 
 impl App {
@@ -499,6 +512,7 @@ impl App {
             viewport_rows,
             lane_time: None,
             date_mode: DateMode::default(),
+            id_mode: IdMode::default(),
             name_mode: NameMode::All,
             show_emails: false,
             show_trailers: true,
@@ -566,7 +580,34 @@ impl App {
             signature_verification_running: false,
             selection_relation: None,
             hidden_branch_updates: HashMap::new(),
+            change_ids: HashMap::new(),
+            duplicate_change_ids: HashSet::new(),
         }
+    }
+
+    pub(crate) fn effective_id_mode(&self) -> IdMode {
+        match self.id_mode {
+            IdMode::Off if !self.duplicate_change_ids.is_empty() => IdMode::Change,
+            mode => mode,
+        }
+    }
+
+    pub(crate) fn change_id(&self, id: ObjectId) -> ChangeId {
+        self.change_ids.get(&id).copied().unwrap_or_else(|| id.into())
+    }
+
+    pub(crate) fn has_duplicate_change_id(&self, id: ObjectId) -> bool {
+        self.duplicate_change_ids.contains(&id)
+    }
+
+    pub(crate) fn set_change_ids(&mut self, change_ids: HashMap<ObjectId, ChangeId>, duplicates: HashSet<ObjectId>) {
+        self.change_ids = change_ids;
+        self.duplicate_change_ids = duplicates;
+    }
+
+    fn clear_change_ids(&mut self) {
+        self.change_ids.clear();
+        self.duplicate_change_ids.clear();
     }
 
     pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
@@ -828,6 +869,7 @@ impl App {
             &action,
             Action::ToggleHistoryDisplay
                 | Action::ToggleDate
+                | Action::CycleIds
                 | Action::ToggleEmail
                 | Action::ToggleName
                 | Action::ToggleTrailers
@@ -945,6 +987,13 @@ impl App {
                     DateMode::Author => DateMode::Committer,
                     DateMode::Committer => DateMode::None,
                     DateMode::None => DateMode::Author,
+                };
+            }
+            Action::CycleIds => {
+                self.id_mode = match self.id_mode {
+                    IdMode::Commit => IdMode::Change,
+                    IdMode::Change => IdMode::Off,
+                    IdMode::Off => IdMode::Commit,
                 };
             }
             Action::ToggleEmail => self.show_emails = !self.show_emails,
@@ -1351,6 +1400,7 @@ impl App {
         select_top: bool,
     ) -> Option<Vec<SharedCommitRow>> {
         self.forget_confirmation = None;
+        self.clear_change_ids();
         drop(self.store_commits(commits));
 
         let visible = self.reachable_from(view_tips);
@@ -1485,6 +1535,7 @@ impl App {
         self.hidden_branch_targets.clear();
         self.hidden_rebase_bases.clear();
         self.hidden_branch_updates.clear();
+        self.clear_change_ids();
         self.pending_hidden_rows = None;
         self.titles = Vec::new();
         self.notes.clear();
@@ -3561,6 +3612,25 @@ mod tests {
         assert_eq!(app.date_mode, DateMode::None);
         app.update(Action::ToggleDate);
         assert_eq!(app.date_mode, DateMode::Author);
+        assert_eq!(app.id_mode, IdMode::Off);
+        app.update(Action::CycleIds);
+        assert_eq!(app.id_mode, IdMode::Commit);
+        app.update(Action::CycleIds);
+        assert_eq!(app.id_mode, IdMode::Change);
+        app.update(Action::CycleIds);
+        assert_eq!(app.id_mode, IdMode::Off);
+        app.set_change_ids(HashMap::new(), HashSet::from([id(1), id(2)]));
+        assert_eq!(
+            app.effective_id_mode(),
+            IdMode::Change,
+            "off automatically reveals duplicate change IDs"
+        );
+        app.update(Action::CycleIds);
+        assert_eq!(
+            app.effective_id_mode(),
+            IdMode::Commit,
+            "an explicit commit-ID mode overrides automatic change IDs"
+        );
         assert!(app.show_emails);
         assert_eq!(app.name_mode, NameMode::None);
         assert!(!app.show_trailers);
