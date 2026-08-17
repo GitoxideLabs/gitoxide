@@ -762,8 +762,8 @@ mod tests {
         assert_eq!(output.lines().count(), 5, "the complete projected history is printed");
         assert!(output.contains('●'), "history graph lanes are rendered");
         assert!(
-            output.lines().any(|line| line.starts_with("🚧 ")),
-            "todos lead their rows"
+            output.lines().any(|line| line.starts_with("🚧├")),
+            "todos directly lead their rows: {output:?}"
         );
         assert!(output.contains("📌"), "applicable pins are decorated and traversed");
         assert!(

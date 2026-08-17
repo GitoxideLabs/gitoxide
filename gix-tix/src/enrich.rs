@@ -17,9 +17,9 @@ pub(crate) struct Enrichment {
 
 pub(crate) fn marker(todo: bool, note: bool) -> &'static str {
     match (todo, note) {
-        (true, true) => "🚧📝 ",
-        (true, false) => "🚧 ",
-        (false, true) => "📝 ",
+        (true, true) => "🚧📝",
+        (true, false) => "🚧",
+        (false, true) => "📝",
         (false, false) => "",
     }
 }
