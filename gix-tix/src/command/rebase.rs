@@ -38,6 +38,9 @@ pub(super) struct Todo {
     /// Hide this revision and derive the editable fork point from it.
     #[arg(short = 'h', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
+    /// Do not infer hidden local branches from remote HEADs.
+    #[arg(long)]
+    no_auto_hide: bool,
     /// Rebase the derived scope onto this commit instead of its fork point.
     #[arg(long, value_name = "REV")]
     onto: Option<OsString>,
@@ -86,10 +89,12 @@ fn todo(repo: gix::Repository, args: Todo) -> Result<()> {
 }
 
 fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
-    if args.hide.is_empty() {
-        anyhow::bail!("rebase todo requires at least one -h/--hide revision");
+    let (hide, unavailable) = history::available_hidden_revisions(repo, &args.hide, !args.no_auto_hide)?;
+    if hide.is_empty() {
+        anyhow::bail!(
+            "rebase todo requires at least one -h/--hide revision when no remote HEAD maps to a local branch"
+        );
     }
-    let (hide, unavailable) = history::available_hidden_revisions(repo, &args.hide)?;
     for (revision, err) in unavailable {
         eprintln!(
             "warning: ignoring unavailable hidden revision {}: {err}",
@@ -330,6 +335,7 @@ mod tests {
             &Todo {
                 help: None,
                 hide: vec!["HEAD~2".into()],
+                no_auto_hide: false,
                 onto: None,
                 edit_and_apply: false,
                 tips: Vec::new(),
@@ -357,6 +363,7 @@ mod tests {
             &Todo {
                 help: None,
                 hide: Vec::new(),
+                no_auto_hide: true,
                 onto: None,
                 edit_and_apply: false,
                 tips: Vec::new(),
@@ -364,6 +371,45 @@ mod tests {
         )
         .expect_err("a hidden revision is required");
         assert!(format!("{err:#}").contains("at least one -h/--hide"));
+        Ok(())
+    }
+
+    #[test]
+    fn infers_the_hidden_base_from_a_remote_head() -> gix_testtools::Result {
+        let (fixture, _repo) = repository()?;
+        for args in [
+            &["branch", "base", "HEAD~2"][..],
+            &["config", "remote.origin.url", "https://example.com/repo"][..],
+            &["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"][..],
+            &["update-ref", "refs/remotes/origin/base", "refs/heads/base"][..],
+            &["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/base"][..],
+        ] {
+            let output = Command::new("git").current_dir(fixture.path()).args(args).output()?;
+            assert!(
+                output.status.success(),
+                "git {args:?} prepares the remote default: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let repo = crate::test_repository::open_with(
+            fixture.path(),
+            ["core.abbrev=7", "user.name=todo author", "user.email=todo@example.com"],
+        )?;
+        let prepared = prepare(
+            &repo,
+            &Todo {
+                help: None,
+                hide: Vec::new(),
+                no_auto_hide: false,
+                onto: None,
+                edit_and_apply: false,
+                tips: Vec::new(),
+            },
+        )?;
+        assert!(
+            String::from_utf8(prepared.document)?.contains("# Rebase from"),
+            "the inferred local default branch provides the rebase base"
+        );
         Ok(())
     }
 
@@ -475,6 +521,7 @@ mod tests {
             &Todo {
                 help: None,
                 hide: vec!["HEAD~2".into()],
+                no_auto_hide: false,
                 onto: None,
                 edit_and_apply: false,
                 tips: Vec::new(),
