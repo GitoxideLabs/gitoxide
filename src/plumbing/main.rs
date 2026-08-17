@@ -1852,7 +1852,7 @@ mod tests {
         }
 
         for arguments in [
-            vec!["gix", "tix", "-h", "main", "--hide", "tag", "-w", "topic"],
+            vec!["gix", "tix", "-x", "main", "--hide", "tag", "topic"],
             vec!["gix", "tix", "amend"],
             vec!["gix", "tix", "spill"],
         ] {
@@ -1871,12 +1871,14 @@ mod tests {
             clap::error::ErrorKind::UnknownArgument,
             "alternate-screen operation has no command-line mode"
         );
-        assert_eq!(
-            Args::try_parse_from(["gix", "tix", "--help"])
-                .expect_err("help exits through clap")
-                .kind(),
-            clap::error::ErrorKind::DisplayHelp,
-            "long help remains available while -h belongs to hide"
-        );
+        for help in ["-h", "--help"] {
+            assert_eq!(
+                Args::try_parse_from(["gix", "tix", help])
+                    .expect_err("help exits through clap")
+                    .kind(),
+                clap::error::ErrorKind::DisplayHelp,
+                "embedded tix supports {help}"
+            );
+        }
     }
 }
