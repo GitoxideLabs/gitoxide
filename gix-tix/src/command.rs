@@ -13,14 +13,11 @@ mod travel;
 #[derive(Debug, clap::Args)]
 #[command(args_conflicts_with_subcommands = true)]
 pub struct Platform {
-    /// Print help.
-    #[arg(long, action = clap::ArgAction::HelpLong)]
-    help: Option<bool>,
     /// Exit once all commits and graph lanes have been computed.
     #[arg(long)]
     quit_on_finish: bool,
     /// Hide this revision and every commit reachable from it.
-    #[arg(short = 'h', long, value_name = "REVSPEC")]
+    #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
     #[command(subcommand)]
     command: Option<Command>,
@@ -33,7 +30,6 @@ enum Command {
     /// Print the complete ref-tree without opening the terminal UI.
     RefTree(RefTree),
     /// Print the complete history view without opening the terminal UI.
-    #[command(disable_help_flag = true)]
     Show(Show),
     /// Add staged changes, or worktree changes when nothing is staged, to HEAD.
     Amend(Amend),
@@ -54,14 +50,11 @@ enum Command {
 
 #[derive(Debug, clap::Args)]
 struct RefTree {
-    /// Print help.
-    #[arg(long, action = clap::ArgAction::HelpLong)]
-    help: Option<bool>,
     /// Omit tags as labels, traversal tips, and topology anchors.
     #[arg(long)]
     no_tags: bool,
     /// Hide this revision and every commit reachable from it.
-    #[arg(long, value_name = "REVSPEC")]
+    #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
     /// Use the ref-tree view's Unicode line and node glyphs instead of ASCII.
     #[arg(long)]
@@ -73,11 +66,8 @@ struct RefTree {
 
 #[derive(Debug, clap::Args)]
 struct Show {
-    /// Print help.
-    #[arg(long, action = clap::ArgAction::HelpLong)]
-    help: Option<bool>,
     /// Hide this revision and every commit reachable from it.
-    #[arg(short = 'h', long, value_name = "REVSPEC")]
+    #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
     /// Do not infer hidden local branches from remote HEADs.
     #[arg(long)]
@@ -105,7 +95,6 @@ struct Pin {
 #[command(
     name = "tix",
     about = "Browse or edit commit history",
-    disable_help_flag = true,
     after_long_help = "Commands which open an editor use Git's normal editor selection. Set GIT_EDITOR=<command> to override it."
 )]
 struct Cli {
@@ -122,7 +111,6 @@ impl Platform {
     /// Run this command against `repository`.
     pub fn run(self, repository: gix::ThreadSafeRepository) -> Result<()> {
         let Platform {
-            help: _,
             quit_on_finish,
             hide,
             command,
@@ -185,7 +173,7 @@ fn print_ref_tree(repository: &gix::Repository, args: RefTree) -> Result<()> {
 fn show(repository: &gix::Repository, args: Show) -> Result<()> {
     let (hide, unavailable) = crate::history::available_hidden_revisions(repository, &args.hide, !args.no_auto_hide)?;
     if hide.is_empty() {
-        anyhow::bail!("show requires at least one -h/--hide revision when no remote HEAD maps to a local branch");
+        anyhow::bail!("show requires at least one -x/--hide revision when no remote HEAD maps to a local branch");
     }
     for (revision, err) in unavailable {
         eprintln!(
@@ -415,7 +403,7 @@ mod tests {
 
     #[test]
     fn parses_tui_options_and_top_level_commands() {
-        let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-h", "main", "--hide", "tag", "topic"])
+        let cli = Cli::try_parse_from(["tix", "--quit-on-finish", "-x", "main", "--hide", "tag", "topic"])
             .expect("TUI arguments parse");
         assert!(cli.platform.quit_on_finish);
         assert_eq!(cli.platform.hide, ["main", "tag"], "hide options append");
@@ -430,7 +418,7 @@ mod tests {
             "tix",
             "ref-tree",
             "--no-tags",
-            "--hide",
+            "-x",
             "private",
             "--unicode",
             "main",
@@ -442,20 +430,18 @@ mod tests {
         let Some(Command::RefTree(ref_tree)) = ref_tree else {
             panic!("ref-tree was expected")
         };
-        assert!(ref_tree.help.is_none());
         assert!(ref_tree.no_tags);
         assert_eq!(ref_tree.hide, ["private"]);
         assert!(ref_tree.unicode);
         assert_eq!(ref_tree.revisions, ["main", "topic"]);
 
-        let show = Cli::try_parse_from(["tix", "show", "-h", "main", "--hide", "tag", "topic"])
+        let show = Cli::try_parse_from(["tix", "show", "-x", "main", "--hide", "tag", "topic"])
             .expect("show options parse")
             .platform
             .command;
         let Some(Command::Show(show)) = show else {
             panic!("show was expected")
         };
-        assert!(show.help.is_none());
         assert_eq!(show.hide, ["main", "tag"]);
         assert!(!show.no_auto_hide);
         assert_eq!(show.revisions, ["topic"]);
@@ -579,7 +565,7 @@ mod tests {
                 "rebase",
                 "todo",
                 "--no-auto-hide",
-                "-h",
+                "-x",
                 "main",
                 "--onto",
                 "next",
@@ -630,23 +616,36 @@ mod tests {
 
     #[test]
     fn preserves_hide_and_help_semantics() {
+        for command in [
+            &[][..],
+            &["ref-tree"],
+            &["show"],
+            &["amend"],
+            &["spill"],
+            &["split"],
+            &["pin"],
+            &["travel"],
+            &["reword"],
+            &["rebase"],
+            &["rebase", "todo"],
+            &["rebase", "apply"],
+        ] {
+            for help in ["-h", "--help"] {
+                let arguments = std::iter::once("tix").chain(command.iter().copied()).chain([help]);
+                assert_eq!(
+                    Cli::try_parse_from(arguments)
+                        .expect_err("help exits through clap")
+                        .kind(),
+                    ErrorKind::DisplayHelp,
+                    "{command:?} supports {help}"
+                );
+            }
+        }
         assert_eq!(
-            Cli::try_parse_from(["tix", "--help"])
-                .expect_err("long help exits through clap")
-                .kind(),
-            ErrorKind::DisplayHelp
-        );
-        assert_eq!(
-            Cli::try_parse_from(["tix", "-h"])
+            Cli::try_parse_from(["tix", "-x"])
                 .expect_err("hide requires a value")
                 .kind(),
             ErrorKind::InvalidValue
-        );
-        assert_eq!(
-            Cli::try_parse_from(["tix", "show", "--help"])
-                .expect_err("show has long help")
-                .kind(),
-            ErrorKind::DisplayHelp
         );
         assert_eq!(
             Cli::try_parse_from(["tix", "amend", "topic"])
@@ -745,14 +744,13 @@ mod tests {
         let err = show(
             &repository,
             Show {
-                help: None,
                 hide: Vec::new(),
                 no_auto_hide: true,
                 revisions: Vec::new(),
             },
         )
         .expect_err("disabling auto-hide requires an explicit hidden revision");
-        assert!(format!("{err:#}").contains("at least one -h/--hide"));
+        assert!(format!("{err:#}").contains("at least one -x/--hide"));
         create_pins(&repository, &[OsString::from("topic")])?;
         let head = repository.head_id()?.detach();
         assert!(crate::enrich::toggle(&repository, head)?.todo);

@@ -18,7 +18,6 @@ use crate::{
 #[derive(Debug, clap::Subcommand)]
 pub(super) enum Command {
     /// Produce a self-contained rebase todo, or edit and apply it immediately.
-    #[command(disable_help_flag = true)]
     Todo(Todo),
     /// Apply a self-contained rebase todo from FILE or standard input.
     #[command(
@@ -29,14 +28,11 @@ pub(super) enum Command {
 
 #[derive(Debug, clap::Args)]
 #[command(
-    after_long_help = "Without --edit-and-apply, the todo is written to stdout. With it, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -h main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -h main topic"
+    after_long_help = "Without --edit-and-apply, the todo is written to stdout. With it, Git's normal editor selection is used; GIT_EDITOR=<command> overrides it.\n\nExamples:\n  tix rebase todo -x main topic >todo.md\n  ${GIT_EDITOR:-editor} todo.md\n  tix rebase apply todo.md\n  tix rebase todo --edit-and-apply -x main topic"
 )]
 pub(super) struct Todo {
-    /// Print help.
-    #[arg(long, action = clap::ArgAction::HelpLong)]
-    help: Option<bool>,
     /// Hide this revision and derive the editable fork point from it.
-    #[arg(short = 'h', long, value_name = "REVSPEC")]
+    #[arg(short = 'x', long, value_name = "REVSPEC")]
     hide: Vec<OsString>,
     /// Do not infer hidden local branches from remote HEADs.
     #[arg(long)]
@@ -92,7 +88,7 @@ fn prepare(repo: &gix::Repository, args: &Todo) -> Result<todo::Prepared> {
     let (hide, unavailable) = history::available_hidden_revisions(repo, &args.hide, !args.no_auto_hide)?;
     if hide.is_empty() {
         anyhow::bail!(
-            "rebase todo requires at least one -h/--hide revision when no remote HEAD maps to a local branch"
+            "rebase todo requires at least one -x/--hide revision when no remote HEAD maps to a local branch"
         );
     }
     for (revision, err) in unavailable {
@@ -329,7 +325,6 @@ mod tests {
         let prepared = prepare(
             &repo,
             &Todo {
-                help: None,
                 hide: vec!["HEAD~2".into()],
                 no_auto_hide: false,
                 onto: None,
@@ -357,7 +352,6 @@ mod tests {
         let err = prepare(
             &repo,
             &Todo {
-                help: None,
                 hide: Vec::new(),
                 no_auto_hide: true,
                 onto: None,
@@ -366,7 +360,7 @@ mod tests {
             },
         )
         .expect_err("a hidden revision is required");
-        assert!(format!("{err:#}").contains("at least one -h/--hide"));
+        assert!(format!("{err:#}").contains("at least one -x/--hide"));
         Ok(())
     }
 
@@ -394,7 +388,6 @@ mod tests {
         let prepared = prepare(
             &repo,
             &Todo {
-                help: None,
                 hide: Vec::new(),
                 no_auto_hide: false,
                 onto: None,
@@ -515,7 +508,6 @@ mod tests {
         let prepared = prepare(
             &repo,
             &Todo {
-                help: None,
                 hide: vec!["HEAD~2".into()],
                 no_auto_hide: false,
                 onto: None,
