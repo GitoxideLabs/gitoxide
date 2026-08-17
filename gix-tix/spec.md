@@ -436,7 +436,8 @@ space first; changes blocks adapt within the remaining history width.
 - Each block has a top border carrying its compact summary. Tree summaries show
   the selected short hash; worktree summaries distinguish staged and unstaged
   counts. Kind totals, total files when non-redundant, and non-zero line totals
-  are color-coded. An empty enabled worktree says `Worktree clean` in green.
+  are color-coded. Empty enabled Tree and Worktree blocks remain visible, say
+  `clean` in green, and are not focusable.
 - Tree paths preserve tree-diff order. Worktree paths show staged entries first in
   green and unstaged/untracked/conflicted entries second in bright red, sorted by
   raw path within each group.
