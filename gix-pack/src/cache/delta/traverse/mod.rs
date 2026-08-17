@@ -7,7 +7,7 @@ use gix_features::{
 };
 
 use crate::{
-    cache::delta::{Item, Tree, traverse::util::ItemSliceSync},
+    cache::delta::{Tree, traverse::util::ItemSliceSync, tree::Item},
     data::EntryRange,
 };
 
@@ -19,6 +19,7 @@ pub(super) type SharedRefDeltaChildren = OwnShared<Mutable<super::tree::RefDelta
 
 /// Returned by [`Tree::traverse()`]
 #[derive(thiserror::Error, Debug)]
+#[allow(missing_docs)]
 pub enum Error {
     #[error("{message}")]
     ZlibInflate {

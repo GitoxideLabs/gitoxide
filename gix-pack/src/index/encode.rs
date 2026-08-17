@@ -69,7 +69,7 @@ mod function {
 
     pub(crate) fn write_to(
         out: &mut dyn io::Write,
-        entries_sorted_by_oid: Vec<crate::cache::delta::Item<crate::index::write::TreeEntry>>,
+        entries_sorted_by_oid: Vec<crate::cache::delta::tree::Item<crate::index::write::TreeEntry>>,
         pack_hash: &gix_hash::ObjectId,
         kind: crate::index::Version,
         object_hash: gix_hash::Kind,

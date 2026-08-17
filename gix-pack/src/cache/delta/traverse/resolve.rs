@@ -7,15 +7,15 @@ use gix_features::{
 
 use crate::{
     cache::delta::{
-        Item,
         traverse::{Context, Error, util::ItemSliceSync},
+        tree::Item,
     },
     data,
     data::EntryRange,
 };
 
 mod node {
-    use crate::cache::delta::{Item, traverse::util::ItemSliceSync};
+    use crate::cache::delta::{traverse::util::ItemSliceSync, tree::Item};
 
     /// A node in a delta tree, with exclusive access to its item data.
     pub(crate) struct Node<'a, T: Send> {

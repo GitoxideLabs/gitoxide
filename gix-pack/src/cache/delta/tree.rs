@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{Error, traverse};
+use super::{Error, Tree, traverse};
 use crate::exact_vec;
 
 /// Maps each referenced base object ID to indices in `Tree::child_items` of ref-deltas waiting for it.
@@ -31,7 +31,7 @@ pub struct Item<T> {
 impl<T> Item<T> {
     /// Get the children
     // (we don't want to expose mutable access)
-    pub fn children(&self) -> &[u32] {
+    pub(super) fn children(&self) -> &[u32] {
         &self.children
     }
 
@@ -41,38 +41,14 @@ impl<T> Item<T> {
 }
 
 /// Identify what kind of node we have last seen
-enum NodeKind {
+pub(super) enum NodeKind {
     Root,
     Child,
 }
 
-/// A tree that allows one-time iteration over all nodes and their children, consuming it in the process,
-/// while being shareable among threads without a lock.
-/// It does this by making the guarantee that iteration only happens once.
-pub struct Tree<T> {
-    /// The root nodes, i.e. base objects
-    // SAFETY invariant: see Item.children
-    root_items: Vec<Item<T>>,
-    /// The child nodes, i.e. those that rely a base object, like ref and ofs delta objects
-    // SAFETY invariant: see Item.children
-    child_items: Vec<Item<T>>,
-    /// The last encountered node was either a root or a child.
-    last_seen: Option<NodeKind>,
-    /// Future child offsets, associating their offset into the pack with their index in the items array.
-    /// (parent_offset, child_index)
-    // SAFETY invariant:
-    //    - None of these child indices should already have parents
-    //      i.e. future_child_offsets[i].1 should never be also found
-    //      in Item.children. Indices should be found here at most once.
-    //    - These indices should be in bounds for tree.child_items.
-    future_child_offsets: Vec<(crate::data::Offset, usize)>,
-    /// Child indices waiting for an in-pack object with the given id to be resolved.
-    ref_child_indices: RefDeltaChildren,
-}
-
 impl<T> Tree<T> {
     /// Instantiate a empty tree capable of storing `num_objects` amounts of items.
-    pub fn with_capacity(num_objects: usize) -> Result<Self, Error> {
+    pub(crate) fn with_capacity(num_objects: usize) -> Result<Self, Error> {
         Ok(Tree {
             root_items: exact_vec(num_objects / 2),
             child_items: exact_vec(num_objects / 2),
@@ -144,7 +120,7 @@ impl<T> Tree<T> {
 
     /// Add a new root node, one that only has children but is not a child itself, at the given pack `offset` and associate
     /// custom `data` with it.
-    pub fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result<(), Error> {
+    pub(crate) fn add_root(&mut self, offset: crate::data::Offset, data: T) -> Result<(), Error> {
         self.assert_is_incrementing_and_update_next_offset(offset)?;
         self.last_seen = NodeKind::Root.into();
         self.root_items.push(Item {
@@ -158,7 +134,7 @@ impl<T> Tree<T> {
     }
 
     /// Add a child of the item at `base_offset` which itself resides at pack `offset` and associate custom `data` with it.
-    pub fn add_child(
+    pub(crate) fn add_child(
         &mut self,
         base_offset: crate::data::Offset,
         offset: crate::data::Offset,

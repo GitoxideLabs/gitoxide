@@ -51,19 +51,16 @@ pub mod lru;
 
 pub mod object;
 
-///
-pub(crate) mod delta;
-
 /// Index-less parallel pack traversal.
 ///
-/// Build a delta [`Tree`] directly from a streaming pack scan with
-/// [`Tree::from_offsets_in_pack()`] — no pre-built `.idx` — then resolve every
-/// object in parallel with [`Tree::traverse()`]. This is the index-less companion
-/// to the idx-verified `index::File::traverse_with_index()`; [`Context`] and
-/// [`Options`] configure the traversal.
+/// Build a delta [`delta::Tree`] directly from a streaming pack scan with
+/// [`delta::Tree::from_offsets_in_pack()`] — no pre-built `.idx` — then resolve every
+/// object in parallel with [`delta::Tree::traverse()`]. This is the index-less companion
+/// to the idx-verified [`crate::index::File::traverse_with_index()`]; [`delta::traverse::Context`] and
+/// [`delta::traverse::Options`] configure the traversal.
 ///
 /// ```no_run
-/// use gix_pack::cache::Tree;
+/// use gix_pack::cache::delta::Tree;
 /// use std::sync::atomic::AtomicBool;
 ///
 /// # fn build_index_less(
@@ -85,10 +82,7 @@ pub(crate) mod delta;
 /// let _ = tree;
 /// # Ok(()) }
 /// ```
-pub use delta::{
-    Tree,
-    traverse::{Context, Options},
-};
+pub mod delta;
 
 /// Replaces content of the given `Vec` with the slice. The vec will have the same length
 /// as the slice. The vec can be either `&mut Vec` or `Vec`.
