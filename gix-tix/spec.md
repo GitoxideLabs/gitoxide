@@ -741,28 +741,31 @@ space first; changes blocks adapt within the remaining history width.
 ### History rebase editor
 
 - Selecting an eligible hidden boundary and pressing `e b` opens a Markdown
-  `.md` todo. It grows upward like the history view: each `## fork <id>` section
-  lists its commits oldest-to-newest as `` `pick <short-id>` <displayed metadata> ``.
+  `.md` todo. Its editable plan is read bottom-to-top like the history view:
+  newest commands and refs are highest, and each stack ends in a centered
+  `──── fork <id> ────` separator below its oldest command.
   IDs are shortened through repository configuration; metadata repeats the
   information visible in history and always includes the subject. Base-level
-  stacks begin with `## fork <id> (base) <title>`, using the Markdown-escaped
-  title exactly as displayed in history. Fork points within the editable tree
-  remain plain `## fork <id>` headings.
+  stacks end with `fork <id> (base) <title>` in the separator, using the
+  Markdown-escaped title exactly as displayed in history. Fork points within the editable tree
+  remain plain `fork <id>` separators. Every separator is centered with at least
+  four `─` characters per side, and all span the widest editable line.
 - When that boundary shows `⇣N`, `e u` opens the same editor with each base-level
   stack rooted at the corresponding hidden branch tip. Its otherwise unfamiliar
-  heading is `## fork <id> (updated-base) <title>`, with the Markdown-escaped
+  separator is `fork <id> (updated-base) <title>`, with the Markdown-escaped
   title exactly as shown in history, including `[A]` and `[N]`. The hidden branch
   itself is not moved.
 - Pick lines may be reordered or removed. `squash <id>` folds an existing
-  non-merge commit into the preceding `pick` or `empty` in the same fork; it may
-  carry `@`, and fork headings naming any folded ID resolve to the combined
-  result. A fork cannot begin with `squash`. Fork headings may otherwise target
-  an earlier pick or any existing commit, so adding and removing headings creates
+  non-merge commit into the following `pick` or `empty` below it in the same
+  fork; it may carry `@`, and fork separators naming any folded ID resolve to
+  the combined result. A fork cannot begin with `squash` when read bottom-to-top.
+  Fork separators may otherwise target a pick below or any existing commit, so
+  adding and removing separators creates
   and joins branches. `empty <title>` inserts an empty commit. Markdown code
   spans and equivalent plain commands are accepted; display text after an ID is
   informational.
 - Squash groups are materialized eagerly on every fork by applying their source
-  deltas in todo order. The result retains the first member's author, author
+  deltas in bottom-to-top todo order. The result retains the first member's author, author
   time, encoding, extra headers, and message, receives the operation's committer,
   and is signed once. Before every later full message, a permanent
   `# <short-id> <subject>` line identifies its source. Distinct raw authors of
@@ -772,16 +775,19 @@ space first; changes blocks adapt within the remaining history width.
   mailmap. All folded IDs and mutable refs map to the one resulting commit;
   resources owned by a later folded review commit are removed.
 - The first line points to complete self-documenting help after the editable
-  todo. All instructions are enclosed in Markdown comments so only headings and
-  command lines participate in the editable plan.
+  todo. All instructions are enclosed in Markdown comments so only separators,
+  reference lines, and command lines participate in the editable plan.
 - A versioned Markdown state comment makes the document independently
   applicable in a later process. It records full base, target, scope and tip IDs,
   checkout requirements, and compare-and-swap state for mutable refs. Ref names
   use Git-compatible C-style quoting so arbitrary ref bytes round-trip. Missing
   state cancels; present invalid state never reaches repository mutation. The
-  state comment follows the complete help at the end of the document.
-- Standalone `(ref, ref)` lines place direct mutable refs at the preceding fork
-  heading or command result. Multiple consecutive lines share that destination.
+  state comment follows the complete help at the end of the document. Bottom-up
+  todos use `tix-rebase-state-v2`; older state versions are rejected rather than
+  interpreted with the opposite command order.
+- Standalone `(ref, ref)` lines place direct mutable refs at the following fork
+  separator or command result below them. Multiple consecutive lines share that
+  destination.
   Commit command metadata omits ref decorations because these lines are their
   sole editable representation.
   Existing displayed names may be moved or removed, and new unqualified names
@@ -856,7 +862,7 @@ space first; changes blocks adapt within the remaining history width.
   `tix rebase apply` always
   applies a valid plan, even when its editable commands are unchanged. The first
   Markdown comment states which of these modes applies and explains that emptying
-  the file or removing the `tix-rebase-state-v1` comment cancels. Continuation
+  the file or removing the `tix-rebase-state-v2` comment cancels. Continuation
   todos likewise state that saving unchanged continues the materialized rebase.
 
 ### Editing shortcuts
