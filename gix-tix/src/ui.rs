@@ -1250,17 +1250,13 @@ fn push_selection_span(spans: &mut Vec<Span<'static>>, span: Span<'static>) {
 }
 
 fn index_divider(width: u16) -> Line<'static> {
-    const LABEL: &str = " ↑ index ↑ ";
+    const LABEL: &str = "↑ index ↑ ";
     let width = usize::from(width);
-    if width < LABEL.chars().count() {
-        return Line::styled("─".repeat(width), color(Color::Green));
-    }
-    let rails = width - LABEL.chars().count();
-    let left = rails / 2;
+    let label: String = LABEL.chars().take(width).collect();
+    let rail_width = width - label.chars().count();
     Line::from(vec![
-        Span::styled("─".repeat(left), color(Color::Green)),
-        Span::styled(LABEL, Style::default().add_modifier(Modifier::DIM)),
-        Span::styled("─".repeat(rails - left), color(Color::Green)),
+        Span::styled(label, Style::default().add_modifier(Modifier::DIM)),
+        Span::styled("─".repeat(rail_width), color(Color::Green)),
     ])
 }
 
@@ -5006,22 +5002,23 @@ mod tests {
         let label_x = divider[..divider.find("↑ index ↑").expect("the index label is visible")]
             .chars()
             .count() as u16;
-        assert_eq!(label_x, (80 - 9) / 2, "the index label is centered");
-        assert_eq!(terminal.backend().buffer()[(2, divider_y)].fg, Color::Green);
-        assert!(
-            !terminal.backend().buffer()[(2, divider_y)]
-                .modifier
-                .contains(Modifier::DIM),
-            "the colored divider rail is not dimmed"
-        );
+        let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
+        assert_eq!(label_x, staged_x, "the index label aligns with path kinds");
         assert_eq!(terminal.backend().buffer()[(label_x, divider_y)].fg, Color::Reset);
         assert!(
             terminal.backend().buffer()[(label_x, divider_y)]
                 .modifier
                 .contains(Modifier::DIM),
-            "the centered label uses dimmed normal text"
+            "the label uses dimmed normal text"
         );
-        let staged_x = rendered_line(&terminal, staged_y).find('A').expect("staged letter") as u16;
+        let rail_x = label_x + "↑ index ↑ ".chars().count() as u16;
+        assert_eq!(terminal.backend().buffer()[(rail_x, divider_y)].fg, Color::Green);
+        assert!(
+            !terminal.backend().buffer()[(rail_x, divider_y)]
+                .modifier
+                .contains(Modifier::DIM),
+            "the colored divider rail is not dimmed"
+        );
         let unstaged_x = rendered_line(&terminal, unstaged_y).find('M').expect("unstaged letter") as u16;
         assert_eq!(terminal.backend().buffer()[(staged_x, staged_y)].fg, Color::Green);
         assert_eq!(
@@ -5048,11 +5045,7 @@ mod tests {
             !(0..12).any(|y| rendered_line(&terminal, y).contains("index")),
             "a single change group has no divider"
         );
-        assert_eq!(
-            index_divider(5).to_string(),
-            "─────",
-            "narrow panes retain only the rail"
-        );
+        assert_eq!(index_divider(5).to_string(), "↑ ind", "narrow panes clip the label");
 
         let modified = Changes {
             paths: (0..12)
