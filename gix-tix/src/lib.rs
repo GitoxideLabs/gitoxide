@@ -790,7 +790,7 @@ pub fn run(repository: gix::ThreadSafeRepository, revisions: Vec<OsString>, mut 
     let mut repository_path = repository.git_dir().to_owned();
     let common_dir = normalize_common_dir(repository.common_dir.clone().unwrap_or_else(|| repository_path.clone()))?;
     let (validation_repository, _) = open_history_repository(&mut repository_path, &common_dir)?;
-    let (hide, unavailable) = history::available_hidden_revisions(&validation_repository, &options.hide)?;
+    let (hide, unavailable) = history::available_hidden_revisions(&validation_repository, &options.hide, false)?;
     options.hide = hide;
     for (revision, err) in unavailable {
         eprintln!(

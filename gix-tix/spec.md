@@ -13,11 +13,11 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
-- `tix show -h HIDDEN... [TIP...]` prints the complete history view without
-  opening a terminal UI. At least one hidden revision is required; tips default
-  to `HEAD`, and applicable pins participate exactly as they do in the history
-  view. Output uses the history view's graph lanes and default metadata, without
-  colors, selection, clipping, or a footer.
+- `tix show [-h HIDDEN...] [--no-auto-hide] [TIP...]` prints the complete
+  history view without opening a terminal UI. Tips default to `HEAD`, and
+  applicable pins participate exactly as they do in the history view. Output
+  uses the history view's graph lanes and default metadata, without colors,
+  selection, clipping, or a footer.
 - `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
   checkout, pending-rebase replay, stash handling, and pin reconciliation as
   TUI time travel. Travelling to the current `HEAD` is a no-op. A detached
@@ -45,11 +45,19 @@ without trading responsiveness for metadata that is not visible.
   option may be repeated.
 - `--quit-on-finish` exits after traversal and lane computation, for measurement
   and non-interactive use.
-- `tix rebase todo -h HIDDEN... [--onto REV] [TIP...]` writes a self-contained
-  Markdown history-rebase plan to stdout. At least one hidden revision must
-  resolve; visible tips default to `HEAD`, and an ambiguous derived fork point is
-  an error. `--edit-and-apply` opens the same plan with Git's configured editor
-  and applies it when the editor exits.
+- `tix rebase todo [-h HIDDEN...] [--no-auto-hide] [--onto REV] [TIP...]`
+  writes a self-contained Markdown history-rebase plan to stdout. Visible tips
+  default to `HEAD`, and an ambiguous derived fork point is an error.
+  `--edit-and-apply` opens the same plan with Git's configured editor and applies
+  it when the editor exits.
+- `tix show` and `tix rebase todo` automatically inspect symbolic
+  `refs/remotes/<remote>/HEAD` references. Their targets are reverse-mapped
+  through each remote's fetch refspec, and existing local commit branches are
+  added to the explicit hidden revisions. Multiple remote defaults are
+  deduplicated; stale, direct, ambiguous, unmappable, missing, and non-commit
+  results are ignored. At least one explicit or inferred hidden revision is
+  required. `--no-auto-hide` disables inference. The interactive history and
+  `ref-tree --hide` retain their explicit-only behavior.
 - `tix rebase apply [FILE]` applies such a plan from a file, or from standard
   input when `FILE` is omitted or `-`. Removing its state comment or emptying the
   document cancels successfully; malformed or unsupported state is an error.
