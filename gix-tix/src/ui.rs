@@ -10,8 +10,9 @@ use ratatui::{
 use crate::{
     BuiltInDiff,
     app::{
-        App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesLayout, ChangesMode, CommitRow,
-        CopyKind, DateMode, IdMode, NameMode, Notice, NoticeKind, RefMode, SelectionRelation, SignatureState, State,
+        Alignment as HistoryAlignment, App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes,
+        ChangesLayout, ChangesMode, CommitRow, CopyKind, DateMode, IdMode, NameMode, Notice, NoticeKind, RefMode,
+        SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -499,12 +500,7 @@ pub(crate) fn draw_with_worktree(
     } else {
         rendered_lane_width
     };
-    let align_limit = ((body.width as usize) / 3)
-        .saturating_sub(2)
-        .max(1)
-        .min(content.width as usize);
-    let align_width = max_lane_width.min(align_limit);
-    let align_metadata = app.align_metadata;
+    let alignment = app.alignment;
     let date_mode = app.date_mode;
     let id_mode = app.effective_id_mode();
     let name_mode = app.name_mode;
@@ -513,7 +509,7 @@ pub(crate) fn draw_with_worktree(
     let show_trailers = name_mode == NameMode::All && app.show_trailers;
     let ref_mode = app.ref_mode;
     let selected = app.selected;
-    let metadata: Vec<_> = visible_rows
+    let metadata_columns: Vec<_> = visible_rows
         .iter()
         .enumerate()
         .map(|(index, row)| {
@@ -522,7 +518,7 @@ pub(crate) fn draw_with_worktree(
                 || app.title(row),
                 |note| gix::objs::commit::MessageRef::from_bytes(note).title,
             );
-            metadata_line(
+            metadata_columns(
                 row,
                 title,
                 app.attributions(row),
@@ -546,21 +542,57 @@ pub(crate) fn draw_with_worktree(
             )
         })
         .collect();
-    let graph_max_offset = max_lane_width.saturating_sub(align_width);
-    let max_offset = if align_metadata {
-        graph_max_offset
-    } else {
-        lanes
+    let title_column = lanes
+        .iter()
+        .zip(&metadata_columns)
+        .map(|(lane, metadata)| lane.chars().count().saturating_add(metadata.prefix_width()))
+        .max()
+        .unwrap_or_default();
+    let column_widths = metadata_columns.iter().fold([0; 5], |mut widths, metadata| {
+        for (width, field) in widths.iter_mut().zip(&metadata.fields[..5]) {
+            *width = (*width).max(field.width());
+        }
+        widths
+    });
+    let metadata: Vec<_> = metadata_columns
+        .into_iter()
+        .enumerate()
+        .map(|(index, metadata)| match alignment {
+            HistoryAlignment::None => (metadata.into_line(), 0),
+            HistoryAlignment::Title => {
+                let lane_width = lanes.lane(index).chars().count();
+                (
+                    metadata.align_title(title_column.saturating_sub(lane_width)),
+                    lane_width,
+                )
+            }
+            HistoryAlignment::Columns => (metadata.align_columns(column_widths), max_lane_width),
+        })
+        .collect();
+    let graph_max_offset = max_lane_width.saturating_sub(content.width as usize);
+    let max_offset = match alignment {
+        HistoryAlignment::None => lanes
             .iter()
             .zip(&metadata)
-            .map(|(lane, metadata)| lane.chars().count().saturating_add(metadata.width()))
+            .map(|(lane, (metadata, _))| lane.chars().count().saturating_add(metadata.width()))
             .max()
             .unwrap_or_default()
-            .saturating_sub(content.width as usize)
+            .saturating_sub(content.width as usize),
+        HistoryAlignment::Title => graph_max_offset,
+        HistoryAlignment::Columns => metadata
+            .iter()
+            .map(|(metadata, metadata_x)| metadata_x.saturating_add(metadata.width()))
+            .max()
+            .unwrap_or_default()
+            .saturating_sub(content.width as usize),
     }
     .min(u16::MAX as usize);
     let horizontal_offset = app.horizontal_offset.min(max_offset);
-    let graph_offset = horizontal_offset.min(graph_max_offset);
+    let graph_offset = if alignment == HistoryAlignment::Title {
+        horizontal_offset.min(graph_max_offset)
+    } else {
+        horizontal_offset
+    };
     let selection_info = selection_info_line(
         app.changes_visible()
             .then_some(tree_changes)
@@ -576,7 +608,7 @@ pub(crate) fn draw_with_worktree(
         .enumerate()
         .map(|(index, row)| (row.id, body.y.saturating_add(index as u16)))
         .collect();
-    for (index, metadata) in metadata.into_iter().enumerate() {
+    for (index, (metadata, metadata_x)) in metadata.into_iter().enumerate() {
         let lane = lanes.lane(index);
         let y = body.y.saturating_add(index as u16);
         let selected = app.selected == Some(start + index);
@@ -590,13 +622,16 @@ pub(crate) fn draw_with_worktree(
         let head_state = head.then_some(head_has_descendants);
         let metadata_width = metadata.width();
         let hidden_branch_behind = app.hidden_branch_behind(visible_rows[index].id);
-        let line_width = if align_metadata {
-            align_width.saturating_add(metadata_width)
-        } else {
-            lane.chars()
+        let line_width = match alignment {
+            HistoryAlignment::None => lane
+                .chars()
                 .count()
                 .saturating_add(metadata_width)
-                .saturating_sub(horizontal_offset)
+                .saturating_sub(horizontal_offset),
+            HistoryAlignment::Title => metadata_x.saturating_add(metadata_width),
+            HistoryAlignment::Columns => metadata_x
+                .saturating_add(metadata_width)
+                .saturating_sub(horizontal_offset),
         };
         let hidden_branch_marker = hidden_branch_behind.and_then(|behind| {
             let marker = format!("⇣{behind}");
@@ -660,7 +695,7 @@ pub(crate) fn draw_with_worktree(
         );
 
         let row_area = Rect::new(content.x, y, content.width, 1);
-        if align_metadata {
+        if alignment == HistoryAlignment::Title {
             frame.render_widget(
                 Paragraph::new(lane).style(style).scroll((0, graph_offset as u16)),
                 row_area,
@@ -675,16 +710,21 @@ pub(crate) fn draw_with_worktree(
                 head_state,
             );
             let aligned = Rect::new(
-                content.x.saturating_add(align_width as u16),
+                content.x.saturating_add(u16::try_from(metadata_x).unwrap_or(u16::MAX)),
                 y,
-                content.width.saturating_sub(align_width as u16),
+                content
+                    .width
+                    .saturating_sub(u16::try_from(metadata_x).unwrap_or(u16::MAX)),
                 1,
             );
             frame.render_widget(Clear, aligned);
             frame.render_widget(Paragraph::new(metadata), aligned);
         } else {
-            let mut spans = Vec::with_capacity(metadata.spans.len() + 1);
+            let mut spans = Vec::with_capacity(metadata.spans.len() + 2);
             spans.push(Span::styled(lane, style));
+            if alignment == HistoryAlignment::Columns {
+                spans.push(Span::raw(" ".repeat(metadata_x.saturating_sub(lane.chars().count()))));
+            }
             spans.extend(metadata.spans);
             frame.render_widget(
                 Paragraph::new(Line::from(spans)).scroll((0, horizontal_offset as u16)),
@@ -1112,7 +1152,12 @@ pub(crate) fn draw_with_worktree(
                 Span::raw(" · "),
             ]);
         }
-        ordered.push(toggle("[ align", app.align_metadata));
+        let (alignment, enabled) = match app.alignment {
+            HistoryAlignment::Title => ("[ title", true),
+            HistoryAlignment::Columns => ("[ columns", true),
+            HistoryAlignment::None => ("[ align", false),
+        };
+        ordered.push(toggle(alignment, enabled));
         ordered.push(Span::raw(" · "));
         ordered.extend(shortcut("ref-tree", 't', false));
         ordered.push(Span::raw(" · "));
@@ -1907,14 +1952,48 @@ struct MetadataOptions {
     copy_feedback: Option<CopyKind>,
 }
 
-fn metadata_line<'a>(
+struct MetadataColumns<'a> {
+    fields: [Line<'a>; 6],
+}
+
+impl<'a> MetadataColumns<'a> {
+    fn prefix_width(&self) -> usize {
+        self.fields[..5].iter().map(Line::width).sum()
+    }
+
+    fn into_line(self) -> Line<'a> {
+        Line::from(
+            self.fields
+                .into_iter()
+                .flat_map(|field| field.spans)
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn align_title(mut self, width: usize) -> Line<'a> {
+        let padding = width.saturating_sub(self.prefix_width());
+        self.fields[4].spans.push(Span::raw(" ".repeat(padding)));
+        self.into_line()
+    }
+
+    fn align_columns(mut self, widths: [usize; 5]) -> Line<'a> {
+        for (field, width) in self.fields[..5].iter_mut().zip(widths) {
+            field
+                .spans
+                .push(Span::raw(" ".repeat(width.saturating_sub(field.width()))));
+        }
+        self.into_line()
+    }
+}
+
+fn metadata_columns<'a>(
     row: &'a CommitRow,
     title: &'a BStr,
     attributions: &'a [crate::app::Attribution],
     decorations: &'a Decorations,
     mailmap: &'a gix::mailmap::Snapshot,
     options: MetadataOptions,
-) -> Line<'a> {
+) -> MetadataColumns<'a> {
     debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
         date_mode,
@@ -1944,37 +2023,38 @@ fn metadata_line<'a>(
             style
         }
     };
-    let mut spans = Vec::new();
+    let mut id = Vec::new();
     match id_mode {
-        IdMode::Commit => spans.push(Span::styled(
+        IdMode::Commit => id.push(Span::styled(
             row.id.to_hex_with_len(7).to_string(),
             selected_style(commit_style),
         )),
         IdMode::Change if duplicate_change_id => {
-            spans.push(Span::styled(
+            id.push(Span::styled(
                 change_id.to_reverse_hex_with_len(4).to_string(),
                 selected_style(change_style),
             ));
-            spans.push(Span::styled(
+            id.push(Span::styled(
                 row.id.to_hex_with_len(3).to_string(),
                 selected_style(commit_style),
             ));
         }
-        IdMode::Change => spans.push(Span::styled(
+        IdMode::Change => id.push(Span::styled(
             change_id.to_reverse_hex_with_len(7).to_string(),
             selected_style(change_style),
         )),
         IdMode::Off => {}
     }
+    let mut refs = Vec::new();
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
     if row.is_review {
-        spans.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
+        refs.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
     }
     if row_decorations
         .iter()
         .any(|decoration| decoration.kind == DecorationKind::Pin)
     {
-        spans.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
+        refs.push(Span::styled(" 📌", decoration_style(DecorationKind::Pin)));
     }
     if row_decorations
         .iter()
@@ -1989,7 +2069,7 @@ fn metadata_line<'a>(
         } else {
             " 🎁"
         };
-        spans.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
+        refs.push(Span::styled(marker, decoration_style(DecorationKind::Stash)));
     }
     let mut labels = row_decorations
         .iter()
@@ -2012,13 +2092,13 @@ fn metadata_line<'a>(
         })
         .peekable();
     if labels.peek().is_some() {
-        spans.push(Span::raw(" ("));
+        refs.push(Span::raw(" ("));
         for (index, decoration) in labels.enumerate() {
             if index != 0 {
-                spans.push(Span::raw(", "));
+                refs.push(Span::raw(", "));
             }
             let name = decoration.name.to_str_lossy();
-            spans.push(Span::styled(
+            refs.push(Span::styled(
                 if matches!(
                     decoration.kind,
                     DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
@@ -2037,21 +2117,24 @@ fn metadata_line<'a>(
                 decoration_style(decoration.kind),
             ));
         }
-        spans.push(Span::raw(") "));
+        refs.push(Span::raw(") "));
     } else {
-        spans.push(Span::raw(" "));
+        refs.push(Span::raw(" "));
     }
+    let mut date_spans = Vec::new();
     let date = match date_mode {
         DateMode::Author => Some(row.author_time),
         DateMode::Committer => Some(row.committer_time),
         DateMode::None => None,
     };
     if let Some(date) = date {
-        spans.push(Span::styled(
+        date_spans.push(Span::styled(
             format!("{} ", date.format_or_unix(gix::date::time::format::SHORT)),
             color(Color::Blue),
         ));
     }
+    let mut author_spans = Vec::new();
+    let mut attribution_spans = Vec::new();
     if show_author_name {
         let author = author_label(row.author, mailmap, use_mailmap, show_emails && !row.author.is_bot());
         let mut author_style = if copy_feedback == Some(CopyKind::Author) {
@@ -2062,7 +2145,7 @@ fn metadata_line<'a>(
         if row.author.is_github_noreply() {
             author_style = author_style.add_modifier(Modifier::ITALIC);
         }
-        spans.push(Span::styled(
+        author_spans.push(Span::styled(
             if row.author.is_bot() {
                 format!("[{author}] ")
             } else {
@@ -2113,7 +2196,7 @@ fn metadata_line<'a>(
                 }
             }
             for (marker, markers, actors) in groups {
-                spans.push(Span::styled(
+                attribution_spans.push(Span::styled(
                     if markers.len() == 1 {
                         marker.to_owned()
                     } else {
@@ -2123,20 +2206,21 @@ fn metadata_line<'a>(
                 ));
                 for (index, (name, style)) in actors.into_iter().enumerate() {
                     if index != 0 {
-                        spans.push(Span::raw(", "));
+                        attribution_spans.push(Span::raw(", "));
                     }
-                    spans.push(Span::styled(name, style));
+                    attribution_spans.push(Span::styled(name, style));
                 }
-                spans.push(Span::raw(" "));
+                attribution_spans.push(Span::raw(" "));
             }
         }
     }
     if row.has_agent_marker {
-        spans.push(Span::styled("[A] ", color(NOTE_COLOR)));
+        attribution_spans.push(Span::styled("[A] ", color(NOTE_COLOR)));
     }
     if has_notes {
-        spans.push(Span::styled("[N] ", color(NOTE_COLOR)));
+        attribution_spans.push(Span::styled("[N] ", color(NOTE_COLOR)));
     }
+    let mut title_spans = Vec::new();
     if !show_emails {
         let mut title = markdown_title_spans(title);
         if note {
@@ -2144,9 +2228,29 @@ fn metadata_line<'a>(
                 span.style = span.style.patch(note_style());
             }
         }
-        spans.extend(title);
+        title_spans.extend(title);
     }
-    Line::from(spans)
+    MetadataColumns {
+        fields: [
+            Line::from(id),
+            Line::from(refs),
+            Line::from(date_spans),
+            Line::from(author_spans),
+            Line::from(attribution_spans),
+            Line::from(title_spans),
+        ],
+    }
+}
+
+fn metadata_line<'a>(
+    row: &'a CommitRow,
+    title: &'a BStr,
+    attributions: &'a [crate::app::Attribution],
+    decorations: &'a Decorations,
+    mailmap: &'a gix::mailmap::Snapshot,
+    options: MetadataOptions,
+) -> Line<'a> {
+    metadata_columns(row, title, attributions, decorations, mailmap, options).into_line()
 }
 
 pub(crate) fn plain_history_metadata(
@@ -3486,14 +3590,14 @@ mod tests {
         let footer = rendered_line(&terminal, 1);
         assert!(
             footer.starts_with(
-                    "0 commits · view · edit · enrich · copy · refs · ? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                    "0 commits · view · edit · enrich · copy · refs · ? ([ title · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff) · quit"
                 ),
             "the information prefix contains every following action except quit: {footer}"
         );
         assert_reversed_group(
             &terminal,
             1,
-            "? ([ align · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
+            "? ([ title · ref-tree · message · changes · Esc cancel · ↑↓/jk move · h/l pan · <enter> diff)",
         );
         Ok(())
     }
@@ -4144,11 +4248,11 @@ mod tests {
 
         app.information_expanded = true;
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("copy · refs · ? (s ● -> ● · [ align"));
+        assert!(rendered_line(&terminal, 1).contains("copy · refs · ? (s ● -> ● · [ title"));
 
         app.finish_signature_verification(vec![(id, false)]);
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(rendered_line(&terminal, 1).contains("? (s 1 ● · [ align"));
+        assert!(rendered_line(&terminal, 1).contains("? (s 1 ● · [ title"));
         Ok(())
     }
 
@@ -4590,7 +4694,7 @@ mod tests {
         })?;
         assert!(
             rendered_line(&footer_terminal, 15).contains(
-                "? ([ align · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
+                "? ([ title · ref-tree · message · changes · <tab> switch · ↑↓/jk move · h/l pan · <enter> diff) · quit"
             ),
             "the expanded information prefix contains every following action except quit"
         );
@@ -5887,85 +5991,128 @@ mod tests {
     }
 
     #[test]
-    fn overlays_metadata_on_wide_graphs_and_allows_natural_flow() -> Result<(), Box<dyn std::error::Error>> {
-        let mut app = App::new(1);
-        app.id_mode = IdMode::Commit;
-        app.extend_commits(vec![Commit {
-            id: gix::ObjectId::Sha1([1; 20]),
-            parent_ids: Default::default(),
-            author_time: gix::date::Time::default(),
-            committer_time: gix::date::Time::default(),
-            author: author(b"author", b"author@example.com"),
-            attributions: 0..0,
-            title: format!("{} subject-tail", "a".repeat(50)).into(),
-            metadata_loaded: true,
-            has_agent_marker: false,
-            is_review: false,
-            signature: SignatureState::Unsigned,
-        }]);
+    fn aligns_titles_or_all_columns_from_only_visible_rows() -> Result<(), Box<dyn std::error::Error>> {
+        fn column(line: &str, needle: &str) -> usize {
+            line[..line.find(needle).expect("field is visible")].chars().count()
+        }
+
+        let ids = [1, 2, 3].map(|byte| gix::ObjectId::Sha1([byte; 20]));
+        let mut app = App::new(2);
+        app.extend_commits(LoadedCommits {
+            rows: vec![
+                Commit {
+                    id: ids[0],
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"Byron", b"byron@example.com"),
+                    attributions: 0..0,
+                    title: "first-title".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                },
+                Commit {
+                    id: ids[1],
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"Byron", b"byron@example.com"),
+                    attributions: 0..1,
+                    title: "second-title".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: true,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                },
+                Commit {
+                    id: ids[2],
+                    parent_ids: Default::default(),
+                    author_time: gix::date::Time::default(),
+                    committer_time: gix::date::Time::default(),
+                    author: author(b"An extraordinarily long author", b"long@example.com"),
+                    attributions: 1..1,
+                    title: "third-title".into(),
+                    metadata_loaded: true,
+                    has_agent_marker: false,
+                    is_review: false,
+                    signature: SignatureState::Unsigned,
+                },
+            ],
+            attributions: vec![Attribution {
+                kind: AttributionKind::CoAuthor,
+                author: author(b"GPT", b"gpt@example.com"),
+            }],
+        });
         complete(&mut app);
-        app.set_lane(0, &format!("{}{}", "A".repeat(40), "B".repeat(40)));
-        let mut terminal = Terminal::new(TestBackend::new(60, 2))?;
-
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        let aligned_column = rendered_row(&terminal)
-            .find("0101010")
-            .expect("alignment keeps metadata visible beside wide graphs");
-        assert!(aligned_column < 60, "alignment keeps metadata within the viewport");
-
-        app.update(Action::ScrollRight);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert_eq!(terminal.backend().buffer()[(2, 0)].symbol(), "B");
-        assert_eq!(
-            rendered_row(&terminal).find("0101010"),
-            Some(aligned_column),
-            "horizontal graph scrolling leaves aligned metadata fixed"
-        );
-
-        app.update(Action::ScrollLeft);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        app.update(Action::ToggleAlign);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(
-            !rendered_row(&terminal).contains("0101010"),
-            "[ restores natural post-graph placement"
-        );
-        assert!(
-            !app.align_metadata,
-            "alignment is disabled even when its later footer hint is clipped"
-        );
-
-        app.update(Action::ScrollRight);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
-        assert!(
-            rendered_row(&terminal).contains("0101010"),
-            "l pages far enough right to reveal natural metadata"
-        );
-
-        app.update(Action::ScrollLeft);
+        app.selected = None;
         app.set_lane(0, "● ");
-        app.update(Action::ToggleAlign);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        app.set_lane(1, "●─┐ ");
+        app.set_lane(2, "● ");
+        let decorations = Decorations::from([(
+            ids[0],
+            vec![Decoration {
+                name: "various-improvements".into(),
+                kind: DecorationKind::Local,
+            }],
+        )]);
+        let mut terminal = Terminal::new(TestBackend::new(120, 3))?;
+
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let first_title = column(&rendered_line(&terminal, 0), "first-title");
+        let second_title = column(&rendered_line(&terminal, 1), "second-title");
         assert_eq!(
-            terminal.backend().buffer()[(4, 0)].symbol(),
-            "0",
-            "aligned metadata starts immediately after the widest visible lane"
+            first_title,
+            second_title,
+            "[ aligns only the visible titles: {:?} / {:?}",
+            rendered_line(&terminal, 0),
+            rendered_line(&terminal, 1)
         );
-        assert!(
-            !rendered_row(&terminal).contains("subject-tail"),
-            "long aligned metadata starts clipped"
+        assert_ne!(
+            column(&rendered_line(&terminal, 0), "1970-01-01"),
+            column(&rendered_line(&terminal, 1), "1970-01-01"),
+            "title mode leaves earlier fields at natural positions"
         );
 
-        app.update(Action::ScrollRight);
-        terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
+        app.update(Action::ToggleAlign);
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        let first = rendered_line(&terminal, 0);
+        let second = rendered_line(&terminal, 1);
         assert_eq!(
-            terminal.backend().buffer()[(4, 0)].symbol(),
-            "0",
-            "l leaves aligned metadata fixed when there is no graph left to pan"
+            column(&first, "1970-01-01"),
+            column(&second, "1970-01-01"),
+            "dates align"
+        );
+        assert_eq!(column(&first, "Byron"), column(&second, "Byron"), "authors align");
+        assert_eq!(
+            column(&first, "first-title"),
+            column(&second, "second-title"),
+            "titles align"
         );
         assert!(
-            !rendered_row(&terminal).contains("subject-tail"),
-            "aligned metadata remains clipped instead of becoming horizontal-scroll content"
+            second.contains("Co: GPT [A] second-title"),
+            "attribution and markers share one column"
+        );
+
+        let mut narrow = Terminal::new(TestBackend::new(40, 3))?;
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        app.update(Action::ScrollRight);
+        assert!(app.horizontal_offset > 0, "wide aligned columns create a scroll range");
+        narrow.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            rendered_line(&narrow, 0).contains("first-title"),
+            "l reveals the clipped aligned title"
+        );
+        app.update(Action::ScrollLeft);
+        assert_eq!(app.horizontal_offset, 0, "h returns to the aligned row start");
+
+        let visible_title = column(&first, "first-title");
+        app.offset = 1;
+        terminal.draw(|frame| draw(frame, &mut app, &decorations))?;
+        assert!(
+            column(&rendered_line(&terminal, 0), "second-title") > visible_title,
+            "an off-screen wide author affects alignment only after entering the viewport"
         );
         Ok(())
     }

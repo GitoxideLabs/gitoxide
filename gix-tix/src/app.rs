@@ -428,6 +428,13 @@ pub(crate) enum Effect {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Alignment {
+    None,
+    Title,
+    Columns,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TreeDiffTarget {
     Commit { id: ObjectId, parent: usize },
     Branch { base: ObjectId, tip: ObjectId },
@@ -474,7 +481,7 @@ pub(crate) struct App {
     visible_ref_mode: RefMode,
     pub has_hidden_filter: bool,
     pub show_hidden: bool,
-    pub align_metadata: bool,
+    pub(crate) alignment: Alignment,
     pub show_commit: bool,
     pub changes_mode: Option<ChangesMode>,
     worktree_changes_available: bool,
@@ -571,7 +578,7 @@ impl App {
             visible_ref_mode: RefMode::Default,
             has_hidden_filter: false,
             show_hidden: false,
-            align_metadata: true,
+            alignment: Alignment::Title,
             show_commit: false,
             changes_mode: Some(ChangesMode::Both),
             worktree_changes_available: true,
@@ -1159,7 +1166,13 @@ impl App {
             {
                 return vec![Effect::Reload(!self.show_hidden)];
             }
-            Action::ToggleAlign => self.align_metadata = !self.align_metadata,
+            Action::ToggleAlign => {
+                self.alignment = match self.alignment {
+                    Alignment::Title => Alignment::Columns,
+                    Alignment::Columns => Alignment::None,
+                    Alignment::None => Alignment::Title,
+                };
+            }
             Action::ToggleCommit => {
                 self.show_commit = !self.show_commit;
                 self.reset_commit_view();
@@ -3779,12 +3792,14 @@ mod tests {
         assert_eq!(app.ref_mode, RefMode::All);
         app.update(Action::CycleRefs);
         assert_eq!(app.ref_mode, RefMode::Default);
-        assert!(!app.align_metadata);
+        assert_eq!(app.alignment, Alignment::Columns);
         assert!(app.show_commit);
         assert_eq!(app.changes_mode, Some(ChangesMode::Tree));
         assert_eq!(app.changes_parent, 0);
         app.update(Action::ToggleAlign);
-        assert!(app.align_metadata);
+        assert_eq!(app.alignment, Alignment::None);
+        app.update(Action::ToggleAlign);
+        assert_eq!(app.alignment, Alignment::Title);
     }
 
     #[test]
