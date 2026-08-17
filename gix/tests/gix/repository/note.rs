@@ -44,3 +44,37 @@ fn query_and_mutate_a_configured_notes_ref() -> crate::Result {
     assert!(notes.get(target).map_err(gix::Exn::into_error)?.is_empty());
     Ok(())
 }
+
+#[test]
+fn add_to_an_exact_fully_qualified_reference() -> crate::Result {
+    let (repo, _tmp) = crate::util::basic_rw_repo()?;
+    let target = repo.write_blob(b"annotated")?.detach();
+    let reference: gix::refs::FullName = "refs/worktree/tix/notes".try_into()?;
+    let mut notes = repo.notes().map_err(gix::Exn::into_error)?;
+
+    assert_eq!(
+        notes
+            .add_to_ref(reference.as_ref(), target, b"[commit]\n\ttodo = true\n")
+            .map_err(gix::Exn::into_error)?,
+        None
+    );
+    let mut exact = repo
+        .notes()
+        .map_err(gix::Exn::into_error)?
+        .with_refs([reference.as_bstr()])
+        .map_err(gix::Exn::into_error)?;
+    assert_eq!(
+        exact
+            .get(target)
+            .map_err(gix::Exn::into_error)?
+            .first()
+            .map(|note| note.blob.data.as_slice()),
+        Some(b"[commit]\n\ttodo = true\n".as_slice()),
+        "the exact worktree-local ref stores the note"
+    );
+    assert!(
+        repo.try_find_reference("refs/notes/refs/worktree/tix/notes")?.is_none(),
+        "exact writes do not apply notes shorthand"
+    );
+    Ok(())
+}
