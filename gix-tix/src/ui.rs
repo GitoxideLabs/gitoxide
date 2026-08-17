@@ -11,7 +11,7 @@ use crate::{
     BuiltInDiff,
     app::{
         App, AttributionKind, ChangeGroup, ChangeKind, ChangePane, Changes, ChangesLayout, ChangesMode, CommitRow,
-        CopyKind, DateMode, NameMode, RefMode, SelectionRelation, SignatureState, State,
+        CopyKind, DateMode, IdMode, NameMode, RefMode, SelectionRelation, SignatureState, State,
     },
     history::{DecorationKind, Decorations},
 };
@@ -397,6 +397,7 @@ pub(crate) fn draw_with_worktree(
     let align_width = max_lane_width.min(align_limit);
     let align_metadata = app.align_metadata;
     let date_mode = app.date_mode;
+    let id_mode = app.effective_id_mode();
     let name_mode = app.name_mode;
     let copy_feedback = app.copy_feedback.take();
     let show_author_name = copy_feedback == Some(CopyKind::Author) || name_mode != NameMode::None;
@@ -415,6 +416,9 @@ pub(crate) fn draw_with_worktree(
                 mailmap,
                 MetadataOptions {
                     date_mode,
+                    id_mode,
+                    change_id: app.change_id(row.id),
+                    duplicate_change_id: app.has_duplicate_change_id(row.id),
                     show_author_name,
                     show_emails: app.show_emails,
                     show_trailers,
@@ -911,6 +915,14 @@ pub(crate) fn draw_with_worktree(
             DateMode::None => ("date", false),
         };
         view_prefix_spans.extend(shortcut(date_label, 'd', date_visible));
+        view_prefix_spans.push(Span::raw(" · "));
+        let (id_label, ids_visible) = match (app.id_mode, app.effective_id_mode()) {
+            (IdMode::Off, IdMode::Change) => ("auto change ids", true),
+            (IdMode::Commit, _) => ("commit ids", true),
+            (IdMode::Change, _) => ("change ids", true),
+            (IdMode::Off, _) => ("ids", false),
+        };
+        view_prefix_spans.extend(shortcut(id_label, 'i', ids_visible));
         view_prefix_spans.push(Span::raw(" · "));
         view_prefix_spans.extend(shortcut("emails", 'e', app.show_emails));
         let (name_label, names_visible) = match app.name_mode {
@@ -1682,6 +1694,9 @@ fn notification_discs(spans: Vec<Span<'_>>) -> Vec<Span<'_>> {
 #[derive(Clone, Copy)]
 struct MetadataOptions {
     date_mode: DateMode,
+    id_mode: IdMode,
+    change_id: gix::hash::ChangeId,
+    duplicate_change_id: bool,
     show_author_name: bool,
     show_emails: bool,
     show_trailers: bool,
@@ -1703,6 +1718,9 @@ fn metadata_line<'a>(
     debug_assert!(row.metadata_loaded, "visible rows have metadata");
     let MetadataOptions {
         date_mode,
+        id_mode,
+        change_id,
+        duplicate_change_id,
         show_author_name,
         show_emails,
         show_trailers,
@@ -1712,20 +1730,41 @@ fn metadata_line<'a>(
         selected,
         copy_feedback,
     } = options;
-    let id = row.id.to_hex().to_string();
-    let id_style = if copy_feedback == Some(CopyKind::Id) {
+    let commit_style = if copy_feedback == Some(CopyKind::Id) {
         Style::default()
     } else {
         color(Color::Magenta).add_modifier(Modifier::BOLD)
     };
-    let mut spans = vec![Span::styled(
-        id[..7].to_owned(),
+    let change_style = color(Color::LightCyan).add_modifier(Modifier::BOLD);
+    let selected_style = |style: Style| {
         if selected {
-            id_style.add_modifier(Modifier::REVERSED)
+            style.add_modifier(Modifier::REVERSED)
         } else {
-            id_style
-        },
-    )];
+            style
+        }
+    };
+    let mut spans = Vec::new();
+    match id_mode {
+        IdMode::Commit => spans.push(Span::styled(
+            row.id.to_hex_with_len(7).to_string(),
+            selected_style(commit_style),
+        )),
+        IdMode::Change if duplicate_change_id => {
+            spans.push(Span::styled(
+                change_id.to_reverse_hex_with_len(4).to_string(),
+                selected_style(change_style),
+            ));
+            spans.push(Span::styled(
+                row.id.to_hex_with_len(3).to_string(),
+                selected_style(commit_style),
+            ));
+        }
+        IdMode::Change => spans.push(Span::styled(
+            change_id.to_reverse_hex_with_len(7).to_string(),
+            selected_style(change_style),
+        )),
+        IdMode::Off => {}
+    }
     let row_decorations = decorations.get(&row.id).map(Vec::as_slice).unwrap_or_default();
     if row.is_review {
         spans.push(Span::styled(" ◆", decoration_style(DecorationKind::Review)));
@@ -1918,6 +1957,9 @@ pub(crate) fn plain_history_metadata(
         mailmap,
         MetadataOptions {
             date_mode: app.date_mode,
+            id_mode: app.effective_id_mode(),
+            change_id: app.change_id(row.id),
+            duplicate_change_id: app.has_duplicate_change_id(row.id),
             show_author_name: app.name_mode != NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == NameMode::All && app.show_trailers,
@@ -1945,6 +1987,9 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
         mailmap,
         MetadataOptions {
             date_mode: app.date_mode,
+            id_mode: IdMode::Off,
+            change_id: row.id.into(),
+            duplicate_change_id: false,
             show_author_name: app.name_mode != crate::app::NameMode::None,
             show_emails: app.show_emails,
             show_trailers: app.name_mode == crate::app::NameMode::All && app.show_trailers,
@@ -1958,7 +2003,6 @@ pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::
     let mut out = line
         .spans
         .into_iter()
-        .skip(1)
         .map(|span| span.content.into_owned())
         .collect::<String>()
         .trim()
@@ -2512,6 +2556,7 @@ mod tests {
     #[test]
     fn renders_grouped_attributions_and_bot_names() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(LoadedCommits {
             rows: vec![Commit {
                 id: gix::ObjectId::Sha1([1; 20]),
@@ -2715,6 +2760,7 @@ mod tests {
     fn renders_rows_decorations_selection_and_footer() -> Result<(), Box<dyn std::error::Error>> {
         let id = gix::ObjectId::Sha1([1; 20]);
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(vec![Commit {
             id,
             parent_ids: Default::default(),
@@ -2962,6 +3008,7 @@ mod tests {
         let selected = gix::ObjectId::Sha1([1; 20]);
         let head = gix::ObjectId::Sha1([2; 20]);
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(vec![Commit {
             id: selected,
             parent_ids: Default::default(),
@@ -3082,7 +3129,7 @@ mod tests {
         terminal.draw(|frame| draw(frame, &mut app, &Decorations::new()))?;
 
         let footer = rendered_line(&terminal, 1);
-        let view = "view (author date · emails · names · mailmap · trailers · refs · show hidden)";
+        let view = "view (author date · ids · emails · names · mailmap · trailers · refs · show hidden)";
         assert!(
             footer.starts_with(&format!("0 commits · {view} · copy · refs · ?")),
             "the active view prefix follows the history position"
@@ -3379,6 +3426,7 @@ mod tests {
     fn removes_the_copied_fields_color_from_only_the_selected_row_for_one_frame()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(
             (1..=2)
                 .map(|n| Commit {
@@ -3529,6 +3577,7 @@ mod tests {
             signature: SignatureState::Unsigned,
         };
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.set_worktree_head(Some(head), false);
         app.extend_commits(vec![commit(child, Some(head)), commit(head, None)]);
         complete(&mut app);
@@ -3999,6 +4048,7 @@ mod tests {
     #[test]
     fn changing_the_changes_height_keeps_history_alignment_stable() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(11);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(
             (1..=10)
                 .map(|n| Commit {
@@ -4082,6 +4132,7 @@ mod tests {
     #[test]
     fn shows_changed_paths_in_a_bottom_pane_below_the_summary() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(6);
+        app.id_mode = IdMode::Commit;
         app.commit_pane_background = Some((15, 16, 17));
         app.extend_commits(vec![
             Commit {
@@ -4917,6 +4968,7 @@ mod tests {
     #[test]
     fn renders_only_the_visible_rows() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(
             (1..=3)
                 .map(|n| Commit {
@@ -4998,6 +5050,7 @@ mod tests {
             signature: SignatureState::Unverified,
         };
         let mut app = App::new(2);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(vec![commit(1)]);
         std::sync::Arc::make_mut(&mut app.rows[0]).parent_ids = [gix::ObjectId::Sha1([2; 20])].into_iter().collect();
         app.extend_hidden_commits(vec![commit(2)]);
@@ -5164,6 +5217,9 @@ mod tests {
             &mailmap,
             MetadataOptions {
                 date_mode: DateMode::Committer,
+                id_mode: IdMode::Commit,
+                change_id: row.id.into(),
+                duplicate_change_id: false,
                 show_author_name: true,
                 show_emails: false,
                 show_trailers: true,
@@ -5218,8 +5274,74 @@ mod tests {
     }
 
     #[test]
+    fn hides_ids_by_default_and_color_splits_duplicate_change_ids() {
+        let id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        let row = &app.rows[0];
+        let plain = plain_history_metadata(
+            &app,
+            row,
+            &Decorations::new(),
+            &gix::mailmap::Snapshot::default(),
+            false,
+        );
+        assert!(!plain.contains("0101010"), "history rows hide IDs by default");
+
+        let change_id = gix::hash::ChangeId::from(gix::ObjectId::Sha1([2; 20]));
+        app.set_change_ids(
+            std::collections::HashMap::from([(id, change_id)]),
+            std::collections::HashSet::from([id]),
+        );
+        let row = &app.rows[0];
+        let decorations = Decorations::new();
+        let mailmap = gix::mailmap::Snapshot::default();
+        let line = metadata_line(
+            row,
+            app.title(row),
+            app.attributions(row),
+            &decorations,
+            &mailmap,
+            MetadataOptions {
+                date_mode: DateMode::None,
+                id_mode: app.effective_id_mode(),
+                change_id: app.change_id(id),
+                duplicate_change_id: app.has_duplicate_change_id(id),
+                show_author_name: false,
+                show_emails: false,
+                show_trailers: false,
+                has_notes: false,
+                use_mailmap: false,
+                ref_mode: RefMode::None,
+                selected: false,
+                copy_feedback: None,
+            },
+        );
+        assert_eq!(line.spans[0].content, change_id.to_reverse_hex_with_len(4).to_string());
+        assert_eq!(
+            line.spans[0].style,
+            color(Color::LightCyan).add_modifier(Modifier::BOLD)
+        );
+        assert_eq!(line.spans[1].content, id.to_hex_with_len(3).to_string());
+        assert_eq!(line.spans[1].style, color(Color::Magenta).add_modifier(Modifier::BOLD));
+    }
+
+    #[test]
     fn overlays_metadata_on_wide_graphs_and_allows_natural_flow() -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new(1);
+        app.id_mode = IdMode::Commit;
         app.extend_commits(vec![Commit {
             id: gix::ObjectId::Sha1([1; 20]),
             parent_ids: Default::default(),

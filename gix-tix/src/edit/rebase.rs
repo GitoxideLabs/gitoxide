@@ -513,6 +513,7 @@ fn perform_inner(
         let id = write_commit(
             &repo,
             commit,
+            None,
             &committer,
             CommitState::Unmarked(signature),
             signing.clone(),
@@ -620,7 +621,7 @@ fn perform_inner(
         } else {
             CommitState::Unmarked(signature)
         };
-        let new_id = write_commit(&repo, commit, &committer, state, signing.clone())?;
+        let new_id = write_commit(&repo, commit, Some(old_id), &committer, state, signing.clone())?;
         rewritten.insert(old_id, Some(new_id));
         if let Some((tree, conflicts)) = new_conflict {
             conflict = Some((old_id, tree, conflicts, new_id));
@@ -631,6 +632,7 @@ fn perform_inner(
                 let upper_id = write_commit(
                     &repo,
                     upper,
+                    None,
                     &committer,
                     CommitState::Unmarked(Signature::RedoIfNeeded),
                     signing.clone(),
@@ -751,6 +753,7 @@ pub(super) fn finish_review(
         let new = write_commit(
             &repo,
             commit,
+            Some(*old),
             &committer,
             CommitState::Unmarked(Signature::RedoIfNeeded),
             signing.clone(),
@@ -795,6 +798,7 @@ pub(super) fn finish_review(
         let new = write_commit(
             &repo,
             commit,
+            Some(old),
             &committer,
             CommitState::Pending {
                 original_parent: old_parents.first().copied(),
@@ -1049,7 +1053,12 @@ pub(crate) fn perform_plan_with_progress(
                 original_parent: recorded_parent.flatten().or_else(|| graph_parents.first().copied()),
             }
         };
-        let (new_id, signing_time) = write_commit_timed(&repo, commit, &committer, state, signing.clone())?;
+        let predecessor = match step.commit {
+            PlanCommit::Pick(id) | PlanCommit::Resolved(id) => Some(id),
+            PlanCommit::Empty(_) => None,
+        };
+        let (new_id, signing_time) =
+            write_commit_timed(&repo, commit, predecessor, &committer, state, signing.clone())?;
         if let Some(elapsed) = signing_time {
             progress.signed += 1;
             progress.signing_time += elapsed;
@@ -1714,20 +1723,25 @@ pub(super) fn is_pending(commit: &gix::objs::Commit) -> bool {
 fn write_commit(
     repo: &gix::Repository,
     commit: gix::objs::Commit,
+    predecessor: Option<ObjectId>,
     committer: &gix::actor::Signature,
     state: CommitState,
     signing: Option<gix::objs::signature::sign::Options>,
 ) -> Result<ObjectId> {
-    Ok(write_commit_timed(repo, commit, committer, state, signing)?.0)
+    Ok(write_commit_timed(repo, commit, predecessor, committer, state, signing)?.0)
 }
 
 fn write_commit_timed(
     repo: &gix::Repository,
     mut commit: gix::objs::Commit,
+    predecessor: Option<ObjectId>,
     committer: &gix::actor::Signature,
     state: CommitState,
     signing: Option<gix::objs::signature::sign::Options>,
 ) -> Result<(ObjectId, Option<Duration>)> {
+    if let Some(predecessor) = predecessor {
+        crate::change_id::inherit(repo, &mut commit, predecessor)?;
+    }
     commit.committer = committer.clone();
     let signature = match state {
         CommitState::Unmarked(signature) => {
@@ -2106,13 +2120,24 @@ mod tests {
             old_tip_tree,
             "a reword preserves descendant trees"
         );
-        for id in [new_middle, new_tip] {
+        for (id, predecessor) in [(new_middle, middle), (new_tip, old_tip)] {
             let commit = repo.find_commit(id)?.decode()?.into_owned()?;
             assert_eq!(commit.committer.name, b"rebasing committer".as_bstr());
             assert_eq!(commit.committer.email, b"rebasing@example.com".as_bstr());
             assert_eq!(
                 commit.committer.time.seconds, 978_307_200,
                 "every rewritten commit receives the operation's current committer date"
+            );
+            assert_eq!(
+                crate::change_id::effective(
+                    id,
+                    commit
+                        .extra_headers
+                        .iter()
+                        .filter_map(|(name, value)| (name == crate::change_id::HEADER).then_some(value.as_ref()))
+                ),
+                gix::hash::ChangeId::from(predecessor),
+                "each rewritten commit retains the identity of its predecessor"
             );
         }
         insta::assert_snapshot!(
@@ -2767,6 +2792,11 @@ mod tests {
         assert_eq!(commit.tree, tip_tree, "all source tree changes are present");
         assert_eq!(commit.author.name, b"author".as_bstr());
         assert_eq!(commit.committer.name, b"rebasing committer".as_bstr());
+        assert_eq!(
+            crate::change_id::effective(combined, commit.extra_headers().find_all(crate::change_id::HEADER)),
+            gix::hash::ChangeId::from(middle),
+            "the primary picked commit supplies the squash identity"
+        );
         assert!(!has_marker(&commit), "squash is eager even without a checkout marker");
         assert_eq!(
             commit.message,

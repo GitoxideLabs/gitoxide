@@ -29,6 +29,7 @@ C2
   parent C1
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id oxzuvntpklkyxykvvmmuzqomsnzrrwwvtuoxwttx
   
   review
 
@@ -37,6 +38,7 @@ C3
   parent C2
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id tlynrtysuoqktszrqppwrnsxpvokwvoqoqvkvqsv
   
   review successor
 
@@ -45,6 +47,7 @@ C4
   parent C3
   author reviewer <reviewer@example.com> 978307200 +0000
   committer reviewer <reviewer@example.com> 978307200 +0000
+  change-id xlpouomvnxrqllnkynsusvqwkkwnlrttmrvxquso
   tix-rebase-parent 2cb49e443aa675eab8add679938ca6cd303ae353
   
   A
@@ -59,14 +62,14 @@ tree = T2
 100644 file "successor" = "A\n"
 
 [objects]
-C2 = 066adf4b205850540218e32e44576bcb33249572
+C2 = 1a13dc5cbbc857de093c9a007e6b104a1a9ffbdb
 B0 = 223b7836fb19fdf64ba2d3cd6173c6a283141f78
 C1 = 2cb49e443aa675eab8add679938ca6cd303ae353
 T0 = 2e457f998ff6a6163f89e091bc4d6b92c8ed2a28
-C4 = 4ec5d7b25bc7415d9243067e231d934cc6952501
 T1 = 6d5f482d15035cdd7733b1b551d1fead28d22592
 T2 = 74c148aa829dcd83ad2608b6d0862ae1e6981501
+C4 = 7b4c1808849fabbe6f5afcd94ff930defbda47f3
 T3 = 93664bfc7cc096fcc0d1ac962596031e10f26906
 C0 = c38a9f7427b84ed8ba5e187ec385489d82d71695
-C3 = e0b1ce8b2ac673ea0cc153ca4b8958a3aa315dd0
+C3 = e028a8e769407c249d118ddc499f0c064685ba16
 B1 = f70f10e4db19068f79bc43844b49f3eece45c4e8

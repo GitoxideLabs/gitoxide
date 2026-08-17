@@ -206,6 +206,7 @@ fn write_history(
     ));
     let refs = crate::history::snapshot(repository, revisions, hide, false)?;
     let mut app = crate::app::App::new(usize::MAX);
+    app.id_mode = crate::app::IdMode::Commit;
     let mut decorations = crate::history::Decorations::default();
     let mut history_graph = None;
     crate::history::load(
