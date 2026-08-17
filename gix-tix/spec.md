@@ -138,8 +138,8 @@ without trading responsiveness for metadata that is not visible.
 - The commit marker is blue when unsigned, orange when signed but unverified or
   being verified, green when verified, and bright red when verification fails.
 - The current `HEAD` commit, including a review commit, uses `@` instead of the
-  normal commit disc and keeps
-  the same signature and selection coloring. It remains visible when textual
+  normal commit disc. The marker is italic when HEAD is attached to a branch and
+  keeps the same signature and selection coloring. It remains visible when textual
   reference labels are hidden, and textual `HEAD` is never rendered alongside it.
 - At startup, the current worktree's `@` row becomes selected as soon as it is
   loaded, unless the user navigates first. Once the viewport is known, the row
