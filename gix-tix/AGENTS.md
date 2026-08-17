@@ -12,6 +12,11 @@
   or resource-ownership change to tix. Update the specification and its
   regression coverage in the same semantic patch as the implementation.
 
+## Command output
+
+- Write warnings, diagnostics, and informational messages to stderr. Reserve
+  stdout for a command's primary data output so it remains safe to redirect.
+
 ## Test repositories
 
 - Open fixture repositories through `crate::test_repository::open()` or
