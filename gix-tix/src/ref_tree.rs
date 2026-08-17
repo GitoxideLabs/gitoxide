@@ -166,6 +166,7 @@ pub(crate) struct Tree {
     edit_expanded: bool,
     remote_deletions: Vec<RemoteDeletion>,
     message: Option<String>,
+    history_commits: HashSet<ObjectId>,
 }
 
 impl Tree {
@@ -189,6 +190,11 @@ impl Tree {
 
     pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
         self.message = Some(message.into());
+    }
+
+    pub(crate) fn set_history_commits(&mut self, commits: impl IntoIterator<Item = ObjectId>) {
+        self.history_commits.clear();
+        self.history_commits.extend(commits);
     }
 
     pub(crate) fn rebuild(&mut self, graph: &HistoryGraph, refs: &RefSnapshot, decorations: &Decorations) {
@@ -458,6 +464,7 @@ impl Tree {
             selected,
             self.motion,
             &self.choices,
+            &self.history_commits,
         );
         let footer_text = if let Some(message) = &self.message {
             message.clone()
@@ -1221,6 +1228,7 @@ fn draw_nodes(
     selected: Option<usize>,
     motion: Motion,
     choices: &[usize],
+    history_commits: &HashSet<ObjectId>,
 ) {
     for (index, node) in overview.nodes.iter().enumerate() {
         let point = placed.nodes[index];
@@ -1241,10 +1249,21 @@ fn draw_nodes(
             )
             .expect("writing to a string cannot fail");
         }
-        let mut style = node.decorations.first().map_or_else(
-            || Style::default().fg(Color::LightBlue),
-            |decoration| decoration_style(decoration.kind),
-        );
+        let mut style = if node.is_anchor && history_commits.contains(&node.id) {
+            Style::default().fg(Color::Cyan)
+        } else if node.decorations.iter().any(|decoration| {
+            matches!(
+                decoration.kind,
+                DecorationKind::WorktreeBranch | DecorationKind::WorktreeDetached
+            )
+        }) {
+            Style::default().fg(Color::Green)
+        } else {
+            node.decorations.first().map_or_else(
+                || Style::default().fg(Color::LightBlue),
+                |decoration| decoration_style(decoration.kind),
+            )
+        };
         if selected == Some(index) {
             style = style.add_modifier(Modifier::REVERSED | Modifier::BOLD);
         } else if let Some(overlay) = overlay {
@@ -2331,8 +2350,10 @@ mod tests {
 
     #[test]
     fn interactive_ref_tree_renders_exact_visible_counts() -> gix_testtools::Result {
-        let (graph, refs, decorations) = fixture();
+        let (graph, refs, mut decorations) = fixture();
+        decorations.get_mut(&id(5)).expect("topic is decorated")[0].kind = DecorationKind::WorktreeBranch;
         let mut tree = Tree::default();
+        tree.set_history_commits([id(6)]);
         tree.rebuild(&graph, &refs, &decorations);
         let mut terminal = Terminal::new(TestBackend::new(100, 18))?;
 
@@ -2363,6 +2384,7 @@ mod tests {
         let selected = tree.selected.expect("the ref-tree selects a node");
         let placed = tree.placed.as_ref().expect("drawing places the ref-tree");
         let point = placed.nodes[selected];
+        let rail_width = placed.rail_width;
         assert!(
             !terminal.backend().buffer()[(point.x as u16, point.y as u16)]
                 .modifier
@@ -2370,10 +2392,25 @@ mod tests {
             "the selected disk is not inverted"
         );
         assert!(
-            terminal.backend().buffer()[(placed.rail_width as u16, point.y as u16)]
+            terminal.backend().buffer()[(rail_width as u16, point.y as u16)]
                 .modifier
                 .contains(Modifier::REVERSED),
             "the selected node label remains inverted"
+        );
+        let topic =
+            tree.overview.as_ref().expect("the ref-tree exists").by_commit[&graph.index(id(5)).expect("topic exists")];
+        let point = tree.placed.as_ref().expect("drawing places the ref-tree").nodes[topic];
+        assert_eq!(
+            terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
+            Color::Green,
+            "an out-of-history linked worktree uses dark green"
+        );
+        tree.set_history_commits([id(6), id(5)]);
+        terminal.draw(|frame| tree.draw(frame, Some(&graph)))?;
+        assert_eq!(
+            terminal.backend().buffer()[(rail_width as u16, point.y as u16)].fg,
+            Color::Cyan,
+            "history visibility takes precedence with the bright current-history color"
         );
 
         let fork = tree.overview.as_ref().expect("the ref-tree exists").by_commit
