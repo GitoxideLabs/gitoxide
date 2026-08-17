@@ -1757,6 +1757,23 @@ pub(crate) fn decorations(repo: &gix::Repository, pins: &[Pin], worktrees: &[Wor
             continue;
         }
         if full_name.as_bstr().starts_with(REVIEW_STASH_PREFIX) {
+            let leaf: Result<Option<ObjectId>> = (|| {
+                let stash = repo.find_commit(reference.peel_to_id()?)?;
+                Ok(stash.parent_ids().next().map(gix::Id::detach))
+            })();
+            let leaf = match leaf {
+                Ok(leaf) => leaf,
+                Err(err) => {
+                    tracing::warn!(name = %full_name, error = %err, "ignored malformed review stash reference");
+                    None
+                }
+            };
+            if let Some(id) = leaf {
+                out.entry(id).or_default().push(Decoration {
+                    name: "stash".into(),
+                    kind: DecorationKind::Stash,
+                });
+            }
             continue;
         }
         if full_name.as_bstr().starts_with(STASH_PREFIX) {
@@ -2755,10 +2772,14 @@ mod tests {
     }
 
     #[test]
-    fn review_resources_are_not_history_tips_and_stashes_are_not_decorations() -> gix_testtools::Result {
+    fn review_resources_are_not_history_tips_and_stashes_decorate_the_saved_leaf() -> gix_testtools::Result {
         let fixture = gix_testtools::scripted_fixture_writable("history.sh")?;
         let repo = crate::test_repository::open(fixture.path())?;
         let review = repo.rev_parse_single("topic")?.detach();
+        let mut stash = repo.find_commit(review)?.decode()?.into_owned()?;
+        stash.parents = [review].into_iter().collect();
+        stash.message = "review stash".into();
+        let stash = repo.write_object(&stash)?.detach();
         repo.reference(
             "refs/worktree/tix/review/1",
             review,
@@ -2767,7 +2788,7 @@ mod tests {
         )?;
         repo.reference(
             "refs/worktree/tix/review/stashes/1",
-            review,
+            stash,
             gix::refs::transaction::PreviousValue::MustNotExist,
             "test review stash",
         )?;
@@ -2777,12 +2798,18 @@ mod tests {
             !snapshot(&repo, &[], &[], false)?.view_tips.contains(&review),
             "review resources do not retain history"
         );
+        let decorations = decorations(&repo, &[], &worktree_checkouts(&repo))?;
         assert!(
-            decorations(&repo, &[], &worktree_checkouts(&repo))?
-                .values()
-                .flatten()
-                .all(|decoration| !decoration.name.contains_str("stashes")),
-            "saved review state is an internal resource"
+            decorations.get(&review).is_some_and(|decorations| decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::Stash)),
+            "saved review state decorates the review leaf"
+        );
+        assert!(
+            decorations.get(&stash).is_none_or(|decorations| decorations
+                .iter()
+                .all(|decoration| decoration.kind != DecorationKind::Stash)),
+            "the internal stash commit is not decorated"
         );
         Ok(())
     }

@@ -385,7 +385,9 @@ The Enter key is written as `<enter>` throughout.
   restores it with `git stash apply --index` and consumes its companion ref after
   Git returns, including when application leaves conflicts to resolve. Manual
   commit stashes use the same plumbing during reviews, while automatic review
-  stashes retain their review-tree identity and namespace.
+  stashes retain their review-tree identity and namespace. An active automatic
+  review stash likewise shows `🎁` on the review leaf whose worktree state it
+  saved, without exposing its internal reference or stash commit to traversal.
 - At a selected `@` with a commit stash, the edit menu offers `unstas[h]` even
   when other worktree changes are present. It applies and consumes the stash in
   place through the same path used when time travel returns to that commit.
@@ -674,8 +676,8 @@ space first; changes blocks adapt within the remaining history width.
   return checkout is restored, and the departure pin is consumed. Finishing a
   review or dropping one through a rebase todo also deletes its review ref and
   optional saved-worktree ref atomically; reordering or rewriting it preserves the
-  headers and resources. Review stash refs are internal: they are neither traversal
-  tips nor decorations.
+  headers and resources. Review stash refs are internal: they are not traversal
+  tips or named decorations, but their saved review leaf carries a `🎁` marker.
 
 ### Forget commits
 
