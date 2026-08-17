@@ -334,10 +334,9 @@ The Enter key is written as `<enter>` throughout.
   successor is not pinned; a distinct departure preserves its rewritten identity.
 - While `HEAD` is detached, every valid pin, including the HEAD pin, from the
   current worktree augments implicit and explicit revision tips. While it is
-  attached, symbolic ordinary pins and direct pins at strict descendants of
-  `HEAD` do so while the HEAD pin is inactive. This lets explicitly pinned
-  references enter history while preserving rewritten leaves after a history
-  rebase moves the checked-out branch down its stack. Pins from other worktrees, dangling,
+  attached, every ordinary pin away from `HEAD` does so while the HEAD pin is
+  inactive. This lets explicitly pinned references and unrelated retained trees
+  remain in history. Pins from other worktrees, dangling,
   malformed, and non-commit pins do not enter the view or its decorations.
   Normal hidden-revision exclusions still apply.
 - One or more worktree pins at a commit are shown as a single blue `📌`
@@ -371,7 +370,9 @@ The Enter key is written as `<enter>` throughout.
   `refs/worktree/tix/review/stashes/N`; ignored files remain untouched. Crossing
   into any commit in that review tree restores the state with `git stash apply
   --index` and always removes the companion ref after Git returns. Apply conflicts
-  remain in the ordinary index/worktree conflict workflow. Nested trees use the
+  remain in the ordinary index/worktree conflict workflow. Leaving a review tree
+  retains its leaf with the normal direct departure pin even after returning to
+  attached history; returning through that pin consumes it. Nested trees use the
   nearest review-root ancestor.
 - When loaded worktree status shows staged, unstaged, or untracked changes without
   conflicts, the edit menu offers `stas[h]` at the selected `@` entry. Missing or
