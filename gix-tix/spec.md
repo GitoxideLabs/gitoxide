@@ -138,7 +138,9 @@ without trading responsiveness for metadata that is not visible.
   A detached foreign worktree is shown as `directory@` at its actual `HEAD`,
   without a pin marker. Its symbolic HEAD pin is shown separately as `★branch`
   at that branch's actual tip. The worktree administration name is used when no
-  directory basename is available. Identical labels are deduplicated.
+  directory basename is available. A detached current worktree is identified by
+  the graph `@` alone and has no redundant `@directory` label. Identical labels
+  are deduplicated.
 - When reference labels are hidden, worktree labels are visible only on the
   selected row. Stale, malformed, unborn, and otherwise unreadable worktree
   entries are skipped without failing history loading.
