@@ -4,6 +4,7 @@
 
 mod animation;
 mod app;
+mod change_id;
 pub mod command;
 mod edit;
 mod history;
@@ -70,6 +71,17 @@ struct FillRepository {
     bare: bool,
     retained: Option<gix::Repository>,
     retain: bool,
+}
+
+struct ChangeIdWorker {
+    cancelled: Arc<AtomicBool>,
+    results: mpsc::Receiver<Result<Option<change_id::Scan>>>,
+}
+
+impl Drop for ChangeIdWorker {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
 }
 
 struct WorktreeWatcher {
@@ -915,6 +927,7 @@ fn event_loop(
     let mut ref_refresh_deadline: Option<Instant> = None;
     let mut refresh_expand_hidden = false;
     let mut verification_receiver = None;
+    let mut change_id_worker: Option<ChangeIdWorker> = None;
     let mut commit_message = None;
     let mut tree_changes = TreeChangesCache::default();
     let mut worktree_changes = None;
@@ -1221,6 +1234,25 @@ fn event_loop(
                 }
             }
         }
+        if let Some(result) = change_id_worker.as_ref().map(|worker| worker.results.try_recv()) {
+            match result {
+                Ok(Ok(Some(scan))) => {
+                    app.set_change_ids(scan.overrides, scan.duplicates);
+                    change_id_worker = None;
+                    dirty = true;
+                }
+                Ok(Ok(None)) => change_id_worker = None,
+                Ok(Err(err)) => {
+                    tracing::warn!(error = %err, "change ID scan failed");
+                    change_id_worker = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    tracing::warn!("change ID scan worker stopped unexpectedly");
+                    change_id_worker = None;
+                }
+            }
+        }
         if let Some(result) = lane_receiver.as_ref().map(mpsc::Receiver::try_recv) {
             match result {
                 Ok((rows, graph, lane_time)) => {
@@ -1243,6 +1275,11 @@ fn event_loop(
                     if quit_on_finish {
                         return Ok(app.lane_time);
                     }
+                    change_id_worker = Some(start_change_id_scan(
+                        repository_path.clone(),
+                        repository_is_bare,
+                        app.rows.iter().map(|row| row.id).collect(),
+                    ));
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -1326,6 +1363,7 @@ fn event_loop(
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
+            change_id_worker = None;
             ref_tree_refresh_pending = false;
             refresh_receiver = Some(start_history_refresh(
                 repository_path.clone(),
@@ -1349,6 +1387,7 @@ fn event_loop(
             && history_graph.is_some()
             && matches!(app.state, State::Complete | State::Cancelled)
         {
+            change_id_worker = None;
             let refresh_started = Instant::now();
             let response_ids = filesystem_responses.begin_reference_refresh();
             let repository = match open_repository(&repository_path, repository_is_bare, true) {
@@ -2574,6 +2613,20 @@ fn start_lane_worker(rows: Vec<SharedCommitRow>) -> mpsc::Receiver<(Vec<SharedCo
         let _ = sender.send(app::compute_lanes(rows));
     });
     receiver
+}
+
+fn start_change_id_scan(repository_path: PathBuf, bare: bool, ids: Vec<gix::ObjectId>) -> ChangeIdWorker {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let worker_cancelled = Arc::clone(&cancelled);
+    let (sender, results) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = open_repository(&repository_path, bare, false).and_then(|mut repository| {
+            repository.object_cache_size_if_unset(OBJECT_CACHE_SIZE);
+            change_id::scan(&repository, &ids, &worker_cancelled)
+        });
+        let _ = sender.send(result);
+    });
+    ChangeIdWorker { cancelled, results }
 }
 
 type SignatureVerification = (gix::ObjectId, bool);
@@ -4591,6 +4644,7 @@ fn action_allowed_during_rebase_continuation(action: Option<&Action>, changes_fo
                 | Action::First
                 | Action::Last
                 | Action::ToggleDate
+                | Action::CycleIds
                 | Action::ToggleName
                 | Action::ToggleEmail
                 | Action::ToggleTrailers
@@ -4649,6 +4703,7 @@ fn action_with_shortcut_groups(key: KeyEvent, history_display_expanded: bool, ed
         KeyCode::Home | KeyCode::Char('g') => Some(Action::First),
         KeyCode::End | KeyCode::Char('G') => Some(Action::Last),
         KeyCode::Char('d') if history_display_expanded => Some(Action::ToggleDate),
+        KeyCode::Char('i') if history_display_expanded => Some(Action::CycleIds),
         KeyCode::Char('e') if history_display_expanded => Some(Action::ToggleEmail),
         KeyCode::Char('n') if history_display_expanded => Some(Action::ToggleName),
         KeyCode::Char('t') if history_display_expanded => Some(Action::ToggleTrailers),
@@ -5717,6 +5772,7 @@ mod tests {
         );
         for (key, expected) in [
             ('d', Action::ToggleDate),
+            ('i', Action::CycleIds),
             ('e', Action::ToggleEmail),
             ('n', Action::ToggleName),
             ('t', Action::ToggleTrailers),
