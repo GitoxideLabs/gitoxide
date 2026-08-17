@@ -1296,7 +1296,7 @@ fn draw_nodes(
 }
 
 fn rail_label(node: &Node, count: Option<usize>) -> String {
-    let mut out = count.map_or_else(String::new, |count| count.to_string());
+    let mut out = count.map_or_else(String::new, |count| format!("{count}•"));
     let suffix = node_label(node);
     if !out.is_empty() && !suffix.is_empty() {
         out.push(' ');
@@ -2346,11 +2346,11 @@ mod tests {
         assert!(rendered.contains("topic"), "the rounded ref-tree shows topic");
         assert!(rendered.contains("ref-tree ·"), "the footer identifies the ref-tree");
         assert!(
-            rendered.contains("5 main"),
+            rendered.contains("5• main"),
             "the selected reference shows its exact count"
         );
         assert!(
-            rendered.contains("1 topic"),
+            rendered.contains("1• topic"),
             "visible references show relative exact counts"
         );
         assert!(

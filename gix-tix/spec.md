@@ -205,7 +205,7 @@ without trading responsiveness for metadata that is not visible.
   its commit remains available.
 - The selected node shows the exact number of commits reachable
   through all parents. Other reference and raw-tip nodes show the number reachable
-  from them but not from the selection as `N●`; multiple labels at one commit
+  from them but not from the selection as `N•`; multiple labels at one commit
   share one count. Space fixes this count anchor at the selected node or clears it
   when pressed there again, so cursor navigation can reuse reachability and layout
   caches. Selected first-parent ancestry is emphasized, other reachable history is
@@ -214,9 +214,9 @@ without trading responsiveness for metadata that is not visible.
   and cached only for reference rows visible in the viewport.
 - The ref-tree orders tips above roots and renders one retained or boundary
   node per row. Rounded ancestry lanes precede aligned counts and labels; their
-  disk is the node marker, so counts do not repeat it. Selection emphasizes the
-  label without inverting the disk, while a selected synthetic node inverts its
-  otherwise-unlabelled disk.
+  `●` disk is the node marker, while the smaller `•` is the commit-count unit.
+  Selection emphasizes the label without inverting the disk, while a selected
+  synthetic node inverts its otherwise-unlabelled disk.
 - Rendering clips lanes and node labels to the viewport.
 - `Tab` switches nearest-direction and topological movement.
   Nearest movement chooses the closest node in the requested screen direction.
