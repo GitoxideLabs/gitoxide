@@ -617,9 +617,17 @@ pub(crate) fn draw_with_worktree(
                 .iter()
                 .any(|decoration| decoration.kind == DecorationKind::Head)
         });
+        let attached_head = decorations.get(&visible_rows[index].id).is_some_and(|decorations| {
+            decorations
+                .iter()
+                .any(|decoration| decoration.kind == DecorationKind::CurrentWorktreeBranch)
+        });
         let head_has_descendants = app.worktree_head_has_descendants(visible_rows[index].id);
         let underline = head_has_descendants && !selected;
-        let head_state = head.then_some(head_has_descendants);
+        let head_state = head.then_some(HeadState {
+            has_descendants: head_has_descendants,
+            attached: attached_head,
+        });
         let metadata_width = metadata.width();
         let hidden_branch_behind = app.hidden_branch_behind(visible_rows[index].id);
         let line_width = match alignment {
@@ -2380,6 +2388,12 @@ fn color(color: Color) -> Style {
     Style::default().fg(color)
 }
 
+#[derive(Clone, Copy)]
+struct HeadState {
+    has_descendants: bool,
+    attached: bool,
+}
+
 fn color_graph(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -2387,7 +2401,7 @@ fn color_graph(
     offset: usize,
     highlight: Option<Color>,
     signature: SignatureState,
-    head: Option<bool>,
+    head: Option<HeadState>,
 ) {
     for (x, symbol) in graph.chars().skip(offset).take(area.width as usize).enumerate() {
         if symbol.is_whitespace() {
@@ -2400,12 +2414,15 @@ fn color_graph(
         } else {
             graph_style(offset.saturating_add(x) / 2)
         };
-        if head == Some(true) && symbol == '●' {
+        if head.is_some_and(|head| head.has_descendants) && symbol == '●' {
             style = style.add_modifier(Modifier::BOLD);
         }
         let cell = &mut frame.buffer_mut()[(area.x + x as u16, area.y)];
         if head.is_some() && symbol == '●' {
             cell.set_symbol("@");
+            if head.is_some_and(|head| head.attached) {
+                style = style.add_modifier(Modifier::ITALIC);
+            }
         }
         cell.set_style(style);
     }
@@ -3951,7 +3968,10 @@ mod tests {
                         0,
                         Some(signature_color(*state)),
                         *state,
-                        head.then_some(false),
+                        head.then_some(HeadState {
+                            has_descendants: false,
+                            attached: false,
+                        }),
                     );
                 }
             }
@@ -3981,11 +4001,72 @@ mod tests {
                 0,
                 None,
                 SignatureState::Unsigned,
-                Some(true),
+                Some(HeadState {
+                    has_descendants: true,
+                    attached: false,
+                }),
             );
         })?;
         assert_eq!(terminal.backend().buffer()[(0, 0)].symbol(), "@");
         assert_eq!(terminal.backend().buffer()[(1, 0)].symbol(), "─");
+        Ok(())
+    }
+
+    #[test]
+    fn italicizes_only_an_attached_head_marker() -> Result<(), Box<dyn std::error::Error>> {
+        let id = gix::ObjectId::Sha1([1; 20]);
+        let mut app = App::new(1);
+        app.extend_commits(vec![Commit {
+            id,
+            parent_ids: Default::default(),
+            author_time: gix::date::Time::default(),
+            committer_time: gix::date::Time::default(),
+            author: author(b"author", b"author@example.com"),
+            attributions: 0..0,
+            title: "subject".into(),
+            metadata_loaded: true,
+            has_agent_marker: false,
+            is_review: false,
+            signature: SignatureState::Unsigned,
+        }]);
+        complete(&mut app);
+        app.selected = None;
+        app.set_lane(0, "● ");
+        let mut terminal = Terminal::new(TestBackend::new(80, 2))?;
+        let head = Decoration {
+            name: "HEAD".into(),
+            kind: DecorationKind::Head,
+        };
+
+        let attached = Decorations::from([(
+            id,
+            vec![
+                head.clone(),
+                Decoration {
+                    name: "main".into(),
+                    kind: DecorationKind::CurrentWorktreeBranch,
+                },
+            ],
+        )]);
+        terminal.draw(|frame| draw(frame, &mut app, &attached))?;
+        let marker = &terminal.backend().buffer()[(2, 0)];
+        assert_eq!(marker.symbol(), "@");
+        assert!(marker.modifier.contains(Modifier::ITALIC), "attached HEAD is italic");
+
+        let detached = Decorations::from([(
+            id,
+            vec![
+                head,
+                Decoration {
+                    name: "worktree".into(),
+                    kind: DecorationKind::CurrentWorktreeDetached,
+                },
+            ],
+        )]);
+        terminal.draw(|frame| draw(frame, &mut app, &detached))?;
+        let marker = &terminal.backend().buffer()[(2, 0)];
+        assert_eq!(marker.symbol(), "@");
+        assert!(!marker.modifier.contains(Modifier::ITALIC), "detached HEAD is upright");
         Ok(())
     }
 
