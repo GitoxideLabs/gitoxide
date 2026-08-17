@@ -50,6 +50,19 @@ pub(crate) enum SignatureState {
     PendingRebase,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum NoticeKind {
+    Success,
+    Attention,
+    Error,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Notice {
+    pub kind: NoticeKind,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ChangeKind {
     Added,
@@ -449,7 +462,7 @@ pub(crate) struct App {
     reachable_rows: Option<Vec<bool>>,
     pub copy_feedback: Option<CopyKind>,
     pub(crate) focus_feedback: Option<&'static str>,
-    message: Option<String>,
+    notice: Option<Notice>,
     pub(crate) unseen_filesystem_redraw: bool,
     pub(crate) history_display_expanded: bool,
     pub(crate) edit_expanded: bool,
@@ -544,7 +557,7 @@ impl App {
             reachable_rows: None,
             copy_feedback: None,
             focus_feedback: None,
-            message: None,
+            notice: None,
             unseen_filesystem_redraw: false,
             history_display_expanded: false,
             edit_expanded: false,
@@ -610,12 +623,54 @@ impl App {
         self.duplicate_change_ids.clear();
     }
 
-    pub(crate) fn leave_message(&mut self, message: impl Into<String>) {
-        self.message = Some(message.into());
+    pub(crate) fn leave_attention(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Attention, message);
     }
 
-    pub(crate) fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+    pub(crate) fn leave_success(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Success, message);
+    }
+
+    pub(crate) fn leave_error(&mut self, message: impl Into<String>) {
+        self.leave_notice(NoticeKind::Error, message);
+    }
+
+    fn leave_notice(&mut self, kind: NoticeKind, message: impl Into<String>) {
+        self.notice = Some(Notice {
+            kind,
+            text: message.into(),
+        });
+    }
+
+    pub(crate) fn notice(&self) -> Option<Notice> {
+        let prompt = if self.rebase_continuation_pending() {
+            Some(if self.rebase_continuation_conflicted() {
+                "REBASE PAUSED · resolve conflicts, then <enter> continue · Esc stop"
+            } else {
+                "REBASE PAUSED · <enter> continue · Esc stop"
+            })
+        } else if self.pending_rebase_conflict.is_some() {
+            Some("rebase conflict · <enter> checkout for resolution · any other key cancel")
+        } else if self.review_return_selection_active() {
+            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel")
+        } else if self.review_selection_active() {
+            Some("review base · j/k select ancestor · <enter> start · Esc cancel")
+        } else if self.forget_confirmation_visible() {
+            Some("forget commit · d again confirm · any other action cancel")
+        } else {
+            None
+        };
+        match (prompt, self.notice.as_ref()) {
+            (Some(prompt), Some(notice)) if notice.text != prompt => Some(Notice {
+                kind: notice.kind.max(NoticeKind::Attention),
+                text: format!("{prompt} · {}", notice.text),
+            }),
+            (Some(prompt), _) => Some(Notice {
+                kind: NoticeKind::Attention,
+                text: prompt.into(),
+            }),
+            (None, notice) => notice.cloned(),
+        }
     }
 
     pub(crate) fn configure_hidden_filter(&mut self, present: bool) {
@@ -645,7 +700,6 @@ impl App {
         );
         self.pending_rebase_conflict = Some(id);
         self.rebase_continuation_pending = false;
-        self.leave_message("rebase conflict · <enter> checkout for resolution · any other key cancel");
     }
 
     pub(crate) fn has_rebase_conflict(&self) -> bool {
@@ -654,7 +708,7 @@ impl App {
 
     pub(crate) fn clear_rebase_conflict(&mut self) {
         self.pending_rebase_conflict = None;
-        self.message = None;
+        self.notice = None;
     }
 
     pub(crate) fn begin_conflict_resolution(&mut self) {
@@ -861,7 +915,7 @@ impl App {
     }
 
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        self.message = None;
+        self.notice = None;
         if !matches!(&action, Action::Forget) {
             self.forget_confirmation = None;
         }
@@ -1202,7 +1256,6 @@ impl App {
                     self.clear_review_selection();
                     return vec![Effect::StartReview { tip, base }];
                 }
-                self.leave_message("review base · j/k select ancestor · <enter> start · Esc cancel");
             }
             Action::TimeTravel if self.time_travel_shortcut_visible() => {
                 return vec![Effect::TimeTravel(
@@ -2915,6 +2968,11 @@ mod tests {
         assert!(!app.is_row_reachable(4), "unrelated commits are not return candidates");
         app.update(Action::MoveUp);
         assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("review return is missing · j/k select commit · <enter> finish detached · Esc cancel".into()),
+            "navigation retains the return-selection prompt"
+        );
+        assert_eq!(
             app.selected.map(|index| app.rows[index].id),
             Some(id(5)),
             "navigation skips ineligible rows"
@@ -2945,8 +3003,17 @@ mod tests {
             "the first d only arms confirmation"
         );
         assert!(app.forget_confirmation_visible());
+        assert_eq!(
+            app.notice().map(|notice| (notice.kind, notice.text)),
+            Some((
+                NoticeKind::Attention,
+                "forget commit · d again confirm · any other action cancel".into()
+            )),
+            "the armed confirmation owns a persistent attention notice"
+        );
         app.update(Action::MoveDown);
         assert!(!app.forget_confirmation_visible(), "navigation cancels confirmation");
+        assert!(app.notice().is_none(), "cancelling the confirmation removes its notice");
         assert!(app.can_forget(), "a commit with linear descendants can be forgotten");
         app.update(Action::MoveUp);
         assert!(app.update(Action::Forget).is_empty());
@@ -3236,6 +3303,11 @@ mod tests {
         assert!(app.is_row_reachable(tip_index));
         assert!(!app.is_row_reachable(unrelated));
         app.update(Action::MoveDown);
+        assert_eq!(
+            app.notice().map(|notice| notice.text),
+            Some("review base · j/k select ancestor · <enter> start · Esc cancel".into()),
+            "navigation retains the review-base prompt"
+        );
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(3)));
         app.update(Action::MoveDown);
         assert_eq!(app.selected.map(|index| app.rows[index].id), Some(id(1)));
