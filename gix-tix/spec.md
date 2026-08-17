@@ -673,6 +673,13 @@ space first; changes blocks adapt within the remaining history width.
   review-side leaf, the reviewed tip's prior descendants are lazily reparented
   after it; with multiple leaves they branch directly after the finished review.
   The review ref is deleted in the same atomic ref/worktree transaction.
+- If the recorded review return ref is missing, finishing leaves the repository
+  untouched and limits navigation to visible non-review commits descended from
+  the reviewed tip. The reviewed tip is selected initially when visible;
+  otherwise the nearest eligible row is selected. `<enter>` finishes the review,
+  maps the chosen commit through that rewrite, and checks it out detached, while
+  Escape cancels recovery.
+  Hidden, unrelated, and review commits are not selectable return targets.
 - Forget is unavailable for a review commit with descendants. Forgetting a review
   leaf cancels the review: tracked review changes are discarded, its recorded
   return checkout is restored, and the departure pin is consumed. Finishing a

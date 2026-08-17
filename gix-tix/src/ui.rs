@@ -768,7 +768,12 @@ pub(crate) fn draw_with_worktree(
         State::Cancelled => " · cancelled",
     };
     let mut footer_spans = vec![Span::raw(status)];
-    if app.review_selection_active() {
+    if app.review_return_selection_active() {
+        footer_spans.push(Span::styled(
+            " · review return (<enter> finish detached · Esc cancel)",
+            Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
+        ));
+    } else if app.review_selection_active() {
         footer_spans.push(Span::styled(
             " · review base (<enter> start · Esc cancel)",
             Style::default().fg(Color::LightMagenta).add_modifier(Modifier::BOLD),
