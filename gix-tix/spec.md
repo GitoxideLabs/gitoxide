@@ -13,6 +13,11 @@ without trading responsiveness for metadata that is not visible.
 
 - `tix [REVISION]...` shows commits reachable from the supplied revisions, or
   from `HEAD` when none are supplied.
+- `tix show -h HIDDEN... [TIP...]` prints the complete history view without
+  opening a terminal UI. At least one hidden revision is required; tips default
+  to `HEAD`, and applicable pins participate exactly as they do in the history
+  view. Output uses the history view's graph lanes and default metadata, without
+  colors, selection, clipping, or a footer.
 - `tix travel [--materialize-conflicts] REVSPEC` performs the same detached
   checkout, pending-rebase replay, stash handling, and pin reconciliation as
   TUI time travel. Travelling to the current `HEAD` is a no-op. A detached

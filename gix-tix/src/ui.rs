@@ -1903,6 +1903,37 @@ fn metadata_line<'a>(
     Line::from(spans)
 }
 
+pub(crate) fn plain_history_metadata(
+    app: &App,
+    row: &CommitRow,
+    decorations: &Decorations,
+    mailmap: &gix::mailmap::Snapshot,
+    has_notes: bool,
+) -> String {
+    metadata_line(
+        row,
+        app.title(row),
+        app.attributions(row),
+        decorations,
+        mailmap,
+        MetadataOptions {
+            date_mode: app.date_mode,
+            show_author_name: app.name_mode != NameMode::None,
+            show_emails: app.show_emails,
+            show_trailers: app.name_mode == NameMode::All && app.show_trailers,
+            has_notes,
+            use_mailmap: app.use_mailmap,
+            ref_mode: app.ref_mode,
+            selected: false,
+            copy_feedback: None,
+        },
+    )
+    .spans
+    .into_iter()
+    .map(|span| span.content.into_owned())
+    .collect()
+}
+
 pub(crate) fn todo_metadata(app: &App, row: &CommitRow, mailmap: &gix::mailmap::Snapshot) -> String {
     let title = app.title(row);
     let decorations = Decorations::new();
