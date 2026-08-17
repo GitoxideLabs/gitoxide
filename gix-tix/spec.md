@@ -277,8 +277,10 @@ without trading responsiveness for metadata that is not visible.
   Topological Up moves toward leaves, Down toward roots, and Left/Right chooses
   a remembered child; `i/n` and an emphasized edge show the choice.
 - `g` selects the top ref-tree node, and `Shift-G` selects the root of the current
-  component. Shift-modified directions pan the ref-tree viewport; mouse and the existing
-  Ctrl/Page keys scroll without moving the ref-tree cursor.
+  component. Shift-modified directions and the mouse pan the ref-tree viewport.
+  The existing full- and half-page Ctrl/Page keys move the cursor by the
+  corresponding viewport distance and keep it visible, matching history
+  navigation.
 - `e` opens node-level reference editing. `d` deletes every eligible local branch
   immediately. `e r` is offered only when selected remote-tracking references
   map uniquely through a named remote's fetch refspecs; it deletes every resolved
