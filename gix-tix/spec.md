@@ -571,6 +571,10 @@ space first; changes blocks adapt within the remaining history width.
   commit's tree delta into the worktree by replacing its tree with its first
   parent's tree, or the empty tree for a root commit. Clean operations are
   unavailable and report a no-op through `tix amend|spill`.
+- Command-line `tix amend --index` disables the worktree fallback. It amends
+  staged index content when present and reports `nothing to amend` when the
+  index matches `HEAD`, even if tracked worktree changes exist. This option does
+  not alter the history-view amend action.
 - Command-line edits use the same default HEAD, applicable pin, and review tips
   as the history view. Unrelated refs do not broaden their descendant rewrite
   scope, while mutable refs pointing into that scope are still retargeted.
